@@ -1,7 +1,12 @@
 FROM node:22-bookworm-slim AS frontend-build
 WORKDIR /workspace
 COPY package.json package-lock.json ./
-RUN npm ci --ignore-scripts
+# The Dokploy host reaches the default npm registry unreliably.  Rewriting
+# package-lock download hosts keeps reproducible lockfile versions while using
+# the reachable registry mirror for the actual tarballs.
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm config set replace-registry-host always \
+    && npm ci --ignore-scripts
 COPY index.html tsconfig.json vite.config.ts postcss.config.mjs ./
 COPY src ./src
 RUN npm run typecheck && npm run build
@@ -23,8 +28,8 @@ COPY data/__init__.py data/metric_dictionary_seed.json ./data/
 COPY data/mock ./data/mock
 COPY scripts ./scripts
 COPY --from=frontend-build /workspace/dist ./dist
-RUN pip install --no-cache-dir --index-url https://pypi.org/simple "setuptools>=68" \
-    && pip install --no-cache-dir --no-build-isolation --index-url https://pypi.org/simple -r requirements.runtime.lock \
+RUN pip install --no-cache-dir --index-url https://pypi.tuna.tsinghua.edu.cn/simple "setuptools>=68" \
+    && pip install --no-cache-dir --no-build-isolation --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.runtime.lock \
     && pip install --no-cache-dir --no-deps .
 RUN mkdir -p /app/runtime /app/data/智能运营 && chown -R app:app /app
 USER app

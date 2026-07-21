@@ -8,6 +8,7 @@ RUN npm config set registry https://registry.npmmirror.com \
     && npm config set replace-registry-host always \
     && npm ci --ignore-scripts
 COPY index.html tsconfig.json vite.config.ts postcss.config.mjs ./
+COPY public ./public
 COPY src ./src
 RUN npm run typecheck && npm run build
 

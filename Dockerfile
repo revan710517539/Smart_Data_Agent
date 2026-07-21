@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.4
 FROM node:22-bookworm-slim AS frontend-build
 WORKDIR /workspace
 COPY package.json package-lock.json ./
@@ -24,13 +23,8 @@ COPY data/__init__.py data/metric_dictionary_seed.json ./data/
 COPY data/mock ./data/mock
 COPY scripts ./scripts
 COPY --from=frontend-build /workspace/dist ./dist
-RUN --network=host printf 'Acquire::ForceIPv4 "true";\nAcquire::http::Pipeline-Depth "0";\nAcquire::Retries "3";\nAcquire::http::Timeout "30";\n' > /etc/apt/apt.conf.d/99network \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends build-essential libsasl2-dev \
-    && pip install --no-cache-dir -r requirements.lock \
-    && pip install --no-cache-dir --no-deps . \
-    && apt-get purge -y --auto-remove build-essential libsasl2-dev \
-    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir -r requirements.lock \
+    && pip install --no-cache-dir --no-deps .
 RUN mkdir -p /app/runtime /app/data/智能运营 && chown -R app:app /app
 USER app
 EXPOSE 8787

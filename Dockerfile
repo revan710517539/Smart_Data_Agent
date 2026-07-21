@@ -16,6 +16,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     SMART_DATA_AGENT_ENV=production \
     SMART_DATA_AGENT_STATIC_ROOT=/app/dist \
+    SMART_DATA_AGENT_JSON_WAREHOUSE_PATH=/app/data/mock/semantic_datasets.json \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 WORKDIR /app
 RUN groupadd --system app && useradd --system --gid app --home /app app

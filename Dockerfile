@@ -23,11 +23,11 @@ COPY data/__init__.py data/metric_dictionary_seed.json ./data/
 COPY data/mock ./data/mock
 COPY scripts ./scripts
 COPY --from=frontend-build /workspace/dist ./dist
-RUN apt-get update \\
-    && apt-get install -y --no-install-recommends build-essential libsasl2-dev \\
-    && pip install --no-cache-dir -r requirements.lock \\
-    && pip install --no-cache-dir --no-deps . \\
-    && apt-get purge -y --auto-remove build-essential libsasl2-dev \\
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential libsasl2-dev \
+    && pip install --no-cache-dir -r requirements.lock \
+    && pip install --no-cache-dir --no-deps . \
+    && apt-get purge -y --auto-remove build-essential libsasl2-dev \
     && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /app/runtime /app/data/智能运营 && chown -R app:app /app
 USER app

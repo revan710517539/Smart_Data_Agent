@@ -30,7 +30,7 @@ COPY scripts ./scripts
 COPY --from=frontend-build /workspace/dist ./dist
 RUN pip install --no-cache-dir --index-url https://pypi.tuna.tsinghua.edu.cn/simple "setuptools>=68" \
     && pip install --no-cache-dir --no-build-isolation --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.runtime.lock \
-    && pip install --no-cache-dir --no-deps .
+    && pip install --no-cache-dir --no-deps --no-build-isolation .
 RUN mkdir -p /app/runtime /app/data/智能运营 && chown -R app:app /app
 USER app
 EXPOSE 8787

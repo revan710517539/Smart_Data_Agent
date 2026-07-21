@@ -23,7 +23,7 @@ COPY data/__init__.py data/metric_dictionary_seed.json ./data/
 COPY data/mock ./data/mock
 COPY scripts ./scripts
 COPY --from=frontend-build /workspace/dist ./dist
-RUN printf 'Acquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99force-ipv4 \
+RUN printf 'Acquire::ForceIPv4 "true";\nAcquire::http::Pipeline-Depth "0";\nAcquire::Retries "3";\nAcquire::http::Timeout "30";\n' > /etc/apt/apt.conf.d/99network \
     && apt-get update \
     && apt-get install -y --no-install-recommends build-essential libsasl2-dev \
     && pip install --no-cache-dir -r requirements.lock \

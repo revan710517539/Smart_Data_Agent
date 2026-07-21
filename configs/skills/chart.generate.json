@@ -1,0 +1,19 @@
+{
+  "skill_id": "chart.generate",
+  "skill_name": "Chart Generate",
+  "skill_type": "visualization",
+  "description": "Generate governed chart specs from reviewed query results.",
+  "input_schema": {
+    "data": "array",
+    "question": "string",
+    "preferred_chart": "string?"
+  },
+  "output_schema": {
+    "chart_spec": "object"
+  },
+  "permission_scope": ["chart:generate"],
+  "runtime_type": "python",
+  "risk_level": "low",
+  "version": "1.0.0",
+  "owner": "data-platform"
+}

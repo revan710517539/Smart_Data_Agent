@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-data-agent-backend"
+version = "0.1.0"
+description = "Governed backend runtime for Smart Data Agent"
+requires-python = ">=3.11"
+dependencies = [
+  "certifi>=2025.1,<2027",
+  "websocket-client>=1.8,<2",
+  "PyJWT[crypto]>=2.10,<3",
+  "redis>=5,<7",
+  "pypdf>=5,<7",
+  "python-docx>=1.1,<2",
+  "croniter>=6,<7",
+  "psycopg[binary,pool]>=3.2,<4",
+  "boto3>=1.35,<2",
+  "uvicorn[standard]>=0.35,<1",
+  "PyMySQL>=1.1,<2",
+  "PyHive[hive]>=0.7,<1",
+  "sqlglot>=30.12,<31",
+  "playwright>=1.61,<2",
+  "ddddocr-basic>=1.5.6.post3,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pip-audit>=2.9,<3",
+]
+
+[project.scripts]
+smart-data-agent-api = "backend.platform.api.server:main"
+smart-data-agent-asgi = "backend.platform.api.asgi:main"
+smart-data-agent-worker = "backend.platform.worker:main"
+
+[tool.setuptools.packages.find]
+include = ["backend*", "configs*", "data*"]
+
+[tool.setuptools.package-data]
+configs = ["**/*.json"]
+data = ["**/*.json"]
+
+[tool.unittest]
+start-directory = "backend"

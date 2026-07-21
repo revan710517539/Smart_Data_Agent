@@ -1,0 +1,19 @@
+services:
+  smart-data-agent:
+    build:
+      context: .
+    ports:
+      - "8787:8787"
+    environment:
+      SMART_DATA_AGENT_ENV: development
+      SMART_DATA_AGENT_AUTH_MODE: development
+      SMART_DATA_AGENT_CORS_ORIGINS: http://localhost:8787
+      SMART_DATA_AGENT_DATA_WAREHOUSE: json
+      SMART_DATA_AGENT_OBJECT_STORE: local
+      SMART_DATA_AGENT_STATIC_ROOT: /app/dist
+    volumes:
+      - smart-data-agent-runtime:/app/runtime
+    restart: unless-stopped
+
+volumes:
+  smart-data-agent-runtime:

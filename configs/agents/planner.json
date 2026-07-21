@@ -1,0 +1,10 @@
+{
+  "agent_id": "planner",
+  "agent_name": "Planner Agent",
+  "agent_type": "planner",
+  "description": "Classify user intent and build a data-analysis plan.",
+  "allowed_skills": ["supersonic.query", "knowledge.search", "trend.analysis"],
+  "prompt_template_id": "planner.default",
+  "memory_policy": "read_relevant_write_reviewed",
+  "status": "active"
+}

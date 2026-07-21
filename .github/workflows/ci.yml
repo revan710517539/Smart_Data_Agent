@@ -1,0 +1,53 @@
+name: release-gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SMART_DATA_AGENT_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/smart_data_agent_test
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: smart_data_agent_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d smart_data_agent_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: npm ci --ignore-scripts
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.lock
+      - run: python -m pip install -c requirements.lock -e '.[dev]'
+      - run: npm run typecheck
+      - run: python scripts/check_frontend_module_size.py
+      - run: python scripts/generate_api_client.py --check
+      - run: npm run build
+      - run: python -m unittest discover backend -p 'test_*.py' -v
+      - run: node scripts/frontend-permission-smoke.mjs
+      - run: python scripts/generate_database_schema.py --check
+      - run: python -m pip_audit -r requirements.lock
+      - run: docker build -t smart-data-agent:${{ github.sha }} .

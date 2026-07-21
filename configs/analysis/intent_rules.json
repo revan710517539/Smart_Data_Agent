@@ -1,0 +1,84 @@
+{
+  "rules": [
+    {
+      "id": "risk_diagnostic",
+      "task_type": "diagnostic_analysis",
+      "terms": ["逾期", "风险", "M1", "m1", "不良", "为什么", "原因", "归因", "下降", "波动", "异常", "趋势"],
+      "dataset_id": "risk_operation_mart",
+      "metrics": ["m1_overdue_rate", "loan_balance"],
+      "dimensions": ["product_line", "month"],
+      "chart_types": ["line", "column", "table"],
+      "analysis_angles": [
+        "按消费贷和经营贷拆分风险迁徙和余额压力",
+        "按月份观察M1逾期率连续变化",
+        "结合机构和产品线定位异常来源"
+      ]
+    },
+    {
+      "id": "channel_roi",
+      "task_type": "simple_metric_query",
+      "terms": ["ROI", "roi", "渠道", "获客", "成本"],
+      "dataset_id": "channel_operation_mart",
+      "metrics": ["customer_acquisition_cost", "roi"],
+      "dimensions": ["channel", "month"],
+      "chart_types": ["line", "column", "table"],
+      "analysis_angles": [
+        "比较渠道投入产出和获客成本",
+        "按月份观察ROI变化趋势",
+        "结合产品线判断投放效率和转化质量"
+      ]
+    },
+    {
+      "id": "customer_segment",
+      "task_type": "simple_metric_query",
+      "terms": ["客群", "画像", "年龄", "转化", "漏斗"],
+      "dataset_id": "customer_operation_mart",
+      "metrics": ["conversion_rate", "active_customer_count"],
+      "dimensions": ["customer_segment", "product_line"],
+      "chart_types": ["column", "table"],
+      "analysis_angles": [
+        "按客群和产品线识别转化效率差异",
+        "分析消费贷客群偏好和经营贷经营稳定性",
+        "结合活跃客户数判断样本规模和推广优先级"
+      ]
+    },
+    {
+      "id": "branch_rank",
+      "task_type": "simple_metric_query",
+      "terms": ["排名", "TOP", "top", "rank"],
+      "dataset_id": "loan_operation_mart",
+      "metrics": ["loan_amount", "drawdown_rate"],
+      "dimensions": ["branch_name", "product_line"],
+      "chart_types": ["column", "table"],
+      "analysis_angles": [
+        "按机构排名识别头部贡献和尾部短板",
+        "结合产品线和动支率判断增长质量"
+      ]
+    },
+    {
+      "id": "default_report",
+      "task_type": "report_generation",
+      "terms": ["报告", "周报", "月报"],
+      "dataset_id": "loan_operation_mart",
+      "metrics": ["loan_amount", "drawdown_rate"],
+      "dimensions": ["branch_name", "product_line"],
+      "chart_types": ["column", "line", "table"],
+      "analysis_angles": [
+        "按机构和产品线拆分规模贡献",
+        "结合动支率、转化率和余额变化判断经营质量"
+      ]
+    }
+  ],
+  "default": {
+    "task_type": "simple_metric_query",
+    "dataset_id": "loan_operation_mart",
+    "metrics": ["loan_amount", "drawdown_rate"],
+    "dimensions": ["branch_name", "product_line"],
+    "chart_types": ["column", "table"],
+    "analysis_angles": [
+      "按机构和产品线拆分规模贡献",
+      "结合动支率、转化率和余额变化判断经营质量"
+    ]
+  },
+  "business_focus": "消费贷关注客群转化、额度使用和风险迁徙；经营贷关注经营稳定性、续贷留存、行业风险和动支节奏。"
+}

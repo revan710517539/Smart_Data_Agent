@@ -1,0 +1,153 @@
+{
+  "version": "2026-07-11",
+  "description": "Local JSON mock data warehouse for Smart Data Agent. Rows with tenant_id '*' are tenant-safe templates and are materialized under the request tenant at query time.",
+  "datasets": {
+    "weekly_core_metrics_mart": {
+      "label": "经营周报核心指标宽表",
+      "allowed_metrics": ["loan_balance", "loan_amount", "new_balance"],
+      "allowed_dimensions": ["stat_week"],
+      "metric_aggregation": {
+        "loan_balance": "sum",
+        "loan_amount": "sum",
+        "new_balance": "sum"
+      },
+      "rows": [
+        {"tenant_id": "*", "stat_week": "2026-06-22", "loan_balance": 1786000000, "loan_amount": 326000000, "new_balance": 52000000},
+        {"tenant_id": "*", "stat_week": "2026-06-29", "loan_balance": 1819000000, "loan_amount": 348000000, "new_balance": 33000000},
+        {"tenant_id": "*", "stat_week": "2026-07-06", "loan_balance": 1858000000, "loan_amount": 371000000, "new_balance": 39000000},
+        {"tenant_id": "*", "stat_week": "2026-07-13", "loan_balance": 1896000000, "loan_amount": 394000000, "new_balance": 38000000}
+      ]
+    },
+    "loan_operation_mart": {
+      "label": "贷款经营宽表",
+      "allowed_metrics": ["loan_amount", "drawdown_rate"],
+      "allowed_dimensions": ["branch_name", "product_line", "month", "channel", "customer_segment"],
+      "metric_aggregation": {
+        "loan_amount": "sum",
+        "drawdown_rate": {"aggregation": "ratio", "numerator": "drawdown_amount", "denominator": "eligible_amount", "multiplier": 1}
+      },
+      "rows": [
+        {"tenant_id": "*", "branch_name": "上海分行", "product_line": "经营贷", "month": "2026-03", "channel": "客户经理", "customer_segment": "小微商户", "loan_amount": 42800000, "drawdown_rate": 0.421, "drawdown_amount": 42100000, "eligible_amount": 100000000},
+        {"tenant_id": "*", "branch_name": "上海分行", "product_line": "消费贷", "month": "2026-04", "channel": "手机银行", "customer_segment": "年轻白领", "loan_amount": 38600000, "drawdown_rate": 0.397, "drawdown_amount": 31760000, "eligible_amount": 80000000},
+        {"tenant_id": "*", "branch_name": "深圳分行", "product_line": "经营贷", "month": "2026-04", "channel": "联合运营", "customer_segment": "存量经营户", "loan_amount": 36100000, "drawdown_rate": 0.389, "drawdown_amount": 35010000, "eligible_amount": 90000000},
+        {"tenant_id": "*", "branch_name": "郑州分行", "product_line": "经营贷", "month": "2026-05", "channel": "客户经理", "customer_segment": "小微商户", "loan_amount": 33600000, "drawdown_rate": 0.374, "drawdown_amount": 26180000, "eligible_amount": 70000000},
+        {"tenant_id": "*", "branch_name": "南京分行", "product_line": "消费贷", "month": "2026-05", "channel": "手机银行", "customer_segment": "代发客群", "loan_amount": 31200000, "drawdown_rate": 0.352, "drawdown_amount": 21120000, "eligible_amount": 60000000},
+        {"tenant_id": "*", "branch_name": "广州分行", "product_line": "综合授信", "month": "2026-06", "channel": "客户经理", "customer_segment": "存量经营户", "loan_amount": 29400000, "drawdown_rate": 0.331, "drawdown_amount": 16550000, "eligible_amount": 50000000},
+        {"tenant_id": "*", "branch_name": "成都分行", "product_line": "消费贷", "month": "2026-06", "channel": "联合运营", "customer_segment": "年轻白领", "loan_amount": 25800000, "drawdown_rate": 0.316, "drawdown_amount": 12640000, "eligible_amount": 40000000},
+        {"tenant_id": "tenant_demo", "branch_name": "测试分行", "product_line": "经营贷", "month": "2026-06", "channel": "客户经理", "customer_segment": "小微商户", "loan_amount": 21600000, "drawdown_rate": 0.347, "drawdown_amount": 10410000, "eligible_amount": 30000000},
+        {"tenant_id": "*", "branch_name": "上海分行", "product_line": "经营贷", "month": "2026-07", "channel": "客户经理", "customer_segment": "小微商户", "loan_amount": 48600000, "drawdown_rate": 0.442, "drawdown_amount": 44200000, "eligible_amount": 100000000},
+        {"tenant_id": "*", "branch_name": "南京分行", "product_line": "消费贷", "month": "2026-07", "channel": "手机银行", "customer_segment": "代发客群", "loan_amount": 43800000, "drawdown_rate": 0.405, "drawdown_amount": 36450000, "eligible_amount": 90000000},
+        {"tenant_id": "*", "branch_name": "广州分行", "product_line": "经营贷", "month": "2026-07", "channel": "客户经理", "customer_segment": "存量经营户", "loan_amount": 41200000, "drawdown_rate": 0.391, "drawdown_amount": 31280000, "eligible_amount": 80000000},
+        {"tenant_id": "*", "branch_name": "深圳分行", "product_line": "经营贷", "month": "2026-07", "channel": "联合运营", "customer_segment": "科技企业", "loan_amount": 38900000, "drawdown_rate": 0.382, "drawdown_amount": 26740000, "eligible_amount": 70000000},
+        {"tenant_id": "*", "branch_name": "成都分行", "product_line": "消费贷", "month": "2026-07", "channel": "手机银行", "customer_segment": "年轻白领", "loan_amount": 35400000, "drawdown_rate": 0.361, "drawdown_amount": 21660000, "eligible_amount": 60000000},
+        {"tenant_id": "*", "branch_name": "郑州分行", "product_line": "经营贷", "month": "2026-07", "channel": "客户经理", "customer_segment": "小微商户", "loan_amount": 32600000, "drawdown_rate": 0.348, "drawdown_amount": 17400000, "eligible_amount": 50000000},
+        {"tenant_id": "*", "branch_name": "杭州分行", "product_line": "消费贷", "month": "2026-07", "channel": "线上渠道", "customer_segment": "年轻白领", "loan_amount": 29800000, "drawdown_rate": 0.337, "drawdown_amount": 13480000, "eligible_amount": 40000000},
+        {"tenant_id": "*", "branch_name": "武汉分行", "product_line": "经营贷", "month": "2026-07", "channel": "客户经理", "customer_segment": "存量经营户", "loan_amount": 27100000, "drawdown_rate": 0.326, "drawdown_amount": 9780000, "eligible_amount": 30000000},
+        {"tenant_id": "*", "branch_name": "苏州分行", "product_line": "经营贷", "month": "2026-07", "channel": "联合运营", "customer_segment": "制造企业", "loan_amount": 24600000, "drawdown_rate": 0.315, "drawdown_amount": 6300000, "eligible_amount": 20000000},
+        {"tenant_id": "*", "branch_name": "合肥分行", "product_line": "消费贷", "month": "2026-07", "channel": "线上渠道", "customer_segment": "新市民", "loan_amount": 21900000, "drawdown_rate": 0.302, "drawdown_amount": 3020000, "eligible_amount": 10000000}
+      ]
+    },
+    "risk_operation_mart": {
+      "label": "风险经营分析宽表",
+      "allowed_metrics": ["m1_overdue_rate", "loan_balance"],
+      "allowed_dimensions": ["branch_name", "product_line", "month", "customer_segment"],
+      "metric_aggregation": {
+        "m1_overdue_rate": {"aggregation": "ratio", "numerator": "m1_overdue_balance", "denominator": "loan_balance", "multiplier": 1},
+        "loan_balance": "sum"
+      },
+      "rows": [
+        {"tenant_id": "*", "branch_name": "上海分行", "product_line": "经营贷", "month": "2026-03", "customer_segment": "小微商户", "m1_overdue_rate": 0.0118, "m1_overdue_balance": 2147600, "loan_balance": 182000000},
+        {"tenant_id": "*", "branch_name": "上海分行", "product_line": "经营贷", "month": "2026-04", "customer_segment": "小微商户", "m1_overdue_rate": 0.0126, "m1_overdue_balance": 2368800, "loan_balance": 188000000},
+        {"tenant_id": "*", "branch_name": "上海分行", "product_line": "消费贷", "month": "2026-05", "customer_segment": "年轻白领", "m1_overdue_rate": 0.0096, "m1_overdue_balance": 1363200, "loan_balance": 142000000},
+        {"tenant_id": "*", "branch_name": "深圳分行", "product_line": "经营贷", "month": "2026-05", "customer_segment": "存量经营户", "m1_overdue_rate": 0.0137, "m1_overdue_balance": 2137200, "loan_balance": 156000000},
+        {"tenant_id": "*", "branch_name": "郑州分行", "product_line": "经营贷", "month": "2026-06", "customer_segment": "小微商户", "m1_overdue_rate": 0.0145, "m1_overdue_balance": 1986500, "loan_balance": 137000000},
+        {"tenant_id": "*", "branch_name": "南京分行", "product_line": "消费贷", "month": "2026-06", "customer_segment": "代发客群", "m1_overdue_rate": 0.0109, "m1_overdue_balance": 1318900, "loan_balance": 121000000}
+      ]
+    },
+    "channel_operation_mart": {
+      "label": "渠道经营分析宽表",
+      "allowed_metrics": ["customer_acquisition_cost", "roi"],
+      "allowed_dimensions": ["channel", "month", "product_line", "branch_name"],
+      "metric_aggregation": {
+        "customer_acquisition_cost": {"aggregation": "ratio", "numerator": "marketing_cost", "denominator": "new_customer_count", "multiplier": 1},
+        "roi": {"aggregation": "ratio", "numerator": "attributed_revenue", "denominator": "marketing_cost", "multiplier": 1}
+      },
+      "rows": [
+        {"tenant_id": "*", "channel": "手机银行", "month": "2026-03", "product_line": "消费贷", "branch_name": "上海分行", "customer_acquisition_cost": 116.5, "roi": 2.31, "marketing_cost": 116500, "new_customer_count": 1000, "attributed_revenue": 269115},
+        {"tenant_id": "*", "channel": "手机银行", "month": "2026-04", "product_line": "消费贷", "branch_name": "南京分行", "customer_acquisition_cost": 109.2, "roi": 2.48, "marketing_cost": 98280, "new_customer_count": 900, "attributed_revenue": 243734.4},
+        {"tenant_id": "*", "channel": "客户经理", "month": "2026-04", "product_line": "经营贷", "branch_name": "深圳分行", "customer_acquisition_cost": 184.6, "roi": 2.06, "marketing_cost": 129220, "new_customer_count": 700, "attributed_revenue": 266193.2},
+        {"tenant_id": "*", "channel": "联合运营", "month": "2026-05", "product_line": "经营贷", "branch_name": "郑州分行", "customer_acquisition_cost": 152.4, "roi": 2.22, "marketing_cost": 121920, "new_customer_count": 800, "attributed_revenue": 270662.4},
+        {"tenant_id": "*", "channel": "广告投放", "month": "2026-06", "product_line": "消费贷", "branch_name": "广州分行", "customer_acquisition_cost": 201.8, "roi": 1.74, "marketing_cost": 121080, "new_customer_count": 600, "attributed_revenue": 210679.2},
+        {"tenant_id": "*", "channel": "存量触达", "month": "2026-06", "product_line": "经营贷", "branch_name": "上海分行", "customer_acquisition_cost": 92.1, "roi": 2.86, "marketing_cost": 110520, "new_customer_count": 1200, "attributed_revenue": 316087.2}
+      ]
+    },
+    "customer_operation_mart": {
+      "label": "客群经营分析宽表",
+      "allowed_metrics": ["conversion_rate", "active_customer_count"],
+      "allowed_dimensions": ["customer_segment", "product_line", "branch_name", "month"],
+      "metric_aggregation": {
+        "conversion_rate": {"aggregation": "ratio", "numerator": "converted_customer_count", "denominator": "eligible_customer_count", "multiplier": 1},
+        "active_customer_count": "sum"
+      },
+      "rows": [
+        {"tenant_id": "*", "customer_segment": "存量经营户", "product_line": "经营贷", "branch_name": "上海分行", "month": "2026-04", "conversion_rate": 0.184, "converted_customer_count": 1840, "eligible_customer_count": 10000, "active_customer_count": 16200},
+        {"tenant_id": "*", "customer_segment": "小微商户", "product_line": "经营贷", "branch_name": "深圳分行", "month": "2026-05", "conversion_rate": 0.167, "converted_customer_count": 1503, "eligible_customer_count": 9000, "active_customer_count": 13800},
+        {"tenant_id": "*", "customer_segment": "年轻白领", "product_line": "消费贷", "branch_name": "南京分行", "month": "2026-05", "conversion_rate": 0.226, "converted_customer_count": 2712, "eligible_customer_count": 12000, "active_customer_count": 19600},
+        {"tenant_id": "*", "customer_segment": "代发客群", "product_line": "消费贷", "branch_name": "广州分行", "month": "2026-06", "conversion_rate": 0.203, "converted_customer_count": 2233, "eligible_customer_count": 11000, "active_customer_count": 17400},
+        {"tenant_id": "*", "customer_segment": "沉睡唤醒", "product_line": "综合授信", "branch_name": "郑州分行", "month": "2026-06", "conversion_rate": 0.121, "converted_customer_count": 968, "eligible_customer_count": 8000, "active_customer_count": 9100}
+      ]
+    },
+    "institution_operation_mock_mart": {
+      "label": "模拟机构经营主题表（100条）",
+      "csv_path": "institution_master_100.csv",
+      "allowed_metrics": ["institution_count", "employee_count", "customer_manager_count", "target_credit_amount", "target_drawdown_amount"],
+      "allowed_dimensions": ["branch_name", "institution_name", "institution_level", "province", "city", "institution_type", "status"],
+      "metric_aggregation": {
+        "institution_count": "count",
+        "employee_count": "sum",
+        "customer_manager_count": "sum",
+        "target_credit_amount": "sum",
+        "target_drawdown_amount": "sum"
+      },
+      "integer_fields": ["employee_count", "customer_manager_count", "target_application_count", "target_credit_amount", "target_drawdown_amount"]
+    },
+    "customer_profile_mock_mart": {
+      "label": "模拟客户画像主题表（100条）",
+      "csv_path": "customer_master_100.csv",
+      "allowed_metrics": ["customer_count", "active_customer_count", "credit_customer_count", "drawdown_customer_count", "customer_loan_balance", "average_credit_score"],
+      "allowed_dimensions": ["branch_name", "institution_name", "province", "city", "customer_segment", "industry", "risk_level", "gender"],
+      "metric_aggregation": {
+        "customer_count": "count",
+        "active_customer_count": {"aggregation": "sum", "field": "is_active"},
+        "credit_customer_count": {"aggregation": "sum", "field": "has_credit"},
+        "drawdown_customer_count": {"aggregation": "sum", "field": "has_drawdown"},
+        "customer_loan_balance": {"aggregation": "sum", "field": "current_loan_balance"},
+        "average_credit_score": {"aggregation": "avg", "field": "credit_score"}
+      },
+      "integer_fields": ["age", "annual_income", "annual_revenue", "credit_score", "is_active", "has_credit", "has_drawdown", "current_loan_balance"]
+    },
+    "loan_funnel_mock_mart": {
+      "label": "模拟贷款申请授信动支主题表（100条）",
+      "csv_path": "loan_transaction_order_100.csv",
+      "allowed_metrics": ["application_order_count", "completion_order_count", "credit_approved_order_count", "drawdown_application_order_count", "drawdown_success_order_count", "credit_approval_rate", "drawdown_rate", "approved_amount", "drawdown_amount", "loan_balance", "m1_overdue_rate", "credit_weighted_rate", "drawdown_weighted_rate"],
+      "allowed_dimensions": ["branch_name", "institution_name", "product_line", "month", "channel", "customer_segment", "current_stage", "application_status"],
+      "metric_aggregation": {
+        "application_order_count": "sum",
+        "completion_order_count": "sum",
+        "credit_approved_order_count": "sum",
+        "drawdown_application_order_count": "sum",
+        "drawdown_success_order_count": "sum",
+        "credit_approval_rate": {"aggregation": "ratio", "numerator": "credit_approved_customer_count", "denominator": "completed_customer_count", "multiplier": 1},
+        "drawdown_rate": {"aggregation": "ratio", "numerator": "drawdown_success_customer_count", "denominator": "credit_approved_customer_count", "multiplier": 1},
+        "approved_amount": "sum",
+        "drawdown_amount": "sum",
+        "loan_balance": "sum",
+        "m1_overdue_rate": {"aggregation": "ratio", "numerator": "m1_overdue_balance", "denominator": "loan_balance", "multiplier": 1},
+        "credit_weighted_rate": {"aggregation": "ratio", "numerator": "credit_rate_weighted_amount", "denominator": "approved_amount", "multiplier": 1},
+        "drawdown_weighted_rate": {"aggregation": "ratio", "numerator": "drawdown_rate_weighted_amount", "denominator": "drawdown_amount", "multiplier": 1}
+      },
+      "integer_fields": ["application_amount", "approved_amount", "drawdown_apply_amount", "drawdown_amount", "loan_balance", "m1_overdue_balance", "overdue_days", "term_months", "application_order_count", "completion_order_count", "completed_customer_count", "credit_approved_order_count", "credit_approved_customer_count", "drawdown_application_order_count", "drawdown_success_order_count", "drawdown_success_customer_count"],
+      "number_fields": ["annual_interest_rate", "credit_rate_weighted_amount", "drawdown_rate_weighted_amount"]
+    }
+  }
+}

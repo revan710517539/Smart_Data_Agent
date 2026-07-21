@@ -1,0 +1,30 @@
+{
+  "group_id": "analysis_execution",
+  "group_name": "智能分析执行组",
+  "mission": "在同一执行事实链上完成计划、权限查询、证据绑定和最终评审。",
+  "controller_agent": "planner",
+  "agents": [
+    {
+      "agent_id": "planner",
+      "name": "Planner Agent",
+      "type": "规划型",
+      "responsibility": "编译类型化分析计划。",
+      "allowed_skills": ["knowledge.search", "supersonic.query"]
+    },
+    {
+      "agent_id": "data_query",
+      "name": "Data Query Agent",
+      "type": "数据查询型",
+      "responsibility": "仅通过受治理语义查询读取数据。",
+      "allowed_skills": ["supersonic.query"]
+    },
+    {
+      "agent_id": "review",
+      "name": "Review Agent",
+      "type": "最终评审型",
+      "responsibility": "对最终证据、脚本、图表和结论执行发布门禁。",
+      "allowed_skills": ["permission.check", "audit.write"]
+    }
+  ],
+  "stage_gates": ["plan_compiled", "permission_enforced", "evidence_bound", "final_review_passed"]
+}

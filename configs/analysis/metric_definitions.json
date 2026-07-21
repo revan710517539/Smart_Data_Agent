@@ -1,0 +1,221 @@
+{
+  "version": "2026-07-10",
+  "description": "Reviewed executable metric semantics. Descriptive valueLogic text is never compiled into SQL.",
+  "metrics": [
+    {
+      "metric_code": "loan_balance",
+      "metric_name": "在贷余额",
+      "dataset_id": "weekly_core_metrics_mart",
+      "aggregation": "sum",
+      "version": "v1",
+      "unit": "元",
+      "grain": "周"
+    },
+    {
+      "metric_code": "loan_amount",
+      "metric_name": "放款金额",
+      "dataset_id": "weekly_core_metrics_mart",
+      "aggregation": "sum",
+      "version": "v1",
+      "unit": "元",
+      "grain": "周"
+    },
+    {
+      "metric_code": "new_balance",
+      "metric_name": "新增余额",
+      "dataset_id": "weekly_core_metrics_mart",
+      "aggregation": "sum",
+      "version": "v1",
+      "unit": "元",
+      "grain": "周"
+    },
+    {
+      "metric_code": "loan_amount",
+      "metric_name": "放款金额",
+      "dataset_id": "loan_operation_mart",
+      "aggregation": "sum",
+      "version": "v1",
+      "unit": "元",
+      "grain": "机构、产品线、月份"
+    },
+    {
+      "metric_code": "drawdown_rate",
+      "metric_name": "动支率",
+      "dataset_id": "loan_operation_mart",
+      "aggregation": "ratio",
+      "numerator": "drawdown_amount",
+      "denominator": "eligible_amount",
+      "multiplier": 1,
+      "version": "v1",
+      "unit": "比例",
+      "grain": "机构、产品线、月份"
+    },
+    {
+      "metric_code": "m1_overdue_rate",
+      "metric_name": "M1逾期率",
+      "dataset_id": "risk_operation_mart",
+      "aggregation": "ratio",
+      "numerator": "m1_overdue_balance",
+      "denominator": "loan_balance",
+      "multiplier": 1,
+      "version": "v1",
+      "unit": "比例",
+      "grain": "机构、产品线、月份"
+    },
+    {
+      "metric_code": "loan_balance",
+      "metric_name": "贷款余额",
+      "dataset_id": "risk_operation_mart",
+      "aggregation": "sum",
+      "version": "v1",
+      "unit": "元",
+      "grain": "机构、产品线、月份"
+    },
+    {
+      "metric_code": "customer_acquisition_cost",
+      "metric_name": "获客成本",
+      "dataset_id": "channel_operation_mart",
+      "aggregation": "ratio",
+      "numerator": "marketing_cost",
+      "denominator": "new_customer_count",
+      "multiplier": 1,
+      "version": "v1",
+      "unit": "元/户",
+      "grain": "渠道、产品线、月份"
+    },
+    {
+      "metric_code": "roi",
+      "metric_name": "渠道ROI",
+      "dataset_id": "channel_operation_mart",
+      "aggregation": "ratio",
+      "numerator": "attributed_revenue",
+      "denominator": "marketing_cost",
+      "multiplier": 1,
+      "version": "v1",
+      "unit": "倍",
+      "grain": "渠道、产品线、月份"
+    },
+    {
+      "metric_code": "conversion_rate",
+      "metric_name": "转化率",
+      "dataset_id": "customer_operation_mart",
+      "aggregation": "ratio",
+      "numerator": "converted_customer_count",
+      "denominator": "eligible_customer_count",
+      "multiplier": 1,
+      "version": "v1",
+      "unit": "比例",
+      "grain": "客群、产品线、月份"
+    },
+    {
+      "metric_code": "active_customer_count",
+      "metric_name": "活跃客户数",
+      "dataset_id": "customer_operation_mart",
+      "aggregation": "sum",
+      "version": "v1",
+      "unit": "户",
+      "grain": "客群、产品线、月份"
+    },
+    {
+      "metric_code": "institution_count", "metric_name": "机构数", "dataset_id": "institution_operation_mock_mart",
+      "aggregation": "count", "version": "mock-v1", "unit": "家", "grain": "分行、机构层级"
+    },
+    {
+      "metric_code": "employee_count", "metric_name": "员工人数", "dataset_id": "institution_operation_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "人", "grain": "分行、机构"
+    },
+    {
+      "metric_code": "customer_manager_count", "metric_name": "客户经理人数", "dataset_id": "institution_operation_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "人", "grain": "分行、机构"
+    },
+    {
+      "metric_code": "target_credit_amount", "metric_name": "授信目标金额", "dataset_id": "institution_operation_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "元", "grain": "分行、机构"
+    },
+    {
+      "metric_code": "target_drawdown_amount", "metric_name": "动支目标金额", "dataset_id": "institution_operation_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "元", "grain": "分行、机构"
+    },
+    {
+      "metric_code": "customer_count", "metric_name": "客户数", "dataset_id": "customer_profile_mock_mart",
+      "aggregation": "count", "version": "mock-v1", "unit": "户", "grain": "分行、机构、客群"
+    },
+    {
+      "metric_code": "active_customer_count", "metric_name": "活跃客户数", "dataset_id": "customer_profile_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "户", "grain": "分行、机构、客群"
+    },
+    {
+      "metric_code": "credit_customer_count", "metric_name": "授信成功人数", "dataset_id": "customer_profile_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "人", "grain": "分行、机构、客群"
+    },
+    {
+      "metric_code": "drawdown_customer_count", "metric_name": "动支成功人数", "dataset_id": "customer_profile_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "人", "grain": "分行、机构、客群"
+    },
+    {
+      "metric_code": "customer_loan_balance", "metric_name": "客户贷款余额", "dataset_id": "customer_profile_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "元", "grain": "分行、机构、客群"
+    },
+    {
+      "metric_code": "average_credit_score", "metric_name": "平均信用评分", "dataset_id": "customer_profile_mock_mart",
+      "aggregation": "avg", "version": "mock-v1", "unit": "分", "grain": "分行、机构、客群"
+    },
+    {
+      "metric_code": "application_order_count", "metric_name": "进件笔数", "dataset_id": "loan_funnel_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "笔", "grain": "分行、机构、产品、月份"
+    },
+    {
+      "metric_code": "completion_order_count", "metric_name": "完件笔数", "dataset_id": "loan_funnel_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "笔", "grain": "分行、机构、产品、月份"
+    },
+    {
+      "metric_code": "credit_approved_order_count", "metric_name": "总授信成功笔数", "dataset_id": "loan_funnel_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "笔", "grain": "分行、机构、产品、月份"
+    },
+    {
+      "metric_code": "drawdown_application_order_count", "metric_name": "动支申请笔数", "dataset_id": "loan_funnel_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "笔", "grain": "分行、机构、产品、月份"
+    },
+    {
+      "metric_code": "drawdown_success_order_count", "metric_name": "动支成功笔数", "dataset_id": "loan_funnel_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "笔", "grain": "分行、机构、产品、月份"
+    },
+    {
+      "metric_code": "credit_approval_rate", "metric_name": "授信通过率（人数）", "dataset_id": "loan_funnel_mock_mart",
+      "aggregation": "ratio", "numerator": "credit_approved_customer_count", "denominator": "completed_customer_count",
+      "multiplier": 1, "version": "mock-v1", "unit": "比例", "grain": "分行、机构、产品、月份"
+    },
+    {
+      "metric_code": "drawdown_rate", "metric_name": "动支率（人数）", "dataset_id": "loan_funnel_mock_mart",
+      "aggregation": "ratio", "numerator": "drawdown_success_customer_count", "denominator": "credit_approved_customer_count",
+      "multiplier": 1, "version": "mock-v1", "unit": "比例", "grain": "分行、机构、产品、月份"
+    },
+    {
+      "metric_code": "approved_amount", "metric_name": "授信金额", "dataset_id": "loan_funnel_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "元", "grain": "分行、机构、产品、月份"
+    },
+    {
+      "metric_code": "drawdown_amount", "metric_name": "动支成功金额", "dataset_id": "loan_funnel_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "元", "grain": "分行、机构、产品、月份"
+    },
+    {
+      "metric_code": "loan_balance", "metric_name": "贷款余额", "dataset_id": "loan_funnel_mock_mart",
+      "aggregation": "sum", "version": "mock-v1", "unit": "元", "grain": "分行、机构、产品、月份"
+    },
+    {
+      "metric_code": "m1_overdue_rate", "metric_name": "M1逾期率", "dataset_id": "loan_funnel_mock_mart",
+      "aggregation": "ratio", "numerator": "m1_overdue_balance", "denominator": "loan_balance",
+      "multiplier": 1, "version": "mock-v1", "unit": "比例", "grain": "分行、机构、产品、月份"
+    },
+    {
+      "metric_code": "credit_weighted_rate", "metric_name": "授信加权利率", "dataset_id": "loan_funnel_mock_mart",
+      "aggregation": "ratio", "numerator": "credit_rate_weighted_amount", "denominator": "approved_amount",
+      "multiplier": 1, "version": "mock-v1", "unit": "比例", "grain": "分行、机构、产品、月份"
+    },
+    {
+      "metric_code": "drawdown_weighted_rate", "metric_name": "动支加权利率", "dataset_id": "loan_funnel_mock_mart",
+      "aggregation": "ratio", "numerator": "drawdown_rate_weighted_amount", "denominator": "drawdown_amount",
+      "multiplier": 1, "version": "mock-v1", "unit": "比例", "grain": "分行、机构、产品、月份"
+    }
+  ]
+}

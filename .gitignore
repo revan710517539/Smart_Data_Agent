@@ -1,0 +1,43 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+
+node_modules/
+dist/
+tmp/
+test-results/
+.playwright-cli/
+.crawler-sessions/
+.crawler-checkpoints/
+..smart_data_agent_artifacts/
+
+# Runtime crawler exports and generated artifacts can contain customer data.
+# Provision source credentials and retain exports in the deployment volume,
+# never in Forgejo.
+artifacts/
+output/
+data/acquisition/
+data/智能运营/
+data/智能运营源站下载/
+
+*.log
+*.sqlite
+*.sqlite3
+*.sqlite-*
+.smart_data_agent.sqlite
+
+# Keep only deterministic fixtures under data/. Every operational download is
+# generated at runtime and stays outside source control.
+data/*
+!data/__init__.py
+!data/metric_dictionary_seed.json
+!data/mock/
+!data/mock/**
+
+__pycache__/
+*.py[cod]
+
+casbin-pycasbin-master/
+smart_data_agent_backend.egg-info/
+[ ]$ HOME/

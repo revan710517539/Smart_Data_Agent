@@ -1,0 +1,39 @@
+{
+  "server_id": "knowledge",
+  "server_name": "Knowledge Base MCP Server",
+  "server_type": "knowledge",
+  "endpoint": "mcp://knowledge",
+  "exposed_tools": ["search", "ingest"],
+  "tool_definitions": {
+    "search": {
+      "title": "Governed knowledge search",
+      "description": "Search only approved tenant knowledge and return stable citations.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string"},
+          "limit": {"type": "integer", "minimum": 1, "maximum": 20}
+        },
+        "required": ["query"]
+      }
+    },
+    "ingest": {
+      "title": "Stage knowledge for review",
+      "description": "Create a tenant knowledge candidate; it is not searchable until four-eyes approval.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "content": {"type": "string"},
+          "document_type": {"type": "string"},
+          "domains": {"type": "array", "items": {"type": "string"}},
+          "tags": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["title", "content"]
+      }
+    }
+  },
+  "allowed_agents": ["knowledge", "planner", "review"],
+  "risk_level": "medium",
+  "status": "active"
+}

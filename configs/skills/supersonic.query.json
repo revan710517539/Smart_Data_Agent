@@ -1,0 +1,24 @@
+{
+  "skill_id": "supersonic.query",
+  "skill_name": "SuperSonic Semantic Query",
+  "skill_type": "data_query",
+  "description": "Route natural language questions through semantic model mapping, semantic parsing, correction, SQL translation, and execution.",
+  "input_schema": {
+    "question": "string",
+    "dataset_id": "string?",
+    "metrics": "array?",
+    "dimensions": "array?",
+    "filters": "object?"
+  },
+  "output_schema": {
+    "sql": "string",
+    "data": "array",
+    "chart_spec": "object",
+    "semantic_info": "object"
+  },
+  "permission_scope": ["data:query", "semantic:query"],
+  "runtime_type": "supersonic",
+  "risk_level": "medium",
+  "version": "1.0.0",
+  "owner": "data-platform"
+}

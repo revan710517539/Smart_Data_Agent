@@ -1,0 +1,10 @@
+{
+  "agent_id": "review",
+  "agent_name": "Review Agent",
+  "agent_type": "review",
+  "description": "Check SQL traceability, metric scope, permission compliance, and conclusion faithfulness.",
+  "allowed_skills": ["permission.check", "audit.write"],
+  "prompt_template_id": "review.default",
+  "memory_policy": "write_review_comments",
+  "status": "active"
+}

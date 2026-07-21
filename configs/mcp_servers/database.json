@@ -1,0 +1,32 @@
+{
+  "server_id": "database",
+  "server_name": "Database MCP Server",
+  "server_type": "database",
+  "endpoint": "mcp://database",
+  "exposed_tools": ["query", "schema"],
+  "tool_definitions": {
+    "query": {
+      "title": "Governed semantic query",
+      "description": "Execute a tenant-scoped semantic query through the current authorized warehouse.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "question": {"type": "string"},
+          "dataset_id": {"type": "string"},
+          "metrics": {"type": "array", "items": {"type": "string"}},
+          "dimensions": {"type": "array", "items": {"type": "string"}},
+          "filters": {"type": "object"},
+          "limit": {"type": "integer", "minimum": 1, "maximum": 500}
+        }
+      }
+    },
+    "schema": {
+      "title": "Authorized semantic schema",
+      "description": "List datasets, metrics and dimensions visible in the active semantic runtime.",
+      "inputSchema": {"type": "object", "properties": {}}
+    }
+  },
+  "allowed_agents": ["data_query"],
+  "risk_level": "high",
+  "status": "active"
+}

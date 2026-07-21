@@ -1,0 +1,114 @@
+{
+  "group_id": "engineering",
+  "group_name": "工程开发",
+  "source_file": "/Users/revan/Documents/Agent_Teams/01_工程开发_Engineering.zip",
+  "mission": "把 PRD、技术文档、用户需求转化为可执行、可验收、可持续迭代的工程任务，避免只有页面、没有数据库、没有后端、没有工作流、没有测试的玩具版交付。",
+  "controller_agent": "engineering_controller",
+  "agents": [
+    {
+      "agent_id": "engineering_controller",
+      "name": "工程开发总控 Agent",
+      "type": "总控编排型",
+      "responsibility": "工程任务路由、优先级、阶段门禁和最终整合。",
+      "allowed_skills": ["task.plan", "architecture.review", "permission.check", "audit.write"]
+    },
+    {
+      "agent_id": "requirement_analysis",
+      "name": "需求分析 Agent",
+      "type": "目标解析型",
+      "responsibility": "把用户输入、PRD、会议结论或业务想法转化为明确、可开发、可验收的工程需求。",
+      "allowed_skills": ["knowledge.search", "memory.search", "task.plan"]
+    },
+    {
+      "agent_id": "task_planning",
+      "name": "任务规划 Agent",
+      "type": "专业执行型",
+      "responsibility": "把需求拆成可执行任务图，明确任务依赖、执行顺序、并行关系和阶段性交付物。",
+      "allowed_skills": ["task.plan", "workflow.design"]
+    },
+    {
+      "agent_id": "technical_architecture",
+      "name": "技术架构 Agent",
+      "type": "技术设计型",
+      "responsibility": "判断需求对系统整体架构的影响，避免局部拼凑式开发。",
+      "allowed_skills": ["architecture.review", "graph.query_metric_lineage", "knowledge.search"]
+    },
+    {
+      "agent_id": "database_architecture",
+      "name": "数据库架构 Agent",
+      "type": "技术设计型",
+      "responsibility": "负责数据库模型、迁移、索引、关系、数据生命周期设计。",
+      "allowed_skills": ["schema.design", "sql.review", "data.quality_check"]
+    },
+    {
+      "agent_id": "backend_development",
+      "name": "后端开发 Agent",
+      "type": "技术设计型",
+      "responsibility": "负责 API、Service、Repository、权限校验、异常处理和服务端业务逻辑。",
+      "allowed_skills": ["code.generate", "permission.check", "audit.write"]
+    },
+    {
+      "agent_id": "frontend_development",
+      "name": "前端开发 Agent",
+      "type": "技术设计型",
+      "responsibility": "负责页面结构、组件、交互、状态管理、API 联调和用户体验。",
+      "allowed_skills": ["ui.implement", "chart.generate", "accessibility.check"]
+    },
+    {
+      "agent_id": "security_permission",
+      "name": "安全权限 Agent",
+      "type": "风险合规型",
+      "responsibility": "负责权限、审计、数据隔离、敏感操作确认和合规要求。",
+      "allowed_skills": ["permission.check", "data.mask", "risk.review", "audit.write"]
+    },
+    {
+      "agent_id": "mcp_tool_engineering",
+      "name": "MCP工具工程 Agent",
+      "type": "技术设计型",
+      "responsibility": "负责 MCP 工具注册、路由、调用、权限、安全审计和沙箱隔离。",
+      "allowed_skills": ["mcp.register", "mcp.call", "permission.check", "audit.write"]
+    },
+    {
+      "agent_id": "workflow_engineering",
+      "name": "工作流工程 Agent",
+      "type": "流程运营型",
+      "responsibility": "负责流程型任务、长任务、多 Agent 协作任务的状态机和工作流设计。",
+      "allowed_skills": ["workflow.design", "task.checkpoint", "memory.write"]
+    },
+    {
+      "agent_id": "integration_debugging",
+      "name": "集成联调 Agent",
+      "type": "技术设计型",
+      "responsibility": "把数据库、后端、工作流、工具和前端打通，确保系统真实可运行。",
+      "allowed_skills": ["integration.test", "mcp.call", "audit.write"]
+    },
+    {
+      "agent_id": "test_agent",
+      "name": "测试 Agent",
+      "type": "质量验证型",
+      "responsibility": "负责测试策略、测试用例、自动化测试和验收验证。",
+      "allowed_skills": ["test.run", "evaluation.run"]
+    },
+    {
+      "agent_id": "engineering_review",
+      "name": "工程评审 Agent",
+      "type": "质量评审型",
+      "responsibility": "以 CTO / Tech Lead 视角评审工程交付质量。",
+      "allowed_skills": ["architecture.review", "code.review", "risk.review"]
+    },
+    {
+      "agent_id": "completion_check",
+      "name": "完成度检查 Agent",
+      "type": "质量评审型",
+      "responsibility": "按照 Definition of Done 判断任务是否真正完成。",
+      "allowed_skills": ["completion.audit", "test.run", "audit.write"]
+    }
+  ],
+  "stage_gates": [
+    "需求明确且可验收",
+    "数据库、后端、前端、工作流、权限和测试都有对应任务",
+    "权限与审计由安全权限 Agent 复核",
+    "MCP 工具必须经过注册、权限、安全审计和沙箱隔离",
+    "工程评审和完成度检查通过后才能标记完成"
+  ]
+}

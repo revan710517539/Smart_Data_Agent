@@ -1,0 +1,29 @@
+{
+  "version": "2026-07-05",
+  "description": "Example DB-API/SQLite warehouse catalog. Copy this file and set SMART_DATA_AGENT_SQL_WAREHOUSE_CATALOG to the copied path when SMART_DATA_AGENT_DATA_WAREHOUSE=sqlite.",
+  "datasets": {
+    "loan_operation_mart": {
+      "label": "贷款经营宽表",
+      "source_table": "loan_operation_fact",
+      "tenant_column": "tenant_id",
+      "allowed_metrics": ["loan_amount", "drawdown_rate"],
+      "allowed_dimensions": ["branch_name", "product_line", "month", "channel", "customer_segment"],
+      "source_snapshot": {
+        "snapshot_id": "",
+        "observed_at": "",
+        "latest_partition": "",
+        "artifact_sha256": "",
+        "immutable": false
+      },
+      "metric_aggregation": {
+        "loan_amount": "sum",
+        "drawdown_rate": {
+          "aggregation": "ratio",
+          "numerator": "drawdown_amount",
+          "denominator": "eligible_amount",
+          "multiplier": 1
+        }
+      }
+    }
+  }
+}

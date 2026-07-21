@@ -1,0 +1,10 @@
+{
+  "agent_id": "data_query",
+  "agent_name": "Data Query Agent",
+  "agent_type": "data_query",
+  "description": "Query governed semantic data through SuperSonic skills only.",
+  "allowed_skills": ["supersonic.query", "supersonic.metric_search", "supersonic.dataset_search"],
+  "prompt_template_id": "data_query.default",
+  "memory_policy": "read_only",
+  "status": "active"
+}

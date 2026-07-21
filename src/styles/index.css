@@ -1,0 +1,52 @@
+@import './fonts.css';
+@import './tailwind.css';
+@import './theme.css';
+
+@media print {
+  @page {
+    size: auto;
+    margin: 12mm;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .weekly-report-print-root,
+  .weekly-report-print-root * {
+    visibility: visible !important;
+  }
+
+  .weekly-report-print-root {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+
+  .weekly-report-print-hidden,
+  .weekly-report-print-hidden *,
+  .weekly-report-print-root button,
+  .weekly-report-print-root select {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  .weekly-report-print-root input,
+  .weekly-report-print-root textarea {
+    border: 0 !important;
+    background: transparent !important;
+    color: #1d1d1f !important;
+    -webkit-text-fill-color: #1d1d1f !important;
+    box-shadow: none !important;
+  }
+
+  .weekly-report-print-root textarea {
+    overflow: visible !important;
+    resize: none !important;
+  }
+}

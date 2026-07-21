@@ -1,0 +1,20 @@
+{
+  "skill_id": "trend.analysis",
+  "skill_name": "Trend Analysis",
+  "skill_type": "analysis_algorithm",
+  "description": "Analyze time-series trend, week-over-week change, and key fluctuation points.",
+  "input_schema": {
+    "data": "array",
+    "metric": "string",
+    "time_dimension": "string"
+  },
+  "output_schema": {
+    "analysis_result": "object",
+    "chart_spec": "object"
+  },
+  "permission_scope": ["analysis:run"],
+  "runtime_type": "sandbox",
+  "risk_level": "medium",
+  "version": "1.0.0",
+  "owner": "algorithm-platform"
+}

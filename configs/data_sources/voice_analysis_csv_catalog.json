@@ -1,0 +1,36 @@
+{
+  "datasets": {
+    "loan_operation_mart": {
+      "label": "智能分析语音链路 CSV Mock 贷款经营宽表",
+      "object_uri": "data/mock/voice_analysis_loan_operation.csv",
+      "artifact_sha256": "d3bdaafeea665cf9f0f093dbe90d31eb40e995b78a0dc419feb08feb8dbb6600",
+      "snapshot_id": "voice-analysis-csv-2026-07-v1",
+      "observed_at": "2026-07-11T00:00:00Z",
+      "latest_partition": "2026-07",
+      "tenant_column": "tenant_id",
+      "allowed_metrics": ["loan_amount", "drawdown_rate"],
+      "allowed_dimensions": ["branch_name", "product_line", "month", "channel", "customer_segment"],
+      "metric_aggregation": {
+        "loan_amount": "sum",
+        "drawdown_rate": {
+          "aggregation": "ratio",
+          "numerator": "drawdown_amount",
+          "denominator": "eligible_amount",
+          "multiplier": 1
+        }
+      },
+      "field_types": {
+        "tenant_id": "string",
+        "branch_name": "string",
+        "product_line": "string",
+        "month": "string",
+        "channel": "string",
+        "customer_segment": "string",
+        "loan_amount": "float",
+        "drawdown_rate": "float",
+        "drawdown_amount": "float",
+        "eligible_amount": "float"
+      }
+    }
+  }
+}

@@ -1,0 +1,128 @@
+{
+  "group_id": "algorithm_engineering",
+  "group_name": "算法工程师",
+  "source_file": "/Users/revan/Documents/Agent_Teams/06_算法工程师_AlgorithmEngineer.zip",
+  "mission": "把银行业务问题转化为可训练、可评估、可上线、可监控的算法方案，要求可解释、可审计、可复核。",
+  "controller_agent": "algorithm_controller",
+  "agents": [
+    {
+      "agent_id": "algorithm_controller",
+      "name": "算法工程师总控 Agent",
+      "type": "总控编排型",
+      "responsibility": "路由算法任务、确认边界、协调依赖并执行最终门禁。",
+      "allowed_skills": ["model.plan", "evaluation.run", "risk.review"]
+    },
+    {
+      "agent_id": "modeling_goal_parser",
+      "name": "建模目标解析 Agent",
+      "type": "目标解析型",
+      "responsibility": "把银行业务目标转化为明确的建模目标和算法任务。",
+      "allowed_skills": ["knowledge.search", "metric_definition.search", "task.plan"]
+    },
+    {
+      "agent_id": "dataset_design",
+      "name": "数据集设计 Agent",
+      "type": "算法建模型",
+      "responsibility": "设计算法训练所需的数据集、样本、标签、时间窗和数据切分方式。",
+      "allowed_skills": ["dataset.profile", "data.quality_check", "permission.check"]
+    },
+    {
+      "agent_id": "algorithm_data_quality",
+      "name": "算法数据质量 Agent",
+      "type": "算法建模型",
+      "responsibility": "检查建模数据的完整性、稳定性、偏差和可用性。",
+      "allowed_skills": ["data.quality_check", "drift.detect", "audit.write"]
+    },
+    {
+      "agent_id": "feature_engineering",
+      "name": "特征工程 Agent",
+      "type": "算法建模型",
+      "responsibility": "为银行算法模型设计特征体系。",
+      "allowed_skills": ["feature.generate", "feature.validate", "data.mask"]
+    },
+    {
+      "agent_id": "model_selection",
+      "name": "模型选择 Agent",
+      "type": "算法建模型",
+      "responsibility": "根据任务、数据、业务约束和上线要求选择合适模型。",
+      "allowed_skills": ["model.compare", "risk.review"]
+    },
+    {
+      "agent_id": "training_validation",
+      "name": "训练验证 Agent",
+      "type": "算法建模型",
+      "responsibility": "设计模型训练、验证、调参和实验管理流程。",
+      "allowed_skills": ["model.train", "evaluation.run", "experiment.track"]
+    },
+    {
+      "agent_id": "evaluation_metrics",
+      "name": "评估指标 Agent",
+      "type": "数据分析型",
+      "responsibility": "设计技术指标和业务指标，判断模型是否真正有价值。",
+      "allowed_skills": ["evaluation.run", "metric_definition.search", "report.generate_markdown"]
+    },
+    {
+      "agent_id": "model_explanation",
+      "name": "模型解释 Agent",
+      "type": "算法建模型",
+      "responsibility": "把模型结果转化为业务可理解、合规可审计的解释。",
+      "allowed_skills": ["model.explain", "knowledge.search", "risk.review"]
+    },
+    {
+      "agent_id": "model_service",
+      "name": "模型服务 Agent",
+      "type": "技术设计型",
+      "responsibility": "设计模型上线服务，包括批量评分、实时推理、API 服务和系统集成。",
+      "allowed_skills": ["model.deploy_plan", "mcp.call", "integration.test"]
+    },
+    {
+      "agent_id": "mlops",
+      "name": "MLOps Agent",
+      "type": "算法建模型",
+      "responsibility": "负责模型全生命周期管理。",
+      "allowed_skills": ["experiment.track", "model.registry", "drift.detect"]
+    },
+    {
+      "agent_id": "drift_monitoring",
+      "name": "监控漂移 Agent",
+      "type": "算法建模型",
+      "responsibility": "监控模型上线后的稳定性、数据漂移和效果衰减。",
+      "allowed_skills": ["drift.detect", "alert.create", "evaluation.run"]
+    },
+    {
+      "agent_id": "feedback_loop",
+      "name": "反馈闭环 Agent",
+      "type": "算法建模型",
+      "responsibility": "设计模型预测结果、业务执行结果和人工反馈的回流机制。",
+      "allowed_skills": ["feedback.collect", "memory.write", "evaluation.run"]
+    },
+    {
+      "agent_id": "algorithm_risk_compliance",
+      "name": "算法风控合规 Agent",
+      "type": "风险合规型",
+      "responsibility": "检查算法在银行场景中的公平性、隐私、安全、可解释和监管风险。",
+      "allowed_skills": ["risk.review", "data.mask", "audit.write"]
+    },
+    {
+      "agent_id": "algorithm_review",
+      "name": "算法评审 Agent",
+      "type": "质量评审型",
+      "responsibility": "检查算法方案是否达到银行可上线标准。",
+      "allowed_skills": ["model.review", "risk.review", "evaluation.run"]
+    },
+    {
+      "agent_id": "algorithm_report_writer",
+      "name": "算法报告 Writer",
+      "type": "文档整合型",
+      "responsibility": "把算法建设过程整合成算法方案或模型实验报告。",
+      "allowed_skills": ["report.generate_markdown", "knowledge.search"]
+    }
+  ],
+  "stage_gates": [
+    "建模目标、样本、标签、时间窗和数据权限已明确",
+    "特征、训练、验证、评估、解释、服务和监控方案齐全",
+    "客户、账户、交易、策略信息已脱敏或说明授权",
+    "算法风控合规和算法评审通过",
+    "模型服务、MLOps、漂移监控和反馈闭环具备交接条件"
+  ]
+}

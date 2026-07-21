@@ -1,0 +1,163 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import unittest
+
+from backend.platform.api.asgi import SmartDataAgentASGI
+from backend.platform.bootstrap import build_local_platform
+
+
+class ASGIRuntimeTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.services = build_local_platform()
+        self.app = SmartDataAgentASGI(self.services, owns_services=False)
+
+    def tearDown(self) -> None:
+        self.services.close()
+
+    def test_liveness_runs_through_asgi_without_threading_http_server(self) -> None:
+        status, headers, payload = asyncio.run(self._request("GET", "/api/live"))
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["service"], "smart-data-agent-api")
+        self.assertEqual(headers["x-content-type-options"], "nosniff")
+
+    def test_lifespan_starts_worker_and_readiness_checks_real_dependencies(self) -> None:
+        status, payload = asyncio.run(self._lifespan_ready())
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ready"])
+        self.assertTrue(payload["checks"]["automation_worker"]["ready"])
+
+    async def _lifespan_ready(self) -> tuple[int, dict]:
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        sent: list[dict] = []
+
+        async def receive() -> dict:
+            return await queue.get()
+
+        async def send(message: dict) -> None:
+            sent.append(message)
+
+        lifespan = asyncio.create_task(
+            self.app({"type": "lifespan"}, receive, send)
+        )
+        await queue.put({"type": "lifespan.startup"})
+        while not any(item["type"] == "lifespan.startup.complete" for item in sent):
+            await asyncio.sleep(0)
+        status, _, payload = await self._request("GET", "/api/ready")
+        await queue.put({"type": "lifespan.shutdown"})
+        await lifespan
+        return status, payload
+
+    def test_analysis_route_preserves_auth_rate_limit_and_evidence_contract(self) -> None:
+        body = json.dumps({"question": "各分行放款金额"}, ensure_ascii=False).encode("utf-8")
+        status, _, payload = asyncio.run(
+            self._request(
+                "POST",
+                "/api/analysis/run",
+                body=body,
+                headers=[
+                    (b"content-type", b"application/json"),
+                    (b"x-user-id", b"u_admin"),
+                    (b"x-tenant-id", b"tenant_demo"),
+                ],
+            )
+        )
+        self.assertEqual(status, 200)
+        result = payload["skill_results"][0]
+        self.assertTrue(result["semantic_info"]["metric_definitions_bound"])
+        self.assertTrue(result["evidence"]["evidence_id"].startswith("ev_"))
+
+    def test_fun_asr_websocket_ping_uses_asgi_auth_origin_and_message_contract(self) -> None:
+        sent = asyncio.run(self._websocket_ping())
+        self.assertEqual(sent[0]["type"], "websocket.accept")
+        payloads = [
+            json.loads(message["text"])
+            for message in sent
+            if message.get("type") == "websocket.send" and message.get("text")
+        ]
+        self.assertEqual(payloads[0], {"type": "connected"})
+        self.assertIn({"type": "pong"}, payloads)
+        self.assertEqual(sent[-1]["type"], "websocket.close")
+
+    async def _websocket_ping(self) -> list[dict]:
+        messages = iter(
+            [
+                {"type": "websocket.connect"},
+                {"type": "websocket.receive", "text": '{"type":"ping"}'},
+                {"type": "websocket.disconnect", "code": 1000},
+            ]
+        )
+        sent: list[dict] = []
+
+        async def receive() -> dict:
+            return next(messages)
+
+        async def send(message: dict) -> None:
+            sent.append(message)
+
+        await self.app(
+            {
+                "type": "websocket",
+                "path": "/api/asr/fun-asr/realtime",
+                "query_string": b"",
+                "headers": [
+                    (b"x-user-id", b"u_admin"),
+                    (b"x-tenant-id", b"tenant_demo"),
+                    (b"origin", b"http://localhost:5173"),
+                ],
+                "subprotocols": [],
+                "client": ("127.0.0.1", 50001),
+            },
+            receive,
+            send,
+        )
+        return sent
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes = b"",
+        headers: list[tuple[bytes, bytes]] | None = None,
+    ) -> tuple[int, dict[str, str], dict]:
+        sent: list[dict] = []
+        received = False
+
+        async def receive() -> dict:
+            nonlocal received
+            if received:
+                await asyncio.sleep(0)
+                return {"type": "http.disconnect"}
+            received = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        async def send(message: dict) -> None:
+            sent.append(message)
+
+        request_headers = list(headers or [])
+        request_headers.append((b"content-length", str(len(body)).encode("ascii")))
+        await self.app(
+            {
+                "type": "http",
+                "method": method,
+                "path": path,
+                "query_string": b"",
+                "headers": request_headers,
+                "client": ("127.0.0.1", 50000),
+            },
+            receive,
+            send,
+        )
+        start = next(message for message in sent if message["type"] == "http.response.start")
+        response = next(message for message in sent if message["type"] == "http.response.body")
+        response_headers = {
+            name.decode("latin-1"): value.decode("latin-1")
+            for name, value in start["headers"]
+        }
+        return start["status"], response_headers, json.loads(response["body"].decode("utf-8"))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -23,7 +23,7 @@ COPY data/__init__.py data/metric_dictionary_seed.json ./data/
 COPY data/mock ./data/mock
 COPY scripts ./scripts
 COPY --from=frontend-build /workspace/dist ./dist
-RUN pip install --no-cache-dir -r requirements.lock \
+RUN pip install --no-cache-dir --no-build-isolation -r requirements.lock \
     && pip install --no-cache-dir --no-deps .
 RUN mkdir -p /app/runtime /app/data/智能运营 && chown -R app:app /app
 USER app

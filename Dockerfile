@@ -6,7 +6,7 @@ COPY index.html tsconfig.json vite.config.ts postcss.config.mjs ./
 COPY src ./src
 RUN npm run typecheck && npm run build
 
-FROM python:3.13-slim AS runtime-base
+FROM python:3.13-slim-bookworm AS runtime-base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     SMART_DATA_AGENT_ENV=production \

@@ -14,7 +14,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 WORKDIR /app
 RUN groupadd --system app && useradd --system --gid app --home /app app
-COPY pyproject.toml requirements.lock README.md ./
+COPY pyproject.toml requirements.runtime.lock README.md ./
 COPY backend ./backend
 COPY configs ./configs
 # Only bundle deterministic demo/seed data. Crawler exports and source
@@ -24,7 +24,7 @@ COPY data/mock ./data/mock
 COPY scripts ./scripts
 COPY --from=frontend-build /workspace/dist ./dist
 RUN pip install --no-cache-dir --index-url https://pypi.org/simple "setuptools>=68" \
-    && pip install --no-cache-dir --no-build-isolation --index-url https://pypi.org/simple -r requirements.lock \
+    && pip install --no-cache-dir --no-build-isolation --index-url https://pypi.org/simple -r requirements.runtime.lock \
     && pip install --no-cache-dir --no-deps .
 RUN mkdir -p /app/runtime /app/data/智能运营 && chown -R app:app /app
 USER app

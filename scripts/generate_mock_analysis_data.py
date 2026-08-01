@@ -17,7 +17,7 @@ from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_DIR = PROJECT_ROOT / "data" / "mock"
+OUTPUT_DIR = PROJECT_ROOT / "Origin_Data" / "mock"
 INSTITUTION_PATH = OUTPUT_DIR / "institution_master_100.csv"
 CUSTOMER_PATH = OUTPUT_DIR / "customer_master_100.csv"
 ORDER_PATH = OUTPUT_DIR / "loan_transaction_order_100.csv"

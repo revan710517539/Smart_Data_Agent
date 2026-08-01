@@ -19,6 +19,34 @@
       "allowed_skills": ["supersonic.query"]
     },
     {
+      "agent_id": "data_analysis",
+      "name": "Data Analysis Agent",
+      "type": "数据分析型",
+      "responsibility": "对已授权查询结果执行确定性的指标剖析和维度分析。",
+      "allowed_skills": ["data.analysis.profile"]
+    },
+    {
+      "agent_id": "data_governance",
+      "name": "Data Governance Agent",
+      "type": "数据治理型",
+      "responsibility": "检查完整性、重复、敏感字段和证据发布边界。",
+      "allowed_skills": ["data.governance.assess"]
+    },
+    {
+      "agent_id": "conclusion",
+      "name": "Conclusion Agent",
+      "type": "结论生成型",
+      "responsibility": "基于数据剖析和治理证据生成事实、解释和行动分层结论。",
+      "allowed_skills": ["conclusion.generate"]
+    },
+    {
+      "agent_id": "bi_report",
+      "name": "BI Report Agent",
+      "type": "报表生成型",
+      "responsibility": "生成不伪造发布状态的可审计 BI 报表规格。",
+      "allowed_skills": ["bi.report.generate"]
+    },
+    {
       "agent_id": "review",
       "name": "Review Agent",
       "type": "最终评审型",

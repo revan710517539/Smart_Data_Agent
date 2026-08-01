@@ -11,8 +11,12 @@ services:
       SMART_DATA_AGENT_DATA_WAREHOUSE: json
       SMART_DATA_AGENT_OBJECT_STORE: local
       SMART_DATA_AGENT_STATIC_ROOT: /app/dist
+      SMART_DATA_AGENT_CSV_SOURCE_ROOT: /app/Origin_Data
+      SMART_DATA_AGENT_EMBEDDED_WORKER: "false"
     volumes:
       - smart-data-agent-runtime:/app/runtime
+      - ${SMART_DATA_AGENT_ORIGIN_DATA_HOST_ROOT:-./Origin_Data}:/app/Origin_Data:ro
+      - ${SMART_DATA_AGENT_TOPIC_DATA_HOST_ROOT:-./Topic_Data}:/app/Topic_Data
     restart: unless-stopped
 
 volumes:

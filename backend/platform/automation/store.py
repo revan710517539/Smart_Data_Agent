@@ -101,6 +101,23 @@ class SQLiteAutomationStore:
         ).fetchall()
         return [_task_row(row) for row in rows]
 
+    def pause_tasks_by_handler_refs(self, handler_refs: set[str]) -> int:
+        refs = sorted({str(item).strip() for item in handler_refs if str(item).strip()})
+        if not refs:
+            return 0
+        placeholders = ",".join("?" for _ in refs)
+        with self._conn:
+            cursor = self._conn.execute(
+                f"""
+                UPDATE platform_automation_tasks
+                SET status = 'paused', next_run_at = NULL, updated_at = ?,
+                    lock_version = lock_version + 1
+                WHERE handler_ref IN ({placeholders}) AND status = 'active'
+                """,
+                (_utcnow(), *refs),
+            )
+        return int(cursor.rowcount)
+
     def get_task_by_code(self, tenant_id: str, task_code: str) -> dict[str, Any] | None:
         row = self._conn.execute(
             "SELECT * FROM platform_automation_tasks WHERE tenant_id = ? AND task_code = ?",
@@ -838,14 +855,17 @@ def _next_run(expression: str, base_time: str, schedule_timezone: str = "UTC") -
         fields = expression.split()
         if len(fields) != 5:
             raise ValueError("five_field_cron_required")
-        candidate = base.astimezone(timezone.utc).replace(second=0, microsecond=0) + timedelta(minutes=1)
+        # Evaluate cron fields in the task's declared timezone.  The prior
+        # fallback converted to UTC before matching, making a 02:00 Shanghai
+        # task run at 02:00 UTC whenever croniter was unavailable.
+        candidate = base.replace(second=0, microsecond=0) + timedelta(minutes=1)
         for _ in range(60 * 24 * 366):
             # Python Monday is 0; cron Sunday is 0.
             cron_weekday = (candidate.weekday() + 1) % 7
             values = (candidate.minute, candidate.hour, candidate.day, candidate.month, cron_weekday)
             ranges = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 6))
             if all(_cron_field_matches(field, value, minimum, maximum) for field, value, (minimum, maximum) in zip(fields, values, ranges)):
-                return candidate.isoformat()
+                return candidate.astimezone(timezone.utc).isoformat()
             candidate += timedelta(minutes=1)
         raise ValueError("cron_next_run_not_found")
     except Exception as exc:

@@ -213,7 +213,7 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
                 self.services,
                 user_id="u_admin",
                 tenant_id="tenant_demo",
-                question="本月各分行放款金额排名TOP10",
+                question="2026年7月各分行放款金额排名TOP10",
                 page_context={"selected_model": {"id": "model_two_stage"}},
             )
 
@@ -262,7 +262,7 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
                 self.services,
                 user_id="u_admin",
                 tenant_id="tenant_demo",
-                question="请按周报分析本月各分行放款金额",
+                question="请按周报分析2026年7月各分行放款金额",
                 page_context={
                     "selected_model": {"id": "model_two_stage"},
                     "analysis_context_skills": [{"id": "weekly-report"}],
@@ -302,7 +302,7 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
                 self.services,
                 user_id="u_admin",
                 tenant_id="tenant_demo",
-                question="本月各分行放款金额排名TOP10",
+                question="2026年7月各分行放款金额排名TOP10",
                 page_context={
                     "model_application_module": "intelligent_analysis_reasoning",
                     "model_application_selection": {
@@ -358,7 +358,7 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
                 self.services,
                 user_id="u_admin",
                 tenant_id="tenant_demo",
-                question="本月各分行放款金额排名TOP10",
+                question="2026年7月各分行放款金额排名TOP10",
                 page_context={"selected_model": {"id": "model_two_stage"}},
             )
 

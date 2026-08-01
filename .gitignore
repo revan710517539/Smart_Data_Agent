@@ -17,9 +17,11 @@ test-results/
 # never in Forgejo.
 artifacts/
 output/
-data/acquisition/
-data/智能运营/
-data/智能运营源站下载/
+Origin_Data/acquisition/
+Origin_Data/智能运营/
+Origin_Data/智能运营源站下载/
+Topic_Data/*
+!Topic_Data/.gitkeep
 
 *.log
 *.sqlite
@@ -27,13 +29,13 @@ data/智能运营源站下载/
 *.sqlite-*
 .smart_data_agent.sqlite
 
-# Keep only deterministic fixtures under data/. Every operational download is
+# Keep only deterministic fixtures under Origin_Data/. Every operational download is
 # generated at runtime and stays outside source control.
-data/*
-!data/__init__.py
-!data/metric_dictionary_seed.json
-!data/mock/
-!data/mock/**
+Origin_Data/*
+!Origin_Data/__init__.py
+!Origin_Data/metric_dictionary_seed.json
+!Origin_Data/mock/
+!Origin_Data/mock/**
 
 __pycache__/
 *.py[cod]

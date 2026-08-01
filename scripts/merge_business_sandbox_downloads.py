@@ -12,8 +12,8 @@ from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_INPUT = PROJECT_ROOT / "data" / "智能运营源站下载"
-DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "智能运营" / "完整页面数据" / "经营沙盘"
+DEFAULT_INPUT = PROJECT_ROOT / "Origin_Data" / "智能运营源站下载"
+DEFAULT_OUTPUT = PROJECT_ROOT / "Origin_Data" / "智能运营" / "完整页面数据" / "经营沙盘"
 _NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 
 

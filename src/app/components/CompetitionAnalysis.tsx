@@ -204,7 +204,7 @@ export function CompetitionAnalysis() {
         </>
       ) : !loading && (
         <div className="rounded-xl border border-[#f0f0f2] bg-white px-6 py-16 text-center text-[12px] text-[#aeaeb2]">
-          请先通过数据接入登记持牌市场来源，写入实体与不可变观测证据，再配置市场监控规则。
+          请先将已获授权的市场来源 CSV 放入项目 Origin_Data 文件夹，写入实体与不可变观测证据后，再配置市场监控规则。
         </div>
       )}
     </div>

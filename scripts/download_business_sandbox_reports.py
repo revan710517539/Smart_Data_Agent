@@ -27,7 +27,7 @@ from scripts.crawl_business_sandbox import (
 )
 
 
-DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "智能运营源站下载"
+DEFAULT_OUTPUT = PROJECT_ROOT / "Origin_Data" / "智能运营源站下载"
 _XLSX_NAMESPACE = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 _BROWSER_PROFILES = (
     ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36", {"width": 1440, "height": 900}),

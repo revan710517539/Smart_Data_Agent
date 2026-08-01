@@ -37,7 +37,10 @@ const PlatformContext = createContext<PlatformContextValue | null>(null);
 
 export function PlatformProvider({ children }: { children: ReactNode }) {
   const [authSession, setAuthSession] = useState<AuthSession | null>(() => loadStoredSession());
-  const [isSessionResolved, setIsSessionResolved] = useState(false);
+  // Render the cached authenticated shell immediately. Session validation still
+  // runs in the background, but it must not create a blank first screen before
+  // the local API responds.
+  const [isSessionResolved, setIsSessionResolved] = useState(true);
   const [tenantCatalog, setTenantCatalog] = useState<string[]>(operatingTenantNames);
   const [selectedInstitution, setSelectedInstitutionState] = useState(() => resolveInitialInstitution(authSession));
   const sessionMutationVersion = useRef(0);

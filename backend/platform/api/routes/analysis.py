@@ -380,6 +380,8 @@ def run_analysis(
         if query_result:
             query_result["evidence"] = _build_execution_evidence(query_result)
             task.skill_results[0] = query_result
+            services.workflow.enrich_with_data_product_skills(context, task, question)
+            query_result = dict(task.skill_results[0])
         task.trace_id = services.trace_recorder.trace_id
         services.task_repository.save_task(task)
         row_count = len(query_result.get("data") or []) if isinstance(query_result, dict) else 0
@@ -469,6 +471,13 @@ def run_analysis(
         )
         services.task_repository.save_task(task)
         services.lineage_store.record_analysis(payload)
+        topic_data_references = services.topic_data_store.record_analysis_execution(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            task=payload,
+            source_reference=_dict_or_none(requested_context.get("topic_data_source")),
+        )
+        payload["topic_data"] = topic_data_references
         services.task_repository.save_runtime_event(
             RuntimeEvent(
                 event_type="analysis.run",
@@ -1080,6 +1089,17 @@ def _resolve_selected_model(
     if not callable(getter):
         raise RuntimeError("model_registry_unavailable")
     stored_model = getter(tenant_id, model_id, reveal_secret=True)
+    if stored_model is None and user_id:
+        list_owned = getattr(services.system_config_store, "list_models_owned_by", None)
+        if callable(list_owned):
+            stored_model = next(
+                (
+                    item
+                    for item in list_owned(user_id, tenant_id, reveal_secret=True)
+                    if str(item.get("id") or "") == model_id
+                ),
+                None,
+            )
     if isinstance(stored_model, dict):
         if str(stored_model.get("status") or "") not in {"available", "connected"}:
             raise RuntimeError("selected_model_not_available")

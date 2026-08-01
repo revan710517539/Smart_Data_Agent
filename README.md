@@ -13,13 +13,21 @@
   npm run dev:api
   ```
 
+  Keep that process running. To make a local restart survive terminal closure on macOS, use:
+
+  ```bash
+  nohup npm run dev:api > .smart-data-agent-api.log 2>&1 &
+  ```
+
   Start the frontend development server in another terminal:
 
   ```bash
-  npm run dev
+  npm run dev -- --host 127.0.0.1 --port 5174 --strictPort
   ```
 
-  The frontend proxies `/api/*` to `http://127.0.0.1:8787` in development.
+  The frontend proxies `/api/*` to `http://127.0.0.1:8788` in development.
+  If the API is unavailable, the page keeps any cached shell visible and shows a retryable
+  API error; it never treats a failed proxy request as a successful login or saved action.
 
   Optional SuperSonic semantic service configuration:
 
@@ -58,14 +66,17 @@
   SMART_DATA_AGENT_DATA_WAREHOUSE=json
   SMART_DATA_AGENT_OBJECT_STORE=local
   SMART_DATA_AGENT_OBJECT_ROOT=/app/runtime/artifacts
-  SMART_DATA_AGENT_CRAWLER_EXPORT_ROOT=/app/runtime/crawler-exports
-  SMART_DATA_AGENT_EMBEDDED_WORKER=true
+  SMART_DATA_AGENT_CSV_SOURCE_ROOT=/app/Origin_Data
+  SMART_DATA_AGENT_CSV_MAX_FILE_BYTES=134217728
+  SMART_DATA_AGENT_EMBEDDED_WORKER=false
   SMART_DATA_AGENT_STATIC_ROOT=/app/dist
   ```
 
-  Crawler connection credentials, storage-state files, and downloaded source
-  data are intentionally excluded from Git and the Docker build context. Add
-  them only as Dokploy secrets after deployment. This internal profile is not a
+  Smart_Data_Agent reads only the read-only project `Origin_Data/` CSV directory.
+  Each CSV is automatically listed as a raw table with a ten-row preview and
+  field interpretation; no external connection or collection runtime is included.
+  The CSV source directory is intentionally excluded from Git and the Docker
+  build context. This internal profile is not a
   production-compliance profile: a production deployment requires the OIDC,
   PostgreSQL, Redis, KMS, object storage, ClamAV, and egress configuration in
   `docs/production_upgrade/operations_runbook.md`.

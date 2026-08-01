@@ -1,0 +1,19 @@
+{
+  "skill_id": "data.governance.assess",
+  "skill_name": "数据治理评估",
+  "skill_type": "data_governance",
+  "description": "检查完整性、重复、敏感字段、真实执行模式和证据发布边界。",
+  "input_schema": {
+    "data": "array",
+    "dataset_id": "string",
+    "semantic_info": "object"
+  },
+  "output_schema": {
+    "governance_assessment": "object"
+  },
+  "permission_scope": ["analysis:run", "data:quality"],
+  "runtime_type": "python",
+  "risk_level": "low",
+  "version": "1.0.0",
+  "owner": "smart-data-agent"
+}

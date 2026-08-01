@@ -1,0 +1,22 @@
+{
+  "skill_id": "conclusion.generate",
+  "skill_name": "证据结论生成",
+  "skill_type": "conclusion_generation",
+  "description": "依据分析计划、数据剖析和治理检查生成事实、解释与行动分层结论。",
+  "input_schema": {
+    "question": "string",
+    "analysis_plan": "object",
+    "analysis_profile": "object",
+    "governance_assessment": "object",
+    "learned_guidance": "array?"
+  },
+  "output_schema": {
+    "conclusions": "array",
+    "conclusion_contract": "object"
+  },
+  "permission_scope": ["analysis:run"],
+  "runtime_type": "python",
+  "risk_level": "low",
+  "version": "1.0.0",
+  "owner": "smart-data-agent"
+}

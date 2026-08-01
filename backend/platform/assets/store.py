@@ -414,7 +414,7 @@ DEFAULT_ASSET_ITEMS: dict[str, list[dict[str, Any]]] = {
         {"id": "tool-financial-analyst", "name": "财务分析师", "provider": "Internal Agent", "toolType": "agent", "description": "调用受治理的财务分析智能体。", "endpoint": "", "capabilities": ["预算分析", "财务诊断", "报告生成"], "enabled": True, "status": "已接入"},
     ],
     "analysis_shortcut": [
-        {"id": "shortcut-branch-ranking", "title": "分行放款排名分析", "query": "本月各分行放款金额排名TOP10，并比较产品线动支率", "skillIds": ["scene-daily-operation", "topic-descriptive"], "tableIds": ["topic_weekly_branch_rank"], "memoryIds": [], "visible": True, "sortOrder": 10, "ownerUserId": ""},
+        {"id": "shortcut-branch-ranking", "title": "分行放款排名分析", "query": "2026年7月各分行放款金额排名TOP10，并比较产品线动支率", "skillIds": ["scene-daily-operation", "topic-descriptive"], "tableIds": ["topic_weekly_branch_rank"], "memoryIds": [], "visible": True, "sortOrder": 10, "ownerUserId": ""},
         {"id": "shortcut-m1-attribution", "title": "M1逾期率归因分析", "query": "消费贷和经营贷的M1逾期率变化及原因", "skillIds": ["scene-risk-strategy", "topic-attribution"], "tableIds": ["topic_m1_overdue_diagnosis"], "memoryIds": [], "visible": True, "sortOrder": 20, "ownerUserId": ""},
         {"id": "shortcut-channel-roi", "title": "渠道获客成本与ROI分析", "query": "按渠道和月份比较获客成本与ROI，定位高投入低产出渠道", "skillIds": ["scene-daily-operation", "topic-attribution"], "tableIds": ["topic_channel_roi"], "memoryIds": [], "visible": True, "sortOrder": 30, "ownerUserId": ""},
         {"id": "shortcut-customer-conversion", "title": "客群转化与活跃分析", "query": "按客群和产品线比较转化率与活跃客户数，识别优先经营客群", "skillIds": ["scene-daily-operation", "topic-descriptive"], "tableIds": ["topic_customer_conversion"], "memoryIds": [], "visible": True, "sortOrder": 40, "ownerUserId": ""},

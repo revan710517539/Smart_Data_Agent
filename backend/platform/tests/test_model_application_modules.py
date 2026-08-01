@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from backend.platform.settings.model_modules import list_models_for_application
+from backend.platform.settings.model_modules import application_module_label, list_models_for_application, normalize_application_module
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -107,6 +107,12 @@ class ModelApplicationModuleTest(unittest.TestCase):
                 self.assertEqual(models["memory_b"]["applicationModule"], "memory_extraction")
             finally:
                 store.close()
+
+    def test_skill_evolution_module_placeholder_is_registered_without_model_binding(self) -> None:
+        store = InMemorySystemConfigStore()
+        self.assertEqual(normalize_application_module("Skill自学习与演化"), "skill_evolution_learning")
+        self.assertEqual(application_module_label("skill_evolution_learning"), "Skill自学习与演化")
+        self.assertEqual(list_models_for_application(store, "tenant_demo", "skill_evolution_learning"), [])
 
 
 if __name__ == "__main__":

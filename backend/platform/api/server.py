@@ -266,7 +266,7 @@ class AnalysisAPIHandler(BaseHTTPRequestHandler):
         target_id: str = "",
         detail: dict[str, Any] | None = None,
     ) -> None:
-        self.services.audit_store.write(
+        event = self.services.audit_store.write(
             tenant_id=context.tenant_id,
             actor_user_id=context.user_id,
             action=action,
@@ -275,6 +275,17 @@ class AnalysisAPIHandler(BaseHTTPRequestHandler):
             detail=detail or {},
             ip_address=self.client_address[0] if self.client_address else "",
         )
+        try:
+            self.services.learning_service.observe_operation(event)
+        except Exception as exc:
+            # Learning is an additive background concern. A malformed candidate
+            # or temporary learning failure must never roll back the user action.
+            self.services.trace_recorder.add_span(
+                "learning.operation.observe",
+                inputs={"action": action, "target_type": target_type},
+                status="error",
+                error_code=type(exc).__name__,
+            )
 
     def _read_json(self, max_bytes: int = MAX_JSON_BODY_BYTES) -> dict[str, Any]:
         content_length = int(self.headers.get("content-length") or "0")
@@ -455,13 +466,13 @@ def main() -> None:
     load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=False)
     parser = argparse.ArgumentParser(description="Run the Smart Data Agent local API server.")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--port", type=int, default=8788)
     parser.add_argument("--db", default=".smart_data_agent.sqlite")
     args = parser.parse_args()
 
     os.environ.setdefault(
         "SMART_DATA_AGENT_OBJECT_ROOT",
-        str(Path(__file__).resolve().parents[3] / "data" / "acquisition"),
+        str(Path(__file__).resolve().parents[3] / "Topic_Data" / "artifacts"),
     )
 
     server = create_server(args.host, args.port, args.db)

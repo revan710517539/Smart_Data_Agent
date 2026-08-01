@@ -24,7 +24,7 @@ from websocket import (
 
 from backend.platform.api.support import first_query_value, send_route_exception
 from backend.platform.security import EgressPolicyError, validate_outbound_url
-from backend.platform.settings import normalize_application_module
+from backend.platform.settings import list_models_for_application, normalize_application_module
 
 
 FUN_ASR_REALTIME_PATH = "/api/asr/fun-asr/realtime"
@@ -103,10 +103,13 @@ def handle_fun_asr_runtime_config_get(handler: Any, query: str) -> None:
 
 def _resolve_runtime_analysis_models(handler: Any, tenant_id: str, user_id: str) -> list[dict[str, Any]]:
     store = handler.services.system_config_store
-    models = list(store.list_models(tenant_id, reveal_secret=False))
-    list_owned = getattr(store, "list_models_owned_by", None)
-    if user_id and callable(list_owned):
-        models.extend(list_owned(user_id, tenant_id, reveal_secret=False))
+    models = list_models_for_application(
+        store,
+        tenant_id,
+        "intelligent_analysis_reasoning",
+        user_id=user_id,
+        reveal_secret=False,
+    )
     deduplicated: dict[str, dict[str, Any]] = {}
     for model in models:
         model_id = str(model.get("id") or "").strip()

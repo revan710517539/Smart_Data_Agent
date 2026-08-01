@@ -8,11 +8,13 @@ import { AnalysisProgressPanel } from "./self-analysis/AnalysisProgressPanel";
 import { completedProgressSteps, configuredModelForModule, modelApplicationModuleForTrigger, modelApplicationSelection, modelInvocationIssue, modelsForModule, speechApplicationModuleForTarget } from "./self-analysis/analysisRuntime";
 import { createRealtimeSpeakerGateState, extractRealtimeVoiceAnalysisCommand, gateRealtimeSpeakerFrame, isRealtimeVoiceTrigger, type RealtimeSpeakerGateState, type RealtimeVoiceTrigger } from "./self-analysis/realtimeVoice";
 import { fetchMetricDictionary } from "../services/metricDictionaryApi";
-import { fetchSavedAnalysisResults, saveSavedAnalysisResult } from "../services/reportApi";
+import { deleteSavedAnalysisResult, fetchSavedAnalysisResults, saveSavedAnalysisResult } from "../services/reportApi";
 import {
   fetchDataAssets,
+  fetchTopicData,
   saveDataAssetItem,
   type RawTableAsset,
+  type TopicDataReference,
   type TopicTableAsset,
 } from "../services/dataAssetApi";
 import { apiErrorMessage, getApiBaseUrl } from "../services/apiClient";
@@ -20,8 +22,8 @@ import { demoFallbackDisabledMessage, isDemoFallbackEnabled } from "../services/
 import { modelApplicationModuleLabel } from "../data/modelApplicationModules";
 import { runApplicationAction } from "../services/applicationApi";
 import { fetchAnalysisRuntimeConfig, type FunAsrRuntimeIntegration, type ModelIntegration } from "../services/systemConfigApi";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis } from "recharts";
-import { ArrowUp, AudioLines, Sparkles, Clock, Star, ArrowUpRight, BarChart3, PieChartIcon, TrendingUp, Table2, Download, BookmarkPlus, History, Lightbulb, ChevronDown, Code2, Mic, Plus, Upload, X, ChevronsDown, ChevronsUp } from "lucide-react";
+import { ArrowUp, AudioLines, Sparkles, Clock, Star, ArrowUpRight, BarChart3, PieChartIcon, TrendingUp, Table2, Download, BookmarkPlus, History, Lightbulb, ChevronDown, Code2, Mic, Plus, Upload, X, ChevronsDown, ChevronsUp, Eye, Pencil, Trash2, Check } from "lucide-react";
+import { AnalysisVisualCard, RawDataTable } from "./self-analysis/ResultViews";
 import {
   type VisualizationType,
   type ResultVisualKey,
@@ -95,7 +97,6 @@ import {
   groupAnalysisModelOptions,
   hasSelectableAnalysisModel,
   autoReferenceSkillCategories,
-  visualizationOptions,
   inferVisualTypes,
   visualizationLabel,
   createAnalysisPlan,
@@ -110,9 +111,7 @@ import {
   formatMetricScenarios,
   loadSavedAnalysisResults,
   downloadCsv,
-  analysisRawFields,
   csvCell,
-  displayRawCell,
   readKnowledgeAttachment,
 } from "./self-analysis/domain";
 
@@ -635,6 +634,11 @@ export function SelfAnalysis() {
   const [analysisTopicShortcuts, setAnalysisTopicShortcuts] = useState<AnalysisTopicShortcut[]>([]);
   const [savedAnalysisResults, setSavedAnalysisResults] = useState<SavedAnalysisResult[]>([]);
   const [savedAnalysisLoadError, setSavedAnalysisLoadError] = useState("");
+  const [expandedReportId, setExpandedReportId] = useState("");
+  const [editingReportId, setEditingReportId] = useState<string | null>(null);
+  const [reportTitleDraft, setReportTitleDraft] = useState("");
+  const [reportActionError, setReportActionError] = useState("");
+  const [reportLoadingId, setReportLoadingId] = useState("");
   const [analysisTopicsLoaded, setAnalysisTopicsLoaded] = useState(false);
   const [analysisTopicsExpanded, setAnalysisTopicsExpanded] = useState(false);
   const [topicShortcutMenu, setTopicShortcutMenu] = useState<TopicShortcutMenuState>(null);
@@ -907,8 +911,8 @@ export function SelfAnalysis() {
     const syncMetrics = async () => {
       try {
         const [metricResponse, assetResponse] = await Promise.all([
-          fetchMetricDictionary({ tenantId }),
-          fetchDataAssets({ tenantId }),
+          fetchMetricDictionary({ tenantId, userId }),
+          fetchDataAssets({ tenantId, userId }),
         ]);
         if (!cancelled) {
           const allConfiguredShortcuts = (assetResponse.analysis_shortcuts || [])
@@ -919,6 +923,8 @@ export function SelfAnalysis() {
             : allConfiguredShortcuts.filter((item) => !item.ownerUserId))
             .sort((a, b) => a.sortOrder - b.sortOrder);
           setAvailableMetrics(metricResponse.metrics);
+          // raw_tables is the same CSV catalog rendered in 数据管理 → 原始表.
+          // It is intentionally not a separately stored configuration list.
           setAvailableRawTables(assetResponse.raw_tables.filter((table) => table.lifecycleStatus === "active"));
           setAvailableTopicTables(assetResponse.topic_tables);
           const configuredSkills = (assetResponse.analysis_skills || [])
@@ -1217,6 +1223,7 @@ export function SelfAnalysis() {
     forcedSkills: AnalysisSkillOption[] = [],
     forcedDataTables?: AnalysisDataTableSelection[],
     forcedMemoryIds: string[] = [],
+    topicDataSource?: { type: "shortcut"; id: string },
   ) => {
     const nextQuery = (q || query).trim();
     if (!nextQuery) {
@@ -1363,6 +1370,7 @@ export function SelfAnalysis() {
           })),
           selected_data_tables: effectiveDataTables,
           analysis_memory_ids: forcedMemoryIds,
+          topic_data_source: topicDataSource || null,
           files: knowledgeFiles,
           plugins: [],
           selected_topic: topic
@@ -1645,14 +1653,125 @@ export function SelfAnalysis() {
       .filter((table): table is TopicTableAsset => Boolean(table));
     const tableSelections = shortcutTables.map(topicTableToSelection);
     if (tableSelections.length) setSelectedDataTables(tableSelections);
-    void handleQuery(
-      topic.query,
-      shortcutTables[0],
-      "manual",
-      boundSkills,
-      tableSelections.length ? tableSelections : undefined,
-      topic.memoryIds || [],
-    );
+    void restoreTopicDataReference(
+      { reference_type: "shortcut", reference_id: topic.id },
+      { fallbackQuery: topic.query, fallbackVisualTypes: inferVisualTypes(topic.query, tableSelections) },
+    ).catch(() => {
+      void handleQuery(
+        topic.query,
+        shortcutTables[0],
+        "manual",
+        boundSkills,
+        tableSelections.length ? tableSelections : undefined,
+        topic.memoryIds || [],
+        { type: "shortcut", id: topic.id },
+      );
+    });
+  };
+
+  const rowsFromTopicSnapshot = (rows: Array<Record<string, string>>): AnalysisRow[] => {
+    if (!rows.length) return [];
+    const first = rows[0];
+    const metricField = Object.keys(first).find((field) => Number.isFinite(Number(first[field]))) || Object.keys(first)[0] || "value";
+    const dimensionField = Object.keys(first).find((field) => field !== metricField) || metricField;
+    return rows.slice(0, 200).map((raw, index) => ({
+      branch: String(raw[dimensionField] || `第${index + 1}行`),
+      productLine: String(raw.product_line || "—"),
+      customerSegment: String(raw.customer_segment || "—"),
+      amount: Number(raw[metricField]) || 0,
+      metricName: metricField,
+      metricUnit: "",
+      raw,
+      completion: String(raw.completion_rate || raw.balance_completion_rate || "—"),
+      conversion: String(raw.conversion_rate || "—"),
+      overdueRate: String(raw.m1_overdue_rate || "—"),
+      weekChange: String(raw.week_change || raw.weekly_net_increase || "—"),
+    }));
+  };
+
+  const restoreTopicDataReference = async (
+    reference: Pick<TopicDataReference, "reference_type" | "reference_id">,
+    options: { fallbackQuery: string; fallbackVisualTypes?: Record<ResultVisualKey, VisualizationType> },
+  ) => {
+    const snapshot = await fetchTopicData({
+      tenantId,
+      userId,
+      referenceType: reference.reference_type,
+      referenceId: reference.reference_id,
+      dataType: "data",
+    });
+    const manifest = snapshot.manifest as Record<string, unknown>;
+    const restoredQuery = String(manifest.question || options.fallbackQuery || "历史分析");
+    const restoredRows = rowsFromTopicSnapshot(snapshot.rows);
+    setQuery(restoredQuery);
+    setScriptPlanName(restoredQuery);
+    setAnalysisTaskId(String(manifest.task_id || (reference.reference_type === "history" ? reference.reference_id : "")));
+    setAnalysisPlan(String(manifest.analysis_plan?.toString?.() || `已复用 Topic_Data 最新快照 · ${snapshot.row_count} 行数据。`));
+    setAnalysisRows(restoredRows);
+    setAnalysisSummary(String(manifest.summary || "该结果已从 Topic_Data 最新快照恢复。"));
+    setSqlScript(String(manifest.sql || "-- 当前 Topic_Data 快照未保存 SQL。"));
+    setPythonScript(String(manifest.python_script || "# 当前 Topic_Data 快照未保存 Python 脚本。"));
+    setVisualTypes(options.fallbackVisualTypes || inferVisualTypes(restoredQuery, selectedDataTables));
+    setAnalysisError("");
+    setResultMode("visual");
+    setShowResult(true);
+  };
+
+  const openSavedReport = async (result: SavedAnalysisResult) => {
+    const reference = result.topicData || (result.analysisTaskId ? { reference_type: "history" as const, reference_id: result.analysisTaskId } : null);
+    if (!reference) {
+      setReportActionError("该报告缺少可读取的数据快照。");
+      return;
+    }
+    if (expandedReportId === result.id) {
+      setExpandedReportId("");
+      return;
+    }
+    setReportActionError("");
+    setExpandedReportId(result.id);
+    setReportLoadingId(result.id);
+    try {
+      await restoreTopicDataReference(reference, { fallbackQuery: result.query, fallbackVisualTypes: result.visualTypes as Record<ResultVisualKey, VisualizationType> });
+    } catch (error) {
+      setReportActionError(apiErrorMessage(error, "报告数据读取失败"));
+    } finally {
+      setReportLoadingId("");
+    }
+  };
+
+  const saveReportTitle = async (result: SavedAnalysisResult) => {
+    const title = reportTitleDraft.trim();
+    if (!title) {
+      setReportActionError("报告名称不能为空。");
+      return;
+    }
+    try {
+      const response = await saveSavedAnalysisResult({ tenantId, userId, result: { ...result, title } });
+      const saved = {
+        ...response.result,
+        visualTypes: {
+          primary: response.result.visualTypes.primary as VisualizationType,
+          secondary: response.result.visualTypes.secondary as VisualizationType,
+        },
+      } satisfies SavedAnalysisResult;
+      setSavedAnalysisResults((current) => current.map((item) => item.id === result.id ? saved : item));
+      setEditingReportId(null);
+      setReportActionError("");
+    } catch (error) {
+      setReportActionError(apiErrorMessage(error, "报告名称保存失败"));
+    }
+  };
+
+  const deleteSavedReport = async (result: SavedAnalysisResult) => {
+    if (!window.confirm(`确认删除报告“${result.title || result.query}”吗？`)) return;
+    try {
+      await deleteSavedAnalysisResult({ tenantId, userId, resultId: result.id });
+      setSavedAnalysisResults((current) => current.filter((item) => item.id !== result.id));
+      if (expandedReportId === result.id) setExpandedReportId("");
+      setReportActionError("");
+    } catch (error) {
+      setReportActionError(apiErrorMessage(error, "报告删除失败"));
+    }
   };
 
   const saveAnalysisResult = async () => {
@@ -1671,10 +1790,10 @@ export function SelfAnalysis() {
     };
     setSaveMessage("保存中...");
     try {
-      const response = await saveSavedAnalysisResult({ tenantId, result });
+      const response = await saveSavedAnalysisResult({ tenantId, userId, result });
       setSavedAnalysisResults((current) => [response.result as SavedAnalysisResult, ...current.filter((item) => item.id !== response.result.id)].slice(0, 50));
       window.dispatchEvent(new CustomEvent("smart-data-agent-analysis-saved", { detail: response.result }));
-      setSaveMessage("已保存到银行经营分析周报");
+      setSaveMessage("已保存到我的报告，数据已关联 Topic_Data 最新快照。");
     } catch (error) {
       if (isDemoFallbackEnabled()) {
         const nextResults = [result, ...loadSavedAnalysisResults()].slice(0, 12);
@@ -2358,7 +2477,7 @@ export function SelfAnalysis() {
                 </div>
                 <div className="space-y-1.5">
                   {recentSavedQueries.map((item) => (
-                    <div key={item.id} onClick={() => void handleQuery(item.query)}
+                    <div key={item.id} onClick={() => void openSavedReport(item)}
                       className="flex items-center gap-3 p-3 bg-[#fafbfc] rounded-lg cursor-pointer hover:bg-[#f2f2f7] transition-colors">
                       <Clock className="w-3.5 h-3.5 text-[#c7c7cc] shrink-0" />
                       <span className="text-[12px] text-[#636366] flex-1">{item.query}</span>
@@ -2525,17 +2644,68 @@ export function SelfAnalysis() {
 
       {activeView === "reports" && (
         <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
-          <h3 className="text-[13px] text-[#1d1d1f] mb-4">已保存的报告</h3>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-[13px] text-[#1d1d1f]">我的报告</h3>
+              <p className="mt-1 text-[11px] text-[#aeaeb2]">报告、最近查询和快捷键统一读取 Topic_Data 中保留的最新数据。</p>
+            </div>
+            <span className="rounded-md bg-[#f2f2f7] px-2 py-1 text-[11px] text-[#636366]">{savedAnalysisResults.length} 份</span>
+          </div>
+          {reportActionError && <div className="mb-3 rounded-lg border border-[#ffd0d0] bg-[#fff5f5] px-3 py-2 text-[11px] text-[#d93025]">{reportActionError}</div>}
           <div className="space-y-1.5">
             {savedAnalysisResults.map((result) => (
-              <div key={result.id} className="flex items-center gap-3 p-3 bg-[#fafbfc] rounded-lg hover:bg-[#f2f2f7] transition-colors">
-                <Star className="w-4 h-4 text-[#c7c7cc]" />
-                <div className="flex-1">
-                  <div className="text-[12px] text-[#1d1d1f]">{result.title || result.query}</div>
-                  <div className="text-[11px] text-[#c7c7cc] mt-0.5">
-                    {result.savedAt || "时间未记录"}{result.analysisTaskId ? ` · 任务 ${result.analysisTaskId}` : ""}
+              <div key={result.id} className="overflow-hidden rounded-lg bg-[#fafbfc]">
+                <div
+                  className="flex cursor-pointer items-center gap-3 p-3 transition-colors hover:bg-[#f2f2f7]"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => { if (editingReportId !== result.id) void openSavedReport(result); }}
+                  onKeyDown={(event) => { if (editingReportId !== result.id && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); void openSavedReport(result); } }}
+                >
+                  <Star className="w-4 h-4 shrink-0 text-[#c7c7cc]" />
+                  <div className="min-w-0 flex-1">
+                    {editingReportId === result.id ? (
+                      <input
+                        autoFocus
+                        value={reportTitleDraft}
+                        onChange={(event) => setReportTitleDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") void saveReportTitle(result);
+                          if (event.key === "Escape") setEditingReportId(null);
+                        }}
+                        className="h-7 w-full rounded-md border border-[#c7c7cc] bg-white px-2 text-[12px] text-[#1d1d1f] outline-none"
+                      />
+                    ) : (
+                      <span onDoubleClick={(event) => { event.stopPropagation(); setEditingReportId(result.id); setReportTitleDraft(result.title || result.query); }} className="block max-w-full truncate text-left text-[12px] text-[#1d1d1f]" title="双击修改报告名称">
+                        {result.title || result.query}
+                      </span>
+                    )}
+                    <div className="mt-0.5 text-[11px] text-[#c7c7cc]">{result.savedAt || "时间未记录"}{result.topicData?.updated_at ? ` · 数据更新 ${new Date(result.topicData.updated_at).toLocaleString("zh-CN", { hour12: false })}` : ""}</div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {editingReportId === result.id ? (
+                      <button type="button" aria-label="保存报告名称" title="保存" onClick={(event) => { event.stopPropagation(); void saveReportTitle(result); }} className="rounded-md p-1.5 text-[#636366] hover:bg-white"><Check className="h-3.5 w-3.5" /></button>
+                    ) : (
+                      <button type="button" aria-label="编辑报告名称" title="编辑" onClick={(event) => { event.stopPropagation(); setEditingReportId(result.id); setReportTitleDraft(result.title || result.query); }} className="rounded-md p-1.5 text-[#636366] hover:bg-white"><Pencil className="h-3.5 w-3.5" /></button>
+                    )}
+                    <button type="button" aria-label="查看报告" title="查看" onClick={(event) => { event.stopPropagation(); void openSavedReport(result); }} className="rounded-md p-1.5 text-[#636366] hover:bg-white"><Eye className="h-3.5 w-3.5" /></button>
+                    <button type="button" aria-label="删除报告" title="删除" onClick={(event) => { event.stopPropagation(); void deleteSavedReport(result); }} className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3.5 w-3.5" /></button>
                   </div>
                 </div>
+                {expandedReportId === result.id && (
+                  <div className="border-t border-[#ececf0] bg-white p-4">
+                    <div className="mb-3 text-[12px] font-medium text-[#1d1d1f]">可视化图形与结论</div>
+                    {reportLoadingId === result.id ? (
+                      <div className="rounded-lg bg-[#fafbfc] px-3 py-8 text-center text-[12px] text-[#8a8a8e]">正在从 Topic_Data 读取该报告的最新数据…</div>
+                    ) : <>
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <AnalysisVisualCard id="primary" title={`主分析视图 · ${visualizationLabel(result.visualTypes.primary as VisualizationType)}`} type={result.visualTypes.primary as VisualizationType} rows={analysisRows} open={false} onMenuToggle={() => undefined} onTypeChange={() => undefined} />
+                      <AnalysisVisualCard id="secondary" title={`补充分析视图 · ${visualizationLabel(result.visualTypes.secondary as VisualizationType)}`} type={result.visualTypes.secondary as VisualizationType} rows={analysisRows} open={false} onMenuToggle={() => undefined} onTypeChange={() => undefined} />
+                    </div>
+                    <div className="mt-4 rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-3 text-[12px] leading-[1.7] whitespace-pre-wrap text-[#3a3a3c]">{analysisSummary || result.summary || "当前报告尚无可展示结论。"}</div>
+                    </>}
+                  </div>
+                )}
               </div>
             ))}
             {!savedAnalysisResults.length && (
@@ -2769,208 +2939,5 @@ function VoiceInputPopover({
         </div>
       </div>
     </div>
-  );
-}
-
-function RawDataTable({ rows, onDownload }: { rows: AnalysisRow[]; onDownload: () => void }) {
-  const fields = analysisRawFields(rows);
-  return (
-    <div className="rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div>
-          <div className="text-[12px] text-[#1d1d1f]">可视化原始数据</div>
-          <div className="text-[11px] text-[#aeaeb2] mt-0.5">当前图形对应的 SQL 返回数据，默认显示 20 条</div>
-        </div>
-        <button
-          type="button"
-          onClick={onDownload}
-          disabled={!rows.length}
-          className="inline-flex items-center gap-1 rounded-lg border border-[#e5e5ea] bg-white px-3 py-1.5 text-[11px] text-[#636366] hover:bg-[#f2f2f7] disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <Download className="w-3 h-3" />
-          下载数据
-        </button>
-      </div>
-      <div className="overflow-x-auto rounded-lg border border-[#f0f0f2] bg-white">
-        <table className="w-full text-[12px]">
-          <thead>
-            <tr className="border-b border-[#f0f0f2] text-[#aeaeb2]">
-              {fields.map((field) => <th key={field} className="whitespace-nowrap px-3 py-2 text-left font-normal">{field}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length ? (
-              rows.slice(0, 20).map((row, index) => (
-                <tr key={`${row.branch}_${index}`} className="border-b border-[#fafafa] last:border-b-0">
-                  {fields.map((field) => (
-                    <td key={field} className="whitespace-nowrap px-3 py-2 text-[#3a3a3c]">{displayRawCell(row.raw[field])}</td>
-                  ))}
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td className="px-3 py-8 text-center text-[#8a8a8e]" colSpan={Math.max(1, fields.length)}>
-                  暂无 SQL 返回数据
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function AnalysisVisualCard({
-  id,
-  title,
-  type,
-  rows,
-  open,
-  compact = false,
-  onMenuToggle,
-  onTypeChange,
-}: {
-  id: ResultVisualKey;
-  title: string;
-  type: VisualizationType;
-  rows: AnalysisRow[];
-  open: boolean;
-  compact?: boolean;
-  onMenuToggle: () => void;
-  onTypeChange: (type: VisualizationType) => void;
-}) {
-  return (
-    <div data-visual-card={id} className="relative rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-4">
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div>
-          <div className="text-[12px] text-[#1d1d1f]">{title}</div>
-          <div className="text-[11px] text-[#aeaeb2] mt-0.5">右侧可切换可视化组件</div>
-        </div>
-        <button
-          type="button"
-          onClick={onMenuToggle}
-          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#e5e5ea] bg-white text-[11px] text-[#636366] hover:bg-[#f2f2f7]"
-          aria-label={`切换${title}可视化`}
-        >
-          {visualizationLabel(type)}
-          <ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
-        </button>
-      </div>
-
-      {open && (
-        <div className="absolute right-4 top-12 z-20 w-32 rounded-lg border border-[#e5e5ea] bg-white p-1 shadow-lg shadow-black/[0.08]">
-          {visualizationOptions.map((option) => (
-            <button
-              key={option.type}
-              type="button"
-              onClick={() => onTypeChange(option.type)}
-              className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] ${
-                option.type === type ? "bg-[#f2f2f7] text-[#1d1d1f]" : "text-[#636366] hover:bg-[#fafbfc]"
-              }`}
-            >
-              <option.icon className="w-3.5 h-3.5 text-[#8a8a8e]" />
-              {option.label}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <VisualizationRenderer type={type} rows={rows} compact={compact} />
-    </div>
-  );
-}
-
-function VisualizationRenderer({ type, rows, compact }: { type: VisualizationType; rows: AnalysisRow[]; compact?: boolean }) {
-  const height = compact ? 220 : 300;
-  const visibleRows = rows.slice(0, compact ? 5 : 8);
-  const metricName = rows[0]?.metricName || "metric_value";
-
-  if (!rows.length) {
-    return (
-      <div className="flex h-[220px] items-center justify-center rounded-lg border border-dashed border-[#e5e5ea] bg-[#fafbfc] text-[12px] text-[#8a8a8e]">
-        暂无可视化数据
-      </div>
-    );
-  }
-
-  if (type === "table") {
-    const fields = analysisRawFields(visibleRows);
-    return (
-      <div className="overflow-x-auto rounded-lg border border-[#f0f0f2] bg-white">
-        <table className="w-full text-[12px]">
-          <thead>
-            <tr className="border-b border-[#f0f0f2] text-[#aeaeb2]">
-              {fields.map((field) => <th key={field} className="whitespace-nowrap px-3 py-2 text-left font-normal">{field}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {visibleRows.map((row, index) => (
-              <tr key={`${row.branch}_${index}`} className="border-b border-[#fafafa] last:border-b-0">
-                {fields.map((field) => <td key={field} className="whitespace-nowrap px-3 py-2 text-[#3a3a3c]">{displayRawCell(row.raw[field])}</td>)}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-
-  if (type === "column") {
-    return (
-      <ResponsiveContainer width="100%" height={height}>
-        <BarChart data={visibleRows} margin={{ top: 12, right: 8, left: -18, bottom: 0 }}>
-          <CartesianGrid stroke="#f0f0f2" strokeDasharray="3 3" vertical={false} />
-          <XAxis dataKey="branch" tick={{ fontSize: 10, fill: "#8a8a8e" }} tickLine={false} axisLine={false} />
-          <YAxis tick={{ fontSize: 10, fill: "#aeaeb2" }} tickLine={false} axisLine={false} />
-          <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #f0f0f2" }} />
-          <Bar dataKey="amount" name={metricName} fill="#636366" radius={[4, 4, 0, 0]} barSize={compact ? 18 : 24} />
-        </BarChart>
-      </ResponsiveContainer>
-    );
-  }
-
-  if (type === "line") {
-    return (
-      <ResponsiveContainer width="100%" height={height}>
-        <LineChart data={visibleRows} margin={{ top: 12, right: 16, left: -18, bottom: 0 }}>
-          <CartesianGrid stroke="#f0f0f2" strokeDasharray="3 3" vertical={false} />
-          <XAxis dataKey="branch" tick={{ fontSize: 10, fill: "#8a8a8e" }} tickLine={false} axisLine={false} />
-          <YAxis tick={{ fontSize: 10, fill: "#aeaeb2" }} tickLine={false} axisLine={false} />
-          <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #f0f0f2" }} />
-          <Line type="monotone" dataKey="amount" name={metricName} stroke="#1d1d1f" strokeWidth={2} dot={{ r: 2.5 }} />
-        </LineChart>
-      </ResponsiveContainer>
-    );
-  }
-
-  if (type === "radar") {
-    const radarRows = visibleRows.map((row) => ({
-      factor: row.branch,
-      value: row.amount,
-    }));
-    return (
-      <ResponsiveContainer width="100%" height={height}>
-        <RadarChart data={radarRows} outerRadius={compact ? 78 : 104}>
-          <PolarGrid stroke="#e5e5ea" />
-          <PolarAngleAxis dataKey="factor" tick={{ fontSize: 11, fill: "#636366" }} />
-          <PolarRadiusAxis angle={90} tick={{ fontSize: 10, fill: "#aeaeb2" }} />
-          <Radar name={metricName} dataKey="value" stroke="#1d1d1f" fill="#1d1d1f" fillOpacity={0.14} />
-          <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #f0f0f2" }} />
-        </RadarChart>
-      </ResponsiveContainer>
-    );
-  }
-
-  return (
-    <ResponsiveContainer width="100%" height={height}>
-      <BarChart data={visibleRows} layout="vertical" margin={{ top: 12, right: 12, left: 10, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f2" horizontal={false} />
-        <XAxis type="number" tick={{ fontSize: 10, fill: "#c7c7cc" }} stroke="transparent" tickLine={false} />
-        <YAxis type="category" dataKey="branch" tick={{ fontSize: 11, fill: "#636366" }} stroke="transparent" tickLine={false} width={45} />
-        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #f0f0f2" }} />
-        <Bar dataKey="amount" name={metricName} fill="#8e8e93" radius={[0, 4, 4, 0]} barSize={18} />
-      </BarChart>
-    </ResponsiveContainer>
   );
 }

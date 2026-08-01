@@ -17,6 +17,15 @@ export type SavedAnalysisResult = {
   ownerUserId?: string;
   visibility?: "private" | "tenant";
   updatedBy?: string;
+  topicData?: {
+    reference_type: "history" | "shortcut" | "topic" | "report";
+    reference_id: string;
+    folder: string;
+    updated_at: string;
+    row_count: number;
+    has_data: boolean;
+    version_count: 1;
+  };
 };
 
 export type ReportComment = Record<string, unknown>;

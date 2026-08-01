@@ -1,10 +1,8 @@
 # Lean runtime dependency set for the Dokploy web service on the internal host.
 #
-# The full crawler/warehouse extras stay declared in pyproject.toml and are
-# intentionally installed only in the separately provisioned crawler runtime.
-# Keeping those large, optional browser and database clients out of the API
-# image prevents a transient package-mirror slowdown from taking the service
-# offline during an otherwise routine web deployment.
+# The web service consumes externally delivered CSV files and does not install
+# browser-automation dependencies. Keeping the runtime lean also prevents a
+# transient package-mirror slowdown from taking the service offline.
 anyio==4.14.1
 certifi==2026.6.17
 cffi==2.1.0

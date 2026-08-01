@@ -3,6 +3,7 @@ import { createBrowserRouter, Navigate } from "react-router";
 import { Layout } from "./components/Layout";
 import { PlaceholderPage } from "./components/PlaceholderPage";
 import { RouteErrorPage } from "./components/RouteErrorPage";
+import { routePreloaders } from "./routePreload";
 
 const Dashboard = lazyNamed(() => import("./components/Dashboard"), "Dashboard");
 const BusinessFunnel = lazyNamed(() => import("./components/BusinessFunnel"), "BusinessFunnel");
@@ -73,7 +74,16 @@ function withPageSuspense(Component: ComponentType) {
 }
 
 function RouteFallback() {
-  return createElement("div", { className: "p-7 text-[13px] text-[#8a8a8e]" }, "页面加载中...");
+  return createElement(
+    "div",
+    { className: "animate-pulse p-7", "aria-label": "页面内容加载中" },
+    createElement("div", { className: "h-5 w-36 rounded bg-[#e9e9ed]" }),
+    createElement("div", { className: "mt-2 h-3 w-72 max-w-full rounded bg-[#f0f0f2]" }),
+    createElement("div", { className: "mt-7 grid gap-4 md:grid-cols-3" },
+      ...Array.from({ length: 3 }, (_, index) => createElement("div", { key: index, className: "h-28 rounded-xl border border-[#f0f0f2] bg-[#fafbfc]" })),
+    ),
+    createElement("div", { className: "mt-5 h-72 rounded-xl border border-[#f0f0f2] bg-[#fafbfc]" }),
+  );
 }
 
 export const router = createBrowserRouter([
@@ -100,7 +110,7 @@ export const router = createBrowserRouter([
       { path: "agent/todos", Component: withPageSuspense(DataAgentWorkspace) },
       { path: "agent/tasks", Component: withPageSuspense(DataAgentWorkspace) },
       { path: "agent/insights", Component: () => createElement(Navigate, { to: "/agent/tasks", replace: true }) },
-      { path: "agent/abilities", Component: withPageSuspense(DataAgentWorkspace) },
+      { path: "agent/abilities", Component: () => createElement(Navigate, { to: "/agent/tasks", replace: true }) },
       { path: "agent/skills", Component: withPageSuspense(SkillPluginManager) },
       { path: "data-assets", Component: () => createElement(Navigate, { to: "/data-assets/metrics", replace: true }) },
       { path: "data-assets/metrics", Component: withPageSuspense(DataAssets) },

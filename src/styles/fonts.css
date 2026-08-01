@@ -1,1 +1,21 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+/*
+ * Keep the first paint completely local.  The previous Google Fonts @import
+ * could stay pending for seconds on restricted bank networks, which delayed
+ * the stylesheet and made the application appear as a blank page before its
+ * route skeleton had a chance to render.  The system stack preserves the
+ * intended macOS/Chinese UI typography without making page availability
+ * depend on an external font CDN.
+ */
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  font-synthesis: none;
+}
+
+body,
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}

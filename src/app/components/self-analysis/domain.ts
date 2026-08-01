@@ -201,6 +201,17 @@ export type SavedAnalysisResult = {
   rows: unknown[];
   analysisTaskId: string;
   visibility?: "private" | "tenant";
+  ownerUserId?: string;
+  updatedBy?: string;
+  topicData?: {
+    reference_type: "history" | "shortcut" | "topic" | "report";
+    reference_id: string;
+    folder: string;
+    updated_at: string;
+    row_count: number;
+    has_data: boolean;
+    version_count: 1;
+  };
 };
 
 export const savedAnalysisStorageKey = "smart_data_agent_saved_analysis_results";

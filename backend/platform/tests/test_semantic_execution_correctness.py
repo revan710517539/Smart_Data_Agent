@@ -578,7 +578,7 @@ class SemanticExecutionCorrectnessTest(unittest.TestCase):
         self.assertEqual(second["manual_edits"]["python"]["status"], "accepted_for_sandbox_execution")
         self.assertEqual(second["manual_edits"]["plan"]["status"], "annotation_only")
 
-    def test_manual_sql_is_read_only_and_cannot_fall_back_to_mock(self) -> None:
+    def test_manual_sql_is_read_only_and_rejected_by_csv_only_runtime(self) -> None:
         self.assertEqual(validate_read_only_sql_candidate("SELECT * FROM governed_view"), "SELECT * FROM governed_view")
         for value in ("DELETE FROM fact", "SELECT 1; SELECT 2", "SELECT * FROM fact -- bypass"):
             with self.subTest(value=value), self.assertRaises(ManualSQLValidationError):
@@ -593,7 +593,7 @@ class SemanticExecutionCorrectnessTest(unittest.TestCase):
             question="2026年6月各分行放款金额",
             page_context={"request_id": "manual-base"},
         )
-        with self.assertRaisesRegex(RuntimeError, "manual_sql_requires_one_verified_tenant_connection"):
+        with self.assertRaisesRegex(RuntimeError, "manual_sql_not_supported_in_csv_mode"):
             run_analysis(
                 services,
                 user_id="u_admin",

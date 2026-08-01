@@ -120,6 +120,20 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
 }
 
 export function apiErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof ApiRequestError) {
+    const message = error.message.trim();
+    // A proxy or an older API build can return only the machine code. Never
+    // expose that raw value in the UI; keep the actionable Chinese guidance
+    // while preserving a useful server-side message when one is available.
+    if (message && message !== error.code && !/^[a-z][a-z0-9_]*$/.test(message)) return message;
+    const knownMessages: Record<string, string> = {
+      api_request_error: "Data Agent API 请求失败，请确认 API 服务已启动后重试。",
+      network_error: "无法连接 Data Agent API，请确认本地 API 服务已启动。",
+      request_timeout: "Data Agent API 请求超时，请稍后重试。",
+      invalid_json_response: "Data Agent API 返回了无效响应，请稍后重试。",
+    };
+    return knownMessages[error.code] || fallback;
+  }
   if (error instanceof Error && error.message) return error.message;
   return fallback;
 }

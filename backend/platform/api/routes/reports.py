@@ -34,8 +34,41 @@ def handle_report_analysis_result_upsert(handler: Any) -> None:
         handler._require_report_permission(context, "create")
         handler.services.report_retention_service.enforce(context.tenant_id)
         task_id = str(result.get("analysisTaskId") or result.get("analysis_task_id") or "").strip()
-        task = handler.services.task_repository.get_task(task_id) if task_id else None
-        if not task or task.get("tenant_id") != context.tenant_id or task.get("user_id") != context.user_id:
+        result_id = str(result.get("id") or "").strip()
+        try:
+            task = handler.services.task_repository.get_task(task_id) if task_id else None
+        except KeyError:
+            task = None
+        existing = handler.services.report_store.get_analysis_result(
+            context.tenant_id,
+            result_id,
+            actor_user_id=context.user_id,
+        ) if result_id else None
+        # A report title is report metadata, not a new analysis execution.
+        # Historical saved reports predate analysisTaskId/Topic_Data and must
+        # remain renameable by their owner.  In that path preserve every field
+        # except title so a title update cannot rewrite report evidence/data.
+        is_owned_existing_report = bool(existing)
+        is_title_update = bool(existing and task_id and str(existing.get("analysisTaskId") or "") == task_id)
+        if is_owned_existing_report and not task:
+            requested_title = str(result.get("title") or "").strip()
+            if not requested_title:
+                raise ValueError("report_title_required")
+            candidate_reference = result.get("topicData") if isinstance(result.get("topicData"), dict) else {}
+            expected_report_id = str(existing.get("id") or "")
+            is_own_report_reference = (
+                candidate_reference.get("reference_type") == "report"
+                and str(candidate_reference.get("reference_id") or "") == expected_report_id
+            )
+            # The browser can only retain a reference that was just hydrated
+            # by this server for this exact report. It cannot point one user's
+            # report at another report or submit arbitrary source rows.
+            result = {
+                **existing,
+                "title": requested_title,
+                **({"topicData": candidate_reference} if is_own_report_reference else {}),
+            }
+        elif not is_title_update and (not task or task.get("tenant_id") != context.tenant_id or task.get("user_id") != context.user_id):
             raise PermissionError("saved analysis must reference an owned execution")
         result = {
             **result,
@@ -48,18 +81,26 @@ def handle_report_analysis_result_upsert(handler: Any) -> None:
             result,
             updated_by=context.user_id,
         )
-        handler.services.lineage_store.record_edge(
-            context.tenant_id,
-            {
-                "source_type": "analysis_task",
-                "source_id": task_id,
-                "target_type": "saved_analysis_result",
-                "target_id": str(saved.get("id") or saved.get("resultId") or ""),
-                "edge_type": "publishes",
-                "metadata": {"visibility": saved.get("visibility")},
-            },
-            context.user_id,
-        )
+        if task:
+            topic_data = handler.services.topic_data_store.record_analysis_execution(
+                tenant_id=context.tenant_id,
+                user_id=context.user_id,
+                task=task,
+                source_reference={"type": "report", "id": str(saved.get("id") or "")},
+            )
+            saved = {**saved, "topicData": topic_data.get("history")}
+            handler.services.lineage_store.record_edge(
+                context.tenant_id,
+                {
+                    "source_type": "analysis_task",
+                    "source_id": task_id,
+                    "target_type": "saved_analysis_result",
+                    "target_id": str(saved.get("id") or saved.get("resultId") or ""),
+                    "edge_type": "publishes",
+                    "metadata": {"visibility": saved.get("visibility")},
+                },
+                context.user_id,
+            )
         handler._send_json({"tenant_id": context.tenant_id, "result": saved})
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
         send_route_exception(handler, exc)
@@ -385,14 +426,78 @@ def _weekly_learning_engine(handler: Any) -> WeeklyReportLearningEngine:
 
 def _hydrate_saved_analysis(handler: Any, user_id: str, tenant_id: str, result: dict[str, Any]) -> dict[str, Any]:
     task_id = str(result.get("analysisTaskId") or "")
-    task = handler.services.task_repository.get_task(task_id) if task_id else None
+    try:
+        task = handler.services.task_repository.get_task(task_id) if task_id else None
+    except KeyError:
+        task = None
     if not task or task.get("tenant_id") != tenant_id:
-        return {**result, "rows": [], "execution_status": "unavailable"}
-    skill_results = task.get("skill_results") if isinstance(task.get("skill_results"), list) else []
-    first = skill_results[0] if skill_results and isinstance(skill_results[0], dict) else {}
+        report_id = str(result.get("id") or "").strip()
+        existing_reference = result.get("topicData") if isinstance(result.get("topicData"), dict) else None
+        if existing_reference and existing_reference.get("reference_type") == "report":
+            report_reference = existing_reference
+        else:
+            report_reference = handler.services.topic_data_store.record_saved_report_snapshot(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                report_id=report_id,
+                report=result,
+            )
+            # The migration is durable: subsequent title edits use this
+            # server-authored reference and never need the legacy row payload.
+            result = handler.services.report_store.upsert_analysis_result(
+                tenant_id,
+                {**result, "topicData": report_reference},
+                updated_by=user_id,
+            )
+        try:
+            topic_data = handler.services.topic_data_store.read_reference(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                reference_type="report",
+                reference_id=report_id,
+                data_type="data",
+            )
+        except (KeyError, ValueError, PermissionError):
+            return {**result, "rows": [], "execution_status": "unavailable"}
+        return {
+            **result,
+            "rows": topic_data["rows"],
+            "topicData": report_reference,
+            "execution_status": "legacy_snapshot",
+        }
+    try:
+        topic_data = handler.services.topic_data_store.read_reference(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            reference_type="history",
+            reference_id=task_id,
+            data_type="data",
+        )
+    except (KeyError, ValueError, PermissionError):
+        topic_data = handler.services.topic_data_store.record_analysis_execution(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            task=task,
+        )["history"]
+        topic_data = handler.services.topic_data_store.read_reference(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            reference_type="history",
+            reference_id=task_id,
+            data_type="data",
+        )
     return {
         **result,
-        "rows": [dict(row) for row in first.get("data", []) if isinstance(row, dict)][:200],
+        "rows": topic_data["rows"],
+        "topicData": {
+            "reference_type": "history",
+            "reference_id": task_id,
+            "folder": topic_data["folder"],
+            "updated_at": str(topic_data.get("manifest", {}).get("created_at") or ""),
+            "row_count": topic_data["row_count"],
+            "has_data": True,
+            "version_count": 1,
+        },
         "execution_status": task.get("status"),
         "execution_id": task.get("execution_id"),
         "publication_gate": (task.get("review") or {}).get("publication_gate"),

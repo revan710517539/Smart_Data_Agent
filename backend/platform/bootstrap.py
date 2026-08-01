@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from backend.authz import (
     AuthEnforcer,
@@ -41,18 +41,12 @@ from backend.platform.ingestion import (
     S3ArtifactObjectStore,
     SQLiteAcquisitionStore,
     TopicDataResolver,
+    TopicDataStore,
+    TopicDataBatchService,
 )
-from backend.platform.crawler_engine.metadata import TopicMetadataService
-from backend.platform.crawler_engine import CrawlerEngine
-from backend.platform.crawler_engine.playwright_transport import PlaywrightCrawlerTransport
-from backend.platform.crawler_engine.systems.qifu_focuspro_sios import QIFU_BUSINESS_SANDBOX_PROFILE_ID, QIFU_FUNNEL_PROFILE_ID
-from backend.platform.crawler_engine.systems.qifu_focuspro_sios.auto_login import ensure_business_sandbox_login_session
-from backend.platform.crawler_engine.systems.qifu_yushu import (
-    YUSHU_MY_QUERIES_PROFILE_ID,
-    sync_my_queries_to_raw_tables,
-)
-from backend.platform.crawler_engine.tool_assets import ensure_crawler_tools
+from backend.platform.ingestion.topic_metadata import CSVTopicMetadataService
 from backend.platform.knowledge import InMemoryKnowledgeStore, KnowledgeDocument, KnowledgeService, PostgreSQLKnowledgeStore, SQLiteKnowledgeStore
+from backend.platform.learning import SkillLearningService
 from backend.platform.lineage import InMemoryLineageStore, PostgreSQLLineageStore, SQLiteLineageStore
 from backend.platform.market import InMemoryMarketStore, MarketMonitoringService, PostgreSQLMarketStore, SQLiteMarketStore
 from backend.platform.memory import InMemoryMemoryStore, MemoryService, PostgreSQLMemoryStore, SQLiteMemoryStore
@@ -77,7 +71,6 @@ from backend.platform.security import (
     build_rate_limiter,
 )
 from backend.platform.semantic import (
-    ConfiguredConnectionSupersonicClient,
     FallbackSupersonicClient,
     InMemorySupersonicClient,
     SemanticQueryService,
@@ -86,7 +79,7 @@ from backend.platform.semantic import (
 )
 from backend.platform.settings import InMemorySystemConfigStore, PostgreSQLSystemConfigStore, SQLiteSystemConfigStore
 from backend.platform.skills import SkillConfigCatalog, SkillExecutor, SkillRegistry
-from backend.platform.skills.builtin import build_supersonic_query_skill
+from backend.platform.skills.builtin import build_data_product_skills, build_supersonic_query_skill
 
 
 LOCAL_ANALYSIS_USER_ID = "u_admin"
@@ -96,7 +89,22 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_RBAC_EXTENSION_MENU_OBJECTS = frozenset({
     "menu:self-analysis.analysis-config",
     "menu:data-assets.tools",
+    "skill:data.analysis.profile",
+    "skill:data.governance.assess",
+    "skill:conclusion.generate",
+    "skill:bi.report.generate",
 })
+
+
+def _prime_csv_catalog_in_background(csv_source: object) -> None:
+    """Warm the delivered CSV catalog without extending API listener downtime."""
+
+    thread = threading.Thread(
+        target=getattr(csv_source, "prime_catalog"),
+        name="smart-data-agent-csv-catalog-warmup",
+        daemon=True,
+    )
+    thread.start()
 
 
 @dataclass
@@ -116,8 +124,10 @@ class PlatformServices:
     data_asset_store: InMemoryDataAssetStore | SQLiteDataAssetStore
     data_acquisition_store: InMemoryAcquisitionStore | SQLiteAcquisitionStore
     data_acquisition_service: DataAcquisitionService
-    topic_metadata_service: TopicMetadataService
+    topic_metadata_service: CSVTopicMetadataService
     topic_data_resolver: TopicDataResolver
+    topic_data_store: TopicDataStore
+    topic_data_batch_service: TopicDataBatchService
     automation_store: InMemoryAutomationStore | SQLiteAutomationStore
     automation_runtime: AutomationRuntime
     market_store: InMemoryMarketStore | SQLiteMarketStore
@@ -125,6 +135,7 @@ class PlatformServices:
     application_store: InMemoryApplicationStore | SQLiteApplicationStore
     memory_store: InMemoryMemoryStore | SQLiteMemoryStore
     memory_service: MemoryService
+    learning_service: SkillLearningService
     metric_dictionary_store: InMemoryMetricDictionaryStore | SQLiteMetricDictionaryStore
     lineage_store: InMemoryLineageStore | SQLiteLineageStore
     system_config_store: InMemorySystemConfigStore | SQLiteSystemConfigStore
@@ -276,12 +287,15 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         task_repository,
         data_asset_store=data_asset_store,
     )
-    topic_metadata_service = TopicMetadataService(
+    # Origin_Data can be a mounted delivery folder.  Warm it in the background
+    # so a normal local restart first binds the API listener rather than
+    # looking like a several-second page outage.
+    _prime_csv_catalog_in_background(data_acquisition_service.csv_source)
+    topic_data_store = TopicDataStore(PROJECT_ROOT / "Topic_Data")
+    topic_data_batch_service = TopicDataBatchService(data_acquisition_service.csv_source, topic_data_store, data_asset_store)
+    topic_metadata_service = CSVTopicMetadataService(
         data_acquisition_store,
-        system_config_store,
-        artifact_object_store,
-        lineage_store,
-        data_acquisition_service.crawler_engine,
+        data_acquisition_service.csv_source,
     )
     topic_data_resolver = TopicDataResolver(data_acquisition_service)
     knowledge_service = KnowledgeService(
@@ -310,7 +324,6 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         data_asset_store,
         application_store,
         market_service,
-        system_config_store,
     )
     data_acquisition_service.automation_runtime = automation_runtime
     if initialize_defaults:
@@ -325,10 +338,13 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
                 data_asset_store.seed_defaults(tenant_id)
             else:
                 data_asset_store.seed_missing_defaults(tenant_id)
-            ensure_crawler_tools(data_asset_store, tenant_id)
+            _ensure_topic_data_batch_task(automation_runtime, tenant_id, SUPER_ADMIN_USER_ID)
     base_supersonic_client, semantic_client_mode, semantic_fallback_mode, data_source_mode = build_supersonic_client_from_env()
-    supersonic_client = ConfiguredConnectionSupersonicClient(system_config_store, base_supersonic_client)
-    semantic_routing_mode = "tenant_connection_registry"
+    # Smart Data Agent is a CSV-only consumer.  Semantic execution is backed
+    # by the configured Origin_Data/Topic_Data warehouse adapter, never by a
+    # legacy tenant data-connection record.
+    supersonic_client = base_supersonic_client
+    semantic_routing_mode = "origin_topic_data"
     semantic_service = SemanticQueryService(supersonic_client, trace_recorder, permission_broker)
     operating_snapshot_service = OperatingSnapshotService(semantic_service)
     register_local_mcp_handlers(
@@ -344,6 +360,8 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         skill_registry.declare(configured_skill)
     supersonic_spec, supersonic_handler = build_supersonic_query_skill(semantic_service)
     skill_registry.register(supersonic_spec, supersonic_handler)
+    for data_product_spec, data_product_handler in build_data_product_skills():
+        skill_registry.register(data_product_spec, data_product_handler)
     skill_executor = SkillExecutor(
         skill_registry,
         permission_broker,
@@ -352,6 +370,12 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         approval_store=approval_store,
     )
     agent_runtime = AgentRuntime(agent_catalog, skill_executor, trace_recorder)
+    learning_service = SkillLearningService(
+        audit_store,
+        data_asset_store,
+        memory_service,
+        trace_recorder=trace_recorder,
+    )
 
     workflow = AnalysisWorkflow(
         skill_executor,
@@ -359,6 +383,7 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         memory_store,
         planning_catalog=AnalysisPlanningCatalog.from_config_path(PROJECT_ROOT / "configs" / "analysis" / "intent_rules.json"),
         agent_runtime=agent_runtime,
+        learning_service=learning_service,
         metric_semantic_catalog=MetricSemanticCatalog.from_config_path(
             PROJECT_ROOT / "configs" / "analysis" / "metric_definitions.json",
             metric_dictionary_store,
@@ -383,6 +408,8 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         data_acquisition_service=data_acquisition_service,
         topic_metadata_service=topic_metadata_service,
         topic_data_resolver=topic_data_resolver,
+        topic_data_store=topic_data_store,
+        topic_data_batch_service=topic_data_batch_service,
         automation_store=automation_store,
         automation_runtime=automation_runtime,
         market_store=market_store,
@@ -390,6 +417,7 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         application_store=application_store,
         memory_store=memory_store,
         memory_service=memory_service,
+        learning_service=learning_service,
         metric_dictionary_store=metric_dictionary_store,
         lineage_store=lineage_store,
         system_config_store=system_config_store,
@@ -411,6 +439,9 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         data_source_mode=data_source_mode,
     )
     automation_runtime.platform_services = services
+    if runtime_config.environment in {"development", "test"} and db_path is not None:
+        for tenant_id in [normalize_tenant_id(tenant) for tenant in OPERATING_TENANTS] + [LEGACY_TENANT_ID]:
+            _ensure_topic_data_batch_task(automation_runtime, tenant_id, SUPER_ADMIN_USER_ID)
     return services
 
 
@@ -471,12 +502,12 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
             task_repository,
             data_asset_store=data_asset_store,
         )
-        topic_metadata_service = TopicMetadataService(
+        _prime_csv_catalog_in_background(data_acquisition_service.csv_source)
+        topic_data_store = TopicDataStore(PROJECT_ROOT / "Topic_Data")
+        topic_data_batch_service = TopicDataBatchService(data_acquisition_service.csv_source, topic_data_store, data_asset_store)
+        topic_metadata_service = CSVTopicMetadataService(
             data_acquisition_store,
-            system_config_store,
-            artifact_object_store,
-            lineage_store,
-            data_acquisition_service.crawler_engine,
+            data_acquisition_service.csv_source,
         )
         topic_data_resolver = TopicDataResolver(data_acquisition_service)
         knowledge_service = KnowledgeService(
@@ -505,12 +536,14 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
             data_asset_store,
             application_store,
             market_service,
-            system_config_store,
         )
         data_acquisition_service.automation_runtime = automation_runtime
         base_client, semantic_client_mode, semantic_fallback_mode, data_source_mode = build_supersonic_client_from_env()
-        supersonic_client = ConfiguredConnectionSupersonicClient(system_config_store, base_client)
-        semantic_routing_mode = "tenant_connection_registry"
+        # Keep the production execution boundary consistent with the local
+        # CSV-only product: configured warehouses are selected at startup,
+        # not from the retired tenant data-connection control plane.
+        supersonic_client = base_client
+        semantic_routing_mode = "origin_topic_data"
         semantic_service = SemanticQueryService(supersonic_client, trace_recorder, permission_broker)
         operating_snapshot_service = OperatingSnapshotService(semantic_service)
         register_local_mcp_handlers(
@@ -526,6 +559,8 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
             skill_registry.declare(configured_skill)
         supersonic_spec, supersonic_handler = build_supersonic_query_skill(semantic_service)
         skill_registry.register(supersonic_spec, supersonic_handler)
+        for data_product_spec, data_product_handler in build_data_product_skills():
+            skill_registry.register(data_product_spec, data_product_handler)
         skill_executor = SkillExecutor(
             skill_registry,
             permission_broker,
@@ -534,12 +569,19 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
             approval_store=approval_store,
         )
         agent_runtime = AgentRuntime(agent_catalog, skill_executor, trace_recorder)
+        learning_service = SkillLearningService(
+            audit_store,
+            data_asset_store,
+            memory_service,
+            trace_recorder=trace_recorder,
+        )
         workflow = AnalysisWorkflow(
             skill_executor,
             knowledge_store,
             memory_store,
             planning_catalog=AnalysisPlanningCatalog.from_config_path(PROJECT_ROOT / "configs" / "analysis" / "intent_rules.json"),
             agent_runtime=agent_runtime,
+            learning_service=learning_service,
             metric_semantic_catalog=MetricSemanticCatalog.from_config_path(
                 PROJECT_ROOT / "configs" / "analysis" / "metric_definitions.json",
                 metric_dictionary_store,
@@ -563,6 +605,8 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
             data_acquisition_service=data_acquisition_service,
             topic_metadata_service=topic_metadata_service,
             topic_data_resolver=topic_data_resolver,
+            topic_data_store=topic_data_store,
+            topic_data_batch_service=topic_data_batch_service,
             automation_store=automation_store,
             automation_runtime=automation_runtime,
             market_store=market_store,
@@ -570,6 +614,7 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
             application_store=application_store,
             memory_store=memory_store,
             memory_service=memory_service,
+            learning_service=learning_service,
             metric_dictionary_store=metric_dictionary_store,
             lineage_store=lineage_store,
             system_config_store=system_config_store,
@@ -628,7 +673,6 @@ def _register_automation_handlers(
     data_asset_store: InMemoryDataAssetStore | SQLiteDataAssetStore,
     application_store: InMemoryApplicationStore | SQLiteApplicationStore,
     market_service: MarketMonitoringService,
-    system_config_store: InMemorySystemConfigStore | SQLiteSystemConfigStore,
 ) -> None:
     def acquisition_handler(
         tenant_id: str,
@@ -650,58 +694,6 @@ def _register_automation_handlers(
                 "keep_latest_n": int(config.get("keep_latest_n") or 3),
                 "operation_type": "data_query",
             },
-        )
-
-    def crawler_connection_handler(
-        tenant_id: str,
-        config: dict,
-        trigger_payload: dict,
-        context: dict,
-    ) -> dict:
-        connection_id = str(trigger_payload.get("connection_id") or config.get("connection_id") or "").strip()
-        if not connection_id:
-            raise ValueError("connection_id_required")
-        connection = system_config_store.get_data_connection(tenant_id, connection_id, reveal_secret=True)
-        if connection is None:
-            raise KeyError("data_connection_not_found")
-        crawler_config = connection.get("crawlerConfig") if isinstance(connection.get("crawlerConfig"), dict) else {}
-        profile_id = str(connection.get("crawlerProfileId") or "")
-        page_url = str(connection.get("queryPageUrl") or connection.get("apiUrl") or "").strip()
-        crawler_engine = None
-        if profile_id in {QIFU_BUSINESS_SANDBOX_PROFILE_ID, QIFU_FUNNEL_PROFILE_ID}:
-            _allow_registered_crawler_proxy_host(page_url)
-            state_value = str(crawler_config.get("storageStatePath") or "").strip()
-            state_path = Path(state_value) if state_value else PROJECT_ROOT / ".crawler-sessions" / f"{connection_id}.json"
-            if not state_path.is_absolute():
-                state_path = PROJECT_ROOT / state_path
-            ensure_business_sandbox_login_session(
-                connection=connection,
-                page_url=page_url,
-                storage_state=state_path,
-                browser_channel=str(crawler_config.get("browserChannel") or "chrome"),
-            )
-            crawler_engine = CrawlerEngine(transport=PlaywrightCrawlerTransport())
-        elif profile_id == YUSHU_MY_QUERIES_PROFILE_ID:
-            _allow_registered_crawler_proxy_host(page_url)
-            state_value = str(crawler_config.get("storageStatePath") or "").strip()
-            state_path = Path(state_value) if state_value else PROJECT_ROOT / ".crawler-sessions" / f"{connection_id}.json"
-            if not state_path.is_absolute():
-                state_path = PROJECT_ROOT / state_path
-            return sync_my_queries_to_raw_tables(
-                data_asset_store=data_asset_store,
-                tenant_id=tenant_id,
-                actor_user_id=str(context["actor_user_id"]),
-                connection=connection,
-                page_url=page_url,
-                storage_state=state_path,
-                browser_channel=str(crawler_config.get("browserChannel") or "chrome"),
-            )
-        return data_acquisition_service.run_verified_crawler(
-            tenant_id,
-            connection_id,
-            str(context["actor_user_id"]),
-            f"automation:{context['automation_run_id']}",
-            crawler_engine=crawler_engine,
         )
 
     def analysis_handler(
@@ -755,6 +747,17 @@ def _register_automation_handlers(
             cancellation_check=context.get("is_cancelled"),
             progress_callback=report_progress,
         )
+
+    def topic_data_batch_handler(
+        tenant_id: str,
+        config: dict,
+        trigger_payload: dict,
+        context: dict,
+    ) -> dict:
+        services = getattr(runtime, "platform_services", None)
+        if services is None:
+            raise RuntimeError("automation_platform_services_not_bound")
+        return services.topic_data_batch_service.run(tenant_id, str(context["actor_user_id"]))
 
     def metric_monitor_handler(
         tenant_id: str,
@@ -844,30 +847,46 @@ def _register_automation_handlers(
         )
 
     runtime.register_handler("acquisition.run", acquisition_handler)
-    runtime.register_handler("crawler.connection.run", crawler_connection_handler)
     runtime.register_handler("analysis.run", analysis_handler)
+    runtime.register_handler("topic-data.refresh", topic_data_batch_handler)
     runtime.register_handler("analysis.monitor", metric_monitor_handler)
     runtime.register_handler("report.weekly_learning", report_learning_handler)
     runtime.register_handler("market.evaluate", market_evaluate_handler)
     runtime.register_handler("memory.extract", memory_extraction_handler)
 
 
-def _allow_registered_crawler_proxy_host(page_url: str) -> None:
-    """Permit the exact approved crawler host when a local proxy resolves it privately."""
+def _ensure_topic_data_batch_task(runtime: AutomationRuntime, tenant_id: str, owner_user_id: str) -> None:
+    """Idempotently provision the user-requested daily Origin→Topic batch."""
 
-    host = str(urlsplit(page_url).hostname or "").strip().lower()
-    if not host:
-        raise ValueError("crawler_target_hostname_required")
-    current = [item.strip() for item in os.getenv("SMART_DATA_AGENT_EGRESS_PRIVATE_HOSTS", "").split(",") if item.strip()]
-    if host not in current:
-        current.append(host)
-        os.environ["SMART_DATA_AGENT_EGRESS_PRIVATE_HOSTS"] = ",".join(current)
-    allowed = [item.strip() for item in os.getenv("SMART_DATA_AGENT_EGRESS_ALLOWED_HOSTS", "").split(",") if item.strip()]
-    if allowed and host not in allowed:
-        allowed.append(host)
-        os.environ["SMART_DATA_AGENT_EGRESS_ALLOWED_HOSTS"] = ",".join(allowed)
-
-
+    task_code = "system.topic-data.daily-refresh"
+    existing = runtime.store.get_task_by_code(tenant_id, task_code)
+    definition = {
+        "task_code": task_code,
+        "task_name": "主题数据每日定时加工",
+        "task_type": "acquisition",
+        "trigger_type": "schedule",
+        "schedule_expression": "0 2 * * *",
+        "handler_ref": "topic-data.refresh",
+        "task_config": {"schedule_timezone": "Asia/Shanghai", "source": "Origin_Data", "target": "Topic_Data"},
+        "retry_policy": {"max_attempts": 2, "base_delay_seconds": 60},
+        "timeout_seconds": 3_600,
+        "max_concurrency": 1,
+    }
+    if existing is None:
+        runtime.create_task(tenant_id, definition, owner_user_id)
+        return
+    if (
+        str(existing.get("handler_ref") or "") != definition["handler_ref"]
+        or str(existing.get("schedule_expression") or "") != definition["schedule_expression"]
+        or dict(existing.get("task_config") or {}) != definition["task_config"]
+    ):
+        runtime.update_task(
+            tenant_id,
+            str(existing["automation_task_id"]),
+            {**definition, "status": "active"},
+            owner_user_id,
+            int(existing.get("lock_version") or 1),
+        )
 def _seed_metric_dictionary_if_empty(
     metric_dictionary_store: InMemoryMetricDictionaryStore | SQLiteMetricDictionaryStore,
     db_path: str | Path | None,
@@ -1065,7 +1084,7 @@ def _reconcile_local_rbac_extensions(
     repository: SQLitePolicyRepository,
     default_policies: list[PermissionPolicy],
 ) -> None:
-    """Add only newly introduced system-menu grants to an existing local DB.
+    """Add only newly introduced system menu/skill grants to an existing local DB.
 
     Existing role assignments and custom permission choices remain untouched.
     This is deliberately narrower than reseeding the default policy set.
@@ -1114,6 +1133,10 @@ def _platform_runtime_policies(
         policies.extend(
             [
                 PermissionPolicy(role_id, tenant_id, "skill:supersonic.query", "execute"),
+                PermissionPolicy(role_id, tenant_id, "skill:data.analysis.profile", "execute"),
+                PermissionPolicy(role_id, tenant_id, "skill:data.governance.assess", "execute"),
+                PermissionPolicy(role_id, tenant_id, "skill:conclusion.generate", "execute"),
+                PermissionPolicy(role_id, tenant_id, "skill:bi.report.generate", "execute"),
                 PermissionPolicy(role_id, tenant_id, "mcp:database.query", "execute"),
                 PermissionPolicy(role_id, tenant_id, "mcp:database.schema", "execute"),
                 PermissionPolicy(role_id, tenant_id, "mcp:knowledge.search", "execute"),

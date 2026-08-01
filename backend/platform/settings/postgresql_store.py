@@ -47,11 +47,10 @@ class PostgreSQLSystemConfigStore:
     def list_models_owned_by(self, user_id: str, tenant_id: str, reveal_secret: bool = False) -> list[dict[str, Any]]:
         with self.pool.connection() as connection:
             tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
-            user_key = PostgreSQLIdentityResolver.user_id(connection, user_id, required=False)
             with connection.cursor() as cursor:
                 cursor.execute(
-                    self._model_select() + " WHERE m.tenant_id = %s OR m.created_by = %s ORDER BY m.integration_code",
-                    (tenant_key, user_key),
+                    self._model_select() + " WHERE m.tenant_id = %s ORDER BY m.integration_code",
+                    (tenant_key,),
                 )
                 rows = cursor.fetchall()
         return _dedupe([self._model_from_row(row, reveal_secret) for row in rows])
@@ -282,7 +281,6 @@ class PostgreSQLSystemConfigStore:
                 for key in (
                     "institution", "sourceName", "sourceType", "apiUrl", "account",
                     "loginUrl", "queryPageUrl", "metadataPageUrl", "spaceId",
-                    "crawlerMode", "crawlerKey", "crawlerProfileId",
                     "dataset", "defaultDatabase", "enabled", "mockEnabled", "lastTestedAt",
                     "testStatus", "testMessage", "status",
                 )
@@ -511,9 +509,6 @@ class PostgreSQLSystemConfigStore:
             "queryPageUrl": str(config.get("queryPageUrl") or ""),
             "metadataPageUrl": str(config.get("metadataPageUrl") or ""),
             "spaceId": str(config.get("spaceId") or ""),
-            "crawlerMode": str(config.get("crawlerMode") or ""),
-            "crawlerKey": str(config.get("crawlerKey") or ""),
-            "crawlerProfileId": str(config.get("crawlerProfileId") or ""),
             "account": str(config.get("account") or ""),
             "password": "" if has_token else encrypted,
             "token": encrypted if has_token else "",
@@ -572,8 +567,6 @@ class PostgreSQLSystemConfigStore:
 
 def _source_type(value: str) -> str:
     text = str(value or "").strip().lower()
-    if "crawler" in text or "爬虫" in text:
-        return "qbi_crawler"
     if "doris" in text:
         return "doris"
     if "hive" in text:
@@ -592,7 +585,7 @@ def _source_type(value: str) -> str:
 def _dataset_type(source_type: str) -> str:
     if source_type in {"csv", "object_storage"}:
         return "file_collection"
-    if source_type in {"api", "qbi", "qbi_crawler"}:
+    if source_type in {"api", "qbi"}:
         return "api"
     return "semantic"
 

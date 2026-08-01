@@ -68,69 +68,12 @@ function isRetryableRuntimeConfigError(error: unknown) {
   return error.status === 0 || [401, 403, 408, 429, 502, 503, 504].includes(error.status);
 }
 
-export type DataConnection = {
-  id: string;
-  institution: string;
-  sourceName: string;
-  sourceType: "QBI" | "API" | "JDBC" | "file" | "mock" | string;
-  apiUrl: string;
-  loginUrl?: string;
-  queryPageUrl?: string;
-  metadataPageUrl?: string;
-  spaceId?: string;
-  crawlerMode?: "page" | "sql" | "";
-  crawlerKey?: string;
-  crawlerProfileId?: string;
-  account: string;
-  password: string;
-  token: string;
-  dataset: string;
-  defaultDatabase: string;
-  enabled: boolean;
-  mockEnabled: boolean;
-  lastTestedAt?: string;
-  testStatus?: "untested" | "testing" | "verified" | "failed" | "mock";
-  testMessage?: string;
-  status: "connected" | "draft" | "verified" | "degraded" | "disabled" | "mock";
-};
-
 export type SystemDataParam = {
   id: string;
   name: string;
   value: string;
   category: "data" | "security" | "system" | string;
   description: string;
-};
-
-export type DataConnectionTestResult = {
-  connection_id: string;
-  institution: string;
-  dataset: string;
-  status: "verified" | "mock" | "endpoint_required" | "egress_policy_rejected" | "connection_failed" | "not_found" | "schema_incomplete" | "query_failed" | "transport_not_configured" | "manual_intervention_required" | string;
-  callable: boolean;
-  verified?: boolean;
-  execution_mode?: "real" | "mock";
-  data_source_mode: string;
-  matched_dataset?: {
-    dataset_id: string;
-    label: string;
-    source_table: string;
-    metric_count: number;
-    dimension_count: number;
-  } | null;
-  available_datasets: Array<{
-    dataset_id: string;
-    label: string;
-    source_table: string;
-    metric_count: number;
-    dimension_count: number;
-  }>;
-  sample?: {
-    row_count: number;
-    rows: Array<Record<string, unknown>>;
-  };
-  message: string;
-  diagnostics?: Record<string, unknown>;
 };
 
 export type ModelIntegrationTestResult = {
@@ -174,12 +117,10 @@ type SystemConfigResponse = {
   config_owner_user_id?: string;
   models: ModelIntegration[];
   speech_integrations: SpeechIntegration[];
-  data_connections: DataConnection[];
   system_params: SystemDataParam[];
   count: {
     models: number;
     speech_integrations: number;
-    data_connections: number;
     system_params: number;
   };
 };
@@ -311,46 +252,6 @@ export async function deleteSpeechIntegration({
       context: { tenantId, userId },
     },
   );
-}
-
-export async function saveDataConnection({
-  tenantId,
-  userId = getDefaultUserId(),
-  connection,
-}: SystemConfigParams & { connection: DataConnection }): Promise<{ tenant_id: string; connection: DataConnection }> {
-  return apiRequest<{ tenant_id: string; connection: DataConnection }>("/api/system-config/data-connection", {
-    method: "POST",
-    context: { tenantId, userId },
-    body: { connection },
-  });
-}
-
-export async function deleteDataConnection({
-  tenantId,
-  userId = getDefaultUserId(),
-  connectionId,
-}: SystemConfigParams & { connectionId: string }): Promise<{ tenant_id: string; connection_id: string; deleted: boolean }> {
-  const params = new URLSearchParams({ connection_id: connectionId });
-  return apiRequest<{ tenant_id: string; connection_id: string; deleted: boolean }>(
-    `/api/system-config/data-connection?${params.toString()}`,
-    {
-      method: "DELETE",
-      context: { tenantId, userId },
-    },
-  );
-}
-
-export async function testDataConnection({
-  tenantId,
-  userId = getDefaultUserId(),
-  connectionId,
-  connection,
-}: SystemConfigParams & { connectionId?: string; connection?: DataConnection }): Promise<{ tenant_id: string; result: DataConnectionTestResult }> {
-  return apiRequest<{ tenant_id: string; result: DataConnectionTestResult }>("/api/system-config/data-connection/test", {
-    method: "POST",
-    context: { tenantId, userId },
-    body: { connection_id: connectionId, connection },
-  });
 }
 
 export async function saveSystemDataParam({

@@ -15,14 +15,16 @@ export type AuthSession = {
 
 export async function loginWithEmail({
   email,
+  password,
   institution,
 }: {
   email: string;
+  password: string;
   institution?: string;
 }) {
   return apiRequest<AuthSession>("/api/auth/login", {
     method: "POST",
-    body: { email, institution },
+    body: { email, password, institution },
   });
 }
 

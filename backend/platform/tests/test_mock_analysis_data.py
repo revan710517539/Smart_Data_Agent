@@ -15,7 +15,7 @@ from backend.platform.intelligent_analysis.engine import IntelligentAnalysisRequ
 
 
 ROOT = Path(__file__).resolve().parents[3]
-MOCK = ROOT / "data" / "mock"
+MOCK = ROOT / "Origin_Data" / "mock"
 
 
 def _rows(name: str) -> list[dict[str, str]]:
@@ -133,7 +133,7 @@ class MockAnalysisDataTest(unittest.TestCase):
                 "selected_data_tables": [{
                     "id": "topic_mock_loan_funnel", "name": "模拟贷款申请授信动支主题表（100条）",
                     "code": "loan_funnel_mock_mart", "datasetId": "loan_funnel_mock_mart",
-                    "csvPath": "data/mock/loan_transaction_order_100.csv",
+                    "csvPath": "Origin_Data/mock/loan_transaction_order_100.csv",
                     "fields": [{"fieldNameEn": "drawdown_success_customer_count", "fieldNameCn": "动支成功人数分子", "type": "integer", "explanation": "动支率分子"}],
                     "sql": "select * from mock_loan_transaction_order where tenant_id = :tenant_id",
                 }],
@@ -151,7 +151,7 @@ class MockAnalysisDataTest(unittest.TestCase):
         for prompt in (completion.call_args_list[0].args[1], completion.call_args_list[1].args[1]):
             self.assertIn(request.question, prompt)
             self.assertIn("模拟贷款申请授信动支主题表（100条）", prompt)
-            self.assertIn("data/mock/loan_transaction_order_100.csv", prompt)
+            self.assertIn("Origin_Data/mock/loan_transaction_order_100.csv", prompt)
             self.assertIn("动支成功人数/授信成功人数", prompt)
             self.assertIn("drawdown_success_customer_count", prompt)
             self.assertIn("贷款漏斗分析", prompt)

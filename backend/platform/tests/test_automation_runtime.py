@@ -225,7 +225,7 @@ class AutomationRuntimeTest(unittest.TestCase):
             task["automation_task_id"],
             "u_admin",
             "idem-analysis-retry",
-            {"question": "本月各分行放款金额排名", "request_id": "analysis-retry-request"},
+            {"question": "2026年7月各分行放款金额排名", "request_id": "analysis-retry-request"},
         )
         original_run = self.services.workflow.run
         workflow_attempts = 0

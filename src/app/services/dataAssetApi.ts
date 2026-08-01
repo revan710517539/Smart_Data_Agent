@@ -54,11 +54,15 @@ export type RawTableAsset = DataAssetGovernanceFields & {
   rowCount?: number;
   usageScenario?: string;
   relatedIntent?: string;
-  crawlerProfileId?: string;
   connectionId?: string;
   sourceSnapshotId?: string;
+  /** Project-relative CSV path. Present for the read-only CSV source catalog. */
+  relativePath?: string;
+  /** Bounded source preview. The catalog returns at most the first 10 rows. */
+  previewRows?: Array<Record<string, string>>;
+  contentHash?: string;
   /** The platform that owns credentials and execution for this table. */
-  sourcePlatform?: "毓数" | "智能运营";
+  sourcePlatform?: "毓数" | "智能运营" | "本地CSV";
   /** Stable external-tool registry id used by future data calls. */
   linkedToolId?: string;
 };
@@ -89,6 +93,32 @@ export type TopicTableAsset = DataAssetGovernanceFields & {
   qualityReport?: string;
   systemManaged?: boolean;
   deletable?: boolean;
+  dataSnapshot?: TopicDataReference | null;
+};
+
+export type TopicDataReference = {
+  reference_type: "history" | "shortcut" | "topic" | "report";
+  reference_id: string;
+  folder: string;
+  version_id?: string;
+  task_id?: string;
+  updated_at: string;
+  row_count: number;
+  has_data: boolean;
+  version_count: 1;
+};
+
+export type TopicDataSnapshot = {
+  tenant_id: string;
+  reference_type: TopicDataReference["reference_type"];
+  reference_id: string;
+  data_type: "data" | "raw";
+  folder: string;
+  manifest: Record<string, unknown>;
+  columns: string[];
+  rows: Array<Record<string, string>>;
+  row_count: number;
+  truncated: boolean;
 };
 
 export type IntentAsset = DataAssetGovernanceFields & {
@@ -207,6 +237,25 @@ export type AnalysisShortcutAsset = DataAssetGovernanceFields & {
 
 export type DataAssetBundle = {
   tenant_id: string;
+  status?: "loading" | "ready";
+  message?: string;
+  source_mode?: "csv_folder";
+  csv_source?: {
+    mode: "csv_folder";
+    root: string;
+    available: boolean;
+    file_count: number;
+    scanned_at: string;
+    files: Array<{
+      relative_path: string;
+      file_name: string;
+      size_bytes: number;
+      modified_at: string;
+      content_hash: string;
+      row_count: number;
+      columns: string[];
+    }>;
+  };
   raw_tables: RawTableAsset[];
   topic_tables: TopicTableAsset[];
   intents: IntentAsset[];
@@ -249,6 +298,28 @@ export async function fetchDataAssets({
   userId = getDefaultUserId(),
 }: DataAssetParams): Promise<DataAssetBundle> {
   return apiRequest<DataAssetBundle>("/api/data-assets", {
+    method: "GET",
+    context: { tenantId, userId },
+  });
+}
+
+export async function fetchTopicData({
+  tenantId,
+  userId = getDefaultUserId(),
+  referenceType,
+  referenceId,
+  dataType = "data",
+}: DataAssetParams & {
+  referenceType: TopicDataReference["reference_type"];
+  referenceId: string;
+  dataType?: "data" | "raw";
+}): Promise<TopicDataSnapshot> {
+  const params = new URLSearchParams({
+    reference_type: referenceType,
+    reference_id: referenceId,
+    data_type: dataType,
+  });
+  return apiRequest<TopicDataSnapshot>(`/api/topic-data?${params.toString()}`, {
     method: "GET",
     context: { tenantId, userId },
   });

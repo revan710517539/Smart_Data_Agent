@@ -3,7 +3,6 @@ import { Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-route
 import {
   BarChart3,
   Gauge,
-  Users,
   Search,
   BrainCircuit,
   Database,
@@ -11,20 +10,19 @@ import {
   Settings,
   ChevronDown,
   ChevronRight,
-  Bot,
   Landmark,
   ListChecks,
   LogOut,
   X,
-  Send,
   Sparkles,
   PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
 import { runApplicationAction } from "../services/applicationApi";
-import { waitForSelfAnalysis } from "../services/analysisApi";
 import { fetchNavigation } from "../services/navigationApi";
+import { preloadRoutePath } from "../routePreload";
+import { AgentSupervisor } from "./agent-supervisor/AgentSupervisor";
 
 type MenuItem = {
   key: string;
@@ -46,15 +44,6 @@ const menuItems: MenuItem[] = [
     ],
   },
   {
-    key: "market-customer",
-    label: "市场洞察",
-    icon: Users,
-    children: [
-      { key: "market-customer.segment", path: "/customers", label: "客群分析" },
-      { key: "market-customer.competition", path: "/competition", label: "竞品分析" },
-    ],
-  },
-  {
     key: "self-analysis",
     label: "自助分析",
     icon: Search,
@@ -69,7 +58,6 @@ const menuItems: MenuItem[] = [
     label: "任务工作台",
     icon: BrainCircuit,
     children: [
-      { key: "task-workbench.abilities", path: "/agent/abilities", label: "能力总览" },
       { key: "task-workbench.todos", path: "/agent/todos", label: "待办任务" },
       { key: "task-workbench.tasks", path: "/agent/tasks", label: "自动化任务" },
       { key: "task-workbench.skills", path: "/agent/skills", label: "Skill插件" },
@@ -131,19 +119,7 @@ export function Layout() {
   const [allowedMenuKeys, setAllowedMenuKeys] = useState<Set<string> | null>(new Set());
   const [navigationStatus, setNavigationStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [institutionOpen, setInstitutionOpen] = useState(false);
-  const [agentOpen, setAgentOpen] = useState(false);
-  const [agentInput, setAgentInput] = useState("");
-  const [agentStatus, setAgentStatus] = useState<"idle" | "running" | "ready" | "unavailable">("idle");
   const [todoReturnPath, setTodoReturnPath] = useState("/");
-  const [agentMessages, setAgentMessages] = useState<
-    { role: "user" | "agent"; content: string }[]
-  >([
-    {
-      role: "agent",
-      content:
-        "您好！我会通过受治理的智能分析链路回答问题；只有真实数据执行、证据绑定和服务端复核通过后才展示经营结论。",
-    },
-  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -206,63 +182,6 @@ export function Layout() {
 
   const handleTodoShortcut = () => {
     navigate(isTodoPage ? todoReturnPath || "/" : "/agent/todos");
-  };
-
-  const agentUnavailableMessage =
-    "智能体服务暂未形成可验证的分析结果。请进入“智能分析”发起正式查询，或稍后在服务恢复后重试；系统不会用默认数字代替真实分析。";
-
-  const handleAgentSend = async () => {
-    if (!agentInput.trim()) return;
-    const userMsg = agentInput;
-    setAgentMessages((prev) => [...prev, { role: "user", content: userMsg }]);
-    setAgentInput("");
-    setAgentStatus("running");
-    try {
-      const response = await waitForSelfAnalysis({
-        question: userMsg,
-        tenantId,
-        userId,
-        requestId: crypto.randomUUID(),
-        pageContext: {
-          route: location.pathname,
-          selected_institution: selectedInstitution,
-          analysis_trigger: "floating_agent",
-          model_application_module: "intelligent_analysis_reasoning",
-          page_roles: currentTenantRoles.map((role) => role.role),
-        },
-      });
-      const firstResult = response.skill_results?.[0];
-      const semantic = firstResult?.semantic_info || {};
-      const evidence = firstResult?.evidence;
-      const review = response.review || {};
-      const publishable = Boolean(
-        response.status === "completed" &&
-          review.status === "passed" &&
-          review.publication_gate === "allowed" &&
-          semantic.execution_mode === "real" &&
-          semantic.publishable === true &&
-          evidence?.evidence_id &&
-          evidence.source_snapshot &&
-          Object.keys(evidence.source_snapshot).length,
-      );
-      const conclusions = response.conclusions?.filter((item) => item.trim()) || [];
-      if (!publishable || !conclusions.length) {
-        setAgentStatus("unavailable");
-        throw new Error("floating_agent_result_not_publishable");
-      }
-      const answer = `${conclusions.join("\n")}\n\n任务：${response.task_id}\n证据：${evidence?.evidence_id}`;
-      setAgentStatus("ready");
-      setAgentMessages((prev) => [
-        ...prev,
-        {
-          role: "agent",
-          content: answer,
-        },
-      ]);
-    } catch {
-      setAgentStatus("unavailable");
-      setAgentMessages((prev) => [...prev, { role: "agent", content: agentUnavailableMessage }]);
-    }
   };
 
   return (
@@ -389,6 +308,8 @@ export function Layout() {
                         <NavLink
                           key={child.path}
                           to={child.path}
+                          onMouseEnter={() => preloadRoutePath(child.path || "")}
+                          onFocus={() => preloadRoutePath(child.path || "")}
                           className={({ isActive }) =>
                             `flex items-center px-2.5 py-[6px] text-[13px] rounded-md transition-colors ${
                               isActive
@@ -462,91 +383,7 @@ export function Layout() {
         )}
       </main>
 
-      {/* AI Floating */}
-      <button
-        onClick={() => setAgentOpen(!agentOpen)}
-        className="fixed bottom-6 right-6 w-11 h-11 bg-[#1d1d1f] rounded-full shadow-lg shadow-black/8 flex items-center justify-center hover:bg-[#2c2c2e] transition-colors z-50"
-      >
-        <Bot className="w-[18px] h-[18px] text-white" />
-      </button>
-
-      {/* AI Panel */}
-      {agentOpen && (
-        <div className="fixed bottom-20 right-6 w-[370px] h-[500px] bg-white rounded-xl shadow-xl shadow-black/8 flex flex-col z-50 overflow-hidden border border-[#e5e5ea]">
-          <div className="px-4 py-3 border-b border-[#ebebf0] flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <BrainCircuit className="w-4 h-4 text-[#636366]" />
-              <span className="text-[13px] text-[#1d1d1f]">Data Agent</span>
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${
-                  agentStatus === "ready"
-                    ? "bg-[#34c759]"
-                    : agentStatus === "running"
-                      ? "bg-[#f59e0b]"
-                      : "bg-[#aeaeb2]"
-                }`}
-                title={agentStatus === "ready" ? "最近一次结果可验证" : agentStatus === "running" ? "分析执行中" : "暂无可验证结果"}
-              />
-            </div>
-            <button
-              onClick={() => setAgentOpen(false)}
-              className="text-[#aeaeb2] hover:text-[#636366] transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
-            {agentMessages.map((msg, i) => (
-              <div
-                key={i}
-                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`max-w-[85%] px-3 py-2.5 text-[13px] whitespace-pre-wrap leading-relaxed ${
-                    msg.role === "user"
-                      ? "bg-[#1d1d1f] text-white rounded-[14px] rounded-br-sm"
-                      : "bg-[#f2f2f7] text-[#3a3a3c] rounded-[14px] rounded-bl-sm"
-                  }`}
-                >
-                  {msg.content}
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="px-3 py-3 border-t border-[#ebebf0]">
-            <div className="flex gap-2">
-              <input
-                value={agentInput}
-                onChange={(e) => setAgentInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && agentStatus !== "running" && void handleAgentSend()}
-                placeholder="输入分析问题..."
-                className="flex-1 px-3 py-2 bg-[#f2f2f7] rounded-lg text-[13px] border-none focus:outline-none focus:ring-1 focus:ring-[#c7c7cc]"
-              />
-              <button
-                onClick={() => void handleAgentSend()}
-                disabled={agentStatus === "running"}
-                className="px-3 py-2 bg-[#1d1d1f] text-white rounded-lg hover:bg-[#2c2c2e] transition-colors disabled:opacity-50"
-              >
-                <Send className="w-3.5 h-3.5" />
-              </button>
-            </div>
-            <div className="flex gap-1.5 mt-2">
-              {["本月经营总结", "风险预警", "漏斗分析"].map((q) => (
-                <button
-                  key={q}
-                  onClick={() => {
-                    setAgentInput(q);
-                    void runShellAction("select_quick_prompt", { prompt: q, selectedInstitution });
-                  }}
-                  className="px-2 py-1 border border-[#e5e5ea] rounded-md text-[11px] text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#3a3a3c] transition-colors"
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+      <AgentSupervisor />
     </div>
   );
 }

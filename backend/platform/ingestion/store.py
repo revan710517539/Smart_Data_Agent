@@ -21,7 +21,7 @@ SOURCE_CATEGORIES = {
     "file_exchange",
     "other",
 }
-SCRIPT_RUNTIMES = {"python", "sql", "http", "browser", "shell_restricted"}
+SCRIPT_RUNTIMES = {"python", "sql", "http", "shell_restricted"}
 
 
 class SQLiteAcquisitionStore:
@@ -40,15 +40,8 @@ class SQLiteAcquisitionStore:
     def init_schema(self) -> None:
         migration_dir = Path(__file__).resolve().parents[1] / "database" / "sql"
         acquisition_sql = (migration_dir / "0006_data_acquisition_runtime.sql").read_text(encoding="utf-8")
-        acquisition_sql = acquisition_sql.replace(
-            "('python','sql','http','shell_restricted')",
-            "('python','sql','http','browser','shell_restricted')",
-        )
         self._conn.executescript(acquisition_sql)
         self._conn.executescript((migration_dir / "0021_lineage_runtime.sql").read_text(encoding="utf-8"))
-        local_projection_sql = (migration_dir / "0024_yushu_crawler_engine.sql").read_text(encoding="utf-8")
-        local_projection_sql = local_projection_sql[local_projection_sql.index("CREATE TABLE IF NOT EXISTS platform_topic_tables") :]
-        self._conn.executescript(local_projection_sql)
         self._conn.commit()
 
     def ensure_connection_reference(self, tenant_id: str, connection_id: str) -> None:

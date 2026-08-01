@@ -1,0 +1,22 @@
+{
+  "skill_id": "bi.report.generate",
+  "skill_name": "BI报表规格生成",
+  "skill_type": "report_generation",
+  "description": "从分析证据生成可审计的 BI 报表规格，不直接伪造发布状态。",
+  "input_schema": {
+    "question": "string",
+    "analysis_plan": "object",
+    "analysis_profile": "object",
+    "governance_assessment": "object",
+    "chart_spec": "object",
+    "conclusions": "array"
+  },
+  "output_schema": {
+    "report_spec": "object"
+  },
+  "permission_scope": ["analysis:run", "report:generate"],
+  "runtime_type": "python",
+  "risk_level": "low",
+  "version": "1.0.0",
+  "owner": "smart-data-agent"
+}

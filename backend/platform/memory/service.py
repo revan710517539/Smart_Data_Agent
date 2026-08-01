@@ -69,6 +69,9 @@ class MemoryService:
     def list_candidates(self, tenant_id: str) -> list[dict[str, Any]]:
         return self.store.list_candidates(tenant_id)
 
+    def get(self, tenant_id: str, memory_id: str) -> dict[str, Any]:
+        return self.store.get(tenant_id, memory_id)
+
     def list_active(self, tenant_id: str, actor_user_id: str) -> list[dict[str, Any]]:
         records = self.store.search(tenant_id, statuses=("active",), limit=200)
         return [

@@ -33,6 +33,43 @@ def _cookie_header(jar: dict[str, str]) -> str:
 
 
 class SessionSecurityTest(unittest.TestCase):
+    def test_development_email_login_requires_the_configured_password(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                wrong_password = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                wrong_password.request(
+                    "POST",
+                    "/api/auth/login",
+                    body=json.dumps({"email": "lina@bank.com", "password": "incorrect"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                rejected = wrong_password.getresponse()
+                rejected_payload = json.loads(rejected.read().decode("utf-8"))
+
+                correct_password = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                correct_password.request(
+                    "POST",
+                    "/api/auth/login",
+                    body=json.dumps({"email": "lina@bank.com", "password": "123456"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                accepted = correct_password.getresponse()
+                accepted_payload = json.loads(accepted.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertEqual(rejected.status, 400)
+        self.assertEqual(rejected_payload["error"], "invalid_request")
+        self.assertEqual(rejected_payload["message"], "邮箱或密码不正确，请确认后重试。")
+        self.assertEqual(accepted.status, 200)
+        self.assertEqual(accepted_payload["user"]["id"], "u_lina")
+
     def test_idle_absolute_and_access_expiry_are_enforced(self) -> None:
         store = InMemorySessionStore()
         grant = store.issue(
@@ -104,7 +141,7 @@ class SessionSecurityTest(unittest.TestCase):
                 login.request(
                     "POST",
                     "/api/auth/login",
-                    body=json.dumps({"email": "lina@bank.com"}).encode("utf-8"),
+                    body=json.dumps({"email": "lina@bank.com", "password": "123456"}).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                 )
                 login_response = login.getresponse()

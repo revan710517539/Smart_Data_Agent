@@ -333,34 +333,16 @@ class DataAcquisitionTest(unittest.TestCase):
         )
         self.assertEqual(source["source_category"], "market")
 
-    def test_model_repair_rejects_unsafe_generated_sql_before_review(self) -> None:
+    def test_csv_source_repair_requires_file_update(self) -> None:
         model_store = Mock()
-        model_store.list_models.return_value = [
-            {
-                "id": "general-repair-model",
-                "name": "general-repair-model",
-                "status": "available",
-                "testStatus": "connected",
-                "applicationModule": "crawler_exception_optimization",
-                "key": "https://model.example/v1",
-                "value": "secret",
-            }
-        ]
         generator = ModelAcquisitionRepairGenerator(model_store, RestrictedRowTransformSandbox())
-        completion = {
-            "status": "connected",
-            "response_text": json.dumps({"candidate_source_code": "DELETE FROM loan_fact"}),
-            "request_hash": "a" * 64,
-            "response_hash": "b" * 64,
-            "model_id": "general-repair-model",
-        }
-        with patch("backend.platform.ingestion.repair.call_model_text_completion", return_value=completion):
-            with self.assertRaises(ValueError):
-                generator.generate(
-                    "tenant_demo",
-                    {"runtime": "sql", "source_code": "SELECT * FROM loan_fact"},
-                    {"error_code": "source_execution_failed"},
-                )
+        result = generator.generate(
+            "tenant_demo",
+            {"runtime": "sql", "source_code": "SELECT * FROM loan_fact"},
+            {"error_code": "source_execution_failed"},
+        )
+        self.assertIsNone(result["candidate_source_code"])
+        self.assertEqual(result["model_call"]["error_code"], "csv_source_repair_requires_file_update")
 
 
 if __name__ == "__main__":

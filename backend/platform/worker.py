@@ -12,7 +12,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the Smart Data Agent durable worker outside the API process.")
     parser.add_argument("--db", default=".smart_data_agent.sqlite")
     parser.add_argument("--poll-seconds", type=float, default=0.5)
-    parser.add_argument("--worker-id", default=os.getenv("SMART_DATA_AGENT_WORKER_ID", "crawler-worker"))
+    parser.add_argument("--worker-id", default=os.getenv("SMART_DATA_AGENT_WORKER_ID", "data-worker"))
     args = parser.parse_args()
     runtime_config = load_runtime_config()
     services = (

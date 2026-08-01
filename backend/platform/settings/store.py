@@ -7,7 +7,6 @@ from backend.platform.storage import connect_sqlite
 from typing import Any
 
 from backend.platform.security.secrets import decrypt_secret, encrypt_secret
-from backend.platform.crawler_engine.url_identity import build_crawler_url_identity, infer_crawler_mode
 from .model_modules import normalize_application_module
 
 
@@ -50,10 +49,6 @@ DATA_CONNECTION_FIELDS = (
     "queryPageUrl",
     "metadataPageUrl",
     "spaceId",
-    "crawlerMode",
-    "crawlerKey",
-    "crawlerProfileId",
-    "crawlerConfig",
     "account",
     "password",
     "token",
@@ -209,8 +204,6 @@ class InMemorySystemConfigStore:
     ) -> dict[str, str]:
         candidate = dict(connection)
         existing = self._connections_by_tenant.get(tenant_id, {}).get(str(candidate.get("id") or ""))
-        if existing and "crawlerConfig" not in candidate:
-            candidate["crawlerConfig"] = dict(existing.get("crawlerConfig") or {})
         normalized = _normalize_data_connection(candidate)
         secret = _connection_secret(normalized)
         if secret == MASKED_SECRET and existing:
@@ -348,8 +341,6 @@ class SQLiteSystemConfigStore:
             SELECT tenant_id, model_id, payload, created_by, updated_by, updated_at
             FROM platform_model_integrations
             WHERE tenant_id IN (?, ?)
-               OR created_by = ?
-               OR updated_by = ?
             ORDER BY
                 CASE
                     WHEN tenant_id = ? THEN 0
@@ -359,7 +350,7 @@ class SQLiteSystemConfigStore:
                 updated_at DESC,
                 model_id
             """,
-            (account_scope, tenant_id, user_id, user_id, account_scope, tenant_id),
+            (account_scope, tenant_id, account_scope, tenant_id),
         ).fetchall()
         collected: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -627,18 +618,6 @@ class SQLiteSystemConfigStore:
     ) -> dict[str, str]:
         candidate = dict(connection)
         connection_id = str(candidate.get("id") or "").strip()
-        if connection_id and "crawlerConfig" not in candidate:
-            row = self._conn.execute(
-                "SELECT payload FROM platform_data_connections WHERE tenant_id = ? AND connection_id = ?",
-                (tenant_id, connection_id),
-            ).fetchone()
-            if row:
-                try:
-                    existing_payload = json.loads(row["payload"] or "{}")
-                except json.JSONDecodeError:
-                    existing_payload = {}
-                if isinstance(existing_payload.get("crawlerConfig"), dict):
-                    candidate["crawlerConfig"] = dict(existing_payload["crawlerConfig"])
         normalized = _normalize_data_connection(candidate)
         stored_secret = _connection_secret_for_storage(normalized)
         with self._conn:
@@ -842,18 +821,7 @@ def _mask_speech_secret(integration: dict[str, Any]) -> dict[str, str]:
 
 
 def _normalize_data_connection(connection: dict[str, Any]) -> dict[str, Any]:
-    normalized = {
-        field: str(connection.get(field) or "").strip()
-        for field in DATA_CONNECTION_FIELDS
-        if field != "crawlerConfig"
-    }
-    crawler_config = connection.get("crawlerConfig")
-    if crawler_config in (None, ""):
-        normalized["crawlerConfig"] = {}
-    elif isinstance(crawler_config, dict):
-        normalized["crawlerConfig"] = dict(crawler_config)
-    else:
-        raise ValueError("crawlerConfig must be an object.")
+    normalized = {field: str(connection.get(field) or "").strip() for field in DATA_CONNECTION_FIELDS}
     if not normalized["id"] or not normalized["institution"] or not normalized["account"] or not normalized["dataset"]:
         raise ValueError("connection id, institution, account and dataset are required.")
     if not normalized["password"] and not normalized["token"]:
@@ -862,23 +830,6 @@ def _normalize_data_connection(connection: dict[str, Any]) -> dict[str, Any]:
         normalized["sourceName"] = normalized["institution"]
     if not normalized["sourceType"]:
         normalized["sourceType"] = "毓数QBI"
-    crawler_mode = infer_crawler_mode({**connection, **normalized})
-    if crawler_mode:
-        normalized["loginUrl"] = normalized["loginUrl"] or normalized["apiUrl"]
-        normalized["queryPageUrl"] = normalized["queryPageUrl"] or normalized["apiUrl"]
-        normalized["apiUrl"] = normalized["queryPageUrl"]
-        if not normalized["loginUrl"] or not normalized["queryPageUrl"]:
-            raise ValueError("crawler login URL and query page URL are required.")
-        identity = build_crawler_url_identity({**connection, **normalized, "crawlerMode": crawler_mode})
-        if identity is None:
-            raise ValueError("crawler page URL is required.")
-        normalized["crawlerMode"] = identity.mode
-        normalized["crawlerKey"] = identity.crawler_key
-        normalized["crawlerProfileId"] = identity.profile_id
-    else:
-        normalized["crawlerMode"] = ""
-        normalized["crawlerKey"] = ""
-        normalized["crawlerProfileId"] = ""
     if not normalized["defaultDatabase"]:
         normalized["defaultDatabase"] = normalized["dataset"]
     normalized["enabled"] = _normalize_bool(connection.get("enabled"), default=True)
@@ -1016,10 +967,6 @@ def _connection_from_row(row: sqlite3.Row, reveal_secret: bool = False) -> dict[
         "queryPageUrl": payload.get("queryPageUrl") or "",
         "metadataPageUrl": payload.get("metadataPageUrl") or "",
         "spaceId": payload.get("spaceId") or "",
-        "crawlerMode": payload.get("crawlerMode") or "",
-        "crawlerKey": payload.get("crawlerKey") or "",
-        "crawlerProfileId": payload.get("crawlerProfileId") or "",
-        "crawlerConfig": payload.get("crawlerConfig") if isinstance(payload.get("crawlerConfig"), dict) else {},
         "account": row["account"],
         "password": password,
         "token": token,
@@ -1042,9 +989,6 @@ def _normalize_bool(value: Any, default: bool = False) -> bool:
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled", "启用"}
 
-
-def _is_crawler_connection(connection: dict[str, Any]) -> bool:
-    return bool(infer_crawler_mode(connection))
 
 
 def _ensure_column(connection: sqlite3.Connection, table_name: str, column_name: str, declaration: str) -> None:

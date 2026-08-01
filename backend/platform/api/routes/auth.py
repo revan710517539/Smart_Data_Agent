@@ -3,6 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 import hashlib
+import hmac
 import os
 from typing import Any
 from urllib.parse import parse_qs
@@ -24,6 +25,10 @@ def handle_auth_login(handler: Any) -> None:
             return
         payload = handler._read_json()
         email = str(payload.get("email") or "").strip()
+        password = str(payload.get("password") or "")
+        expected_password = os.getenv("SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD", "123456")
+        if not expected_password or not hmac.compare_digest(password, expected_password):
+            raise ValueError("invalid_login_credentials")
         tenant_hint = str(payload.get("tenant_id") or payload.get("institution") or "").strip() or None
         session = handler.services.access_service.login_by_email(email, tenant_hint=tenant_hint)
         response, cookies = _issue_session(handler, session)

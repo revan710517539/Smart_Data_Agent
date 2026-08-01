@@ -12,7 +12,46 @@
     </head>
 
     <body>
-      <div id="root"></div>
+      <style>
+        /* Render immediately while the local application bundle initializes. */
+        #smart-data-agent-bootstrap {
+          box-sizing: border-box;
+          min-height: 100vh;
+          padding: 28px;
+          color: #8a8a8e;
+          background: #fff;
+          font: 13px -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+        #smart-data-agent-bootstrap *,
+        #smart-data-agent-bootstrap *::before,
+        #smart-data-agent-bootstrap *::after { box-sizing: border-box; }
+        .sda-bootstrap-line, .sda-bootstrap-card {
+          border-radius: 10px;
+          background: linear-gradient(100deg, #f3f3f5 20%, #fafafb 38%, #f3f3f5 56%);
+          background-size: 200% 100%;
+          animation: sda-bootstrap-shimmer 1.35s ease-in-out infinite;
+        }
+        .sda-bootstrap-title { width: 150px; height: 22px; }
+        .sda-bootstrap-subtitle { width: min(360px, 85vw); height: 13px; margin-top: 10px; }
+        .sda-bootstrap-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 28px; }
+        .sda-bootstrap-card { height: 116px; border: 1px solid #f0f0f2; }
+        .sda-bootstrap-panel { height: 300px; margin-top: 20px; border-radius: 12px; border: 1px solid #f0f0f2; background: #fafbfc; }
+        @keyframes sda-bootstrap-shimmer { to { background-position: -200% 0; } }
+        @media (max-width: 720px) { #smart-data-agent-bootstrap { padding: 20px; } .sda-bootstrap-grid { grid-template-columns: 1fr; } }
+        @media (prefers-reduced-motion: reduce) { .sda-bootstrap-line, .sda-bootstrap-card { animation: none; } }
+      </style>
+      <div id="root">
+        <main id="smart-data-agent-bootstrap" aria-label="Data Agent 正在加载">
+          <div class="sda-bootstrap-line sda-bootstrap-title"></div>
+          <div class="sda-bootstrap-line sda-bootstrap-subtitle"></div>
+          <div class="sda-bootstrap-grid">
+            <div class="sda-bootstrap-card"></div>
+            <div class="sda-bootstrap-card"></div>
+            <div class="sda-bootstrap-card"></div>
+          </div>
+          <div class="sda-bootstrap-panel"></div>
+        </main>
+      </div>
       <script type="module" src="/src/main.tsx"></script>
     </body>
   </html>

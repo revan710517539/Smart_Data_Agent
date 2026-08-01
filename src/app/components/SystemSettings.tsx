@@ -38,19 +38,14 @@ import {
 } from "../services/accessControlApi";
 import { fetchAuditLogs, type AuditLog } from "../services/auditApi";
 import {
-  deleteDataConnection,
   deleteModelIntegration,
   deleteSpeechIntegration,
   fetchSystemConfig,
-  saveDataConnection,
   saveModelIntegration,
   saveSpeechIntegration,
   saveSystemDataParam,
-  testDataConnection,
   testModelIntegration,
   testSpeechIntegration,
-  type DataConnection,
-  type DataConnectionTestResult,
   type ModelIntegration,
   type ModelIntegrationTestResult,
   type SpeechIntegration,
@@ -70,7 +65,6 @@ import {
   customRoleOptions,
   userRoleOptions,
   modelSourceOptions,
-  dataSourceTypeOptions,
   emptyUserForm,
   roles,
   permissionMenuGroups,
@@ -83,7 +77,6 @@ import {
   systemConfig,
   initialModelIntegrations,
   initialSpeechIntegrations,
-  initialDataConnections,
   initialUserList,
   initialPermissionInstitutions,
   emptyModelForm,
@@ -91,8 +84,6 @@ import {
   maskApiSecret,
   speechProviderLabel,
   modelSourceLabel,
-  dataConnectionDatasetByType,
-  defaultDatasetForDataConnection,
   defaultRelayModelOptions,
   modelOptionDescriptions,
   modelOptionDescription,
@@ -101,7 +92,6 @@ import {
   speechCapabilityDescriptions,
   speechCapabilityOptions,
   initialSystemDataParams,
-  emptyDataForm,
   getSettingsSection,
   formatAuditLog,
   formatAuditTime,
@@ -118,28 +108,6 @@ function hasDuplicateModelName(models: ModelIntegration[], name: string, current
   return models.some((model) => model.id !== currentModelId && normalizedModelName(model.name) === target);
 }
 
-function crawlerModeForSourceType(sourceType: string): "page" | "sql" | "" {
-  const normalized = sourceType.trim().toLowerCase();
-  if (normalized.includes("sql") || (normalized.includes("毓数") && (normalized.includes("爬虫") || normalized.includes("crawler")))) return "sql";
-  if (normalized.includes("页面") || normalized.includes("智运") || normalized.includes("爬虫") || normalized.includes("crawler")) return "page";
-  return "";
-}
-
-function isCrawlerSourceType(sourceType: string) {
-  return Boolean(crawlerModeForSourceType(sourceType));
-}
-
-function normalizedDataSourceType(sourceType: string) {
-  if (sourceType === "毓数平台（爬虫）") return "毓数平台（SQL爬虫）";
-  if (sourceType === "智运平台") return "智运平台（页面爬虫）";
-  return sourceType || dataSourceTypeOptions[0];
-}
-
-function dataConnectionEndpointReady(connection: Pick<DataConnection, "sourceType" | "apiUrl" | "loginUrl" | "queryPageUrl" | "mockEnabled">) {
-  if (connection.mockEnabled) return true;
-  return Boolean((connection.apiUrl || connection.loginUrl || connection.queryPageUrl || "").trim());
-}
-
 export function SystemSettings() {
   const location = useLocation();
   const {
@@ -147,6 +115,7 @@ export function SystemSettings() {
     isSuperAdmin,
     selectedInstitution,
     tenantId,
+    userId,
   } = usePlatformContext();
   const activeTab = getSettingsSection(location.pathname);
   const [searchTerm, setSearchTerm] = useState("");
@@ -157,22 +126,16 @@ export function SystemSettings() {
   const [speechIntegrations, setSpeechIntegrations] = useState<SpeechIntegration[]>(
     isDemoFallbackEnabled() ? initialSpeechIntegrations : [],
   );
-  const [dataConnections, setDataConnections] = useState<DataConnection[]>(
-    isDemoFallbackEnabled() ? initialDataConnections : [],
-  );
   const [systemDataParams, setSystemDataParams] = useState<SystemDataParam[]>(
     isDemoFallbackEnabled() ? initialSystemDataParams : [],
   );
   const [configNotice, setConfigNotice] = useState("");
   const [testingModelId, setTestingModelId] = useState("");
   const [testingSpeechIntegrationId, setTestingSpeechIntegrationId] = useState("");
-  const [testingConnectionId, setTestingConnectionId] = useState("");
   const [modelTestResults, setModelTestResults] = useState<Record<string, ModelIntegrationTestResult>>({});
   const [speechTestResults, setSpeechTestResults] = useState<Record<string, SpeechIntegrationTestResult>>({});
-  const [connectionTestResults, setConnectionTestResults] = useState<Record<string, DataConnectionTestResult>>({});
   const [modelForm, setModelForm] = useState(emptyModelForm);
   const [speechForm, setSpeechForm] = useState(emptySpeechForm);
-  const [dataForm, setDataForm] = useState(emptyDataForm);
   const [users, setUsers] = useState<SystemUser[]>(isDemoFallbackEnabled() ? initialUserList : []);
   const [accessNotice, setAccessNotice] = useState("");
   const [auditRows, setAuditRows] = useState<ReturnType<typeof formatAuditLog>[]>([]);
@@ -184,43 +147,32 @@ export function SystemSettings() {
     useState<InstitutionPermission[]>(isDemoFallbackEnabled() ? initialPermissionInstitutions : []);
   const [editingPermissionId, setEditingPermissionId] = useState<string | null>(null);
   const [permissionRole, setPermissionRole] = useState<PermissionRole>("管理员");
-  const dataAccessInstitutionOptions = Array.from(
-    new Set((visibleInstitutions.length ? visibleInstitutions : [selectedInstitution]).filter(Boolean)),
-  );
-  const activeDataConnectionInstitution = dataAccessInstitutionOptions.includes(selectedInstitution)
-    ? selectedInstitution
-    : dataAccessInstitutionOptions[0] || operatingTenantNames[0];
-
   useEffect(() => {
-    if (activeTab !== "config") return;
     let cancelled = false;
 
     const syncSystemConfig = async () => {
       try {
-        const response = await fetchSystemConfig({ tenantId });
+        const response = await fetchSystemConfig({ tenantId, userId });
         if (cancelled) return;
         setModelIntegrations(response.models);
         setSpeechIntegrations(response.speech_integrations || []);
-        setDataConnections(response.data_connections);
         setSystemDataParams(response.system_params);
         setConfigNotice(
-          response.count.models || response.count.speech_integrations || response.count.data_connections || response.count.system_params
+          response.count.models || response.count.speech_integrations || response.count.system_params
             ? `系统接入配置已连接后端：${selectedInstitution}`
-            : `系统接入配置已连接后端：${selectedInstitution}，当前暂无模型或数据接入配置。`,
+            : `系统接入配置已连接后端：${selectedInstitution}，当前暂无模型或语音配置。`,
         );
       } catch (error) {
         if (cancelled) return;
         if (isDemoFallbackEnabled()) {
           setModelIntegrations(initialModelIntegrations);
           setSpeechIntegrations(initialSpeechIntegrations);
-          setDataConnections(initialDataConnections);
           setSystemDataParams(initialSystemDataParams);
           setConfigNotice(`系统接入配置后端暂不可用，已使用显式 demo 本地状态。${apiErrorMessage(error, "")}`);
           return;
         }
         setModelIntegrations([]);
         setSpeechIntegrations([]);
-        setDataConnections([]);
         setSystemDataParams([]);
         setConfigNotice(`${demoFallbackDisabledMessage("系统接入配置加载")} ${apiErrorMessage(error, "")}`);
       }
@@ -230,10 +182,9 @@ export function SystemSettings() {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, selectedInstitution, tenantId]);
+  }, [selectedInstitution, tenantId, userId]);
 
   useEffect(() => {
-    if (activeTab !== "users" && activeTab !== "roles") return;
     let cancelled = false;
 
     const syncAccessUsers = async () => {
@@ -264,7 +215,7 @@ export function SystemSettings() {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, selectedInstitution, tenantId]);
+  }, [selectedInstitution, tenantId]);
 
   useEffect(() => {
     if (activeTab !== "audit") return;
@@ -318,8 +269,8 @@ export function SystemSettings() {
     setModelIntegrations((current) => [...current, nextModel]);
     setModelForm(emptyModelForm);
     try {
-      const response = await saveModelIntegration({ tenantId, model: nextModel });
-      const latest = await fetchSystemConfig({ tenantId, forceRefresh: true });
+      const response = await saveModelIntegration({ tenantId, userId, model: nextModel });
+      const latest = await fetchSystemConfig({ tenantId, userId, forceRefresh: true });
       setModelIntegrations(latest.models.length ? latest.models : [response.model]);
       setConfigNotice(nextModel.applicationModule === "memory_extraction" ? "模型接入已同步到后端；记忆模块仅保留当前这一条模型绑定。" : "模型接入已同步到后端。");
     } catch (error) {
@@ -336,7 +287,7 @@ export function SystemSettings() {
     const previousModels = modelIntegrations;
     setModelIntegrations((current) => current.filter((item) => item.id !== id));
     try {
-      await deleteModelIntegration({ tenantId, modelId: id });
+      await deleteModelIntegration({ tenantId, userId, modelId: id });
       setConfigNotice("模型接入已从后端删除。");
     } catch (error) {
       if (isDemoFallbackEnabled()) {
@@ -383,8 +334,8 @@ export function SystemSettings() {
     if (!nextModel.key || !nextModel.value) return;
     setModelIntegrations((current) => current.map((item) => (item.id === model.id ? nextModel : item)));
     try {
-      const response = await saveModelIntegration({ tenantId, model: nextModel });
-      const latest = await fetchSystemConfig({ tenantId, forceRefresh: true });
+      const response = await saveModelIntegration({ tenantId, userId, model: nextModel });
+      const latest = await fetchSystemConfig({ tenantId, userId, forceRefresh: true });
       setModelIntegrations(latest.models.length ? latest.models : [response.model]);
       setConfigNotice(nextModel.applicationModule === "memory_extraction" ? "模型接入已更新；记忆模块仅保留当前这一条模型绑定。" : "模型接入已更新。");
     } catch (error) {
@@ -402,7 +353,7 @@ export function SystemSettings() {
     setTestingModelId(model.id);
     setConfigNotice("正在测试模型接入...");
     try {
-      const response = await testModelIntegration({ tenantId, modelId: model.id });
+      const response = await testModelIntegration({ tenantId, userId, modelId: model.id });
       setModelTestResults((current) => ({ ...current, [model.id]: response.result }));
       if (response.model) {
         setModelIntegrations((current) => current.map((item) => (item.id === model.id ? response.model! : item)));
@@ -543,188 +494,6 @@ export function SystemSettings() {
     }
   };
 
-  const addDataConnection = async () => {
-    const institution = activeDataConnectionInstitution;
-    const sourceType = dataForm.sourceType.trim() || dataSourceTypeOptions[0];
-    const sourceName = dataForm.sourceName.trim() || institution;
-    const dataset = defaultDatasetForDataConnection(sourceType, sourceName, institution);
-    if (
-      !institution ||
-      !dataForm.account.trim() ||
-      !dataForm.password.trim() ||
-      !dataConnectionEndpointReady(dataForm)
-    ) return;
-    const previousConnections = dataConnections;
-    const dataUrl = (dataForm.apiUrl || dataForm.loginUrl || dataForm.queryPageUrl).trim();
-    const nextConnection: DataConnection = {
-      id: `data_${Date.now()}`,
-      institution,
-      sourceName,
-      sourceType,
-      apiUrl: dataUrl,
-      loginUrl: dataUrl,
-      queryPageUrl: dataUrl,
-      metadataPageUrl: "",
-      spaceId: "",
-      crawlerMode: crawlerModeForSourceType(sourceType),
-      account: dataForm.account.trim(),
-      password: dataForm.password.trim(),
-      token: "",
-      dataset,
-      defaultDatabase: dataset,
-      enabled: dataForm.enabled,
-      mockEnabled: dataForm.mockEnabled,
-      status: dataForm.mockEnabled ? "mock" : dataForm.enabled ? "draft" : "disabled",
-    };
-    setDataConnections((current) => [...current, nextConnection]);
-    setDataForm(emptyDataForm);
-    try {
-      const response = await saveDataConnection({ tenantId, connection: nextConnection });
-      setDataConnections((current) => current.map((item) => (item.id === nextConnection.id ? response.connection : item)));
-      setConfigNotice("数据接入已同步到后端。");
-    } catch (error) {
-      if (isDemoFallbackEnabled()) {
-        setConfigNotice(`数据接入已保留在 demo 本地状态，后端同步失败：${apiErrorMessage(error, "未知错误")}`);
-        return;
-      }
-      setDataConnections(previousConnections);
-      setConfigNotice(`${demoFallbackDisabledMessage("数据接入新增")} ${apiErrorMessage(error, "未知错误")}`);
-    }
-  };
-
-  const removeDataConnection = async (id: string) => {
-    const previousConnections = dataConnections;
-    setDataConnections((current) => current.filter((item) => item.id !== id));
-    setConnectionTestResults((current) => {
-      const next = { ...current };
-      delete next[id];
-      return next;
-    });
-    try {
-      await deleteDataConnection({ tenantId, connectionId: id });
-      setConfigNotice("数据接入已从后端删除。");
-    } catch (error) {
-      if (isDemoFallbackEnabled()) {
-        setConfigNotice(`数据接入已从 demo 本地状态删除，后端同步失败：${apiErrorMessage(error, "未知错误")}`);
-        return;
-      }
-      setDataConnections(previousConnections);
-      setConfigNotice(`${demoFallbackDisabledMessage("数据接入删除")} ${apiErrorMessage(error, "未知错误")}`);
-    }
-  };
-
-  const updateDataConnection = async (
-    connection: DataConnection,
-    patch: Pick<DataConnection, "sourceName" | "sourceType" | "apiUrl" | "loginUrl" | "queryPageUrl" | "metadataPageUrl" | "spaceId" | "account" | "password" | "enabled" | "mockEnabled">,
-  ) => {
-    const previousConnections = dataConnections;
-    const isPendingConnection = connection.id.startsWith("pending_");
-    const sourceName = patch.sourceName.trim() || connection.sourceName || connection.institution;
-    const sourceType = patch.sourceType.trim() || dataSourceTypeOptions[0];
-    const dataset =
-      sourceType !== connection.sourceType
-        ? defaultDatasetForDataConnection(sourceType, sourceName, connection.institution)
-        : connection.dataset || defaultDatasetForDataConnection(sourceType, sourceName, connection.institution);
-    const dataUrl = (patch.apiUrl || patch.loginUrl || patch.queryPageUrl || "").trim();
-    const nextConnection: DataConnection = {
-      ...connection,
-      id: isPendingConnection ? `data_${Date.now()}` : connection.id,
-      sourceName,
-      sourceType,
-      apiUrl: dataUrl,
-      loginUrl: dataUrl,
-      queryPageUrl: dataUrl,
-      metadataPageUrl: "",
-      spaceId: "",
-      crawlerMode: crawlerModeForSourceType(sourceType),
-      account: patch.account.trim(),
-      password: patch.password.trim() || connection.password || "******",
-      token: connection.token || "",
-      dataset,
-      defaultDatabase: connection.defaultDatabase || dataset,
-      enabled: patch.enabled,
-      mockEnabled: patch.mockEnabled,
-      status: patch.mockEnabled ? "mock" : patch.enabled ? "draft" : "disabled",
-    };
-    if (!nextConnection.account || !nextConnection.dataset || !dataConnectionEndpointReady(nextConnection)) return;
-    setDataConnections((current) => {
-      if (isPendingConnection) {
-        return [...current, nextConnection];
-      }
-      return current.map((item) => (item.id === connection.id ? nextConnection : item));
-    });
-    setConnectionTestResults((current) => {
-      const next = { ...current };
-      delete next[connection.id];
-      return next;
-    });
-    try {
-      const response = await saveDataConnection({ tenantId, connection: nextConnection });
-      setDataConnections((current) => {
-        const withoutDuplicate = current.filter((item) => item.id !== connection.id && item.id !== response.connection.id);
-        return [...withoutDuplicate, response.connection];
-      });
-      setConfigNotice("数据接入已更新。");
-    } catch (error) {
-      if (isDemoFallbackEnabled()) {
-        setConfigNotice(`数据接入已保留在 demo 本地状态，后端同步失败：${apiErrorMessage(error, "未知错误")}`);
-        return;
-      }
-      setDataConnections(previousConnections);
-      setConfigNotice(`${demoFallbackDisabledMessage("数据接入修改")} ${apiErrorMessage(error, "未知错误")}`);
-      throw error;
-    }
-  };
-
-  const runDataConnectionTest = async (connection: DataConnection) => {
-    setTestingConnectionId(connection.id);
-    setConfigNotice("正在测试数据接入...");
-    try {
-      const isPendingConnection = connection.id.startsWith("pending_");
-      const sourceName = connection.sourceName || connection.institution;
-      const sourceType = connection.sourceType || dataSourceTypeOptions[0];
-      const dataset = connection.dataset || defaultDatasetForDataConnection(sourceType, sourceName, connection.institution);
-      const testConnection: DataConnection = {
-        ...connection,
-        id: isPendingConnection ? `probe_${Date.now()}` : connection.id,
-        sourceName,
-        sourceType,
-        account: connection.account || "probe_account",
-        password: connection.password || "probe_secret",
-        dataset,
-        defaultDatabase: connection.defaultDatabase || dataset,
-      };
-      const response = await testDataConnection(
-        isPendingConnection
-          ? { tenantId, connection: testConnection }
-          : { tenantId, connectionId: connection.id },
-      );
-      setConnectionTestResults((current) => ({ ...current, [connection.id]: response.result }));
-      setDataConnections((current) =>
-        current.map((item) => (item.id === connection.id ? { ...item, status: response.result.callable ? "connected" : "draft" } : item)),
-      );
-      setConfigNotice(response.result.message);
-    } catch (error) {
-      setConnectionTestResults((current) => ({
-        ...current,
-        [connection.id]: {
-          connection_id: connection.id,
-          institution: connection.institution,
-          dataset: connection.dataset,
-          status: "query_failed",
-          callable: false,
-          data_source_mode: "unknown",
-          matched_dataset: null,
-          available_datasets: [],
-          message: error instanceof Error ? error.message : "数据接入测试失败",
-        },
-      }));
-      setConfigNotice(`数据接入测试失败：${error instanceof Error ? error.message : "未知错误"}`);
-    } finally {
-      setTestingConnectionId("");
-    }
-  };
-
   const updateSystemDataParam = async (param: SystemDataParam, value: string) => {
     const previousParams = systemDataParams;
     const nextParam = { ...param, value };
@@ -858,21 +627,39 @@ export function SystemSettings() {
         <p className="text-[13px] text-[#aeaeb2] mt-1">用户管理 · 角色权限 · 审计日志 · 系统配置</p>
       </div>
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        {[
-          { label: "总用户数", value: String(users.length), icon: Users, color: "#636366" },
-          { label: "角色数", value: String(roles.length), icon: Shield, color: "#636366" },
-          { label: "今日登录", value: "42", icon: Key, color: "#636366" },
-          { label: "在线用户", value: String(users.filter((user) => user.status === "active").length), icon: CheckCircle2, color: "#636366" },
-        ].map((s) => (
-          <div key={s.label} className="bg-white p-4 rounded-xl border border-[#f0f0f2]">
-            <div className="flex items-center justify-between mb-2">
-              <s.icon className="w-4 h-4" style={{ color: s.color }} />
-            </div>
-            <div className="text-[22px] text-gray-900 tracking-tight">{s.value}</div>
-            <div className="text-[12px] text-gray-400 mt-0.5">{s.label}</div>
+      <div className="mb-6 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
+        <section className="rounded-xl border border-[#f0f0f2] bg-white p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="text-[13px] text-[#1d1d1f]">用户与角色概览</div>
+            <span className="text-[11px] text-[#aeaeb2]">当前机构</span>
           </div>
-        ))}
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { label: "角色数", value: String(roles.length), icon: Shield, color: "#636366" },
+              { label: "总用户数", value: String(users.length), icon: Users, color: "#636366" },
+              { label: "今日登录", value: "42", icon: Key, color: "#636366" },
+              { label: "在线用户", value: String(users.filter((user) => user.status === "active").length), icon: CheckCircle2, color: "#636366" },
+            ].map((s) => (
+              <div key={s.label} className="rounded-lg bg-[#fafbfc] p-3">
+                <div className="mb-2 flex items-center justify-between"><s.icon className="h-4 w-4" style={{ color: s.color }} /></div>
+                <div className="text-[21px] tracking-tight text-gray-900">{s.value}</div>
+                <div className="mt-0.5 text-[11px] text-gray-400">{s.label}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+        <AccessConfigCard
+          title="模型接入"
+          subtitle="统一维护大模型与语音转文字接入"
+          icon={Key}
+          items={[
+            `${modelIntegrations.length} 个大模型接入`,
+            `${speechIntegrations.length} 个语音转文字接入`,
+            modelIntegrations.map((item) => item.name).join("、") || "暂无大模型配置",
+            speechIntegrations.map((item) => `${item.name}(${speechProviderLabel(item.provider)})`).join("、") || "暂无语音配置",
+          ]}
+          onEdit={() => setAccessModal("model")}
+        />
       </div>
 
       {(activeTab === "users" || activeTab === "roles") && accessNotice && (
@@ -1028,31 +815,6 @@ export function SystemSettings() {
               {configNotice}
             </div>
           )}
-          <div className="grid gap-4 lg:grid-cols-2">
-            <AccessConfigCard
-              title="模型接入"
-              subtitle="统一维护大模型与语音转文字接入；语音平台当前支持阿里云 Fun-ASR"
-              icon={Key}
-              items={[
-                `${modelIntegrations.length} 个大模型接入`,
-                `${speechIntegrations.length} 个语音转文字接入`,
-                modelIntegrations.map((item) => item.name).join("、"),
-                speechIntegrations.map((item) => `${item.name}(${speechProviderLabel(item.provider)})`).join("、"),
-              ]}
-              onEdit={() => setAccessModal("model")}
-            />
-            <AccessConfigCard
-              title="数据接入"
-              subtitle="维护毓数QBI、智运平台、邮件日报、驾驶舱和小程序数据接入参数"
-              icon={Database}
-              items={[
-                `${dataConnections.length} 个数据源配置`,
-                dataConnections.map((item) => `${item.sourceName || item.institution}(${item.sourceType})`).join("、"),
-              ]}
-              onEdit={() => setAccessModal("data")}
-            />
-          </div>
-
           <SystemDataParamsPanel params={systemDataParams} onSave={updateSystemDataParam} />
         </div>
       )}
@@ -1078,23 +840,6 @@ export function SystemSettings() {
           testResults={modelTestResults}
           speechTestResults={speechTestResults}
           onClose={closeModelAccessModal}
-        />
-      )}
-
-      {accessModal === "data" && (
-        <DataAccessModal
-          connections={dataConnections}
-          institutionOptions={dataAccessInstitutionOptions}
-          activeInstitution={activeDataConnectionInstitution}
-          form={dataForm}
-          onFormChange={(key, value) => setDataForm((current) => ({ ...current, [key]: value }))}
-          onAdd={addDataConnection}
-          onUpdate={updateDataConnection}
-          onDelete={removeDataConnection}
-          onTest={runDataConnectionTest}
-          testingConnectionId={testingConnectionId}
-          testResults={connectionTestResults}
-          onClose={() => setAccessModal(null)}
         />
       )}
 
@@ -2129,7 +1874,7 @@ function ModelAccessModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4">
-      <div className="flex max-h-[86vh] w-full max-w-[1200px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
+      <div className="flex h-[min(760px,86vh)] w-full max-w-[1200px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
         <ModalHeader
           title="模型接入管理"
           desc="统一维护系统可调用的大模型、可选子模型和语音转文字能力；业务页面只选择这里已启用的模型配置。"
@@ -2155,10 +1900,10 @@ function ModelAccessModal({
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-hidden">
         {activeAccessTab === "llm" && (
-          <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_340px]">
-            <div className="overflow-hidden rounded-lg border border-[#f0f0f2]">
+          <div className="grid h-full min-h-0 gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+            <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-[#f0f0f2]">
               <div className="grid grid-cols-[1fr_0.7fr_1fr_0.72fr_1fr_112px] gap-3 border-b border-[#f0f0f2] bg-[#fafbfc] px-3 py-2 text-[11px] text-[#8a8a8e]">
                 <span>模型名称</span>
                 <span>模型来源</span>
@@ -2167,6 +1912,7 @@ function ModelAccessModal({
                 <span>应用模块</span>
                 <span className="text-right">操作</span>
               </div>
+              <div className="min-h-0 flex-1 overflow-y-auto" data-model-integrations-scroll="true">
               {models.map((model) => {
                 const isEditing = editingModelId === model.id;
                 const availableModels = availableModelOptions(model);
@@ -2302,8 +2048,9 @@ function ModelAccessModal({
                 );
               })}
               {!models.length && <div className="px-3 py-8 text-center text-[12px] text-[#aeaeb2]">暂无大模型接入</div>}
+              </div>
             </div>
-            <div className="rounded-lg bg-[#fafbfc] p-4">
+            <div className="overflow-y-auto rounded-lg bg-[#fafbfc] p-4">
               <div className="mb-3 text-[13px] text-[#1d1d1f]">新增模型</div>
               <ModelInput label="模型名称" value={form.name} onChange={(value) => onFormChange("name", value)} />
               <div className="grid grid-cols-2 gap-3">
@@ -2485,408 +2232,6 @@ function ModelAccessModal({
             </div>
           </div>
         )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function DataAccessModal({
-  connections,
-  institutionOptions,
-  activeInstitution,
-  form,
-  onFormChange,
-  onAdd,
-  onUpdate,
-  onDelete,
-  onTest,
-  testingConnectionId,
-  testResults,
-  onClose,
-}: {
-  connections: DataConnection[];
-  institutionOptions: string[];
-  activeInstitution: string;
-  form: typeof emptyDataForm;
-  onFormChange: (key: keyof typeof emptyDataForm, value: string | boolean) => void;
-  onAdd: () => void;
-  onUpdate: (
-    connection: DataConnection,
-    patch: Pick<DataConnection, "sourceName" | "sourceType" | "apiUrl" | "loginUrl" | "queryPageUrl" | "metadataPageUrl" | "spaceId" | "account" | "password" | "enabled" | "mockEnabled">,
-  ) => Promise<void>;
-  onDelete: (id: string) => void;
-  onTest: (connection: DataConnection) => void;
-  testingConnectionId: string;
-  testResults: Record<string, DataConnectionTestResult>;
-  onClose: () => void;
-}) {
-  const connectionRows: Array<DataConnection & { configured: boolean }> = [...connections]
-    .sort((left, right) => left.institution.localeCompare(right.institution, "zh-CN") || left.sourceName.localeCompare(right.sourceName, "zh-CN"))
-    .map((connection) => ({ ...connection, configured: true }));
-  const [editingConnectionId, setEditingConnectionId] = useState("");
-  const [expandedConnectionId, setExpandedConnectionId] = useState("");
-  const [sessionTestResultIds, setSessionTestResultIds] = useState<string[]>([]);
-  const [connectionEditDraft, setConnectionEditDraft] = useState({
-    sourceName: "",
-    sourceType: dataSourceTypeOptions[0],
-    apiUrl: "",
-    loginUrl: "",
-    queryPageUrl: "",
-    metadataPageUrl: "",
-    spaceId: "",
-    account: "",
-    password: "",
-    enabled: true,
-    mockEnabled: false,
-  });
-
-  const startConnectionEdit = (connection: DataConnection) => {
-    const dataUrl = connection.apiUrl || connection.loginUrl || connection.queryPageUrl || "";
-    setEditingConnectionId(connection.id);
-    setConnectionEditDraft({
-      sourceName: connection.sourceName || connection.institution,
-      sourceType: normalizedDataSourceType(connection.sourceType),
-      apiUrl: dataUrl,
-      loginUrl: dataUrl,
-      queryPageUrl: dataUrl,
-      metadataPageUrl: "",
-      spaceId: "",
-      account: connection.account || "",
-      password: "",
-      enabled: connection.enabled,
-      mockEnabled: connection.mockEnabled,
-    });
-  };
-
-  const cancelConnectionEdit = () => {
-    setEditingConnectionId("");
-    setConnectionEditDraft({
-      sourceName: "",
-      sourceType: dataSourceTypeOptions[0],
-      apiUrl: "",
-      loginUrl: "",
-      queryPageUrl: "",
-      metadataPageUrl: "",
-      spaceId: "",
-      account: "",
-      password: "",
-      enabled: true,
-      mockEnabled: false,
-    });
-  };
-
-  const saveConnectionEdit = async (connection: DataConnection) => {
-    try {
-      await onUpdate(connection, connectionEditDraft);
-      cancelConnectionEdit();
-    } catch {
-      // Notice is handled by the parent updater; keep the row editable.
-    }
-  };
-
-  const deleteConnectionRow = (connection: DataConnection & { configured: boolean }) => {
-    setExpandedConnectionId((current) => (current === connection.id ? "" : current));
-    setSessionTestResultIds((current) => current.filter((id) => id !== connection.id));
-    onDelete(connection.id);
-  };
-
-  const toggleConnectionExpansion = (connectionId: string) => {
-    setExpandedConnectionId((current) => (current === connectionId ? "" : connectionId));
-  };
-
-  const runConnectionTest = (connection: DataConnection & { configured: boolean }) => {
-    setExpandedConnectionId(connection.id);
-    setSessionTestResultIds((current) => (current.includes(connection.id) ? current : [...current, connection.id]));
-    onTest(connection);
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4">
-      <div className="flex max-h-[86vh] w-full max-w-[1040px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
-        <ModalHeader title="数据接入管理" desc="每条记录对应一个机构下的一个目标页面；同一机构可注册多个 URL，账号与密码按记录隔离。" onClose={onClose} />
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="overflow-hidden rounded-lg border border-[#f0f0f2]">
-              <div className="grid grid-cols-[minmax(92px,1fr)_minmax(78px,0.64fr)_minmax(80px,0.74fr)_minmax(82px,0.74fr)_minmax(82px,0.52fr)_94px] gap-1.5 border-b border-[#f0f0f2] bg-[#fafbfc] px-3 py-2 text-[11px] text-[#8a8a8e]">
-                <span>机构 / 页面</span>
-                <span>数据源类型</span>
-                <span>账号</span>
-                <span>密码</span>
-                <span>模式</span>
-                <span className="text-right">操作</span>
-              </div>
-              {connectionRows.map((connection) => {
-                const result = testResults[connection.id];
-                const isEditing = editingConnectionId === connection.id;
-                const isTesting = testingConnectionId === connection.id;
-                const expanded = expandedConnectionId === connection.id;
-                const shouldShowTestResult = expanded && sessionTestResultIds.includes(connection.id) && result;
-                return (
-                  <div key={connection.id} className="border-b border-[#f8f8f8] px-3 py-2.5 last:border-b-0">
-                    <div
-                      onClick={() => {
-                        if (!isEditing) toggleConnectionExpansion(connection.id);
-                      }}
-                      className={`grid grid-cols-[minmax(92px,1fr)_minmax(78px,0.64fr)_minmax(80px,0.74fr)_minmax(82px,0.74fr)_minmax(82px,0.52fr)_94px] items-center gap-1.5 rounded-md transition-colors ${
-                        isEditing ? "" : "cursor-pointer hover:bg-[#fafbfc]"
-                      }`}
-                    >
-                      {isEditing ? (
-                        <>
-                          <input
-                            value={connectionEditDraft.sourceName}
-                            onChange={(event) => setConnectionEditDraft((current) => ({ ...current, sourceName: event.target.value }))}
-                            className="h-8 min-w-0 w-full rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
-                          />
-                          <select
-                            value={connectionEditDraft.sourceType}
-                            onChange={(event) => setConnectionEditDraft((current) => ({ ...current, sourceType: event.target.value }))}
-                            className="h-8 min-w-0 w-full rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
-                          >
-                            {dataSourceTypeOptions.map((type) => (
-                              <option key={type} value={type}>{type}</option>
-                            ))}
-                          </select>
-                          <input
-                            value={connectionEditDraft.account}
-                            onChange={(event) => setConnectionEditDraft((current) => ({ ...current, account: event.target.value }))}
-                            className="h-8 min-w-0 w-full rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
-                          />
-                          <input
-                            value={connectionEditDraft.password}
-                            type="password"
-                            placeholder="留空保留"
-                            onChange={(event) => setConnectionEditDraft((current) => ({ ...current, password: event.target.value }))}
-                            className="h-8 min-w-0 w-full rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
-                          />
-                          <span className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5">
-                            <label className="flex min-w-0 items-center gap-1 text-[11px] text-[#636366]">
-                              <input
-                                type="checkbox"
-                                checked={connectionEditDraft.enabled}
-                                onChange={(event) =>
-                                  setConnectionEditDraft((current) => ({
-                                    ...current,
-                                    enabled: event.target.checked,
-                                    mockEnabled: event.target.checked ? false : current.mockEnabled,
-                                  }))
-                                }
-                                className="h-3.5 w-3.5 accent-[#1d1d1f]"
-                              />
-                              启用
-                            </label>
-                            <label className="flex min-w-0 items-center gap-1 text-[11px] text-[#636366]">
-                              <input
-                                type="checkbox"
-                                checked={connectionEditDraft.mockEnabled}
-                                onChange={(event) =>
-                                  setConnectionEditDraft((current) => ({
-                                    ...current,
-                                    mockEnabled: event.target.checked,
-                                    enabled: event.target.checked ? false : current.enabled,
-                                  }))
-                                }
-                                className="h-3.5 w-3.5 accent-[#1d1d1f]"
-                              />
-                              Mock
-                            </label>
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <span className="min-w-0 text-[12px] text-[#1d1d1f]">
-                            <span className="block truncate">{connection.sourceName || connection.institution}</span>
-                            <span className="mt-0.5 block truncate text-[10px] text-[#aeaeb2]" title={connection.queryPageUrl || connection.apiUrl}>{connection.institution} · {connection.queryPageUrl || connection.apiUrl || "URL 未配置"}</span>
-                          </span>
-                          <span className="truncate text-[11px] text-[#636366]">{normalizedDataSourceType(connection.sourceType)}</span>
-                          <span className={`truncate font-mono text-[11px] ${connection.configured ? "text-[#636366]" : "text-[#c7c7cc]"}`}>
-                            {connection.account || "未配置"}
-                          </span>
-                          <span className={`font-mono text-[11px] ${connection.configured ? "text-[#636366]" : "text-[#c7c7cc]"}`}>
-                            {connection.password ? maskApiSecret(connection.password) : "未配置"}
-                          </span>
-                          <span className="flex flex-wrap gap-1">
-                            <span className={`rounded-md px-1.5 py-0.5 text-[10px] ${connection.enabled ? "bg-[#eef8f1] text-[#258a3f]" : "bg-[#f2f2f7] text-[#8a8a8e]"}`}>
-                              启用
-                            </span>
-                            <span className={`rounded-md px-1.5 py-0.5 text-[10px] ${connection.mockEnabled ? "bg-[#f5f0ff] text-[#6d4aff]" : "bg-[#f2f2f7] text-[#8a8a8e]"}`}>
-                              Mock
-                            </span>
-                          </span>
-                        </>
-                      )}
-                      <span className="flex min-w-0 justify-end gap-1">
-                        {isEditing ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => void saveConnectionEdit(connection)}
-                              disabled={
-                                !connectionEditDraft.sourceName.trim() ||
-                                !connectionEditDraft.account.trim() ||
-                                !dataConnectionEndpointReady(connectionEditDraft)
-                              }
-                              className="rounded-md p-1.5 text-[#258a3f] hover:bg-[#eef8f1] disabled:opacity-40"
-                              aria-label={`保存${connection.institution}数据接入`}
-                            >
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={cancelConnectionEdit}
-                              className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#f2f2f7]"
-                              aria-label="取消数据接入修改"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                runConnectionTest(connection);
-                              }}
-                              disabled={isTesting}
-                              className={`relative rounded-md p-1.5 transition-colors ${
-                                isTesting
-                                  ? "cursor-wait bg-[#f2f2f7] text-[#c7c7cc]"
-                                  : "text-[#8a8a8e] hover:bg-[#eef8f1] hover:text-[#258a3f]"
-                              } disabled:opacity-80`}
-                              aria-label={`测试${connection.institution}数据接入`}
-                              title="测试"
-                            >
-                              {isTesting && <span className="absolute -inset-1 rounded-full bg-[#d7efd9] opacity-70 animate-ping" />}
-                              <Activity className="relative z-10 h-3.5 w-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                startConnectionEdit(connection);
-                              }}
-                              className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f]"
-                              aria-label={`修改${connection.institution}数据接入`}
-                              title="编辑"
-                            >
-                              <Edit3 className="h-3.5 w-3.5" />
-                            </button>
-                          </>
-                        )}
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            deleteConnectionRow(connection);
-                          }}
-                          className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#fff0f0] hover:text-[#d93025]"
-                          aria-label={`删除${connection.institution}数据接入`}
-                          title="删除"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </span>
-                    </div>
-                    {isEditing && (
-                      <input
-                        value={connectionEditDraft.apiUrl}
-                        placeholder="数据获取URL，例如 https://data.example.com/page"
-                        onClick={(event) => event.stopPropagation()}
-                        onChange={(event) => setConnectionEditDraft((current) => ({ ...current, apiUrl: event.target.value, loginUrl: event.target.value, queryPageUrl: event.target.value }))}
-                        className="mt-2 h-8 w-full rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
-                      />
-                    )}
-                    {expanded && (
-                      <div
-                        className={`mt-2 rounded-md px-2.5 py-1.5 text-[11px] leading-relaxed ${
-                          shouldShowTestResult
-                            ? result.callable
-                              ? "bg-[#eef8f1] text-[#258a3f]"
-                              : "bg-[#fff7ed] text-[#b45309]"
-                            : "bg-[#fafbfc] text-[#8a8a8e]"
-                        }`}
-                      >
-                        {shouldShowTestResult
-                          ? `${result.callable ? "可调用" : "需处理"} · ${result.message}`
-                          : "点击测试符号后，这里显示本次连通性返回；关闭弹窗后不保留。"}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {!connectionRows.length ? <div className="px-4 py-10 text-center text-[11px] text-[#aeaeb2]">暂无已注册页面，请在右侧新增。</div> : null}
-            </div>
-            <div className="rounded-lg bg-[#fafbfc] p-4">
-              <div className="mb-3">
-                <div className="text-[13px] text-[#1d1d1f]">注册数据接入</div>
-                <div className="mt-0.5 text-[11px] text-[#aeaeb2]">当前写入机构：{activeInstitution} · 每次只注册一个 URL 页面</div>
-              </div>
-              <ModelInput label="页面名称" value={form.sourceName || activeInstitution} onChange={(value) => onFormChange("sourceName", value)} />
-              <label className="mb-3 block">
-                <span className="mb-1 block text-[11px] text-[#8a8a8e]">数据源类型</span>
-                <select
-                  value={form.sourceType}
-                  onChange={(event) => onFormChange("sourceType", event.target.value)}
-                  className="h-9 w-full rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
-                >
-                  {dataSourceTypeOptions.map((type) => (
-                    <option key={type} value={type}>{type}</option>
-                  ))}
-                </select>
-              </label>
-              <ModelInput label="数据获取URL" value={form.apiUrl} onChange={(value) => {
-                onFormChange("apiUrl", value);
-                onFormChange("loginUrl", value);
-                onFormChange("queryPageUrl", value);
-              }} />
-              <ModelInput label="账号" value={form.account} onChange={(value) => onFormChange("account", value)} />
-              <ModelInput label="密码" value={form.password} type="password" onChange={(value) => onFormChange("password", value)} />
-              <div className="mb-3 grid grid-cols-2 gap-2">
-                <label className="flex items-center gap-2 rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[12px] text-[#636366]">
-                  <input
-                    type="checkbox"
-                    checked={form.enabled}
-                    onChange={(event) => {
-                      onFormChange("enabled", event.target.checked);
-                      if (event.target.checked) onFormChange("mockEnabled", false);
-                    }}
-                    className="h-3.5 w-3.5 accent-[#1d1d1f]"
-                  />
-                  启用
-                </label>
-                <label className="flex items-center gap-2 rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[12px] text-[#636366]">
-                  <input
-                    type="checkbox"
-                    checked={form.mockEnabled}
-                    onChange={(event) => {
-                      onFormChange("mockEnabled", event.target.checked);
-                      if (event.target.checked) onFormChange("enabled", false);
-                    }}
-                    className="h-3.5 w-3.5 accent-[#1d1d1f]"
-                  />
-                  Mock
-                </label>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  onAdd();
-                }}
-                disabled={
-                  !(form.sourceName.trim() || activeInstitution) ||
-                  !form.account.trim() ||
-                  !form.password.trim() ||
-                  !dataConnectionEndpointReady(form)
-                }
-                className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 py-2 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-40"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                注册数据接入
-              </button>
-            </div>
-          </div>
         </div>
       </div>
     </div>

@@ -1,0 +1,19 @@
+{
+  "skill_id": "data.analysis.profile",
+  "skill_name": "数据分析剖析",
+  "skill_type": "analysis_algorithm",
+  "description": "对受治理查询结果执行描述性统计、指标摘要和维度分布剖析。",
+  "input_schema": {
+    "data": "array",
+    "metrics": "array",
+    "dimensions": "array"
+  },
+  "output_schema": {
+    "analysis_profile": "object"
+  },
+  "permission_scope": ["analysis:run"],
+  "runtime_type": "python",
+  "risk_level": "low",
+  "version": "1.0.0",
+  "owner": "smart-data-agent"
+}

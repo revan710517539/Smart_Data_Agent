@@ -6,7 +6,7 @@ from typing import Any
 
 
 def load_default_metric_dictionary() -> list[dict[str, Any]]:
-    seed_path = Path(__file__).resolve().parents[3] / "data" / "metric_dictionary_seed.json"
+    seed_path = Path(__file__).resolve().parents[3] / "Origin_Data" / "metric_dictionary_seed.json"
     payload = json.loads(seed_path.read_text(encoding="utf-8"))
     metrics = payload.get("metrics")
     if not isinstance(metrics, list):

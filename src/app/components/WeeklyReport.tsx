@@ -134,6 +134,7 @@ import { WeeklyReportSideRail } from "./weekly-report/WeeklyReportSideRail";
 import { revealContextRail } from "./context-rail/ContextSideRail";
 import { AnalysisProgressPanel } from "./self-analysis/AnalysisProgressPanel";
 import { applyWeeklyCoreMetricSnapshot, buildWeeklyCoreMetricRows } from "./weekly-report/CoreMetrics";
+import { downloadWeeklyExport, downloadWeeklyExportPdf, prepareWeeklyExportDocument, weeklyExportFilename, weeklyExportHtml, type WeeklyExportFormat } from "./weekly-report/exportReport";
 
 const WEEKLY_CORE_ANALYSIS_PROMPT = "结合在贷余额、放款金额、新增余额三个指标在不同机构、日期甚至客户经理下的数据表现，融合调用的指标记忆、skill进行分析，最终形成分析结论";
 
@@ -152,6 +153,10 @@ export function WeeklyReport() {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [viewingHistoryVersionId, setViewingHistoryVersionId] = useState<string | null>(null);
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
+  const [exportFormat, setExportFormat] = useState<WeeklyExportFormat>("html");
+  const [includeExportComments, setIncludeExportComments] = useState(false);
+  const [includeExportAnalysis, setIncludeExportAnalysis] = useState(true);
+  const [isExporting, setIsExporting] = useState(false);
   const [isLoadingReportEvidence, setIsLoadingReportEvidence] = useState(false);
   const [savedAnalysisResults, setSavedAnalysisResults] = useState<SavedAnalysisResult[]>([]);
   const [selectedAnalysisId, setSelectedAnalysisId] = useState("");
@@ -1275,16 +1280,43 @@ export function WeeklyReport() {
     setIsExportDialogOpen(true);
   }
 
-  function printReport() {
-    const previousTitle = document.title;
-    document.title = `打印/下载 - ${activeReport.institutionName}经营周报`;
-    setIsExportDialogOpen(false);
-    window.setTimeout(() => {
-      window.print();
-      window.setTimeout(() => {
-        document.title = previousTitle;
-      }, 500);
-    }, 0);
+  async function confirmExportReport() {
+    const reportNode = reportBodyRef.current?.querySelector<HTMLElement>(".weekly-report-print-root");
+    if (!reportNode || isExporting) return;
+    setIsExporting(true);
+    const filename = weeklyExportFilename(activeReport, exportFormat);
+    try {
+      await runApplicationAction({
+        tenantId,
+        userId,
+        moduleKey: "weekly_report",
+        action: "export_weekly_report",
+        payload: {
+          reportId: activeReport.id,
+          filename,
+          format: exportFormat,
+          includeComments: includeExportComments,
+          includeAiAnalysis: includeExportAnalysis,
+        },
+      }).catch(() => undefined);
+      const documentNode = await prepareWeeklyExportDocument(reportNode, {
+        includeComments: includeExportComments,
+        includeAnalysis: includeExportAnalysis,
+        report: activeReport,
+        comments: visibleComments,
+      });
+      if (exportFormat === "html") {
+        downloadWeeklyExport(new Blob([weeklyExportHtml(documentNode, activeReport)], { type: "text/html;charset=utf-8" }), filename);
+      } else {
+        await downloadWeeklyExportPdf(documentNode, filename);
+      }
+      setIsExportDialogOpen(false);
+      setSavedAt(`经营周报已导出为 ${exportFormat.toUpperCase()} · ${formatNow()}`);
+    } catch (error) {
+      setSavedAt(error instanceof Error ? `周报导出失败：${error.message}` : "周报导出失败，请稍后重试。");
+    } finally {
+      setIsExporting(false);
+    }
   }
 
   return (
@@ -1608,11 +1640,34 @@ export function WeeklyReport() {
           <div className="w-full max-w-[360px] rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/15">
             <div className="border-b border-[#f0f0f2] px-4 py-3">
               <h3 id="weekly-report-export-title" className="text-[15px] text-[#1d1d1f]">
-                打印/下载
+                导出经营周报
               </h3>
               <p className="mt-1 text-[12px] leading-relaxed text-[#8a8a8e]">
-                将从“{activeReport.institutionName}经营周报”标题开始导出，隐藏页面操作按钮和评论栏。
+                导出文件只包含周报正文，不含左侧菜单、右侧工作台栏和页面右上角操作按钮。
               </p>
+            </div>
+            <div className="space-y-4 px-4 py-4">
+              <fieldset>
+                <legend className="mb-2 text-[12px] font-medium text-[#3a3a3c]">导出格式</legend>
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    ["html", "导出为 HTML", "独立可打开的周报网页"],
+                    ["pdf", "导出为 PDF", "A4 版式的周报文件"],
+                  ] as Array<[WeeklyExportFormat, string, string]>).map(([format, label, description]) => (
+                    <label key={format} className={`cursor-pointer rounded-lg border px-3 py-2.5 ${exportFormat === format ? "border-[#1d1d1f] bg-[#f7f7f8]" : "border-[#e5e5ea] bg-white"}`}>
+                      <span className="flex items-center gap-2"><input type="radio" name="weekly-export-format" checked={exportFormat === format} onChange={() => setExportFormat(format)} className="accent-[#1d1d1f]" /><span className="text-[12px] text-[#1d1d1f]">{label}</span></span>
+                      <span className="mt-1 block pl-5 text-[10px] text-[#8a8a8e]">{description}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset>
+                <legend className="mb-2 text-[12px] font-medium text-[#3a3a3c]">导出内容</legend>
+                <div className="space-y-2">
+                  <label className="flex cursor-pointer items-center justify-between rounded-lg border border-[#e5e5ea] px-3 py-2"><span><span className="block text-[12px] text-[#1d1d1f]">带评论</span><span className="mt-0.5 block text-[10px] text-[#8a8a8e]">附上已公开的周报评论与回复</span></span><input type="checkbox" checked={includeExportComments} onChange={(event) => setIncludeExportComments(event.target.checked)} className="h-4 w-4 accent-[#1d1d1f]" /></label>
+                  <label className="flex cursor-pointer items-center justify-between rounded-lg border border-[#e5e5ea] px-3 py-2"><span><span className="block text-[12px] text-[#1d1d1f]">带 AI 分析</span><span className="mt-0.5 block text-[10px] text-[#8a8a8e]">附上已在周报中确认的 AI 分析结论</span></span><input type="checkbox" checked={includeExportAnalysis} onChange={(event) => setIncludeExportAnalysis(event.target.checked)} className="h-4 w-4 accent-[#1d1d1f]" /></label>
+                </div>
+              </fieldset>
             </div>
             <div className="flex items-center justify-end gap-2 px-4 py-3">
               <button
@@ -1624,10 +1679,11 @@ export function WeeklyReport() {
               </button>
               <button
                 type="button"
-                onClick={printReport}
-                className="rounded-lg bg-[#1d1d1f] px-3 py-1.5 text-[12px] text-white hover:bg-[#2c2c2e]"
+                onClick={() => void confirmExportReport()}
+                disabled={isExporting}
+                className="rounded-lg bg-[#1d1d1f] px-3 py-1.5 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-50"
               >
-                打印/下载
+                {isExporting ? "导出中…" : "导出"}
               </button>
             </div>
           </div>
@@ -1636,6 +1692,7 @@ export function WeeklyReport() {
     </div>
   );
 }
+
 
 function ReportTable({
   block,
@@ -1835,7 +1892,7 @@ function ReportTable({
         </div>
 
         {activeTab === "analysis" ? (
-          <div className="space-y-3">
+          <div className="space-y-3" data-weekly-report-ai="true">
             {block.analysis.status === "分析中" && (
               <AnalysisProgressPanel
                 steps={analysisProgress}

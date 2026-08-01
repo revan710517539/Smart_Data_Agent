@@ -21,11 +21,45 @@ def handle_data_assets_get(handler: Any, query: str) -> None:
         params = parse_qs(query)
         context = handler._request_context(params=params)
         handler._require_asset_permission(context, "read")
+        csv_catalog = handler.services.data_acquisition_service.csv_source
+        if not csv_catalog.catalog_ready:
+            handler._send_json(
+                {
+                    "tenant_id": context.tenant_id,
+                    "status": "loading",
+                    "message": "Origin_Data CSV 目录正在准备中，请稍候重试。",
+                    "source_mode": "csv_folder",
+                },
+                headers={"Retry-After": "1"},
+            )
+            return
         bundle = handler.services.data_asset_store.list_bundle(context.tenant_id)
+        bundle["external_tools"] = [
+            item
+            for item in bundle.get("external_tools", [])
+            if str(item.get("toolType") or "").casefold() not in {"browser_collector", "page_collector"}
+        ]
+        csv_source = csv_catalog.snapshot()
+        # Raw tables are generated directly from the project CSV directory.
+        # Do not merge in legacy stored raw-table records: they may describe a
+        # deleted upload or retired external source and would make the data
+        # management page disagree with the analysis picker.
+        bundle["raw_tables"] = csv_catalog.table_assets()
+        topic_snapshots = handler.services.topic_data_store.topic_table_snapshots(
+            context.tenant_id,
+            [str(item.get("id") or "") for item in bundle.get("topic_tables", []) if item.get("id")],
+        )
+        bundle["topic_tables"] = [
+            {**item, "dataSnapshot": topic_snapshots.get(str(item.get("id") or ""))}
+            for item in bundle.get("topic_tables", [])
+        ]
         handler._send_json(
             {
                 "tenant_id": context.tenant_id,
                 **bundle,
+                "source_mode": "csv_folder",
+                "source_read_only": True,
+                "csv_source": csv_source,
                 "count": {key: len(value) for key, value in bundle.items()},
             }
         )
@@ -78,6 +112,16 @@ def handle_data_asset_item_upsert(handler: Any) -> None:
             # take effect immediately. They remain versioned and audited.
             lifecycle_status="active" if item_type in RUNTIME_CONFIGURATION_ASSET_TYPES else "review",
         )
+        if item_type == "topic_table" and item.get("analysisTaskId"):
+            task = handler.services.task_repository.get_task(str(item["analysisTaskId"]))
+            if task:
+                snapshot = handler.services.topic_data_store.record_topic_table_snapshot(
+                    tenant_id=context.tenant_id,
+                    user_id=context.user_id,
+                    topic_table_id=str(saved.get("id") or ""),
+                    task=task,
+                )
+                saved = {**saved, "dataSnapshot": snapshot}
         handler._write_audit(context, "data_asset.item.upsert", item_type, str(saved.get("id") or ""))
         handler._send_json({"tenant_id": context.tenant_id, "item_type": item_type, "item": saved})
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
@@ -113,6 +157,38 @@ def handle_data_asset_raw_file_upload(handler: Any) -> None:
         )
         handler._send_json({"tenant_id": context.tenant_id, "file": result})
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def handle_topic_data_get(handler: Any, query: str) -> None:
+    try:
+        params = parse_qs(query)
+        context = handler._request_context(params=params)
+        handler._require_asset_permission(context, "read")
+        reference_type = first_query_value(params, "reference_type")
+        reference_id = first_query_value(params, "reference_id")
+        data_type = first_query_value(params, "data_type") or "data"
+        if reference_type == "topic":
+            topic = handler.services.data_asset_store.get_item(context.tenant_id, "topic_table", reference_id)
+            if topic is None:
+                raise PermissionError("topic_table_unavailable")
+        elif reference_type == "report":
+            report = handler.services.report_store.get_analysis_result(
+                context.tenant_id,
+                reference_id,
+                actor_user_id=context.user_id,
+            )
+            if report is None:
+                raise PermissionError("saved_report_unavailable")
+        result = handler.services.topic_data_store.read_reference(
+            tenant_id=context.tenant_id,
+            user_id=context.user_id,
+            reference_type=reference_type,
+            reference_id=reference_id,
+            data_type=data_type,
+        )
+        handler._send_json({"tenant_id": context.tenant_id, **result})
+    except Exception as exc:  # pragma: no cover - HTTP boundary.
         send_route_exception(handler, exc)
 
 

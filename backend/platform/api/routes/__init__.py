@@ -52,6 +52,7 @@ from .assets import (
     handle_data_asset_item_review,
     handle_data_asset_item_upsert,
     handle_data_assets_get,
+    handle_topic_data_get,
 )
 from .audit import handle_audit_logs_get
 from .auth import (
@@ -126,9 +127,6 @@ from .reports import (
 )
 from .settings import (
     handle_system_config_get,
-    handle_system_data_connection_delete,
-    handle_system_data_connection_test,
-    handle_system_data_connection_upsert,
     handle_system_model_delete,
     handle_system_model_test,
     handle_system_model_upsert,
@@ -162,6 +160,7 @@ GET_ROUTE_HANDLERS = {
     "/api/system-config": handle_system_config_get,
     "/api/metric-dictionary": handle_metric_dictionary_get,
     "/api/data-assets": handle_data_assets_get,
+    "/api/topic-data": handle_topic_data_get,
     "/api/lineage": handle_lineage_get,
     "/api/data-acquisition": handle_data_acquisition_get,
     "/api/data-acquisition/latest-csv": handle_latest_acquisition_csv_get,
@@ -200,8 +199,6 @@ POST_ROUTE_HANDLERS = {
     "/api/system-config/model/test": handle_system_model_test,
     "/api/system-config/speech-integration": handle_system_speech_integration_upsert,
     "/api/system-config/speech-integration/test": handle_system_speech_integration_test,
-    "/api/system-config/data-connection": handle_system_data_connection_upsert,
-    "/api/system-config/data-connection/test": handle_system_data_connection_test,
     "/api/system-config/system-param": handle_system_param_upsert,
     "/api/metric-dictionary": handle_metric_dictionary_upsert,
     "/api/access/user": handle_access_user_upsert,
@@ -259,7 +256,6 @@ DELETE_ROUTE_HANDLERS = {
     "/api/analysis/history": handle_analysis_history_delete,
     "/api/system-config/model": handle_system_model_delete,
     "/api/system-config/speech-integration": handle_system_speech_integration_delete,
-    "/api/system-config/data-connection": handle_system_data_connection_delete,
     "/api/access/user": handle_access_user_delete,
     "/api/reports/analysis-result": handle_report_analysis_result_delete,
     "/api/reports/comment": handle_report_comment_delete,

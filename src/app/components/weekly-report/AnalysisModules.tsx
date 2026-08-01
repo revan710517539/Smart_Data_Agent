@@ -79,7 +79,7 @@ function analysisTimestamp(value: string) {
 }
 
 export function SavedAnalysisEmbed({ result }: { result: SavedAnalysisResult }) {
-  return <div className="mb-4 rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-4">
+  return <div className="mb-4 rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-4" data-weekly-report-ai-module="true">
     <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between"><div><div className="text-[13px] text-[#1d1d1f]">{result.title}</div><div className="mt-0.5 text-[11px] text-[#aeaeb2]">来自自助分析 · {result.savedAt}</div></div><span className="w-fit rounded-md border border-[#e5e5ea] bg-white px-2 py-1 text-[11px] text-[#8a8a8e]">已引用分析结果</span></div>
     <div className="mb-3 grid gap-3 md:grid-cols-2"><SavedAnalysisVisual title={`主视图 · ${visualizationLabel(result.visualTypes.primary)}`} type={result.visualTypes.primary} rows={result.rows} /><SavedAnalysisVisual title={`补充视图 · ${visualizationLabel(result.visualTypes.secondary)}`} type={result.visualTypes.secondary} rows={result.rows} /></div>
     <div className="rounded-lg border border-[#f0f0f2] bg-white p-3"><div className="mb-1 text-[12px] text-[#1d1d1f]">AI分析结论</div><p className="text-[12px] leading-[1.7] text-[#636366]">{result.summary}</p></div>

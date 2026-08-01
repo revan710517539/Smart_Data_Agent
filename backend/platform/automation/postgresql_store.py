@@ -74,6 +74,24 @@ class PostgreSQLAutomationStore:
                 rows = cursor.fetchall()
         return [self._task_row(row) for row in rows]
 
+    def pause_tasks_by_handler_refs(self, handler_refs: set[str]) -> int:
+        refs = sorted({str(item).strip() for item in handler_refs if str(item).strip()})
+        if not refs:
+            return 0
+        placeholders = ",".join("%s" for _ in refs)
+        with self._transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    UPDATE platform_automation_tasks
+                    SET status = 'paused', next_run_at = NULL, updated_at = now(),
+                        lock_version = lock_version + 1
+                    WHERE handler_ref IN ({placeholders}) AND status = 'active'
+                    """,
+                    tuple(refs),
+                )
+                return int(cursor.rowcount)
+
     def get_task_by_code(self, tenant_id: str, task_code: str) -> dict[str, Any] | None:
         with self.pool.connection() as connection:
             tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)

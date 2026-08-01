@@ -4,7 +4,7 @@ from typing import Any
 from urllib.parse import parse_qs
 
 from backend.platform.api.support import first_query_value, send_route_exception
-from backend.platform.settings import test_data_connection, test_model_integration, test_speech_integration
+from backend.platform.settings import account_system_config_scope, test_model_integration, test_speech_integration
 
 
 def handle_system_config_get(handler: Any, query: str) -> None:
@@ -15,7 +15,6 @@ def handle_system_config_get(handler: Any, query: str) -> None:
         config_scope = _account_config_scope(context)
         models = _list_account_models(handler, context, config_scope)
         speech_integrations = _list_account_speech_integrations(handler, context, config_scope)
-        data_connections = _list_account_data_connections(handler, context, config_scope)
         system_params = handler.services.system_config_store.list_system_params(context.tenant_id)
         handler._send_json(
             {
@@ -24,12 +23,10 @@ def handle_system_config_get(handler: Any, query: str) -> None:
                 "config_owner_user_id": context.user_id,
                 "models": models,
                 "speech_integrations": speech_integrations,
-                "data_connections": data_connections,
                 "system_params": system_params,
                 "count": {
                     "models": len(models),
                     "speech_integrations": len(speech_integrations),
-                    "data_connections": len(data_connections),
                     "system_params": len(system_params),
                 },
             }
@@ -46,7 +43,7 @@ def handle_system_model_upsert(handler: Any) -> None:
         if not isinstance(model, dict):
             raise ValueError("model must be an object.")
         handler._require_system_config_permission(context, "manage")
-        config_scope = _account_config_scope(context)
+        config_scope = _model_storage_scope(handler, context, str(model.get("id") or ""))
         saved = handler.services.system_config_store.upsert_model(
             config_scope,
             model,
@@ -67,7 +64,10 @@ def handle_system_model_delete(handler: Any, query: str) -> None:
             raise ValueError("model_id is required.")
         handler._require_system_config_permission(context, "manage")
         config_scope = _account_config_scope(context)
-        deleted = handler.services.system_config_store.delete_model(config_scope, model_id)
+        deleted = handler.services.system_config_store.delete_model(
+            _model_storage_scope(handler, context, model_id),
+            model_id,
+        )
         handler._write_audit(context, "system.model.delete", "model", model_id, {"deleted": deleted})
         handler._send_json({"tenant_id": context.tenant_id, "config_scope": config_scope, "model_id": model_id, "deleted": deleted})
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
@@ -81,11 +81,12 @@ def handle_system_model_test(handler: Any) -> None:
         handler._require_system_config_permission(context, "manage")
         model = payload.get("model")
         model_id = str(payload.get("model_id") or "").strip()
+        model_scope = _model_storage_scope(handler, context, model_id)
         if model is None and model_id:
             getter = getattr(handler.services.system_config_store, "get_model", None)
             if not callable(getter):
                 raise ValueError("system config store does not support model lookup.")
-            model = getter(_account_config_scope(context), model_id, reveal_secret=True)
+            model = _get_account_model(handler, context, model_id, reveal_secret=True)
             if model is None:
                 raise ValueError("model integration not found.")
         if not isinstance(model, dict):
@@ -120,7 +121,7 @@ def handle_system_model_test(handler: Any) -> None:
             if preserve_last_known_good:
                 result["preserved_last_known_good"] = True
             saved_model = handler.services.system_config_store.upsert_model(
-                _account_config_scope(context),
+                model_scope,
                 {
                     **model,
                     "availableModels": available_models,
@@ -238,109 +239,53 @@ def handle_system_speech_integration_delete(handler: Any, query: str) -> None:
         send_route_exception(handler, exc)
 
 
-def handle_system_data_connection_upsert(handler: Any) -> None:
-    try:
-        payload = handler._read_json()
-        context = handler._request_context(payload=payload)
-        connection = payload.get("connection")
-        if not isinstance(connection, dict):
-            raise ValueError("connection must be an object.")
-        handler._require_system_config_permission(context, "manage")
-        config_scope = _account_config_scope(context)
-        saved = handler.services.system_config_store.upsert_data_connection(
-            config_scope,
-            connection,
-            updated_by=context.user_id,
-        )
-        handler._write_audit(context, "system.data_connection.upsert", "data_connection", str(saved.get("id") or ""))
-        handler._send_json({"tenant_id": context.tenant_id, "config_scope": config_scope, "connection": saved})
-    except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
-        send_route_exception(handler, exc)
-
-
-def handle_system_data_connection_test(handler: Any) -> None:
-    try:
-        payload = handler._read_json()
-        context = handler._request_context(payload=payload)
-        handler._require_system_config_permission(context, "manage")
-        connection = payload.get("connection")
-        connection_id = str(payload.get("connection_id") or "").strip()
-        if connection is None and connection_id:
-            getter = getattr(handler.services.system_config_store, "get_data_connection", None)
-            if not callable(getter):
-                raise ValueError("system config store does not support connection lookup.")
-            connection = getter(_account_config_scope(context), connection_id, reveal_secret=True)
-            if connection is None:
-                raise ValueError("data connection not found.")
-        if not isinstance(connection, dict):
-            raise ValueError("connection or connection_id is required.")
-        result = test_data_connection({**connection, "tenant_id": context.tenant_id})
-        saved_connection = None
-        if connection.get("id") and connection_id:
-            next_status = "verified" if result.get("verified") else "mock" if result.get("status") == "mock" else "draft"
-            next_test_status = "verified" if result.get("verified") else "mock" if result.get("status") == "mock" else "failed"
-            saved_connection = handler.services.system_config_store.upsert_data_connection(
-                _account_config_scope(context),
-                {
-                    **connection,
-                    "status": next_status,
-                    "testStatus": next_test_status,
-                    "testMessage": result.get("message"),
-                    "lastTestedAt": result.get("tested_at") or result.get("verified_at") or "",
-                },
-                updated_by=context.user_id,
-            )
-        handler._write_audit(
-            context,
-            "system.data_connection.test",
-            "data_connection",
-            str(result.get("connection_id") or connection_id),
-            {"status": result.get("status"), "callable": result.get("callable"), "dataset": result.get("dataset")},
-        )
-        response_payload = {"tenant_id": context.tenant_id, "config_scope": _account_config_scope(context), "result": result}
-        if saved_connection is not None:
-            response_payload["connection"] = saved_connection
-        handler._send_json(response_payload)
-    except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
-        send_route_exception(handler, exc)
-
-
-def handle_system_data_connection_delete(handler: Any, query: str) -> None:
-    try:
-        params = parse_qs(query)
-        context = handler._request_context(params=params)
-        connection_id = first_query_value(params, "connection_id")
-        if not connection_id:
-            raise ValueError("connection_id is required.")
-        handler._require_system_config_permission(context, "manage")
-        config_scope = _account_config_scope(context)
-        deleted = handler.services.system_config_store.delete_data_connection(config_scope, connection_id)
-        handler._write_audit(
-            context,
-            "system.data_connection.delete",
-            "data_connection",
-            connection_id,
-            {"deleted": deleted},
-        )
-        handler._send_json({"tenant_id": context.tenant_id, "config_scope": config_scope, "connection_id": connection_id, "deleted": deleted})
-    except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
-        send_route_exception(handler, exc)
-
-
 def _account_config_scope(context: Any) -> str:
     return context.tenant_id
 
 
 def _list_account_models(handler: Any, context: Any, config_scope: str) -> list[dict[str, Any]]:
+    list_owned = getattr(handler.services.system_config_store, "list_models_owned_by", None)
+    if context.user_id and callable(list_owned):
+        return list_owned(context.user_id, context.tenant_id)
     return handler.services.system_config_store.list_models(config_scope)
+
+
+def _get_account_model(handler: Any, context: Any, model_id: str, *, reveal_secret: bool) -> dict[str, Any] | None:
+    getter = getattr(handler.services.system_config_store, "get_model", None)
+    if not callable(getter):
+        return None
+    for scope in _model_scope_candidates(context):
+        try:
+            model = getter(scope, model_id, reveal_secret=reveal_secret)
+        except Exception:
+            continue
+        if model is not None:
+            return model
+    return None
+
+
+def _model_storage_scope(handler: Any, context: Any, model_id: str) -> str:
+    getter = getattr(handler.services.system_config_store, "get_model", None)
+    if callable(getter):
+        for scope in _model_scope_candidates(context):
+            try:
+                if getter(scope, model_id, reveal_secret=False) is not None:
+                    return scope
+            except Exception:
+                continue
+    return _account_config_scope(context)
+
+
+def _model_scope_candidates(context: Any) -> tuple[str, ...]:
+    account_scope = account_system_config_scope(context.user_id)
+    scopes = [account_scope]
+    if str(context.tenant_id) not in scopes:
+        scopes.append(str(context.tenant_id))
+    return tuple(scopes)
 
 
 def _list_account_speech_integrations(handler: Any, context: Any, config_scope: str) -> list[dict[str, Any]]:
     return handler.services.system_config_store.list_speech_integrations(config_scope)
-
-
-def _list_account_data_connections(handler: Any, context: Any, config_scope: str) -> list[dict[str, Any]]:
-    return handler.services.system_config_store.list_data_connections(config_scope)
 
 
 def handle_system_param_upsert(handler: Any) -> None:

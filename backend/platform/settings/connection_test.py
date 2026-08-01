@@ -12,7 +12,6 @@ from urllib.request import Request
 import certifi
 
 from backend.platform.security import EgressPolicyError, safe_urlopen, validate_outbound_url
-from backend.platform.crawler_engine import CrawlerEngine, build_crawler_url_identity
 
 # This is a production connection-check adapter, not a pytest module.  The
 # historical filename is kept to avoid changing imports used by the settings
@@ -40,8 +39,6 @@ def _test_data_connection(connection: dict[str, Any]) -> dict[str, Any]:
     institution = str(connection.get("institution") or "").strip()
     api_url = str(connection.get("apiUrl") or "").strip()
     source_type = str(connection.get("sourceType") or "http_json").strip()
-    if build_crawler_url_identity(connection):
-        return _test_crawler_connection(connection)
     if not dataset and not mock_enabled:
         raise ValueError("connection dataset is required.")
 
@@ -158,41 +155,6 @@ def _failed_result(connection_id: str, institution: str, dataset: str, status: s
         "matched_dataset": None,
         "available_datasets": [],
         "message": message,
-    }
-
-
-def _test_crawler_connection(connection: dict[str, Any]) -> dict[str, Any]:
-    connection_id = str(connection.get("id") or "")
-    institution = str(connection.get("institution") or "")
-    dataset = str(connection.get("dataset") or "")
-    try:
-        result = CrawlerEngine().connectivity_test(connection, str(connection.get("tenant_id") or ""))
-    except EgressPolicyError:
-        return _failed_result(connection_id, institution, dataset, "egress_policy_rejected", "爬虫登录或查询地址不符合服务端出站安全策略。")
-    except Exception as exc:
-        error_code = str(getattr(exc, "error_code", "connection_failed"))
-        if error_code == "MANUAL_INTERVENTION_REQUIRED":
-            return _failed_result(connection_id, institution, dataset, "manual_intervention_required", "连接需要人工完成验证码、MFA 或账号解锁。")
-        return _failed_result(connection_id, institution, dataset, error_code.lower(), "无法完成爬虫登录或查询页验证，请通过 request_id 查询脱敏诊断。")
-    verified = result.status == "succeeded"
-    status = "verified" if verified else "transport_not_configured" if result.status == "not_configured" else result.status
-    return {
-        "connection_id": connection_id,
-        "institution": institution,
-        "dataset": dataset,
-        "status": status,
-        "callable": verified,
-        "verified": verified,
-        "execution_mode": "real" if verified else "stub",
-        "data_source_mode": f"crawler:{result.diagnostics.get('transport', 'unknown')}",
-        "matched_dataset": None,
-        "available_datasets": [],
-        "diagnostics": result.diagnostics,
-        "message": (
-            "已完成账号登录和目标页面全链路验证。"
-            if verified
-            else str(result.diagnostics.get("message") or "爬虫契约已就绪，但真实 Playwright Worker 尚未启用。")
-        ),
     }
 
 

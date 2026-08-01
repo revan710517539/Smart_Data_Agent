@@ -154,6 +154,12 @@ class InMemorySupersonicClient:
             close()
 
     def query(self, request: SemanticQueryRequest) -> SemanticQueryResult:
+        if str(request.context.get("manual_sql_candidate") or "").strip():
+            # Raw SQL is not an executable client interface in the CSV-only
+            # runtime.  Topic-table SQL remains an administrator-governed,
+            # scheduled transformation; this blocks a manual candidate from
+            # being silently ignored or routed to a retired data connection.
+            raise RuntimeError("manual_sql_not_supported_in_csv_mode")
         metrics = tuple(
             self._safe_identifier(metric, self.warehouse.metric_universe(), "metric")
             for metric in (request.metrics or ("loan_amount",))

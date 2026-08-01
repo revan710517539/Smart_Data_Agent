@@ -13,7 +13,7 @@ from uuid import uuid4
 
 ANALYSIS_RESULT_FIELDS = (
     "id", "title", "query", "plan", "summary", "visualTypes", "savedAt",
-    "analysisTaskId", "ownerUserId", "visibility",
+    "analysisTaskId", "ownerUserId", "visibility", "topicData",
 )
 
 
@@ -44,6 +44,12 @@ class InMemoryReportStore:
             and _report_object_visible(item, actor_user_id)
         ]
         return sorted(visible, key=lambda item: str(item.get("savedAt", "")), reverse=True)
+
+    def get_analysis_result(self, tenant_id: str, result_id: str, actor_user_id: str | None = None) -> dict[str, Any] | None:
+        item = self._analysis_results_by_tenant.get(tenant_id, {}).get(result_id)
+        if not item or (tenant_id, result_id) in self._archived_analysis_results or not _report_object_visible(item, actor_user_id):
+            return None
+        return dict(item)
 
     def upsert_analysis_result(
         self,
@@ -435,6 +441,16 @@ class SQLiteReportStore:
             parameters,
         ).fetchall()
         return [json.loads(row["payload"]) for row in rows]
+
+    def get_analysis_result(self, tenant_id: str, result_id: str, actor_user_id: str | None = None) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT payload, created_by FROM platform_saved_analysis_results WHERE tenant_id = ? AND result_id = ? AND archived_at IS NULL",
+            (tenant_id, result_id),
+        ).fetchone()
+        if not row:
+            return None
+        item = json.loads(row["payload"])
+        return item if _report_object_visible(item, actor_user_id) else None
 
     def upsert_analysis_result(
         self,
@@ -1378,8 +1394,10 @@ def _normalize_analysis_result(result: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(visual_types, dict):
         normalized["visualTypes"] = {"primary": "bar", "secondary": "table"}
     normalized["analysisTaskId"] = str(normalized.get("analysisTaskId") or "").strip()
-    if not normalized["analysisTaskId"]:
-        raise ValueError("analysisTaskId is required; saved results reference an execution instead of copying rows.")
+    topic_data = normalized.get("topicData")
+    is_topic_data_report = isinstance(topic_data, dict) and str(topic_data.get("reference_type") or "") == "report"
+    if not normalized["analysisTaskId"] and not is_topic_data_report:
+        raise ValueError("analysisTaskId is required unless the report has a Topic_Data snapshot.")
     normalized["ownerUserId"] = str(normalized.get("ownerUserId") or "").strip()
     visibility = str(normalized.get("visibility") or "private").strip()
     normalized["visibility"] = visibility if visibility in {"private", "tenant"} else "private"

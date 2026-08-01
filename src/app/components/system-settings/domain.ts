@@ -38,19 +38,6 @@ import {
 } from "../../services/accessControlApi";
 import { fetchAuditLogs, type AuditLog } from "../../services/auditApi";
 import {
-  deleteDataConnection,
-  deleteModelIntegration,
-  deleteSpeechIntegration,
-  fetchSystemConfig,
-  saveDataConnection,
-  saveModelIntegration,
-  saveSpeechIntegration,
-  saveSystemDataParam,
-  testDataConnection,
-  testModelIntegration,
-  testSpeechIntegration,
-  type DataConnection,
-  type DataConnectionTestResult,
   type ModelIntegration,
   type ModelIntegrationTestResult,
   type SpeechIntegration,
@@ -62,9 +49,7 @@ import { demoFallbackDisabledMessage, isDemoFallbackEnabled } from "../../servic
 
 export const customRoleOptions = ["客户经理分析岗", "周报分析岗", "指标维护岗"];
 export const userRoleOptions = ["管理员", "操作员", ...customRoleOptions];
-export const modelSourceOptions = ["中转站", "官方网站"];
-export const dataSourceTypeOptions = ["智运平台（页面爬虫）", "毓数平台（SQL爬虫）", "API/URL", "邮件日报", "驾驶舱", "小程序数据", "毓数QBI"];
-export const emptyUserForm = {
+export const modelSourceOptions = ["中转站", "官方网站"];export const emptyUserForm = {
   name: "",
   department: "",
   email: "",
@@ -99,7 +84,7 @@ export const permissionMenuGroups = [
   { label: "经营分析", children: ["经营周报", "机构督导"] },
   { label: "市场洞察", children: ["客群分析", "竞品分析"] },
   { label: "自助分析", children: ["智能分析", "我的报告"] },
-  { label: "任务工作台", children: ["能力总览", "待办任务", "自动化任务", "Skill插件"] },
+  { label: "任务工作台", children: ["待办任务", "自动化任务", "Skill插件"] },
   { label: "数据资产", children: ["指标字典", "知识记忆", "数据管理", "质量监控"] },
   { label: "推送与订阅", children: ["预警规则", "订阅管理", "推送记录"] },
   { label: "系统管理", children: ["用户管理", "角色权限", "审计日志", "系统配置"] },
@@ -126,7 +111,6 @@ export const superAdminManagementScopes = [
   "菜单权限",
   "指标与数据权限",
   "模型接入",
-  "数据接入",
   "Skill配置",
   "MCP管理",
   "审计与风控",
@@ -197,47 +181,6 @@ export const initialSpeechIntegrations: SpeechIntegration[] = [
     applicationModule: "realtime_voice_input",
     testStatus: "untested",
     status: "available",
-  },
-];
-
-export const initialDataConnections: DataConnection[] = [
-  {
-    id: "data_1",
-    institution: "华兴银行",
-    sourceName: "华兴毓数QBI经营数据",
-    sourceType: "毓数平台（SQL爬虫）",
-    apiUrl: "https://qbi.example.local/api",
-    loginUrl: "https://qbi.example.local/login",
-    queryPageUrl: "https://qbi.example.local/sql-editor",
-    metadataPageUrl: "https://qbi.example.local/metadata",
-    crawlerMode: "sql",
-    account: "huaxing_ops",
-    password: "******",
-    token: "",
-    dataset: "loan_operation_mart",
-    defaultDatabase: "loan_operation_mart",
-    enabled: true,
-    mockEnabled: false,
-    status: "connected",
-  },
-  {
-    id: "data_2",
-    institution: "广州银行",
-    sourceName: "广州毓数QBI渠道数据",
-    sourceType: "毓数平台（SQL爬虫）",
-    apiUrl: "https://qbi.example.local/api",
-    loginUrl: "https://qbi.example.local/login",
-    queryPageUrl: "https://qbi.example.local/sql-editor",
-    metadataPageUrl: "https://qbi.example.local/metadata",
-    crawlerMode: "sql",
-    account: "guangzhou_ops",
-    password: "******",
-    token: "",
-    dataset: "channel_operation_mart",
-    defaultDatabase: "channel_operation_mart",
-    enabled: true,
-    mockEnabled: false,
-    status: "connected",
   },
 ];
 
@@ -342,28 +285,6 @@ export function modelSourceLabel(source: string) {
   return modelSourceOptions.includes(source) ? source : modelSourceOptions[0];
 }
 
-export const dataConnectionDatasetByType: Record<string, string> = {
-  毓数QBI: "loan_operation_mart",
-  "毓数平台（SQL爬虫）": "yushu_crawler_mart",
-  "智运平台（页面爬虫）": "channel_operation_mart",
-  "API/URL": "external_api_mart",
-  智运平台: "channel_operation_mart",
-  邮件日报: "weekly_mail_report_mart",
-  驾驶舱: "management_dashboard_mart",
-  小程序数据: "mini_program_operation_mart",
-};
-
-export function defaultDatasetForDataConnection(sourceType: string, sourceName: string, institution: string) {
-  const mappedDataset = dataConnectionDatasetByType[sourceType];
-  if (mappedDataset) return mappedDataset;
-  const fallback = `${institution}_${sourceName || sourceType || "data_source"}`
-    .trim()
-    .replace(/\s+/g, "_")
-    .replace(/[^\w\u4e00-\u9fa5]/g, "_")
-    .replace(/_+/g, "_");
-  return fallback || "mock_generated_dataset";
-}
-
 export const defaultRelayModelOptions = ["deepseek-v4-flash", "gpt-5.3-codex-spark", "qwen-plus", "glm-5", "deepseek-r1"];
 
 export const modelOptionDescriptions: Record<string, string> = {
@@ -425,7 +346,7 @@ export const initialSystemDataParams: SystemDataParam[] = systemConfig;
 export const emptyDataForm = {
   institution: "",
   sourceName: "",
-  sourceType: "智运平台（页面爬虫）",
+  sourceType: "API/URL",
   apiUrl: "",
   loginUrl: "",
   queryPageUrl: "",
@@ -474,9 +395,6 @@ export const auditActionLabels: Record<string, string> = {
   "system.speech.upsert": "保存语音转文字接入",
   "system.speech.test": "测试语音转文字接入",
   "system.speech.delete": "删除语音转文字接入",
-  "system.data_connection.upsert": "保存数据接入",
-  "system.data_connection.test": "测试数据接入",
-  "system.data_connection.delete": "删除数据接入",
   "system.param.upsert": "保存系统数据参数",
   "data_asset.item.upsert": "保存数据资产",
   "data_asset.item.delete": "删除数据资产",

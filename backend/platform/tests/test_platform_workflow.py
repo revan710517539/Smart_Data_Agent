@@ -29,7 +29,6 @@ from backend.authz.models import PermissionPolicy, Role, RoleAssignment, RoleLev
 from backend.platform.data_access import JSONDataWarehouse, SQLDataWarehouse
 from backend.platform.data_processing import PythonSandbox
 from backend.platform.governance import approval_input_hash
-from backend.platform.settings import test_data_connection
 from backend.platform.security import make_session_token, verify_session_token
 from backend.platform.security.secrets import SecretConfigurationError, decrypt_secret, encrypt_secret
 from backend.platform.mcp import MCPGateway, MCPServerSpec, MCPToolCall, MCPToolResult
@@ -547,26 +546,6 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertIn("product_line", result.rows[0])
         self.assertIn("metric_value", result.rows[0])
 
-    def test_data_connection_mock_mode_generates_sample_rows(self) -> None:
-        result = test_data_connection(
-            {
-                "id": "conn_mock",
-                "institution": "郑州银行",
-                "sourceType": "小程序数据",
-                "account": "zhengzhou_ops",
-                "password": "mock-secret",
-                "dataset": "mini_program_operation_mart",
-                "mockEnabled": True,
-            }
-        )
-
-        self.assertTrue(result["callable"])
-        self.assertEqual(result["status"], "mock")
-        self.assertFalse(result["verified"])
-        self.assertEqual(result["execution_mode"], "mock")
-        self.assertEqual(result["sample"]["row_count"], 3)
-        self.assertEqual(result["sample"]["rows"][0]["data_mode"], "mock")
-
     def test_sql_data_warehouse_executes_tenant_scoped_query(self) -> None:
         with TemporaryDirectory() as tmpdir:
             db_path = f"{tmpdir}/warehouse.sqlite"
@@ -711,7 +690,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                         services,
                         user_id="u_admin",
                         tenant_id="tenant_demo",
-                        question="本月各分行放款金额排名TOP10",
+                        question="2026年7月各分行放款金额排名TOP10",
                     )
                 finally:
                     services.close()
@@ -902,7 +881,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                     services,
                     user_id="u_admin",
                     tenant_id=tenant_id,
-                    question="本月各分行放款金额排名TOP10",
+                question="2026年7月各分行放款金额排名TOP10",
                     page_context={"analysis_policy": {"resultDelivery": "data_first"}},
                 )
                 self.assertGreater(len(response["skill_results"][0]["data"]), 0)
@@ -1799,7 +1778,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                     login_conn.request(
                         "POST",
                         "/api/auth/login",
-                        body=json.dumps({"email": "lina@bank.com"}).encode("utf-8"),
+                        body=json.dumps({"email": "lina@bank.com", "password": "123456"}).encode("utf-8"),
                         headers={"Content-Type": "application/json"},
                     )
                     login_response = login_conn.getresponse()
@@ -1940,7 +1919,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                 login_conn.request(
                     "POST",
                     "/api/auth/login",
-                    body=json.dumps({"email": "lina@bank.com"}, ensure_ascii=False).encode("utf-8"),
+                    body=json.dumps({"email": "lina@bank.com", "password": "123456"}, ensure_ascii=False).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                 )
                 login_response = login_conn.getresponse()
@@ -1951,7 +1930,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                 super_login_conn.request(
                     "POST",
                     "/api/auth/login",
-                    body=json.dumps({"email": "xujingbo-jk@qifu.com", "institution": "华兴银行"}, ensure_ascii=False).encode("utf-8"),
+                    body=json.dumps({"email": "xujingbo-jk@qifu.com", "password": "123456", "institution": "华兴银行"}, ensure_ascii=False).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                 )
                 super_login_response = super_login_conn.getresponse()
@@ -2281,15 +2260,6 @@ class PlatformWorkflowTest(unittest.TestCase):
                     "value": "bank-test",
                     "status": "available",
                 }
-                connection = {
-                    "id": "conn_test",
-                    "institution": "华兴银行",
-                    "sourceType": "毓数QBI",
-                    "account": "huaxing_ops",
-                    "password": "raw-secret",
-                    "dataset": "loan_operation_mart",
-                    "status": "connected",
-                }
                 speech_integration = {
                     "id": "speech_test",
                     "name": "阿里云 Fun-ASR 测试",
@@ -2342,19 +2312,6 @@ class PlatformWorkflowTest(unittest.TestCase):
                 speech_test_response = speech_test_conn.getresponse()
                 speech_test_payload = json.loads(speech_test_response.read().decode("utf-8"))
 
-                data_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                data_conn.request(
-                    "POST",
-                    "/api/system-config/data-connection",
-                    body=json.dumps(
-                        {"user_id": "u_super_admin", "tenant_id": tenant_id, "connection": connection},
-                        ensure_ascii=False,
-                    ).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                )
-                data_response = data_conn.getresponse()
-                data_payload = json.loads(data_response.read().decode("utf-8"))
-
                 updated_model = {
                     **model,
                     "key": "test_llm_updated",
@@ -2386,48 +2343,10 @@ class PlatformWorkflowTest(unittest.TestCase):
                 model_test_response = model_test_conn.getresponse()
                 model_test_payload = json.loads(model_test_response.read().decode("utf-8"))
 
-                updated_connection = {
-                    **connection,
-                    "sourceType": "智运平台（页面爬虫）",
-                    "loginUrl": "https://127.0.0.1/login",
-                    "queryPageUrl": "https://127.0.0.1/portal/funnel",
-                    "account": "huaxing_ops_updated",
-                    "password": "******",
-                    "dataset": "channel_operation_mart",
-                    "defaultDatabase": "channel_operation_mart",
-                    "enabled": False,
-                    "status": "draft",
-                }
-                update_data_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                update_data_conn.request(
-                    "POST",
-                    "/api/system-config/data-connection",
-                    body=json.dumps(
-                        {"user_id": "u_super_admin", "tenant_id": tenant_id, "connection": updated_connection},
-                        ensure_ascii=False,
-                    ).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                )
-                update_data_response = update_data_conn.getresponse()
-                update_data_payload = json.loads(update_data_response.read().decode("utf-8"))
-
                 get_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
                 get_conn.request("GET", f"/api/system-config?tenant_id={quote(tenant_id)}&user_id=u_super_admin")
                 get_response = get_conn.getresponse()
                 get_payload = json.loads(get_response.read().decode("utf-8"))
-
-                test_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                test_conn.request(
-                    "POST",
-                    "/api/system-config/data-connection/test",
-                    body=json.dumps(
-                        {"user_id": "u_super_admin", "tenant_id": tenant_id, "connection_id": "conn_test"},
-                        ensure_ascii=False,
-                    ).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                )
-                test_response = test_conn.getresponse()
-                test_payload = json.loads(test_response.read().decode("utf-8"))
 
                 audit_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
                 audit_conn.request("GET", f"/api/audit-logs?tenant_id={quote(tenant_id)}&user_id=u_super_admin")
@@ -2455,13 +2374,6 @@ class PlatformWorkflowTest(unittest.TestCase):
                 delete_speech_response = delete_speech_conn.getresponse()
                 delete_speech_payload = json.loads(delete_speech_response.read().decode("utf-8"))
 
-                delete_data_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                delete_data_conn.request(
-                    "DELETE",
-                    f"/api/system-config/data-connection?tenant_id={quote(tenant_id)}&user_id=u_super_admin&connection_id=conn_test",
-                )
-                delete_data_response = delete_data_conn.getresponse()
-                delete_data_payload = json.loads(delete_data_response.read().decode("utf-8"))
             finally:
                 server.shutdown()
                 server.server_close()
@@ -2489,20 +2401,10 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertFalse(speech_test_payload["result"]["callable"])
             self.assertEqual(speech_test_payload["result"]["status"], "mock")
             self.assertIn("api-ws/v1/inference", speech_test_payload["result"]["endpoint"])
-            self.assertEqual(data_response.status, 200)
-            self.assertEqual(data_payload["connection"]["password"], "******")
-            self.assertEqual(update_data_response.status, 200)
-            self.assertEqual(update_data_payload["connection"]["sourceType"], "智运平台（页面爬虫）")
-            self.assertEqual(update_data_payload["connection"]["crawlerMode"], "page")
-            self.assertTrue(update_data_payload["connection"]["crawlerKey"].startswith("url_"))
-            self.assertEqual(update_data_payload["connection"]["account"], "huaxing_ops_updated")
-            self.assertEqual(update_data_payload["connection"]["dataset"], "channel_operation_mart")
-            self.assertFalse(update_data_payload["connection"]["enabled"])
             self.assertEqual(get_response.status, 200)
             self.assertEqual(get_payload["config_scope"], tenant_id)
             get_model = next(model for model in get_payload["models"] if model["id"] == "model_test")
             get_speech = next(integration for integration in get_payload["speech_integrations"] if integration["id"] == "speech_test")
-            get_data_connection = next(connection for connection in get_payload["data_connections"] if connection["id"] == "conn_test")
             self.assertEqual(get_model["key"], "test_llm_updated")
             self.assertEqual(get_model["value"], "******")
             self.assertEqual(get_model["modelName"], "中转站")
@@ -2517,21 +2419,9 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertNotIn("workspaceId", get_speech)
             self.assertNotIn("region", get_speech)
             self.assertNotIn("modelName", get_speech)
-            self.assertEqual(get_data_connection["password"], "******")
-            self.assertEqual(get_data_connection["sourceType"], "智运平台（页面爬虫）")
-            self.assertEqual(get_data_connection["crawlerMode"], "page")
-            self.assertEqual(get_data_connection["account"], "huaxing_ops_updated")
-            self.assertEqual(get_data_connection["dataset"], "channel_operation_mart")
-            self.assertFalse(get_data_connection["enabled"])
-            self.assertNotIn("raw-secret", json.dumps(get_payload, ensure_ascii=False))
             self.assertNotIn("dashscope-demo-key", json.dumps(get_payload, ensure_ascii=False))
             self.assertNotIn("zetatechs-demo-key", json.dumps(get_payload, ensure_ascii=False))
-            self.assertEqual(test_response.status, 200)
-            self.assertFalse(test_payload["result"]["callable"])
-            self.assertEqual(test_payload["result"]["status"], "egress_policy_rejected")
-            self.assertIsNone(test_payload["result"]["matched_dataset"])
             self.assertEqual(audit_response.status, 200)
-            self.assertIn("system.data_connection.test", {log["action"] for log in audit_payload["logs"]})
             self.assertIn("system.model.test", {log["action"] for log in audit_payload["logs"]})
             self.assertIn("system.speech.test", {log["action"] for log in audit_payload["logs"]})
             self.assertIn("system.model.upsert", {log["action"] for log in audit_payload["logs"]})
@@ -2540,13 +2430,10 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertEqual(other_payload["config_scope"], other_tenant_id)
             self.assertNotIn("model_test", {model["id"] for model in other_payload["models"]})
             self.assertNotIn("speech_test", {integration["id"] for integration in other_payload["speech_integrations"]})
-            self.assertNotIn("conn_test", {connection["id"] for connection in other_payload["data_connections"]})
             self.assertEqual(delete_model_response.status, 200)
             self.assertTrue(delete_model_payload["deleted"])
             self.assertEqual(delete_speech_response.status, 200)
             self.assertTrue(delete_speech_payload["deleted"])
-            self.assertEqual(delete_data_response.status, 200)
-            self.assertTrue(delete_data_payload["deleted"])
 
     def test_http_system_config_does_not_leak_rows_owned_in_another_tenant(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -2558,7 +2445,6 @@ class PlatformWorkflowTest(unittest.TestCase):
             with store._conn:
                 store._conn.execute("DELETE FROM platform_model_integrations WHERE tenant_id = ?", (account_scope,))
                 store._conn.execute("DELETE FROM platform_speech_integrations WHERE tenant_id = ?", (account_scope,))
-                store._conn.execute("DELETE FROM platform_data_connections WHERE tenant_id = ?", (account_scope,))
             store.upsert_model(
                 tenant_id,
                 {
@@ -2583,20 +2469,6 @@ class PlatformWorkflowTest(unittest.TestCase):
                 },
                 updated_by="u_super_admin",
             )
-            store.upsert_data_connection(
-                tenant_id,
-                {
-                    "id": "legacy_connection_owned_by_account",
-                    "institution": "华兴银行",
-                    "sourceType": "毓数QBI",
-                    "account": "legacy_ops",
-                    "password": "legacy-data-secret",
-                    "dataset": "legacy_dataset",
-                    "status": "connected",
-                },
-                updated_by="u_super_admin",
-            )
-
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
@@ -2614,10 +2486,8 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertEqual(payload["config_scope"], other_tenant_id)
         self.assertNotIn("legacy_model_owned_by_account", {model["id"] for model in payload["models"]})
         self.assertNotIn("legacy_speech_owned_by_account", {integration["id"] for integration in payload["speech_integrations"]})
-        self.assertNotIn("legacy_connection_owned_by_account", {connection["id"] for connection in payload["data_connections"]})
         self.assertNotIn("legacy-secret", json.dumps(payload, ensure_ascii=False))
         self.assertNotIn("legacy-asr-secret", json.dumps(payload, ensure_ascii=False))
-        self.assertNotIn("legacy-data-secret", json.dumps(payload, ensure_ascii=False))
 
     def test_transient_model_test_failure_preserves_last_known_good_state(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -2978,40 +2848,6 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertEqual(get_payload["comments"][0]["replies"][0]["text"], "已补充。")
             self.assertEqual(empty_response.status, 200)
             self.assertEqual(empty_payload["comments"], [])
-
-    def test_sqlite_system_config_encrypts_data_connection_secret_at_rest(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            db_path = f"{tmpdir}/api.sqlite"
-            server = create_server("127.0.0.1", 0, db_path)
-            tenant_id = normalize_tenant_id("华兴银行")
-            try:
-                saved = server.services.system_config_store.upsert_data_connection(
-                    tenant_id,
-                    {
-                        "id": "conn_secret",
-                        "institution": "华兴银行",
-                        "account": "ops",
-                        "password": "raw-secret",
-                        "dataset": "mart_huaxing_credit",
-                        "status": "connected",
-                    },
-                    updated_by="u_admin",
-                )
-                raw_secret = server.services.system_config_store._conn.execute(
-                    """
-                    SELECT secret_value
-                    FROM platform_data_connections
-                    WHERE tenant_id = ? AND connection_id = ?
-                    """,
-                    (tenant_id, "conn_secret"),
-                ).fetchone()[0]
-            finally:
-                server.server_close()
-
-        self.assertEqual(saved["password"], "******")
-        self.assertTrue(raw_secret.startswith("enc:v"))
-        self.assertNotIn("raw-secret", raw_secret)
-        self.assertEqual(decrypt_secret(raw_secret), "raw-secret")
 
     def test_secret_envelope_requires_key_in_strict_mode(self) -> None:
         with patch.dict("os.environ", {"SMART_DATA_AGENT_AUTH_MODE": "strict"}, clear=True):

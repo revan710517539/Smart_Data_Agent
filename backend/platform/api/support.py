@@ -98,6 +98,7 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
         validation_messages = {
             "duplicate_model_name": "模型名称已存在，请使用不同的模型名称。",
             "invalid_model_application_module": "应用模块不在系统登记的可选范围内。",
+            "invalid_login_credentials": "邮箱或密码不正确，请确认后重试。",
         }
         error_text = str(exc)
         message = validation_messages.get(error_text, "The request failed validation.")

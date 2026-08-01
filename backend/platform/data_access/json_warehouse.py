@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_MOCK_WAREHOUSE_PATH = Path(__file__).resolve().parents[3] / "data" / "mock" / "semantic_datasets.json"
+DEFAULT_MOCK_WAREHOUSE_PATH = Path(__file__).resolve().parents[3] / "Origin_Data" / "mock" / "semantic_datasets.json"
 
 
 @dataclass(frozen=True)

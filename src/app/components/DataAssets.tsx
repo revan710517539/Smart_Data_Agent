@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
-  Code2,
   Database,
   FilePlus2,
   Layers3,
@@ -32,20 +31,16 @@ import {
 } from "../services/metricDictionaryApi";
 import { getSystemHealth, type SystemHealthResponse } from "../services/systemHealthApi";
 import {
-  fetchAcquisitionExecutions,
   fetchDataAcquisition,
-  fetchTopicMetadataStatus,
-  refreshTopicMetadata,
   type AcquisitionJob,
-  type AcquisitionExecution,
   type DataQualityResult,
-  type TopicMetadataStatus,
 } from "../services/dataAcquisitionApi";
 import { apiErrorMessage } from "../services/apiClient";
 import { demoFallbackDisabledMessage, isDemoFallbackEnabled } from "../services/apiContext";
 import {
   deleteDataAssetItem,
   fetchDataAssets,
+  fetchTopicData,
   type AnalysisExperienceAsset,
   type BehaviorHabitAsset,
   type DataAssetBundle,
@@ -54,6 +49,7 @@ import {
   type RawTableAsset,
   type RawField,
   type TopicTableAsset,
+  type TopicDataSnapshot,
   saveDataAssetItem,
   uploadRawDataFile,
 } from "../services/dataAssetApi";
@@ -104,7 +100,7 @@ const sectionCopy: Record<
   },
   "data-management": {
     title: "数据管理",
-    subtitle: "原始表定位原始数据，主题表定位智能分析页面产生SQL，让智能分析与周报复用同一套数据资产",
+    subtitle: "原始表读取 Origin_Data 中的 CSV；主题表和分析结果统一复用 Topic_Data 中的最新数据资产",
     searchPlaceholder: "搜索原始表、主题表、字段或 SQL",
   },
   quality: {
@@ -115,7 +111,8 @@ const sectionCopy: Record<
 };
 
 const metricDictionaryStorageKey = "smart_data_agent_metric_dictionary_v2";
-const metricPageSize = 20;
+const metricPageSize = 10;
+const dataTablePageSize = 10;
 
 const metricColumns: {
   key: MetricColumnKey;
@@ -293,7 +290,10 @@ export function DataAssets() {
       const demoMetrics = isDemoFallbackEnabled() ? await loadMetricDictionary(tenantId) : [];
       if (cancelled) return;
       try {
-        const response = await fetchMetricDictionary({ tenantId });
+        // Visibility is evaluated against the authenticated account. Omitting
+        // userId silently fell back to the legacy development identity and made
+        // the saved, account-owned dictionary appear empty after a real login.
+        const response = await fetchMetricDictionary({ tenantId, userId });
         if (cancelled) return;
         if (response.metrics.length) {
           setMetrics(response.metrics);
@@ -321,7 +321,7 @@ export function DataAssets() {
     return () => {
       cancelled = true;
     };
-  }, [section, selectedInstitution, tenantId]);
+  }, [section, selectedInstitution, tenantId, userId]);
 
   useEffect(() => {
     if (section !== "metrics" || !isInstitutionAdmin || isSuperAdmin) return;
@@ -409,7 +409,7 @@ export function DataAssets() {
         ),
       );
       try {
-        await saveMetricDictionaryItem({ tenantId: editingMetricTenantId || tenantId, metric: { ...nextMetric, metricId: editingMetricId } });
+        await saveMetricDictionaryItem({ tenantId: editingMetricTenantId || tenantId, userId, metric: { ...nextMetric, metricId: editingMetricId } });
         setMetricDataSource("backend");
         setMetricNotice("指标已修改并同步到后端。");
       } catch (error) {
@@ -426,7 +426,7 @@ export function DataAssets() {
     } else {
       setMetrics((current) => [nextMetric, ...current]);
       try {
-        await saveMetricDictionaryItem({ tenantId, metric: nextMetric });
+        await saveMetricDictionaryItem({ tenantId, userId, metric: nextMetric });
         setMetricDataSource("backend");
         setMetricNotice("指标已新增并同步到后端。");
       } catch (error) {
@@ -448,7 +448,7 @@ export function DataAssets() {
     const previousMetrics = metrics;
     setMetrics((current) => current.filter((item) => item.metricId !== metric.metricId));
     try {
-      await deleteMetricDictionaryItem({ tenantId: metric.tenantId || tenantId, metricId: metric.metricId });
+      await deleteMetricDictionaryItem({ tenantId: metric.tenantId || tenantId, userId, metricId: metric.metricId });
       setMetricDataSource("backend");
       setMetricNotice("指标已删除并同步到后端。");
     } catch (error) {
@@ -617,20 +617,6 @@ function MetricManagement({
 
   return (
     <div className="space-y-5">
-      <div className="grid gap-4 md:grid-cols-4">
-        {[
-          { label: "指标总数", value: metrics.length },
-          { label: "取值逻辑完整度", value: valueLogicCompleteness },
-          { label: "涉及表名", value: new Set(metrics.map((metric) => metric.sourceTable).filter(Boolean)).size },
-          { label: "涉及字段", value: referencedFieldCount },
-        ].map((item) => (
-          <div key={item.label} className="rounded-xl border border-[#f0f0f2] bg-white p-4">
-            <div className="text-[22px] text-[#1d1d1f] tracking-tight">{item.value}</div>
-            <div className="mt-0.5 text-[12px] text-[#aeaeb2]">{item.label}</div>
-          </div>
-        ))}
-      </div>
-
       {notice && (
         <div className="rounded-lg border border-[#d7efd9] bg-[#eef8f1] px-3 py-2 text-[12px] text-[#258a3f]">
           {notice}
@@ -641,12 +627,6 @@ function MetricManagement({
         <div className="flex flex-col gap-2 border-b border-[#f0f0f2] px-4 py-3 md:flex-row md:items-center md:justify-between">
           <div>
             <div className="text-[13px] text-[#1d1d1f]">指标全集</div>
-            <div className="mt-0.5 text-[11px] text-[#aeaeb2]">
-              来源：02 金科标准指标体系-指标库表格.xlsx · 已完整扫描 231 条指标
-            </div>
-            <div className="mt-0.5 text-[11px] text-[#c7c7cc]">
-              当前机构：{institutionName} · {tenantId} · {dataSource === "backend" ? "后端同步" : dataSource === "syncing" ? "同步中" : dataSource === "local" ? "demo本地缓存" : "后端不可用"}
-            </div>
           </div>
           <div className="flex items-center gap-2">
             <select
@@ -938,6 +918,15 @@ function MetricVisibilityCheckbox({
 
 const emptyAssetBundle: DataAssetBundle = {
   tenant_id: "",
+  source_mode: "csv_folder",
+  csv_source: {
+    mode: "csv_folder",
+    root: "",
+    available: false,
+    file_count: 0,
+    scanned_at: "",
+    files: [],
+  },
   raw_tables: [],
   topic_tables: [],
   intents: [],
@@ -956,10 +945,18 @@ function useDataAssetBundle(tenantId: string) {
 
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: number | undefined;
     const syncAssets = async () => {
       setNotice("资产配置同步中...");
       try {
         const response = await fetchDataAssets({ tenantId });
+        if (response.status === "loading") {
+          if (!cancelled) {
+            setNotice(response.message || "Origin_Data 正在准备中，请稍候...");
+            retryTimer = window.setTimeout(() => void syncAssets(), 700);
+          }
+          return;
+        }
         if (!cancelled) {
           setBundle(response);
           setNotice(`已连接后端资产配置 · 原始表 ${response.raw_tables.length} 张 · 主题表 ${response.topic_tables.length} 个`);
@@ -974,6 +971,7 @@ function useDataAssetBundle(tenantId: string) {
     void syncAssets();
     return () => {
       cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
   }, [tenantId]);
 
@@ -1006,23 +1004,34 @@ function useDataAssetBundle(tenantId: string) {
 
 function DataManagement({ searchTerm, tenantId }: { searchTerm: string; tenantId: string }) {
   const [activeTab, setActiveTab] = useState<DataManagementTab>("raw");
+  const [rawPage, setRawPage] = useState(1);
+  const [topicPage, setTopicPage] = useState(1);
   const [createType, setCreateType] = useState<DataManagementTab | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ itemType: "raw_table" | "topic_table"; item: RawTableAsset | TopicTableAsset } | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const { bundle, notice, upsertRawTable, upsertTopicTable, removeTable, setNotice } = useDataAssetBundle(tenantId);
+  const { bundle, notice, upsertTopicTable, removeTable, setNotice } = useDataAssetBundle(tenantId);
   const keyword = searchTerm.trim().toLowerCase();
   const rawTables = bundle.raw_tables.filter((item) => assetMatches(item, keyword)).sort(sortAssetNewestFirst);
   const topicTables = bundle.topic_tables.filter((item) => assetMatches(item, keyword)).sort(sortAssetNewestFirst);
+  const rawPageCount = Math.max(1, Math.ceil(rawTables.length / dataTablePageSize));
+  const topicPageCount = Math.max(1, Math.ceil(topicTables.length / dataTablePageSize));
+  const pagedRawTables = rawTables.slice((Math.min(rawPage, rawPageCount) - 1) * dataTablePageSize, Math.min(rawPage, rawPageCount) * dataTablePageSize);
+  const pagedTopicTables = topicTables.slice((Math.min(topicPage, topicPageCount) - 1) * dataTablePageSize, Math.min(topicPage, topicPageCount) * dataTablePageSize);
+  const currentPage = activeTab === "raw" ? Math.min(rawPage, rawPageCount) : Math.min(topicPage, topicPageCount);
+  const currentPageCount = activeTab === "raw" ? rawPageCount : topicPageCount;
+  const currentTotal = activeTab === "raw" ? rawTables.length : topicTables.length;
+  const setCurrentPage = activeTab === "raw" ? setRawPage : setTopicPage;
 
-  const saveAsset = async (itemType: "raw_table" | "topic_table", item: RawTableAsset | TopicTableAsset) => {
+  useEffect(() => {
+    setRawPage(1);
+    setTopicPage(1);
+  }, [activeTab, keyword, tenantId]);
+
+  const saveAsset = async (itemType: "topic_table", item: TopicTableAsset) => {
     const creating = !item.id;
     try {
       const response = await saveDataAssetItem({ tenantId, itemType, item });
-      if (itemType === "raw_table") {
-        upsertRawTable(response.item as RawTableAsset);
-      } else {
-        upsertTopicTable(response.item as TopicTableAsset);
-      }
+      upsertTopicTable(response.item as TopicTableAsset);
       setNotice(creating ? "数据表已新增并显示在列表最上方；资产版本已提交复核。" : "资产新版本已提交复核；发布前不会进入智能分析运行时。");
       return response.item;
     } catch (error) {
@@ -1053,18 +1062,29 @@ function DataManagement({ searchTerm, tenantId }: { searchTerm: string; tenantId
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-[14px] text-[#1d1d1f]">数据管理</h3>
-            <p className="mt-1 text-[11px] text-[#aeaeb2]">原始表保存底表/字段语义，主题表保存可复用分析 SQL。</p>
+            <p className="mt-1 text-[11px] text-[#aeaeb2]">原始表自动读取 CSV 文件并展示前 10 行和字段解读；主题表保存可复用分析 SQL。</p>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              aria-label={`新增${activeTab === "raw" ? "原始表" : "主题表"}`}
-              onClick={() => setCreateType(activeTab)}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white hover:bg-[#2c2c2e]"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              新增
-            </button>
+            {(rawTables.length > dataTablePageSize || topicTables.length > dataTablePageSize) && (
+              <DataTablePagination
+                compact
+                page={currentPage}
+                totalPages={currentPageCount}
+                total={currentTotal}
+                onChange={setCurrentPage}
+              />
+            )}
+            {activeTab === "topic" && (
+              <button
+                type="button"
+                aria-label="新增主题表"
+                onClick={() => setCreateType("topic")}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white hover:bg-[#2c2c2e]"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                新增主题表
+              </button>
+            )}
             <SegmentedTabs
               tabs={[
                 { key: "raw", label: `原始表 ${rawTables.length}` },
@@ -1078,19 +1098,17 @@ function DataManagement({ searchTerm, tenantId }: { searchTerm: string; tenantId
 
         {activeTab === "raw" ? (
           <div className="space-y-3">
-            {rawTables.map((table) => (
+            {pagedRawTables.map((table) => (
               <RawTableCard
                 key={table.id}
                 table={table}
-                onSave={async (item) => { await saveAsset("raw_table", item); }}
-                onDelete={() => setPendingDelete({ itemType: "raw_table", item: table })}
               />
             ))}
             {!rawTables.length && <EmptyAssetState text="暂无匹配的原始表配置" />}
           </div>
         ) : (
           <div className="space-y-3">
-            {topicTables.map((topic) => (
+            {pagedTopicTables.map((topic) => (
               <TopicTableCard
                 key={topic.id}
                 tenantId={tenantId}
@@ -1109,7 +1127,7 @@ function DataManagement({ searchTerm, tenantId }: { searchTerm: string; tenantId
           tableType={createType}
           onClose={() => setCreateType(null)}
           onSave={async (item) => {
-            await saveAsset(createType === "raw" ? "raw_table" : "topic_table", item);
+            await saveAsset("topic_table", item as TopicTableAsset);
             setCreateType(null);
           }}
         />
@@ -1123,6 +1141,31 @@ function DataManagement({ searchTerm, tenantId }: { searchTerm: string; tenantId
           onConfirm={() => void confirmDelete()}
         />
       )}
+    </div>
+  );
+}
+
+function DataTablePagination({
+  page,
+  totalPages,
+  total,
+  onChange,
+  compact = false,
+}: {
+  page: number;
+  totalPages: number;
+  total: number;
+  onChange: (page: number) => void;
+  compact?: boolean;
+}) {
+  return (
+    <div className={`flex items-center gap-2 text-[11px] text-[#8a8a8e] ${compact ? "shrink-0" : "flex-wrap justify-between border-t border-[#f0f0f2] pt-3"}`}>
+      <span className={compact ? "hidden xl:inline" : ""}>共 {total} 条，每页 {dataTablePageSize} 条</span>
+      <div className="flex items-center gap-2">
+        <button type="button" aria-label="上一页" disabled={page <= 1} onClick={() => onChange(page - 1)} className="rounded-md border border-[#e5e5ea] bg-white px-2.5 py-1 hover:bg-[#f2f2f7] disabled:cursor-not-allowed disabled:opacity-40">上一页</button>
+        <span>{page} / {totalPages}</span>
+        <button type="button" aria-label="下一页" disabled={page >= totalPages} onClick={() => onChange(page + 1)} className="rounded-md border border-[#e5e5ea] bg-white px-2.5 py-1 hover:bg-[#f2f2f7] disabled:cursor-not-allowed disabled:opacity-40">下一页</button>
+      </div>
     </div>
   );
 }
@@ -1166,19 +1209,6 @@ function emptyRawTableDraft(): RawTableAsset {
     updatedAt: new Date().toISOString(),
   };
 }
-
-const RAW_TABLE_SOURCE_PLATFORMS = {
-  "毓数": {
-    source: "毓数",
-    toolId: "tool_yushu_my_queries_sync",
-    profileId: "qifu_yushu.my_queries.v1",
-  },
-  "智能运营": {
-    source: "智能运营",
-    toolId: "tool_focuspro_business_sandbox_crawler",
-    profileId: "qifu_focuspro_sios.business_sandbox.v1",
-  },
-} as const;
 
 function rawTableSourcePlatform(table: RawTableAsset): "毓数" | "智能运营" {
   if (table.sourcePlatform === "毓数" || table.sourcePlatform === "智能运营") return table.sourcePlatform;
@@ -1800,42 +1830,14 @@ function BehaviorHabits({ searchTerm, tenantId, userId }: { searchTerm: string; 
 
 function RawTableCard({
   table,
-  onSave,
-  onDelete,
 }: {
   table: RawTableAsset;
-  onSave: (table: RawTableAsset) => Promise<void>;
-  onDelete: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const [draftFields, setDraftFields] = useState<RawField[]>(table.fields);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!editing) setDraftFields(table.fields);
-  }, [editing, table.fields]);
-
-  const save = async () => {
-    setSaving(true);
-    try {
-      await onSave({ ...table, fields: draftFields });
-      setEditing(false);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const changeSourcePlatform = async (sourcePlatform: "毓数" | "智能运营") => {
-    const next = RAW_TABLE_SOURCE_PLATFORMS[sourcePlatform];
-    await onSave({
-      ...table,
-      sourcePlatform,
-      source: next.source,
-      linkedToolId: next.toolId,
-      crawlerProfileId: table.crawlerProfileId || next.profileId,
-    });
-  };
+  const [activeDetailTab, setActiveDetailTab] = useState<"preview" | "metadata">("preview");
+  const previewHeaders = Object.keys(table.previewRows?.[0] || {}).length
+    ? Object.keys(table.previewRows?.[0] || {})
+    : table.fields.map((field) => field.fieldNameCn || field.fieldNameEn);
 
   return (
     <div className="rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-4">
@@ -1847,45 +1849,12 @@ function RawTableCard({
             <span className="font-mono text-[11px] text-[#8a8a8e]">{table.tableNameEn}</span>
             {table.fileName && <span className="max-w-[280px] truncate rounded-full border border-[#e5e5ea] bg-white px-2 py-0.5 text-[10px] text-[#636366]" title={table.fileName}>文件：{table.fileName}</span>}
           </div>
-          <p className="mt-1 text-[11px] leading-[1.6] text-[#636366]">{table.description}</p>
-          {table.fileName && (
-            <p className="mt-1 text-[10px] leading-[1.6] text-[#8a8a8e]">
-              使用场景：{table.usageScenario || "未配置"} · 关联意图：{table.relatedIntent || "未配置"}
-            </p>
-          )}
+          <p className="mt-1 text-[11px] leading-[1.6] text-[#636366]">更新时间：{formatAssetTime(table.updatedAt)}</p>
         </div>
         <div className="flex items-center gap-2">
-          {expanded && (
-            <span className="rounded-full border border-[#e5e5ea] bg-white px-2 py-0.5 text-[11px] text-[#636366]">
-              {table.source} · {table.updateFrequency}
-            </span>
-          )}
-          <label className="sr-only" htmlFor={`raw-source-platform-${table.id}`}>来源平台</label>
-          <select
-            id={`raw-source-platform-${table.id}`}
-            value={rawTableSourcePlatform(table)}
-            disabled={editing || saving}
-            onChange={(event) => { void changeSourcePlatform(event.target.value as "毓数" | "智能运营"); }}
-            className="h-7 rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#636366] outline-none disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label={`${table.tableNameCn}的来源平台`}
-          >
-            <option value="毓数">毓数</option>
-            <option value="智能运营">智能运营</option>
-          </select>
-          <AssetEditActions
-            editing={editing}
-            saving={saving}
-            onEdit={() => {
-              setExpanded(true);
-              setEditing(true);
-            }}
-            onCancel={() => {
-              setDraftFields(table.fields);
-              setEditing(false);
-            }}
-            onSave={save}
-          />
-          <AssetDeleteButton label={`删除原始表${table.tableNameCn}`} disabled={editing || saving} onClick={onDelete} />
+          <span className="h-7 rounded-md border border-[#e5e5ea] bg-white px-2 py-1 text-[11px] text-[#636366]">
+            CSV 文件 · {table.rowCount ?? 0} 行
+          </span>
           <AssetCollapseButton
             expanded={expanded}
             label={expanded ? `折叠${table.tableNameCn}` : `展开${table.tableNameCn}`}
@@ -1894,30 +1863,27 @@ function RawTableCard({
         </div>
       </div>
       {expanded && (
-        <>
-          <div className="mb-3 grid gap-2 md:grid-cols-4">
-            <AssetMiniField label="来源平台" value={rawTableSourcePlatform(table)} />
-            <AssetMiniField label="主键" value={table.primaryKey} />
-            <AssetMiniField label="日期字段" value={table.dateField} />
-            <AssetMiniField label="机构字段" value={table.orgField} />
-            <AssetMiniField label="客户字段" value={table.customerField} />
+        <div className="overflow-hidden rounded-lg border border-[#f0f0f2] bg-white">
+          <div className="flex items-center gap-1 border-b border-[#f0f0f2] bg-[#fafbfc] px-3 pt-2">
+            <button type="button" onClick={() => setActiveDetailTab("preview")} className={`rounded-t-md px-3 py-2 text-[11px] ${activeDetailTab === "preview" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:text-[#3a3a3c]"}`}>原始数据（前 10 行）</button>
+            <button type="button" onClick={() => setActiveDetailTab("metadata")} className={`rounded-t-md px-3 py-2 text-[11px] ${activeDetailTab === "metadata" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:text-[#3a3a3c]"}`}>字段元数据及解读</button>
           </div>
-          {table.fileName && (
-            <div className="mb-3 grid gap-2 md:grid-cols-4">
-              <AssetMiniField label="数据源文件名称" value={table.fileName} />
-              <AssetMiniField label="存储文件" value={table.objectFileName || table.fileName} />
-              <AssetMiniField label="使用场景" value={table.usageScenario || "未配置"} />
-              <AssetMiniField label="关联意图" value={table.relatedIntent || "未配置"} />
+          {activeDetailTab === "preview" ? (
+            <div className="max-h-[360px] overflow-auto">
+              <table className="min-w-full text-left text-[11px]">
+                <thead className="sticky top-0 bg-white text-[#8a8a8e]">
+                  <tr>{previewHeaders.map((header) => <th key={header} className="whitespace-nowrap border-b border-[#f0f0f2] px-3 py-2 font-normal">{header}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {(table.previewRows || []).map((row, rowIndex) => <tr key={rowIndex} className="border-b border-[#f8f8f8] last:border-b-0">{previewHeaders.map((header) => <td key={header} className="max-w-[280px] truncate px-3 py-2 text-[#3a3a3c]" title={row[header] || ""}>{row[header] || ""}</td>)}</tr>)}
+                </tbody>
+              </table>
+              {!table.previewRows?.length && <div className="px-3 py-8 text-center text-[11px] text-[#aeaeb2]">文件没有可展示的数据行</div>}
             </div>
+          ) : (
+            <AssetFieldTable fields={table.fields} editing={false} onChange={() => undefined} />
           )}
-          <AssetFieldTable
-            fields={editing ? draftFields : table.fields}
-            editing={editing}
-            onChange={(index, key, value) =>
-              setDraftFields((current) => current.map((field, fieldIndex) => fieldIndex === index ? { ...field, [key]: value } : field))
-            }
-          />
-        </>
+        </div>
       )}
     </div>
   );
@@ -1936,68 +1902,44 @@ function TopicTableCard({
 }) {
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const [scriptOpen, setScriptOpen] = useState(false);
   const [draftFields, setDraftFields] = useState<RawField[]>(() => normalizeTopicFields(topic));
   const [saving, setSaving] = useState(false);
-  const [metadata, setMetadata] = useState<TopicMetadataStatus | null>(null);
-  const [metadataBusy, setMetadataBusy] = useState(false);
-  const [metadataNotice, setMetadataNotice] = useState("");
-  const [logsOpen, setLogsOpen] = useState(false);
-  const [executions, setExecutions] = useState<AcquisitionExecution[]>([]);
-  const metadataTopicKey = topic.code || topic.id;
+  const [activeDetailTab, setActiveDetailTab] = useState<"data" | "raw" | "metadata">("data");
+  const [snapshot, setSnapshot] = useState<TopicDataSnapshot | null>(null);
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const [snapshotError, setSnapshotError] = useState("");
 
   useEffect(() => {
     if (!editing) setDraftFields(normalizeTopicFields(topic));
   }, [editing, topic]);
 
   useEffect(() => {
-    if (!expanded) return;
+    if (!expanded || activeDetailTab === "metadata") return;
     let cancelled = false;
-    void fetchTopicMetadataStatus({ tenantId, topicTableId: metadataTopicKey })
+    setSnapshotLoading(true);
+    setSnapshotError("");
+    void fetchTopicData({
+      tenantId,
+      referenceType: "topic",
+      referenceId: topic.id,
+      dataType: activeDetailTab === "raw" ? "raw" : "data",
+    })
       .then((response) => {
-        if (!cancelled) setMetadata(response.metadata);
+        if (!cancelled) setSnapshot(response);
       })
       .catch((error) => {
-        if (!cancelled) setMetadataNotice(`元数据状态读取失败：${apiErrorMessage(error, "未知错误")}`);
+        if (!cancelled) {
+          setSnapshot(null);
+          setSnapshotError(apiErrorMessage(error, "暂无 Topic_Data 结果；等待每日定时加工或从智能分析保存主题表。"));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setSnapshotLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [expanded, metadataTopicKey, tenantId]);
-
-  const refreshMetadata = async (cascade: boolean) => {
-    setMetadataBusy(true);
-    setMetadataNotice(cascade ? "正在获取级联元数据…" : "正在获取元数据…");
-    try {
-      const response = await refreshTopicMetadata({ tenantId, topicTableId: metadataTopicKey, cascade });
-      const status = await fetchTopicMetadataStatus({ tenantId, topicTableId: metadataTopicKey });
-      setMetadata({
-        ...status.metadata,
-        schema_changed: Boolean(response.metadata.schema_changed_tables?.length),
-      });
-      setMetadataNotice(
-        response.metadata.transport_status === "not_configured"
-          ? "SQL 拆解和元数据投影已完成；真实 Playwright Worker 尚未启用。"
-          : cascade ? "级联元数据已更新。" : "元数据已更新。",
-      );
-    } catch (error) {
-      setMetadataNotice(`元数据获取失败：${apiErrorMessage(error, "未知错误")}`);
-    } finally {
-      setMetadataBusy(false);
-    }
-  };
-
-  const toggleLogs = async () => {
-    const nextOpen = !logsOpen;
-    setLogsOpen(nextOpen);
-    if (!nextOpen) return;
-    try {
-      const response = await fetchAcquisitionExecutions({ tenantId, topicTableId: metadataTopicKey });
-      setExecutions(response.executions);
-    } catch (error) {
-      setMetadataNotice(`执行日志读取失败：${apiErrorMessage(error, "未知错误")}`);
-    }
-  };
+  }, [activeDetailTab, expanded, tenantId, topic.id]);
 
   const save = async () => {
     setSaving(true);
@@ -2016,23 +1958,12 @@ function TopicTableCard({
           <div className="flex items-center gap-2">
             <Layers3 className="h-4 w-4 text-[#8a8a8e]" />
             <h4 className="text-[13px] text-[#1d1d1f]">{topic.name}</h4>
+            <span className="font-mono text-[11px] text-[#8a8a8e]">{topic.code}</span>
           </div>
-          <p className="mt-1 text-[11px] leading-[1.6] text-[#636366]">{topic.description}</p>
+          <p className="mt-1 text-[11px] leading-[1.6] text-[#636366]">更新时间：{formatAssetTime(topic.dataSnapshot?.updated_at || topic.updatedAt)}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {expanded && (
-            <>
-              <span className="font-mono text-[11px] text-[#8a8a8e]">{topic.code}</span>
-              <button
-                type="button"
-                onClick={() => setScriptOpen((open) => !open)}
-                className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#636366] hover:bg-[#f2f2f7]"
-              >
-                <Code2 className="h-3.5 w-3.5 text-[#8a8a8e]" />
-                脚本
-              </button>
-            </>
-          )}
+          <span className="h-7 rounded-md border border-[#e5e5ea] bg-white px-2 py-1 text-[11px] text-[#636366]">主题表 · {topic.dataSnapshot?.row_count ?? topic.rowCount ?? 0} 行</span>
           <AssetEditActions
             editing={editing}
             saving={saving}
@@ -2055,99 +1986,41 @@ function TopicTableCard({
         </div>
       </div>
       {expanded && (
-        <>
-          <div className="grid gap-2 md:grid-cols-3">
-            <AssetMiniField label="适用场景" value={topic.applicableScene} />
-            <AssetMiniField label="关联意图" value={topic.relatedIntent} />
-            <AssetMiniField label="周报引用" value={topic.reportReference || "未配置"} />
+        <div className="overflow-hidden rounded-lg border border-[#f0f0f2] bg-white">
+          <div className="flex items-center gap-1 border-b border-[#f0f0f2] bg-[#fafbfc] px-3 pt-2">
+            <button type="button" onClick={() => setActiveDetailTab("data")} className={`rounded-t-md px-3 py-2 text-[11px] ${activeDetailTab === "data" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:text-[#3a3a3c]"}`}>数据</button>
+            <button type="button" onClick={() => setActiveDetailTab("raw")} className={`rounded-t-md px-3 py-2 text-[11px] ${activeDetailTab === "raw" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:text-[#3a3a3c]"}`}>原始数据</button>
+            <button type="button" onClick={() => setActiveDetailTab("metadata")} className={`rounded-t-md px-3 py-2 text-[11px] ${activeDetailTab === "metadata" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:text-[#3a3a3c]"}`}>字段元数据及解读</button>
           </div>
-          <div className="mt-3 rounded-lg border border-[#ececf0] bg-white p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-2">
-                <Database className="h-3.5 w-3.5 text-[#8a8a8e]" />
-                <span className="text-[11px] text-[#636366]">元数据</span>
-                <span className={`rounded-full px-2 py-0.5 text-[10px] ${
-                  metadata?.status === "complete"
-                    ? "bg-[#eef8f1] text-[#258a3f]"
-                    : metadata?.status === "partial"
-                      ? "bg-[#fff7ed] text-[#b45309]"
-                      : "bg-[#f2f2f7] text-[#8a8a8e]"
-                }`}>
-                  {metadata?.status === "complete" ? "已完成" : metadata?.status === "partial" ? "部分可用" : "未获取"}
-                </span>
-                <span className="truncate text-[10px] text-[#aeaeb2]">
-                  {metadata?.last_synced_at ? `最近同步 ${formatAssetTime(metadata.last_synced_at)}` : "暂无同步记录"}
-                </span>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                <MetadataActionButton label="获取元数据" disabled={metadataBusy} onClick={() => void refreshMetadata(false)} />
-                <MetadataActionButton label="获取级联元数据" disabled={metadataBusy} onClick={() => void refreshMetadata(true)} />
-                <MetadataActionButton label="重新获取" disabled={metadataBusy} onClick={() => void refreshMetadata(true)} />
-                <MetadataActionButton label="查看日志" disabled={metadataBusy} onClick={() => void toggleLogs()} />
-              </div>
-            </div>
-            {metadataNotice && <p className="mt-2 text-[10px] leading-[1.6] text-[#8a8a8e]">{metadataNotice}</p>}
-            {!!metadata?.raw_tables.length && (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {metadata.raw_tables.map((table) => (
-                  <span key={table.dataset_code} className="rounded-md bg-[#f2f2f7] px-2 py-1 font-mono text-[10px] text-[#636366]">
-                    {table.dataset_code} · {table.field_count} 字段
-                  </span>
-                ))}
-                {metadata.schema_changed && <span className="rounded-md bg-[#fff0f0] px-2 py-1 text-[10px] text-[#d93025]">Schema 已变化</span>}
-              </div>
-            )}
-            {logsOpen && (
-              <div className="mt-2 space-y-1 border-t border-[#f0f0f2] pt-2">
-                {executions.slice(0, 6).map((execution) => (
-                  <div key={execution.acquisition_run_id} className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-[#8a8a8e]">
-                    <span className="font-mono">{execution.acquisition_run_id}</span>
-                    <span>{execution.status} · {execution.rows_read || 0} 行{execution.error_code ? ` · ${execution.error_code}` : ""}</span>
-                  </div>
-                ))}
-                {!executions.length && <p className="text-[10px] text-[#aeaeb2]">暂无该主题表的数据获取执行记录。</p>}
-              </div>
-            )}
-          </div>
-          <div className="mt-3">
+          {activeDetailTab === "metadata" ? (
             <AssetFieldTable
               fields={editing ? draftFields : normalizeTopicFields(topic)}
               editing={editing}
-              onChange={(index, key, value) =>
-                setDraftFields((current) => current.map((field, fieldIndex) => fieldIndex === index ? { ...field, [key]: value } : field))
-              }
+              onChange={(index, key, value) => setDraftFields((current) => current.map((field, fieldIndex) => fieldIndex === index ? { ...field, [key]: value } : field))}
             />
-          </div>
-          {scriptOpen && (
-            <pre className="mt-3 max-h-[220px] overflow-auto rounded-lg bg-[#101114] p-3 font-mono text-[11px] leading-[1.6] text-[#f5f5f7]">
-              {topic.sql}
-            </pre>
+          ) : snapshotLoading ? (
+            <div className="px-3 py-8 text-center text-[11px] text-[#aeaeb2]">正在读取 Topic_Data 最新结果…</div>
+          ) : snapshot ? (
+            <TopicDataTable snapshot={snapshot} />
+          ) : (
+            <div className="px-3 py-8 text-center text-[11px] text-[#aeaeb2]">{snapshotError || "尚无 Topic_Data 结果；等待每日定时加工或从智能分析保存主题表。"}</div>
           )}
-        </>
+        </div>
       )}
     </div>
   );
 }
 
-function MetadataActionButton({
-  label,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  disabled: boolean;
-  onClick: () => void;
-}) {
+function TopicDataTable({ snapshot }: { snapshot: TopicDataSnapshot }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="inline-flex h-7 items-center gap-1 rounded-md border border-[#e5e5ea] bg-white px-2 text-[10px] text-[#636366] hover:bg-[#f2f2f7] disabled:cursor-wait disabled:opacity-50"
-    >
-      <RefreshCw className={`h-3 w-3 text-[#8a8a8e] ${disabled ? "animate-spin" : ""}`} />
-      {label}
-    </button>
+    <div className="max-h-[360px] overflow-auto">
+      <table className="min-w-full text-left text-[11px]">
+        <thead className="sticky top-0 bg-white text-[#8a8a8e]"><tr>{snapshot.columns.map((column) => <th key={column} className="whitespace-nowrap border-b border-[#f0f0f2] px-3 py-2 font-normal">{column}</th>)}</tr></thead>
+        <tbody>{snapshot.rows.map((row, rowIndex) => <tr key={rowIndex} className="border-b border-[#f8f8f8] last:border-b-0">{snapshot.columns.map((column) => <td key={column} title={row[column] || ""} className="max-w-[280px] truncate px-3 py-2 text-[#3a3a3c]">{row[column] || ""}</td>)}</tr>)}</tbody>
+      </table>
+      {!snapshot.rows.length && <div className="px-3 py-8 text-center text-[11px] text-[#aeaeb2]">当前最新快照没有可展示的数据行</div>}
+      {snapshot.truncated && <div className="border-t border-[#f0f0f2] px-3 py-2 text-[10px] text-[#8a8a8e]">为保护页面性能，仅展示前 {snapshot.rows.length} 行；当前快照共 {snapshot.row_count} 行。</div>}
+    </div>
   );
 }
 

@@ -43,6 +43,7 @@ class AnalysisWorkflow:
         planning_catalog: AnalysisPlanningCatalog | None = None,
         python_sandbox: PythonSandbox | None = None,
         agent_runtime: AgentRuntime | None = None,
+        learning_service: Any | None = None,
         metric_semantic_catalog: MetricSemanticCatalog | None = None,
     ) -> None:
         self.skill_executor = skill_executor
@@ -51,6 +52,7 @@ class AnalysisWorkflow:
         self.planning_catalog = planning_catalog or AnalysisPlanningCatalog.default()
         self.python_sandbox = python_sandbox or PythonSandbox()
         self.agent_runtime = agent_runtime
+        self.learning_service = learning_service
         self.metric_semantic_catalog = metric_semantic_catalog
 
     def create_task(self, context: ExecutionContext, question: str) -> AnalysisTask:
@@ -125,6 +127,14 @@ class AnalysisWorkflow:
             question,
             tenant_id=context.tenant_id,
         )
+        if self.learning_service is not None:
+            learned_skills = self.learning_service.resolve_analysis_skills(
+                context,
+                question,
+                task.analysis_plan,
+            )
+            if learned_skills:
+                task.analysis_plan = self._apply_learned_skill_context(task.analysis_plan, learned_skills)
         model_planning_step: AgentStep | None = None
         if callable(planning_hook):
             model_planning = planning_hook(dict(task.analysis_plan))
@@ -173,6 +183,20 @@ class AnalysisWorkflow:
                 {"memory_count": len(visible_memories), "candidate_memory_used": False},
             )
         )
+        if task.analysis_plan.get("applied_learning_skills"):
+            task.plan.append(
+                AgentStep(
+                    "SkillLearningAgent",
+                    "apply_reviewed_procedural_skills",
+                    {
+                        "skill_ids": [
+                            item["skill_id"]
+                            for item in task.analysis_plan["applied_learning_skills"]
+                        ],
+                        "activation_policy": "active_only_before_request",
+                    },
+                )
+            )
 
         skill_request = SkillRequest(
                 skill_id="supersonic.query",
@@ -230,6 +254,145 @@ class AnalysisWorkflow:
         task.plan.append(AgentStep("InsightAgent", "summarize", {"conclusion_count": len(task.conclusions)}))
         task.review = {"status": "pending_final_review", "checks": {}}
         return task
+
+    def enrich_with_data_product_skills(
+        self,
+        context: ExecutionContext,
+        task: AnalysisTask,
+        question: str,
+    ) -> AnalysisTask:
+        """Run the stable analysis/conclusion/BI/governance skill chain."""
+
+        if not task.skill_results:
+            return task
+        required_skill_ids = (
+            "data.analysis.profile",
+            "data.governance.assess",
+            "conclusion.generate",
+            "bi.report.generate",
+        )
+        missing_permissions = [
+            skill_id
+            for skill_id in required_skill_ids
+            if not self.skill_executor.permission_broker.check_resource(
+                context,
+                f"skill:{skill_id}",
+                "execute",
+            )
+        ]
+        if missing_permissions:
+            # The Hermes-style product-skill chain is an additive capability.
+            # Existing custom roles keep their previous access contract instead
+            # of failing an analysis or silently receiving broader permissions.
+            task.plan.append(
+                AgentStep(
+                    "SkillAuthorizationAgent",
+                    "skip_optional_data_product_skills",
+                    {"missing_skill_permissions": missing_permissions},
+                )
+            )
+            return task
+        result = dict(task.skill_results[0])
+        rows = result.get("data") if isinstance(result.get("data"), list) else []
+        semantic_info = result.get("semantic_info") if isinstance(result.get("semantic_info"), dict) else {}
+        learned = [
+            item
+            for item in task.analysis_plan.get("applied_learning_skills", [])
+            if isinstance(item, dict)
+        ]
+        profile_result = self._execute_product_skill(
+            "data_analysis",
+            SkillRequest(
+                skill_id="data.analysis.profile",
+                context=context,
+                inputs={
+                    "data": rows,
+                    "metrics": list(task.analysis_plan.get("metrics") or []),
+                    "dimensions": list(task.analysis_plan.get("dimensions") or []),
+                },
+            ),
+        )
+        profile = dict(profile_result.output["analysis_profile"])
+        governance_result = self._execute_product_skill(
+            "data_governance",
+            SkillRequest(
+                skill_id="data.governance.assess",
+                context=context,
+                inputs={
+                    "data": rows,
+                    "dataset_id": str(task.analysis_plan.get("dataset_id") or ""),
+                    "semantic_info": semantic_info,
+                },
+            ),
+        )
+        governance = dict(governance_result.output["governance_assessment"])
+        conclusion_result = self._execute_product_skill(
+            "conclusion",
+            SkillRequest(
+                skill_id="conclusion.generate",
+                context=context,
+                inputs={
+                    "question": question,
+                    "analysis_plan": task.analysis_plan,
+                    "analysis_profile": profile,
+                    "governance_assessment": governance,
+                    "learned_guidance": learned,
+                },
+            ),
+        )
+        conclusions = list(conclusion_result.output["conclusions"])
+        report_result = self._execute_product_skill(
+            "bi_report",
+            SkillRequest(
+                skill_id="bi.report.generate",
+                context=context,
+                inputs={
+                    "question": question,
+                    "analysis_plan": task.analysis_plan,
+                    "analysis_profile": profile,
+                    "governance_assessment": governance,
+                    "chart_spec": dict(result.get("chart_spec") or {}),
+                    "conclusions": conclusions,
+                },
+            ),
+        )
+        task.skill_results[0] = {
+            **result,
+            "analysis_profile": profile,
+            "governance_assessment": governance,
+            "conclusion_contract": conclusion_result.output["conclusion_contract"],
+            "bi_report_spec": report_result.output["report_spec"],
+        }
+        task.conclusions.extend(conclusions)
+        task.plan.extend(
+            [
+                AgentStep("DataAnalysisAgent", "data.analysis.profile", {"profile_hash": profile["profile_hash"]}),
+                AgentStep(
+                    "DataGovernanceAgent",
+                    "data.governance.assess",
+                    {
+                        "quality_score": governance["quality_score"],
+                        "issue_count": len(governance["issues"]),
+                    },
+                ),
+                AgentStep(
+                    "ConclusionAgent",
+                    "conclusion.generate",
+                    {"conclusion_count": len(conclusions), "learned_skill_count": len(learned)},
+                ),
+                AgentStep(
+                    "BIReportAgent",
+                    "bi.report.generate",
+                    {"content_hash": report_result.output["report_spec"]["content_hash"]},
+                ),
+            ]
+        )
+        return task
+
+    def _execute_product_skill(self, agent_id: str, request: SkillRequest):
+        if self.agent_runtime:
+            return self.agent_runtime.execute_skill(agent_id, request)
+        return self.skill_executor.execute(request)
 
     def _select_intent_rule(self, context: ExecutionContext, question: str) -> AnalysisIntentRule:
         base = self.planning_catalog.select(question)
@@ -337,7 +500,58 @@ class AnalysisWorkflow:
                 evidence_hash=evidence_hash,
             )
         )
+        if self.learning_service is not None:
+            try:
+                learning_result = self.learning_service.observe_analysis_result(context, task)
+                task.plan.append(
+                    AgentStep(
+                        "SkillLearningAgent",
+                        "observe_analysis_result",
+                        learning_result,
+                    )
+                )
+            except Exception as exc:
+                # A learning candidate must never make an otherwise valid
+                # analysis fail or change its publication decision.
+                task.plan.append(
+                    AgentStep(
+                        "SkillLearningAgent",
+                        "observe_analysis_result",
+                        {"observed": False, "error_code": type(exc).__name__},
+                    )
+                )
         return task
+
+    @staticmethod
+    def _apply_learned_skill_context(
+        plan: dict[str, Any],
+        learned_skills: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        analysis_angles = list(plan.get("analysis_angles") or [])
+        chart_types = list(plan.get("chart_types") or [])
+        for skill in learned_skills:
+            analysis_angles.extend(
+                angle
+                for angle in skill.get("analysisAngles", [])
+                if angle not in analysis_angles
+            )
+            chart_types.extend(
+                chart_type
+                for chart_type in skill.get("chartTypes", [])
+                if chart_type not in chart_types
+            )
+        return {
+            **plan,
+            "analysis_angles": analysis_angles[:20],
+            "chart_types": chart_types[:8],
+            "applied_learning_skills": learned_skills,
+            "learning_policy": {
+                "source": "reviewed_user_operations",
+                "activation": "request_boundary",
+                "permission_changes": False,
+                "metric_override": False,
+            },
+        }
 
     def _build_analysis_plan(
         self,

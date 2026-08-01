@@ -35,6 +35,7 @@ def handle_platform_capabilities_get(handler: Any, query: str) -> None:
                 "agents": agents,
                 "agent_groups": groups,
                 "skills": handler.services.skill_registry.list_runtime_statuses(),
+                "learning": handler.services.learning_service.summary(context.tenant_id, context.user_id),
                 "mcp_servers": handler.services.mcp_gateway.list_servers_for_context(context.to_execution_context()),
             }
         )

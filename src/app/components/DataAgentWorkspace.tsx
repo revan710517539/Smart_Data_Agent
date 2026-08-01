@@ -36,12 +36,12 @@ import {
 } from "../services/dataAssetApi";
 import { fetchMetricDictionary } from "../services/metricDictionaryApi";
 import type { MetricDictionaryItem } from "../data/metricDictionary";
-import { fetchSystemConfig, type DataConnection, type ModelIntegration } from "../services/systemConfigApi";
+import { fetchSystemConfig, type ModelIntegration } from "../services/systemConfigApi";
 import { fetchPlatformCapabilities, type PlatformCapabilityResponse } from "../services/capabilitiesApi";
 import { TodoWorkspace } from "./TodoWorkspace";
 
 type AgentTaskStatus = "ready" | "running" | "completed" | "alert" | "paused" | "terminated";
-type AutomationKind = "acquisition" | "memory" | "automatic_analysis";
+type AutomationKind = "memory" | "automatic_analysis";
 type MemoryOutputType = "analysis_experience" | "intent" | "analysis_habit" | "operation_habit" | "reporting_habit";
 
 type AgentTask = {
@@ -62,6 +62,7 @@ type AgentTask = {
   taskCode?: string;
   handlerRef?: string;
   taskConfig?: Record<string, unknown>;
+  systemManaged?: boolean;
   recentRuns: AutomationRun[];
 };
 
@@ -74,7 +75,6 @@ type AgentTaskFormState = {
   result: string;
   description: string;
   automationKind: AutomationKind;
-  connectionId: string;
   sourceIds: string[];
   outputTypes: MemoryOutputType[];
   prompt: string;
@@ -126,21 +126,11 @@ const memoryOutputLabels: Record<MemoryOutputType, string> = {
 const DEFAULT_MEMORY_PROMPT = "从所选知识文件的当前版本中，提炼会改变后续判断、分析方法或运营动作的本质信息。删除背景复述、常识、套话、表层摘要和同义重复；没有足够证据时不要生成记忆。";
 const DEFAULT_AUTOMATIC_ANALYSIS_PROMPT = "当监控指标命中异动规则时，结合指标所在数据表、指标描述、统计口径、所选 Skill 和实际查询证据进行归因分析，说明异动表现、可能原因、证据边界、影响与建议动作。";
 
-const agentCapabilities = [
-  { icon: Search, title: "智能查询", desc: "自然语言查询任意业务数据", color: "#34c759" },
-  { icon: TrendingUp, title: "趋势预测", desc: "基于历史数据预测未来指标", color: "#007aff" },
-  { icon: Target, title: "归因分析", desc: "自动发现指标变动的根本原因", color: "#af52de" },
-  { icon: Bell, title: "智能预警", desc: "7x24小时监控异常并主动推送", color: "#ff9500" },
-  { icon: FileText, title: "报告生成", desc: "一键生成专业分析报告", color: "#34c759" },
-  { icon: Zap, title: "策略推演", desc: "模拟策略调整对业务的影响", color: "#ff3b30" },
-];
-
-type AgentSection = "tasks" | "todos" | "abilities" | "skills";
+type AgentSection = "tasks" | "todos" | "skills";
 
 function getAgentSection(pathname: string): AgentSection {
   if (pathname.endsWith("/skills")) return "skills";
   if (pathname.endsWith("/todos")) return "todos";
-  if (pathname.endsWith("/abilities")) return "abilities";
   return "tasks";
 }
 
@@ -150,11 +140,6 @@ export function DataAgentWorkspace() {
   const activeTab = getAgentSection(location.pathname);
   const [todoComposerRequest, setTodoComposerRequest] = useState(0);
   const headerCopy: Record<AgentSection, { title: string; subtitle: string; action: string }> = {
-    abilities: {
-      title: "任务工作台",
-      subtitle: "能力总览 · 待办任务 · 自动化任务 · Skill插件",
-      action: "新建任务",
-    },
     todos: {
       title: "待办任务",
       subtitle: "个人待办 · 团队日程 · 系统注入任务统一管理",
@@ -162,7 +147,7 @@ export function DataAgentWorkspace() {
     },
     tasks: {
       title: "自动化任务",
-      subtitle: "统一管理数据获取、知识记忆提取与指标自动分析任务",
+      subtitle: "统一管理主题数据加工、知识记忆提取与指标自动分析任务",
       action: "新建任务",
     },
     skills: {
@@ -181,7 +166,6 @@ export function DataAgentWorkspace() {
   const [taskModalMode, setTaskModalMode] = useState<"create" | "detail" | "edit">("create");
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [taskForm, setTaskForm] = useState<AgentTaskFormState>(() => emptyTaskForm());
-  const [dataConnections, setDataConnections] = useState<DataConnection[]>([]);
   const [knowledgeFiles, setKnowledgeFiles] = useState<KnowledgeFileAsset[]>([]);
   const [topicTables, setTopicTables] = useState<TopicTableAsset[]>([]);
   const [analysisSkills, setAnalysisSkills] = useState<AnalysisSkillAsset[]>([]);
@@ -220,7 +204,6 @@ export function DataAgentWorkspace() {
       setKnowledgeFiles(assets.status === "fulfilled" ? assets.value.knowledge_files : []);
       setTopicTables(assets.status === "fulfilled" ? assets.value.topic_tables : []);
       setAnalysisSkills(assets.status === "fulfilled" ? assets.value.analysis_skills : []);
-      setDataConnections(settings.status === "fulfilled" ? settings.value.data_connections : []);
       setAnalysisModels(settings.status === "fulfilled" ? settings.value.models : []);
       setMetricDictionary(metrics.status === "fulfilled" ? metrics.value.metrics : []);
     };
@@ -275,10 +258,6 @@ export function DataAgentWorkspace() {
   const saveTask = async () => {
     const name = taskForm.name.trim();
     if (!name) return;
-    if (taskForm.automationKind === "acquisition" && !taskForm.connectionId) {
-      setWorkspaceNotice("请选择已测试成功的数据获取脚本。");
-      return;
-    }
     if (taskForm.automationKind === "memory" && (!taskForm.sourceIds.length || !taskForm.outputTypes.length || !taskForm.prompt.trim())) {
       setWorkspaceNotice("记忆提取任务必须选择知识文件、输出类别并填写 Prompt。");
       return;
@@ -418,26 +397,6 @@ export function DataAgentWorkspace() {
         </div>
       )}
 
-      {activeTab === "abilities" && (
-        <div className="grid grid-cols-3 gap-4">
-          {agentCapabilities.map((cap) => (
-            <div key={cap.title} className="bg-white rounded-xl border border-[#f0f0f2] p-5 hover:border-[#d1d1d6] transition-colors cursor-pointer">
-              <div className="w-9 h-9 rounded-lg flex items-center justify-center mb-3 bg-[#f2f2f7]">
-                <cap.icon className="w-[18px] h-[18px] text-[#636366]" />
-              </div>
-              <h4 className="text-[13px] text-[#1d1d1f] mb-1">{cap.title}</h4>
-              <p className="text-[12px] text-[#aeaeb2]">{cap.desc}</p>
-              <button
-                onClick={() => setWorkspaceNotice(`“${cap.title}”需从智能分析发起，并绑定真实数据连接与执行证据`)}
-                className="mt-3 text-[11px] text-[#636366] flex items-center gap-0.5 hover:text-[#1d1d1f]"
-              >
-                立即使用 <ArrowUpRight className="w-3 h-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
       {activeTab === "skills" && (
         <div className="space-y-4">
           <div className="rounded-xl border border-[#f0f0f2] bg-white p-5">
@@ -486,7 +445,6 @@ export function DataAgentWorkspace() {
           onChange={setTaskForm}
           onClose={closeTaskModal}
           onSave={saveTask}
-          dataConnections={dataConnections}
           knowledgeFiles={knowledgeFiles}
           metricOptions={automaticAnalysisMetrics}
           analysisSkills={analysisSkills}
@@ -643,15 +601,17 @@ function AgentTaskCard({ task, onDetail, onEdit, onTaskAction }: AgentTaskCardPr
           >
             <Eye className="h-3.5 w-3.5 text-[#8a8a8e]" />
           </button>
-          <button
-            type="button"
-            aria-label={`编辑任务：${task.name}`}
-            title="编辑任务"
-            onClick={onEdit}
-            className="rounded-lg bg-[#f2f2f7] p-2 transition-colors hover:bg-[#e5e5ea]"
-          >
-            <PencilLine className="h-3.5 w-3.5 text-[#8a8a8e]" />
-          </button>
+          {!task.systemManaged && (
+            <button
+              type="button"
+              aria-label={`编辑任务：${task.name}`}
+              title="编辑任务"
+              onClick={onEdit}
+              className="rounded-lg bg-[#f2f2f7] p-2 transition-colors hover:bg-[#e5e5ea]"
+            >
+              <PencilLine className="h-3.5 w-3.5 text-[#8a8a8e]" />
+            </button>
+          )}
         </div>
       </div>
     </article>
@@ -695,7 +655,6 @@ type AgentTaskModalProps = {
   onChange: (value: AgentTaskFormState) => void;
   onClose: () => void;
   onSave: () => void;
-  dataConnections: DataConnection[];
   knowledgeFiles: KnowledgeFileAsset[];
   metricOptions: AutomaticAnalysisMetricContext[];
   analysisSkills: AnalysisSkillAsset[];
@@ -708,7 +667,6 @@ function AgentTaskModal({
   onChange,
   onClose,
   onSave,
-  dataConnections,
   knowledgeFiles,
   metricOptions,
   analysisSkills,
@@ -722,15 +680,11 @@ function AgentTaskModal({
   };
   const toggle = <T extends string>(values: T[], value: T) =>
     values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
-  const verifiedScripts = dataConnections.filter(isVerifiedCrawlerScript);
-  const selectedScript = verifiedScripts.find((connection) => connection.id === form.connectionId);
   const selectableSkills = analysisSkills
     .filter((skill) => skill.enabled !== false && (!skill.lifecycleStatus || skill.lifecycleStatus === "active"))
     .sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0));
   const modelChoices = buildAutomaticAnalysisModelChoices(analysisModels);
-  const taskReady = form.automationKind === "acquisition"
-    ? Boolean(selectedScript)
-    : form.automationKind === "memory"
+  const taskReady = form.automationKind === "memory"
       ? Boolean(form.sourceIds.length && form.outputTypes.length && form.prompt.trim())
       : Boolean(
           form.selectedMetricIds.length
@@ -747,7 +701,7 @@ function AgentTaskModal({
         <div className="flex items-center justify-between border-b border-[#f0f0f2] px-6 py-4">
           <div>
             <h3 className="text-[16px] text-[#1d1d1f]">{title}</h3>
-            <p className="mt-1 text-[12px] text-[#8a8a8e]">配置数据获取、记忆提取或指标异动分析流程，保存后由统一调度器按计划执行。</p>
+            <p className="mt-1 text-[12px] text-[#8a8a8e]">配置记忆提取或指标异动分析流程；数据由配置的 CSV 文件夹提供。</p>
           </div>
           <button
             type="button"
@@ -786,7 +740,7 @@ function AgentTaskModal({
               onChange({
                 ...form,
                 automationKind: kind,
-                type: kind === "acquisition" ? "数据获取任务" : kind === "memory" ? "记忆提取任务" : "自动分析任务",
+                type: kind === "memory" ? "记忆提取任务" : "自动分析任务",
                 skillId: kind === "automatic_analysis" && !form.skillId
                   ? selectableSkills.find((skill) => skill.id === "topic-descriptive")?.id || selectableSkills[0]?.id || ""
                   : form.skillId,
@@ -797,7 +751,6 @@ function AgentTaskModal({
                   : form.prompt,
               });
             }} className="w-full rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[13px] text-[#1d1d1f] outline-none focus:border-[#8a8a8e] disabled:bg-[#fafbfc]">
-              <option value="acquisition">数据获取任务</option>
               <option value="memory">记忆提取任务</option>
               <option value="automatic_analysis">自动分析任务</option>
             </select>
@@ -806,22 +759,7 @@ function AgentTaskModal({
             触发计划
             <input aria-label="触发计划" value={form.schedule} disabled={readOnly} onChange={(event) => updateForm("schedule", event.target.value)} placeholder="例如：每日 09:00 或 0 9 * * *" className="w-full rounded-lg border border-[#e5e5ea] px-3 py-2 text-[13px] text-[#1d1d1f] outline-none focus:border-[#8a8a8e] disabled:bg-[#fafbfc]" />
           </label>
-          {form.automationKind === "acquisition" ? (
-            <div className="space-y-3 md:col-span-2">
-              <label className="block space-y-1.5 text-[12px] text-[#636366]">
-                数据获取脚本
-                <select aria-label="数据获取脚本" value={form.connectionId} disabled={readOnly} onChange={(event) => updateForm("connectionId", event.target.value)} className="w-full rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[13px] text-[#1d1d1f] outline-none focus:border-[#8a8a8e] disabled:bg-[#fafbfc]">
-                  <option value="">请选择数据接入管理中测试成功的爬虫任务</option>
-                  {verifiedScripts.map((connection) => <option key={connection.id} value={connection.id}>{connection.sourceName} · {connection.institution}</option>)}
-                </select>
-              </label>
-              <div className={`rounded-lg border px-3 py-2.5 text-[11px] ${selectedScript ? "border-[#cdebd5] bg-[#eef8f1] text-[#258a3f]" : "border-[#f1d6b8] bg-[#fff7ed] text-[#b45309]"}`}>
-                {selectedScript
-                  ? `已选择测试成功脚本：${selectedScript.sourceName}。运行后由爬虫引擎采集页面数据，并保存为系统 data 目录下的 CSV。`
-                  : "只有在数据接入管理中执行测试成功的页面爬虫才会出现在这里。"}
-              </div>
-            </div>
-          ) : form.automationKind === "memory" ? (
+          {form.automationKind === "memory" ? (
             <>
               <div className="md:col-span-2">
                 <div className="mb-2 flex items-center justify-between gap-3"><span className="text-[12px] text-[#636366]">知识文件输入</span><span className="text-[10px] text-[#aeaeb2]">仅处理选中文件尚未提炼的当前版本</span></div>
@@ -959,14 +897,13 @@ function AgentTaskModal({
 function emptyTaskForm(): AgentTaskFormState {
   return {
     name: "",
-    type: "数据获取任务",
+    type: "记忆提取任务",
     schedule: "每日 09:00",
     status: "active",
     lastRun: "未运行",
     result: "",
     description: "",
-    automationKind: "acquisition",
-    connectionId: "",
+    automationKind: "memory",
     sourceIds: [],
     outputTypes: Object.keys(memoryOutputLabels) as MemoryOutputType[],
     prompt: DEFAULT_MEMORY_PROMPT,
@@ -1006,8 +943,7 @@ function taskToForm(task: AgentTask): AgentTaskFormState {
     lastRun: task.lastRun,
     result: task.result,
     description: task.description,
-    automationKind: isAutomaticAnalysis ? "automatic_analysis" : isMemory ? "memory" : "acquisition",
-    connectionId: String(task.taskConfig?.connection_id || ""),
+    automationKind: isAutomaticAnalysis ? "automatic_analysis" : "memory",
     sourceIds: stringList(task.taskConfig?.source_ids),
     outputTypes: memoryOutputList(task.taskConfig?.output_types),
     prompt: String(task.taskConfig?.prompt || ""),
@@ -1040,10 +976,10 @@ function taskFormToAutomationDefinition(
   return {
     task_code: taskCode,
     task_name: form.name.trim(),
-    task_type: form.automationKind === "acquisition" ? "acquisition" : isAutomaticAnalysis ? "analysis" : "custom",
+    task_type: isAutomaticAnalysis ? "analysis" : "custom",
     trigger_type: triggerType,
     schedule_expression: scheduleExpression,
-    handler_ref: isMemory ? "memory.extract" : isAutomaticAnalysis ? "analysis.monitor" : "crawler.connection.run",
+    handler_ref: isMemory ? "memory.extract" : "analysis.monitor",
     task_config: {
       ...(existing?.taskConfig || {}),
       category: "automation",
@@ -1052,8 +988,8 @@ function taskFormToAutomationDefinition(
       display_schedule: form.schedule.trim(),
       schedule_timezone: "Asia/Shanghai",
       automation_kind: form.automationKind,
-      connection_id: isMemory || isAutomaticAnalysis ? undefined : form.connectionId,
-      data_script_id: isMemory || isAutomaticAnalysis ? undefined : form.connectionId,
+      connection_id: undefined,
+      data_script_id: undefined,
       execution_mode: isMemory ? "llm" : undefined,
       source_kind: isMemory ? "knowledge_file" : undefined,
       unextracted_only: isMemory ? true : undefined,
@@ -1097,7 +1033,7 @@ function mapAutomationTasks(tasks: AutomationTask[], runs: AutomationRun[]): Age
       runsByTask.set(run.automation_task_id, taskRuns);
     });
   return tasks.filter((task) =>
-    task.task_config.category !== "insight" && ["crawler.connection.run", "acquisition.run", "memory.extract", "analysis.monitor"].includes(task.handler_ref),
+    task.task_config.category !== "insight" && ["memory.extract", "analysis.monitor", "topic-data.refresh"].includes(task.handler_ref),
   ).map((task) => {
     const recentRuns = runsByTask.get(task.automation_task_id) || [];
     const latest = recentRuns[0];
@@ -1109,7 +1045,9 @@ function mapAutomationTasks(tasks: AutomationTask[], runs: AutomationRun[]): Age
       status: automationDisplayStatus(task, latest),
       lastRun: latest ? formatServerTime(latest.updated_at) : "未运行",
       result: latest ? automationRunResult(latest) : "",
-      description: String(task.task_config.question || ""),
+      description: task.handler_ref === "topic-data.refresh"
+        ? "每天按主题表 SQL 加工 Origin_Data 中的最新 CSV，并覆盖更新 Topic_Data 当前结果。"
+        : String(task.task_config.question || ""),
       ownerUserId: task.owner_user_id,
       createdBy: task.owner_user_id,
       createdAt: task.created_at,
@@ -1119,6 +1057,7 @@ function mapAutomationTasks(tasks: AutomationTask[], runs: AutomationRun[]): Age
       taskCode: task.task_code,
       handlerRef: task.handler_ref,
       taskConfig: task.task_config,
+      systemManaged: task.handler_ref === "topic-data.refresh",
       recentRuns,
     };
   });
@@ -1131,14 +1070,6 @@ function automationDisplayStatus(task: AutomationTask, run?: AutomationRun): Age
   if (run.status === "queued" || run.status === "running" || run.status === "retry_wait") return "running";
   if (run.status === "failed") return "alert";
   return "completed";
-}
-
-function isVerifiedCrawlerScript(connection: DataConnection) {
-  const sourceType = connection.sourceType.toLowerCase();
-  const dataUrl = connection.apiUrl || connection.queryPageUrl || connection.loginUrl || "";
-  const crawlerSource = Boolean(connection.crawlerMode) || sourceType.includes("爬虫") || sourceType.includes("crawler") || sourceType.includes("页面");
-  const registeredProfile = Boolean(connection.crawlerProfileId) || dataUrl.toLowerCase().includes("#/sios/funnelanalysis");
-  return connection.enabled && connection.status === "verified" && connection.testStatus === "verified" && crawlerSource && registeredProfile;
 }
 
 function stringList(value: unknown): string[] {

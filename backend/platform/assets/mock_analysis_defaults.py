@@ -126,12 +126,12 @@ def _raw_table(
     fields: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
-        "id": item_id, "tableNameEn": code, "tableNameCn": name, "source": f"data/mock/{csv_path}",
+        "id": item_id, "tableNameEn": code, "tableNameCn": name, "source": f"Origin_Data/mock/{csv_path}",
         "tableType": "mock_csv", "primaryKey": primary_key, "dateField": date_field, "orgField": org_field,
         "customerField": customer_field, "description": description, "updateFrequency": "确定性生成",
         "restrictions": "仅限本地演示；查询必须绑定 tenant_id。",
         "exampleSql": f"select * from {code} where tenant_id = :tenant_id limit 100",
-        "fields": fields, "updatedAt": "2026-07-11", "rowCount": 100, "qualityReport": "data/mock/mock_data_quality_report.json",
+        "fields": fields, "updatedAt": "2026-07-11", "rowCount": 100, "qualityReport": "Origin_Data/mock/mock_data_quality_report.json",
     }
 
 
@@ -157,7 +157,7 @@ def _topic(
 ) -> dict[str, Any]:
     return {
         "id": item_id, "name": name, "code": dataset_id, "datasetId": dataset_id, "description": description,
-        "csvPath": f"data/mock/{csv_path}",
+        "csvPath": f"Origin_Data/mock/{csv_path}",
         "sql": f"select * from {source_table} where tenant_id = :tenant_id",
         "fields": fields, "fieldExplanations": "字段级中文名、类型、口径、分子分母和示例用途均已登记。",
         "metricCodes": metric_codes, "defaultMetrics": default_metrics, "dimensionCodes": dimensions,
@@ -166,7 +166,7 @@ def _topic(
         "applicableScene": "智能分析、漏斗分析、机构经营、客户画像、可视化报告",
         "relatedIntent": "模拟数据严谨分析", "relatedExperience": "exp_weekly_growth_quality",
         "quickDisplay": True, "reportReference": "模拟数据端到端验证", "source": "mock_csv",
-        "updatedAt": "2026-07-11", "rowCount": 100, "qualityReport": "data/mock/mock_data_quality_report.json",
+        "updatedAt": "2026-07-11", "rowCount": 100, "qualityReport": "Origin_Data/mock/mock_data_quality_report.json",
     }
 
 

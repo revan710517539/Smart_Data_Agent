@@ -57,7 +57,6 @@ MENU_TREE = (
         "task-workbench",
         "任务工作台",
         (
-            MenuResource("task-workbench.abilities", "能力总览"),
             MenuResource("task-workbench.todos", "待办任务"),
             MenuResource("task-workbench.tasks", "自动化任务"),
             MenuResource("task-workbench.skills", "Skill插件"),

@@ -3,20 +3,29 @@ from __future__ import annotations
 from typing import Any
 
 
+
 MODEL_APPLICATION_MODULES: dict[str, str] = {
     "realtime_voice_input": "实时语音录入",
     "popup_voice_input": "弹窗语音录入",
-    "crawler_exception_optimization": "爬虫异常优化",
     "intelligent_analysis_reasoning": "智能分析推理分析",
     "weekly_report_conclusion_regeneration": "周报结论重新生成",
     "automatic_analysis": "自动分析任务",
     "memory_extraction": "记忆模块",
+    "skill_evolution_learning": "Skill自学习与演化",
+}
+
+# Existing saved integrations are never deleted merely because a retired
+# feature is removed.  The former collector-repair binding is presented as the
+# supported Skill evolution module on read, without changing its stored row.
+LEGACY_APPLICATION_MODULE_ALIASES = {
+    "crawler_exception_optimization": "skill_evolution_learning",
 }
 
 def normalize_application_module(value: Any, *, allow_empty: bool = True) -> str:
     normalized = str(value or "").strip()
     if not normalized and allow_empty:
         return ""
+    normalized = LEGACY_APPLICATION_MODULE_ALIASES.get(normalized, normalized)
     if normalized in MODEL_APPLICATION_MODULES:
         return normalized
     by_label = {label: key for key, label in MODEL_APPLICATION_MODULES.items()}
@@ -41,6 +50,17 @@ def list_models_for_application(
     module_key = normalize_application_module(application_module, allow_empty=False)
     list_owned = getattr(system_config_store, "list_models_owned_by", None)
     models = list(system_config_store.list_models(tenant_id, reveal_secret=reveal_secret))
+    account_models: list[dict[str, Any]] = []
+    if user_id:
+        try:
+            account_models = list(
+                system_config_store.list_models(
+                    f"account:{str(user_id).strip() or 'anonymous'}",
+                    reveal_secret=reveal_secret,
+                )
+            )
+        except Exception:
+            account_models = []
     if user_id and callable(list_owned):
         models.extend(list_owned(user_id, tenant_id, reveal_secret=reveal_secret))
     resolved: list[dict[str, Any]] = []
@@ -56,6 +76,27 @@ def list_models_for_application(
             continue
         seen.add(identity)
         resolved.append(dict(model))
+    has_usable_bound_model = any(
+        str(item).strip()
+        for model in resolved
+        for item in [*(model.get("enabledModels") or []), *(model.get("availableModels") or [])]
+    )
+    if not has_usable_bound_model and account_models:
+        # Older account-bound integrations predate application-module bindings.
+        # Keep them on the governed application-module route while requiring a
+        # previously connected account model; do not use untested demo rows.
+        for model in account_models:
+            if (
+                str(model.get("applicationModule") or "").strip()
+                or str(model.get("status") or "available") not in {"available", "draft"}
+                or str(model.get("testStatus") or "") != "connected"
+            ):
+                continue
+            identity = (str(model.get("id") or ""), module_key)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            resolved.append({**model, "applicationModule": module_key, "legacyAccountBinding": True})
     return resolved
 
 

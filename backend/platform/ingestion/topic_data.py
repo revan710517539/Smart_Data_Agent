@@ -131,6 +131,7 @@ class TopicDataStore:
         user_id: str,
         report_id: str,
         report: dict[str, Any],
+        source: str = "legacy_saved_report_migration",
     ) -> dict[str, Any]:
         """Move a pre-Topic_Data saved report into the shared latest snapshot.
 
@@ -162,7 +163,7 @@ class TopicDataStore:
             "report_id": normalized_report_id,
             "version_id": "current",
             "source_reference": {"type": "report", "id": normalized_report_id},
-            "source": "legacy_saved_report_migration",
+            "source": str(source or "legacy_saved_report_migration")[:200],
         }
         self._write_snapshot(directory, manifest, rows, rows)
         reference = self._reference_payload("report", normalized_report_id, directory, manifest)
@@ -265,13 +266,13 @@ class TopicDataStore:
         return self.root / "analysis" / _segment(tenant_id) / _segment(user_id) / "shortcuts" / _segment(shortcut_id)
 
     def _topic_current_dir(self, tenant_id: str, topic_table_id: str) -> Path:
-        return self.root / "topics" / _segment(tenant_id) / _segment(topic_table_id) / "current"
+        return self.root / _tenant_folder(tenant_id) / "topics" / _segment(topic_table_id) / "current"
 
     def _report_current_dir(self, tenant_id: str, report_id: str) -> Path:
         return self.root / "reports" / _segment(tenant_id) / _segment(report_id) / "current"
 
     def _update_index(self, tenant_id: str, user_id: str, reference_type: str, reference_id: str, reference: dict[str, Any]) -> None:
-        index_path = self.root / "index.json"
+        index_path = self.root / _tenant_folder(tenant_id) / "index.json"
         with self._index_lock:
             try:
                 index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.is_file() else {}
@@ -370,6 +371,13 @@ def _csv_value(value: Any) -> str:
 def _segment(value: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "")).strip("._")
     return normalized[:120] or "unknown"
+
+
+def _tenant_folder(tenant_id: str) -> str:
+    name = str(tenant_id or "").strip().split(":", 1)[-1].strip()
+    if not name or name in {".", ".."} or "/" in name or "\\" in name or "\x00" in name:
+        raise ValueError("topic_data_tenant_directory_invalid")
+    return name
 
 
 def _required_text(value: Any, field: str) -> str:

@@ -332,7 +332,11 @@ export function WeeklyReport() {
     const refreshSavedAnalysis = async () => {
       try {
         const response = await fetchSavedAnalysisResults({ tenantId });
-        setSavedAnalysisResults(sortSavedAnalysisResultsNewestFirst(response.results.map(normalizeSavedAnalysisResult)));
+        setSavedAnalysisResults(sortSavedAnalysisResultsNewestFirst(
+          response.results
+            .filter((result) => result.weeklyReportEligible === true)
+            .map(normalizeSavedAnalysisResult),
+        ));
       } catch {
         setSavedAnalysisResults(isDemoFallbackEnabled() ? loadSavedAnalysisResults() : []);
       }

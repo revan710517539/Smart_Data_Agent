@@ -6,11 +6,13 @@ export function modelInvocationIssue(response: BackendAnalysisResponse, selected
   if (!selectedModel) return "";
   const planning = response.intelligent_analysis?.planning_invocation;
   if (planning && !["connected", "skipped"].includes(planning.status)) {
-    return `第一阶段模型在自动重试后仍未返回有效方案，已使用受治理默认计划继续执行（${selectedModel.name}）。`;
+    const reason = planning.message ? ` 原因：${planning.message}` : "";
+    return `第一阶段模型未完成调用，已使用受治理默认计划继续执行（${selectedModel.name}）。${reason}`;
   }
   const finalInvocation = response.intelligent_analysis?.model_invocation;
   if (!finalInvocation || finalInvocation.status === "connected") return "";
-  return `数据查询已完成；第二阶段模型在自动重试后仍未返回有效结构，已保留数据并使用证据型确定性结论（${selectedModel.name}）。`;
+  const reason = finalInvocation.message ? ` 原因：${finalInvocation.message}` : "";
+  return `数据查询已完成；第二阶段模型未完成调用，已保留数据并使用证据型确定性结论（${selectedModel.name}）。${reason}`;
 }
 
 export function completedProgressSteps(response: BackendAnalysisResponse): AnalysisProgressStep[] {
@@ -35,12 +37,20 @@ export function speechApplicationModuleForTarget(target: FunAsrInputTarget) {
   return target === "voice" ? "popup_voice_input" : "realtime_voice_input";
 }
 
+function modelSupportsApplication(model: ModelIntegration, applicationModule: string) {
+  if (model.applicationModule === applicationModule) return true;
+  // The backend intentionally uses this placeholder for every text scenario.
+  // Keep the picker contract identical so a configured global text model does
+  // not disappear from the Intelligent Analysis page.
+  return model.applicationModule === "global_text_model" && !["realtime_voice_input", "popup_voice_input"].includes(applicationModule);
+}
+
 export function configuredModelForModule(models: ModelIntegration[], applicationModule: string) {
-  return models.find((model) => model.applicationModule === applicationModule && ["available", "draft"].includes(model.status)) || null;
+  return models.find((model) => modelSupportsApplication(model, applicationModule) && ["available", "draft"].includes(model.status) && model.testStatus !== "failed") || null;
 }
 
 export function modelsForModule(models: ModelIntegration[], applicationModule: string) {
-  return models.filter((model) => model.applicationModule === applicationModule && ["available", "draft"].includes(model.status));
+  return models.filter((model) => modelSupportsApplication(model, applicationModule) && ["available", "draft"].includes(model.status) && model.testStatus !== "failed");
 }
 
 export function modelApplicationSelection(applicationModule: string, model: ModelIntegration | null) {

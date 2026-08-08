@@ -1,6 +1,15 @@
 import { apiRequest } from "./apiClient";
 import { getDefaultUserId } from "./apiContext";
 
+export type ReportSource = {
+  channel: string;
+  label: string;
+  bindingId?: string;
+  runId?: string;
+  reportId?: string;
+  url?: string;
+};
+
 export type SavedAnalysisResult = {
   id: string;
   title: string;
@@ -17,6 +26,9 @@ export type SavedAnalysisResult = {
   ownerUserId?: string;
   visibility?: "private" | "tenant";
   updatedBy?: string;
+  source?: ReportSource | null;
+  weeklyReportEligible?: boolean;
+  weeklyReportSavedAt?: string;
   topicData?: {
     reference_type: "history" | "shortcut" | "topic" | "report";
     reference_id: string;
@@ -108,6 +120,30 @@ export async function deleteSavedAnalysisResult({
       context: { tenantId, userId },
     },
   );
+}
+
+export async function saveAnalysisResultToWeeklyReport({
+  tenantId,
+  userId = getDefaultUserId(),
+  resultId,
+}: ReportParams & { resultId: string }): Promise<{ tenant_id: string; result: SavedAnalysisResult }> {
+  return apiRequest<{ tenant_id: string; result: SavedAnalysisResult }>("/api/reports/analysis-result/save-weekly", {
+    method: "POST",
+    context: { tenantId, userId },
+    body: { result_id: resultId },
+  });
+}
+
+export async function saveAnalysisResultAsExperience({
+  tenantId,
+  userId = getDefaultUserId(),
+  resultId,
+}: ReportParams & { resultId: string }): Promise<{ tenant_id: string; record: { memory_id: string; status: string }; idempotent: boolean; message: string }> {
+  return apiRequest<{ tenant_id: string; record: { memory_id: string; status: string }; idempotent: boolean; message: string }>("/api/reports/analysis-result/save-experience", {
+    method: "POST",
+    context: { tenantId, userId },
+    body: { result_id: resultId },
+  });
 }
 
 export async function fetchReportComments({

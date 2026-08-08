@@ -11,6 +11,9 @@ from urllib.parse import parse_qs
 from uuid import uuid4
 
 from backend.platform.api.support import MAX_JSON_BODY_BYTES, RequestBodyTooLarge, send_route_exception
+from backend.platform.integrations.teams import complete_device_authorization, send_markdown_to_self, start_device_authorization
+from backend.platform.automation.metric_subscription import collect_metric_snapshot, normalize_teams_message_template, render_teams_metric_markdown
+from backend.platform.metrics.defaults import teams_subscription_test_metrics
 
 
 def handle_automation_get(handler: Any, query: str) -> None:
@@ -233,6 +236,239 @@ def handle_subscription_delete(handler: Any, query: str) -> None:
         handler._send_json({"tenant_id": context.tenant_id, "subscription": subscription})
     except Exception as exc:  # pragma: no cover - HTTP boundary.
         send_route_exception(handler, exc)
+
+
+def handle_teams_metric_subscription_auth_start(handler: Any) -> None:
+    """Start short-lived browser authorization without persisting an access token."""
+    try:
+        payload = handler._read_json()
+        context = handler._request_context(payload=payload)
+        handler._require_notification_permission(context, "create")
+        _metric_subscription_definition(handler, context, payload)
+        handler._send_json({"authorization": start_device_authorization()})
+    except Exception as exc:  # pragma: no cover - HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def handle_teams_metric_subscription_auth_poll(handler: Any) -> None:
+    """Exchange an approved device code directly into encrypted subscription config."""
+    try:
+        payload = handler._read_json()
+        context = handler._request_context(payload=payload)
+        handler._require_notification_permission(context, "create")
+        definition = _metric_subscription_definition(handler, context, payload)
+        device_code = str(payload.get("device_code") or "").strip()
+        if not device_code:
+            raise ValueError("teams_device_code_required")
+        access_token = complete_device_authorization(device_code)
+        if access_token is None:
+            handler._send_json({"completed": False})
+            return
+        handler.services.automation_store.upsert_teams_connection(context.tenant_id, context.user_id, access_token)
+        subscription, task = _enable_teams_metric_subscription(handler, context, definition, access_token)
+        handler._send_json({"completed": True, "subscription": subscription, "automation_task": task})
+    except Exception as exc:  # pragma: no cover - HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def handle_teams_connection_get(handler: Any, query: str) -> None:
+    """Read a safe per-user connection state; an encrypted token is never returned."""
+    try:
+        params = parse_qs(query)
+        context = handler._request_context(params=params)
+        handler._require_notification_permission(context, "read")
+        connection = handler.services.automation_store.get_teams_connection(context.tenant_id, context.user_id)
+        handler._send_json({"tenant_id": context.tenant_id, "connection": _teams_connection_view(connection)})
+    except Exception as exc:  # pragma: no cover - HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def handle_teams_connection_auth_start(handler: Any) -> None:
+    """Begin the user-owned Teams browser authorization before any rule is enabled."""
+    try:
+        payload = handler._read_json()
+        context = handler._request_context(payload=payload)
+        handler._require_notification_permission(context, "create")
+        handler._send_json({"authorization": start_device_authorization()})
+    except Exception as exc:  # pragma: no cover - HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def handle_teams_connection_auth_poll(handler: Any) -> None:
+    """Persist only a completed Teams self-message authorization for its owner."""
+    try:
+        payload = handler._read_json()
+        context = handler._request_context(payload=payload)
+        handler._require_notification_permission(context, "create")
+        device_code = str(payload.get("device_code") or "").strip()
+        if not device_code:
+            raise ValueError("teams_device_code_required")
+        access_token = complete_device_authorization(device_code)
+        if access_token is None:
+            handler._send_json({"completed": False, "connection": {"connected": False, "provider": "360teams_self"}})
+            return
+        connection = handler.services.automation_store.upsert_teams_connection(context.tenant_id, context.user_id, access_token)
+        handler._write_audit(
+            context,
+            "notification.teams_connection.upsert",
+            "subscription",
+            str(connection["subscription_id"]),
+            {"provider": "360teams_self"},
+        )
+        handler._send_json({"completed": True, "connection": _teams_connection_view(connection)})
+    except Exception as exc:  # pragma: no cover - HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def handle_teams_metric_subscription_enable(handler: Any) -> None:
+    """Enable a metric rule only when this signed-in user already connected Teams."""
+    try:
+        payload = handler._read_json()
+        context = handler._request_context(payload=payload)
+        handler._require_notification_permission(context, "create")
+        definition = _metric_subscription_definition(handler, context, payload)
+        connection = handler.services.automation_store.get_teams_connection(
+            context.tenant_id,
+            context.user_id,
+            reveal_config=True,
+        )
+        access_token = str(dict(connection or {}).get("channel_config", {}).get("access_token") or "").strip()
+        if not access_token:
+            raise ValueError("teams_connection_required")
+        subscription, task = _enable_teams_metric_subscription(handler, context, definition, access_token)
+        handler._send_json({"tenant_id": context.tenant_id, "subscription": subscription, "automation_task": task})
+    except Exception as exc:  # pragma: no cover - HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def handle_teams_metric_subscription_test(handler: Any) -> None:
+    """Immediately send the user's current template to their already-connected Teams account.
+
+    This never creates a subscription, task, delivery record or reusable test
+    token; it is a deliberate, user-triggered connection check.
+    """
+    try:
+        payload = handler._read_json()
+        context = handler._request_context(payload=payload)
+        handler._require_notification_permission(context, "create")
+        definition = _metric_subscription_definition(handler, context, payload)
+        connection = handler.services.automation_store.get_teams_connection(
+            context.tenant_id,
+            context.user_id,
+            reveal_config=True,
+        )
+        access_token = str(dict(connection or {}).get("channel_config", {}).get("access_token") or "").strip()
+        if not access_token:
+            raise ValueError("teams_connection_required")
+        snapshots = [collect_metric_snapshot(handler.services, context.tenant_id, context.user_id, metric) for metric in definition["metrics"]]
+        title, text = render_teams_metric_markdown({"snapshots": snapshots, "message_template": definition["message_template"]})
+        provider_message_id = send_markdown_to_self(access_token, f"测试 · {title}"[:50], text)
+        handler._write_audit(
+            context,
+            "notification.teams_metric_subscription.test",
+            "teams_connection",
+            str(dict(connection or {}).get("subscription_id") or context.user_id),
+            {"metric_ids": [metric.get("metricId") for metric in definition["metrics"]], "provider": "360teams_self"},
+        )
+        handler._send_json({"tenant_id": context.tenant_id, "sent": True, "provider_message_id": provider_message_id})
+    except Exception as exc:  # pragma: no cover - HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def _enable_teams_metric_subscription(handler: Any, context: Any, definition: dict[str, Any], access_token: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    task_identity = ":".join(
+        (
+            str(context.user_id),
+            ",".join(str(metric.get("metricId") or "") for metric in definition["metrics"]),
+            str(definition["schedule_expression"]),
+            str(definition["schedule_timezone"]),
+            json.dumps(definition["message_template"], ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        )
+    )
+    task_code = "system.teams-metric." + hashlib.sha256(task_identity.encode("utf-8")).hexdigest()[:20]
+    existing_task = handler.services.automation_store.get_task_by_code(context.tenant_id, task_code)
+    if existing_task is not None:
+        subscription_id = str(dict(existing_task.get("task_config") or {}).get("subscription_id") or "")
+        return handler.services.automation_store.get_subscription(context.tenant_id, subscription_id), existing_task
+    subscription = handler.services.automation_store.create_subscription(
+        context.tenant_id,
+        {
+            "subscription_name": definition["subscription_name"],
+            "event_types": ["metric.daily.snapshot.ready"],
+            "channel_type": "webhook",
+            "channel_config": {"provider": "360teams_self", "access_token": access_token},
+        },
+        context.user_id,
+    )
+    task = handler.services.automation_runtime.create_task(
+        context.tenant_id,
+        {
+            "task_code": task_code,
+            "task_name": f"每日指标订阅：{'、'.join(str(metric['metricName']) for metric in definition['metrics'])}",
+            "task_type": "notification",
+            "trigger_type": "schedule",
+            "schedule_expression": definition["schedule_expression"],
+            "handler_ref": "metric.subscription.snapshot",
+            "task_config": {
+                "subscription_id": subscription["subscription_id"],
+                "metrics": definition["metrics"],
+                "message_template": definition["message_template"],
+                "schedule_timezone": definition["schedule_timezone"],
+            },
+            "retry_policy": {"max_attempts": 3, "base_delay_seconds": 60},
+            "timeout_seconds": 120,
+            "max_concurrency": 1,
+        },
+        context.user_id,
+    )
+    handler._write_audit(
+        context,
+        "notification.teams_metric_subscription.create",
+        "subscription",
+        subscription["subscription_id"],
+        {"metric_ids": [metric.get("metricId") for metric in definition["metrics"]], "channel": "360teams_self", "task_id": task["automation_task_id"]},
+    )
+    return subscription, task
+
+
+def _teams_connection_view(connection: dict[str, Any] | None) -> dict[str, Any]:
+    if connection is None:
+        return {"connected": False, "provider": "360teams_self"}
+    return {"connected": True, "provider": str(connection.get("channel_provider") or "360teams_self")}
+
+
+def _metric_subscription_definition(handler: Any, context: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    requested = payload.get("metric") if isinstance(payload.get("metric"), dict) else {}
+    raw_metric_ids = payload.get("metric_ids") if isinstance(payload.get("metric_ids"), list) else payload.get("metricIds")
+    metric_ids = [str(item).strip() for item in raw_metric_ids] if isinstance(raw_metric_ids, list) else []
+    legacy_metric_id = str(requested.get("metricId") or payload.get("metric_id") or "").strip()
+    if legacy_metric_id and legacy_metric_id not in metric_ids:
+        metric_ids.append(legacy_metric_id)
+    metric_ids = list(dict.fromkeys(metric_id for metric_id in metric_ids if metric_id))
+    if not metric_ids:
+        raise ValueError("metric_subscription_metric_required")
+    if len(metric_ids) > 12:
+        raise ValueError("metric_subscription_metric_limit_exceeded")
+    handler._require_metric_permission(context, "read")
+    metrics: list[dict[str, Any]] = []
+    test_metrics = {str(metric["metricId"]): metric for metric in teams_subscription_test_metrics()}
+    for metric_id in metric_ids:
+        metric = test_metrics.get(metric_id) or handler.services.metric_dictionary_store.get(context.tenant_id, metric_id)
+        if not isinstance(metric, dict):
+            raise ValueError("metric_subscription_metric_not_found")
+        if any(not str(metric.get(field) or "").strip() for field in ("metricName", "metricCode", "datasetId")):
+            raise ValueError("metric_subscription_metric_execution_metadata_required")
+        metrics.append(metric)
+    subscription_name = str(payload.get("subscription_name") or payload.get("subscriptionName") or f"{metrics[0]['metricName']} 等指标每日快报").strip()
+    if not subscription_name or len(subscription_name) > 300:
+        raise ValueError("invalid_subscription_name")
+    return {
+        "metrics": metrics,
+        "subscription_name": subscription_name,
+        "schedule_expression": str(payload.get("schedule_expression") or payload.get("scheduleExpression") or "0 9 * * *").strip(),
+        "schedule_timezone": str(payload.get("schedule_timezone") or payload.get("scheduleTimezone") or "Asia/Shanghai").strip(),
+        "message_template": normalize_teams_message_template(payload.get("message_template") or payload.get("messageTemplate"), metric_ids),
+    }
 
 
 def handle_notification_provider_callback(handler: Any) -> None:

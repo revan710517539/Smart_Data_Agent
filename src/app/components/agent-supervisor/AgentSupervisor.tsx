@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AudioLines, Bot, BrainCircuit, Database, ExternalLink, Eye, History, ListChecks, Mic, Send, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useLocation, useNavigate } from "react-router";
 import { fetchPlatformCapabilities } from "../../services/capabilitiesApi";
 import { fetchMetricDictionary } from "../../services/metricDictionaryApi";
@@ -28,12 +27,14 @@ type Message = {
   chart?: ChartData;
 };
 
-type ChartData = {
+export type ChartData = {
   title: string;
   metric: string;
   rows: Array<{ label: string; value: number }>;
   mode: "formal" | "exercise";
 };
+
+const LazySupervisorChart = lazy(() => import("./SupervisorChart"));
 
 type StoredConversation = { id: string; title: string; updatedAt: string; messages: Message[] };
 type PageControlKind = "button" | "link" | "select" | "input" | "textarea" | "checkbox" | "radio" | "tab" | "dialog";
@@ -480,7 +481,7 @@ export function AgentSupervisor() {
           </section>
         </div>
       )}
-      <button type="button" onClick={() => { if (open) stopVoiceInput(); setOpen((value) => !value); window.setTimeout(() => inputRef.current?.focus(), 80); }} aria-label="打开 Agent 总管" aria-expanded={open} className="pointer-events-auto absolute bottom-6 right-6 flex h-12 w-12 items-center justify-center rounded-full bg-[#1d1d1f] text-white shadow-xl shadow-black/20 transition hover:scale-105 hover:bg-[#2c2c2e]"><Bot className="h-5 w-5" /><span className="absolute right-0 top-0 h-3 w-3 rounded-full border-2 border-white bg-[#34c759]" /></button>
+      <button type="button" onClick={() => { if (open) stopVoiceInput(); setOpen((value) => !value); window.setTimeout(() => inputRef.current?.focus(), 80); }} aria-label="打开 Agent 总管" aria-expanded={open} className="pointer-events-auto absolute bottom-6 right-6 flex h-12 w-12 items-center justify-center rounded-full bg-[#1d1d1f] text-white shadow-xl shadow-black/20 transition-colors hover:bg-[#2c2c2e]"><Bot className="h-5 w-5" /><span className="absolute right-0 top-0 h-3 w-3 rounded-full border-2 border-white bg-[#34c759]" /></button>
     </div>
   );
 }
@@ -499,11 +500,7 @@ function QuickAction({ icon: Icon, label, onClick }: { icon: LucideIcon; label: 
 
 function MessageCard({ message }: { message: Message }) {
   const tone = message.role === "user" ? "ml-8 bg-[#1d1d1f] text-white" : message.role === "system" ? "mr-8 border border-[#f1d6b8] bg-[#fff7ed] text-[#9a5a09]" : "mr-4 bg-[#f2f2f7] text-[#3a3a3c]";
-  return <article className={`rounded-xl px-3 py-2.5 text-[12px] leading-5 ${tone}`}><div className="mb-1 text-[9px] opacity-60">{message.role === "user" ? "你" : message.role === "system" ? "系统" : "Agent 总管"}</div><p className="whitespace-pre-wrap">{message.content}</p>{message.chart && <SupervisorChart chart={message.chart} />}</article>;
-}
-
-function SupervisorChart({ chart }: { chart: ChartData }) {
-  return <div className={`mt-2 h-40 rounded-lg border p-2 text-[#3a3a3c] ${chart.mode === "exercise" ? "border-[#f1d6b8] bg-[#fffaf1]" : "border-[#e5e5ea] bg-white"}`}><div className="mb-1 flex items-center justify-between gap-2"><p className="truncate text-[10px] text-[#636366]">{chart.title}</p><span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] ${chart.mode === "exercise" ? "bg-[#fff0d7] text-[#9a5a09]" : "bg-[#eaf8ed] text-[#258a3f]"}`}>{chart.mode === "exercise" ? "演练，不可发布" : "已通过发布门"}</span></div><ResponsiveContainer width="100%" height="88%"><BarChart data={chart.rows}><CartesianGrid vertical={false} stroke="#f0f0f2" /><XAxis dataKey="label" tick={{ fontSize: 9 }} /><YAxis tick={{ fontSize: 9 }} /><Tooltip /><Bar dataKey="value" name={chart.metric} fill={chart.mode === "exercise" ? "#b7791f" : "#1d1d1f"} radius={[3, 3, 0, 0]} /></BarChart></ResponsiveContainer></div>;
+  return <article className={`rounded-xl px-3 py-2.5 text-[12px] leading-5 ${tone}`}><div className="mb-1 text-[9px] opacity-60">{message.role === "user" ? "你" : message.role === "system" ? "系统" : "Agent 总管"}</div><p className="whitespace-pre-wrap">{message.content}</p>{message.chart && <Suspense fallback={<div className="mt-2 h-40 animate-pulse rounded-lg border border-[#e5e5ea] bg-white" aria-label="正在加载图表" />}><LazySupervisorChart chart={message.chart} /></Suspense>}</article>;
 }
 
 function resolveNavigationAction(question: string, actions: AgentActionDefinition[]) {

@@ -18,6 +18,7 @@ import {
   Shield,
   Sparkles,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import type { MetricDictionaryItem } from "../data/metricDictionary";
@@ -27,6 +28,7 @@ import { fetchAccessRolePolicies, type AccessRoleConfig } from "../services/acce
 import {
   deleteMetricDictionaryItem,
   fetchMetricDictionary,
+  importMetricDictionaryWorkbook,
   saveMetricDictionaryItem,
 } from "../services/metricDictionaryApi";
 import { getSystemHealth, type SystemHealthResponse } from "../services/systemHealthApi";
@@ -100,7 +102,7 @@ const sectionCopy: Record<
   },
   "data-management": {
     title: "数据管理",
-    subtitle: "原始表读取 Origin_Data 中的 CSV；主题表和分析结果统一复用 Topic_Data 中的最新数据资产",
+    subtitle: "原始表仅读取当前机构 Data Crawler 文件夹中的 CSV；主题表和分析结果统一复用 Topic_Data 中的最新数据资产",
     searchPlaceholder: "搜索原始表、主题表、字段或 SQL",
   },
   quality: {
@@ -252,6 +254,9 @@ export function DataAssets() {
   const { isInstitutionAdmin, isSuperAdmin, selectedInstitution, tenantId, userId } = usePlatformContext();
   const section = getSection(location.pathname);
   const copy = sectionCopy[section];
+  const sectionSubtitle = section === "data-management"
+    ? `原始表仅读取当前机构 /app/data/${selectedInstitution}/ 中的 CSV；主题表和分析结果统一复用 Topic_Data 中的最新数据资产`
+    : copy.subtitle;
   const [searchTerm, setSearchTerm] = useState("");
   const [metrics, setMetrics] = useState<MetricDictionaryItem[]>([]);
   const [metricDataSource, setMetricDataSource] = useState<MetricDataSource>("syncing");
@@ -262,6 +267,10 @@ export function DataAssets() {
   const [metricNotice, setMetricNotice] = useState("");
   const [metricPage, setMetricPage] = useState(1);
   const [editingMetricTenantId, setEditingMetricTenantId] = useState<string | null>(null);
+  const [metricImportOpen, setMetricImportOpen] = useState(false);
+  const [metricImportFile, setMetricImportFile] = useState<File | null>(null);
+  const [metricImportNotice, setMetricImportNotice] = useState("");
+  const [metricImporting, setMetricImporting] = useState(false);
 
   const filteredMetrics = useMemo(
     () => metrics.filter((metric) => matchesMetric(metric, searchTerm)),
@@ -463,6 +472,38 @@ export function DataAssets() {
     }
   };
 
+  const closeMetricImport = () => {
+    if (metricImporting) return;
+    setMetricImportOpen(false);
+    setMetricImportFile(null);
+    setMetricImportNotice("");
+  };
+
+  const importMetrics = async () => {
+    if (!metricImportFile) {
+      setMetricImportNotice("请选择要导入的 .xlsx 指标文件。");
+      return;
+    }
+    setMetricImporting(true);
+    setMetricImportNotice("正在校验并同步指标，原有指标不会被覆盖…");
+    try {
+      const result = await importMetricDictionaryWorkbook({ tenantId, userId, file: metricImportFile });
+      setMetrics((current) => [...result.created, ...current]);
+      setMetricDataSource("backend");
+      setMetricPage(1);
+      setMetricNotice(result.skipped_count
+        ? `已新增 ${result.created_count} 条指标，跳过 ${result.skipped_count} 条重名指标；原指标未被覆盖。`
+        : `已新增 ${result.created_count} 条指标，原指标未被覆盖。`);
+      setMetricImportOpen(false);
+      setMetricImportFile(null);
+      setMetricImportNotice("");
+    } catch (error) {
+      setMetricImportNotice(`${demoFallbackDisabledMessage("批量导入指标")} ${apiErrorMessage(error, "未知错误")}`);
+    } finally {
+      setMetricImporting(false);
+    }
+  };
+
   return (
     <div className="p-7">
       <div className="flex flex-col gap-4 mb-7 xl:flex-row xl:items-center xl:justify-between">
@@ -475,7 +516,7 @@ export function DataAssets() {
               </span>
             )}
           </div>
-          <p className="text-[13px] text-[#aeaeb2] mt-1">{copy.subtitle}</p>
+          <p className="text-[13px] text-[#aeaeb2] mt-1">{sectionSubtitle}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
@@ -488,14 +529,24 @@ export function DataAssets() {
             />
           </div>
           {section === "metrics" && (
-            <button
-              type="button"
-              onClick={() => openMetricEditor()}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white hover:bg-[#2c2c2e] transition-colors"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              新增指标
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => setMetricImportOpen(true)}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] hover:bg-[#f2f2f7] transition-colors"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                批量添加指标
+              </button>
+              <button
+                type="button"
+                onClick={() => openMetricEditor()}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white hover:bg-[#2c2c2e] transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                新增指标
+              </button>
+            </>
           )}
           {section === "data-management" && (
             <span className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#636366]">
@@ -550,6 +601,16 @@ export function DataAssets() {
           onListChange={(key, value) => setMetricForm((current) => ({ ...current, [key]: value }))}
           onClose={closeMetricEditor}
           onSave={saveMetric}
+        />
+      )}
+      {metricImportOpen && (
+        <MetricBatchImportModal
+          file={metricImportFile}
+          importing={metricImporting}
+          notice={metricImportNotice}
+          onFileChange={setMetricImportFile}
+          onClose={closeMetricImport}
+          onImport={importMetrics}
         />
       )}
     </div>
@@ -715,6 +776,58 @@ function MetricManagement({
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MetricBatchImportModal({
+  file,
+  importing,
+  notice,
+  onFileChange,
+  onClose,
+  onImport,
+}: {
+  file: File | null;
+  importing: boolean;
+  notice: string;
+  onFileChange: (file: File | null) => void;
+  onClose: () => void;
+  onImport: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4">
+      <div className="w-full max-w-[620px] rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
+        <div className="flex items-center justify-between border-b border-[#f0f0f2] px-5 py-4">
+          <div>
+            <h3 className="text-[14px] text-[#1d1d1f]">批量添加指标</h3>
+            <p className="mt-0.5 text-[11px] text-[#8a8a8e]">上传标准 Excel 后新增指标；同名指标将跳过，绝不覆盖原指标。</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={importing} className="rounded-lg px-3 py-1.5 text-[12px] text-[#8a8a8e] hover:bg-[#f2f2f7] disabled:opacity-40">关闭</button>
+        </div>
+        <div className="space-y-4 p-5">
+          <label className="block rounded-xl border border-dashed border-[#d1d1d6] bg-[#fafbfc] p-5 text-center hover:bg-[#f7f7f8]">
+            <Upload className="mx-auto h-5 w-5 text-[#636366]" />
+            <span className="mt-2 block text-[13px] text-[#1d1d1f]">{file ? file.name : "选择指标 Excel 文件"}</span>
+            <span className="mt-1 block text-[11px] text-[#8a8a8e]">仅支持 .xlsx，最大 8MB</span>
+            <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="sr-only" onChange={(event) => onFileChange(event.target.files?.[0] || null)} />
+          </label>
+          <div className="grid gap-2 rounded-lg border border-[#f0f0f2] bg-white p-3 text-[11px] text-[#636366] sm:grid-cols-2">
+            <span>✓ 读取：名称、口径、取值逻辑、表名与维度</span>
+            <span>✓ 同步：场景、来源、统计时间与引用文档</span>
+            <span>✓ 保留：原指标名称、数据机构与备注</span>
+            <span>✓ 规则：重复名称跳过，已有指标不改动</span>
+          </div>
+          {notice && <div className="rounded-lg bg-[#fafbfc] px-3 py-2 text-[12px] leading-[1.6] text-[#636366]">{notice}</div>}
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-[#f0f0f2] px-5 py-4">
+          <button type="button" onClick={onClose} disabled={importing} className="rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[12px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-40">取消</button>
+          <button type="button" onClick={onImport} disabled={!file || importing} className="inline-flex items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-4 py-2 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-40">
+            <Upload className="h-3.5 w-3.5" />
+            {importing ? "正在导入" : "开始导入"}
+          </button>
         </div>
       </div>
     </div>
@@ -939,7 +1052,7 @@ const emptyAssetBundle: DataAssetBundle = {
       count: {},
 };
 
-function useDataAssetBundle(tenantId: string) {
+function useDataAssetBundle(tenantId: string, scope?: "knowledge") {
   const [bundle, setBundle] = useState<DataAssetBundle>(emptyAssetBundle);
   const [notice, setNotice] = useState("资产配置同步中...");
 
@@ -949,10 +1062,10 @@ function useDataAssetBundle(tenantId: string) {
     const syncAssets = async () => {
       setNotice("资产配置同步中...");
       try {
-        const response = await fetchDataAssets({ tenantId });
+        const response = await fetchDataAssets({ tenantId, scope });
         if (response.status === "loading") {
           if (!cancelled) {
-            setNotice(response.message || "Origin_Data 正在准备中，请稍候...");
+            setNotice(response.message || "当前机构 Data Crawler 原始数据正在准备中，请稍候...");
             retryTimer = window.setTimeout(() => void syncAssets(), 700);
           }
           return;
@@ -973,7 +1086,7 @@ function useDataAssetBundle(tenantId: string) {
       cancelled = true;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [tenantId]);
+  }, [tenantId, scope]);
 
   const upsertRawTable = (item: RawTableAsset) => {
     setBundle((current) => ({
@@ -1665,7 +1778,7 @@ function KnowledgeMemory({ searchTerm, tenantId, userId }: { searchTerm: string;
   const [activeTab, setActiveTab] = useState<KnowledgeMemoryTab>("all");
   const [memorySort, setMemorySort] = useState<"time" | "weight">("time");
   const [memoryStatus, setMemoryStatus] = useState<"all" | "当前有效" | "历史归档">("all");
-  const { bundle } = useDataAssetBundle(tenantId);
+  const { bundle, notice } = useDataAssetBundle(tenantId, "knowledge");
   const keyword = searchTerm.trim().toLowerCase();
   const [localExperiences, setLocalExperiences] = useState<AnalysisExperienceAsset[]>([]);
 
@@ -1711,7 +1824,9 @@ function KnowledgeMemory({ searchTerm, tenantId, userId }: { searchTerm: string;
         </div>
         <MemoryToolbar sort={memorySort} status={memoryStatus} onSortChange={setMemorySort} onStatusChange={setMemoryStatus} />
 
-        {activeTab === "all" && (
+        {notice === "资产配置同步中..." && <div className="mt-4 rounded-lg border border-[#e5e5ea] bg-[#fafbfc] px-4 py-5 text-[12px] text-[#8a8a8e]">正在加载知识记忆…</div>}
+
+        {notice !== "资产配置同步中..." && activeTab === "all" && (
           <div className="mt-4 space-y-5" data-knowledge-memory-all>
             {!allKnowledgeCount && <EmptyAssetState text="暂无匹配的知识类记忆" />}
             {intents.length > 0 && (
@@ -1731,26 +1846,26 @@ function KnowledgeMemory({ searchTerm, tenantId, userId }: { searchTerm: string;
             )}
           </div>
         )}
-        {activeTab === "intent" && (
+        {notice !== "资产配置同步中..." && activeTab === "intent" && (
           <div className="mt-4 space-y-3">
             {intents.map((intent) => <IntentCard key={intent.id} intent={intent} />)}
             {!intents.length && <EmptyAssetState text="暂无匹配的意图配置" />}
           </div>
         )}
-        {activeTab === "files" && (
+        {notice !== "资产配置同步中..." && activeTab === "files" && (
           <div className="mt-4 space-y-2.5">
             {files.map((item) => <KnowledgeFileRow key={item.id} item={item} />)}
             {!files.length && <EmptyAssetState text="暂无匹配的知识文件" />}
           </div>
         )}
-        {activeTab === "experience" && (
+        {notice !== "资产配置同步中..." && activeTab === "experience" && (
           <div className="mt-4 space-y-3">
             {experiences.map((experience) => <ExperienceCard key={experience.id} experience={experience} onArchive={archiveExperience} />)}
             {!experiences.length && <EmptyAssetState text="暂无匹配的分析经验" />}
           </div>
         )}
       </div>
-      <BehaviorHabits searchTerm={searchTerm} tenantId={tenantId} userId={userId} />
+      <BehaviorHabits searchTerm={searchTerm} tenantId={tenantId} userId={userId} bundle={bundle} loading={notice === "资产配置同步中..."} />
     </div>
   );
 }
@@ -1767,8 +1882,7 @@ function KnowledgeMemoryGroup({ title, count, children }: { title: string; count
   );
 }
 
-function BehaviorHabits({ searchTerm, tenantId, userId }: { searchTerm: string; tenantId: string; userId: string }) {
-  const { bundle } = useDataAssetBundle(tenantId);
+function BehaviorHabits({ searchTerm, tenantId, userId, bundle, loading }: { searchTerm: string; tenantId: string; userId: string; bundle: DataAssetBundle; loading: boolean }) {
   const [activeType, setActiveType] = useState<"all" | "分析习惯" | "运营习惯" | "汇报习惯">("all");
   const [sort, setSort] = useState<"time" | "weight">("time");
   const [status, setStatus] = useState<"all" | "当前有效" | "历史归档">("all");
@@ -1818,6 +1932,7 @@ function BehaviorHabits({ searchTerm, tenantId, userId }: { searchTerm: string; 
         </div>
         <MemoryToolbar sort={sort} status={status} onSortChange={setSort} onStatusChange={setStatus} />
         <div className="mt-3 space-y-3">
+          {loading && <div className="rounded-lg border border-[#e5e5ea] bg-[#fafbfc] px-4 py-5 text-[12px] text-[#8a8a8e]">正在加载行为习惯…</div>}
           {shownHabits.map((habit) => (
             <BehaviorHabitCard key={habit.id} habit={habit} onArchive={archiveHabit} />
           ))}

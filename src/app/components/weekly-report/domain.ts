@@ -214,6 +214,8 @@ export type SavedAnalysisResult = {
   };
   savedAt: string;
   analysisTaskId: string;
+  weeklyReportEligible?: boolean;
+  weeklyReportSavedAt?: string;
   rows: {
     branch: string;
     amount: number;
@@ -827,6 +829,8 @@ export function normalizeSavedAnalysisResult(result: BackendSavedAnalysisResult 
     },
     savedAt: String(result.savedAt || "未记录"),
     analysisTaskId: String(result.analysisTaskId || ""),
+    weeklyReportEligible: result.weeklyReportEligible === true,
+    weeklyReportSavedAt: String(result.weeklyReportSavedAt || ""),
     rows: normalizeSavedAnalysisRows(result.rows),
   };
 }

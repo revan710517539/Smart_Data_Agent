@@ -8,7 +8,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from backend.platform.bootstrap import build_local_platform
 from backend.platform.ingestion.csv_folder import CSVFolderSource
 
 
@@ -41,29 +40,39 @@ class CSVFolderSourceTest(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 source.read("../outside.csv")
 
-    def test_platform_uses_project_csv_catalog_without_external_collection_runtime(self) -> None:
+    def test_environment_prefers_explicit_deployed_data_crawler_root(self) -> None:
         with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "platform.sqlite"
-            ignored_external_root = Path(tmpdir) / "external-csv"
-            ignored_external_root.mkdir()
-            (ignored_external_root / "outside.csv").write_text("outside\n1\n", encoding="utf-8")
-            with patch.dict(os.environ, {"SMART_DATA_AGENT_CSV_SOURCE_ROOT": str(ignored_external_root)}):
-                services = build_local_platform(db_path)
-                try:
-                    source = services.data_acquisition_service.csv_source
-                    project_root = Path(__file__).resolve().parents[3] / "Origin_Data"
-                    physical_file_count = len(list(project_root.rglob("*.csv")))
-                    self.assertEqual(source.root, project_root.resolve())
-                    snapshot = source.snapshot()
-                    expected_count = snapshot["file_count"]
-                    self.assertEqual(snapshot["physical_file_count"], physical_file_count)
-                    self.assertGreater(expected_count, 0)
-                    self.assertLessEqual(expected_count, physical_file_count)
-                    self.assertEqual(len(source.table_assets()), expected_count)
-                    self.assertNotIn("outside", [item["relativePath"] for item in source.table_assets()])
-                    self.assertEqual(services.topic_metadata_service.__class__.__name__, "CSVTopicMetadataService")
-                finally:
-                    services.close()
+            deployed_root = Path(tmpdir) / "crawler-csv"
+            with patch.dict(os.environ, {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": str(deployed_root)}):
+                source = CSVFolderSource.from_environment()
+            self.assertEqual(source.root, deployed_root.resolve())
+            # A missing configured mount cannot fall back to either the local
+            # crawler checkout or legacy Origin_Data.
+            self.assertFalse(source.snapshot()["available"])
+            self.assertEqual(source.for_tenant("tenant_a").snapshot()["files"], [])
+
+    def test_environment_uses_local_data_crawler_root_when_present(self) -> None:
+        local_root = CSVFolderSource.local_data_crawler_root
+        self.assertTrue(local_root.is_dir(), "local Data Crawler checkout must exist for this development test")
+        with TemporaryDirectory() as tmpdir, patch.dict(os.environ, {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": ""}, clear=False), patch.object(
+            CSVFolderSource, "container_data_crawler_root", Path(tmpdir) / "missing-app-data"
+        ):
+            source = CSVFolderSource.from_environment()
+        self.assertEqual(source.root, local_root.resolve())
+
+    def test_environment_uses_app_data_mount_before_local_checkout(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            app_data = Path(tmpdir) / "app-data"
+            (app_data / "华兴银行").mkdir(parents=True)
+            (app_data / "华兴银行" / "loan.csv").write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            with patch.dict(os.environ, {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": ""}, clear=False), patch.object(
+                CSVFolderSource, "container_data_crawler_root", app_data
+            ):
+                source = CSVFolderSource.from_environment()
+            tenant_source = source.for_tenant("tenant:华兴银行")
+            tenant_source.prime_catalog()
+            self.assertEqual(source.root, app_data.resolve())
+            self.assertEqual([item["file_name"] for item in tenant_source.snapshot()["files"]], ["loan.csv"])
 
     def test_daily_delivery_versions_expose_only_the_latest_source_file(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -98,3 +107,18 @@ class CSVFolderSourceTest(unittest.TestCase):
             # bounded cache window expires or the batch forces a refresh.
             self.assertEqual(source.table_assets()[0]["previewRows"][0]["金额"], "1")
             self.assertEqual(source.table_assets(force=True)[0]["previewRows"][0]["金额"], "2")
+
+    def test_tenant_catalog_never_falls_back_to_another_institution(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "tenant_a").mkdir()
+            (root / "tenant_b").mkdir()
+            (root / "tenant_a" / "a.csv").write_text("机构,金额\nA,1\n", encoding="utf-8")
+            (root / "tenant_b" / "b.csv").write_text("机构,金额\nB,2\n", encoding="utf-8")
+            source = CSVFolderSource(root)
+            a_source = source.for_tenant("tenant_a")
+            a_source.prime_catalog()
+            self.assertEqual([item["file_name"] for item in a_source.snapshot()["files"]], ["a.csv"])
+            missing_source = source.for_tenant("tenant_missing")
+            missing_source.prime_catalog()
+            self.assertEqual(missing_source.snapshot()["files"], [])

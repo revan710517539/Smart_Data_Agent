@@ -97,7 +97,7 @@ export function AnalysisConfigManager() {
 
   return (
     <div className="min-h-full bg-[#f8f8fa] p-7">
-      <div className="mx-auto max-w-[1120px]">
+      <div className="w-full">
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">分析配置</h2>

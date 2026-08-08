@@ -77,7 +77,12 @@ from backend.platform.semantic import (
     SupersonicClient,
     SupersonicHTTPClient,
 )
-from backend.platform.settings import InMemorySystemConfigStore, PostgreSQLSystemConfigStore, SQLiteSystemConfigStore
+from backend.platform.settings import (
+    InMemorySystemConfigStore,
+    PostgreSQLSystemConfigStore,
+    SQLiteSystemConfigStore,
+    ensure_default_models_for_accounts,
+)
 from backend.platform.skills import SkillConfigCatalog, SkillExecutor, SkillRegistry
 from backend.platform.skills.builtin import build_data_product_skills, build_supersonic_query_skill
 
@@ -287,10 +292,9 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         task_repository,
         data_asset_store=data_asset_store,
     )
-    # Origin_Data can be a mounted delivery folder.  Warm it in the background
-    # so a normal local restart first binds the API listener rather than
-    # looking like a several-second page outage.
-    _prime_csv_catalog_in_background(data_acquisition_service.csv_source)
+    # Each request primes only its authenticated institution's Data Crawler
+    # directory.  Do not warm the shared crawler root here: that would scan
+    # another institution's files before the user selects one.
     topic_data_store = TopicDataStore(PROJECT_ROOT / "Topic_Data")
     topic_data_batch_service = TopicDataBatchService(data_acquisition_service.csv_source, topic_data_store, data_asset_store)
     topic_metadata_service = CSVTopicMetadataService(
@@ -800,6 +804,39 @@ def _register_automation_handlers(
             progress_callback=report_progress,
         )
 
+    def metric_subscription_handler(
+        tenant_id: str,
+        config: dict,
+        trigger_payload: dict,
+        context: dict,
+    ) -> dict:
+        from backend.platform.automation.metric_subscription import collect_metric_snapshot
+
+        services = getattr(runtime, "platform_services", None)
+        if services is None:
+            raise RuntimeError("automation_platform_services_not_bound")
+        configured_metrics = config.get("metrics") if isinstance(config.get("metrics"), list) else []
+        metrics = [dict(metric) for metric in configured_metrics if isinstance(metric, dict)]
+        if not metrics and isinstance(config.get("metric"), dict):  # Compatibility with existing one-metric tasks.
+            metrics = [dict(config["metric"])]
+        if not metrics:
+            raise ValueError("metric_subscription_metrics_required")
+        snapshots = [collect_metric_snapshot(services, tenant_id, str(context["actor_user_id"]), metric) for metric in metrics]
+        subscription_id = str(config.get("subscription_id") or "").strip()
+        if not subscription_id:
+            raise ValueError("metric_subscription_id_required")
+        run_id = str(context["automation_run_id"])
+        runtime.store.enqueue_outbox_event(
+            tenant_id,
+            "metric_subscription",
+            subscription_id,
+            "metric.daily.snapshot.ready",
+            {"snapshots": snapshots, "message_template": config.get("message_template") if isinstance(config.get("message_template"), dict) else {}},
+            event_key=f"metric-subscription:{subscription_id}:{run_id}",
+            created_by=str(context["actor_user_id"]),
+        )
+        return {"subscription_id": subscription_id, "metric_count": len(snapshots), "snapshots": snapshots}
+
     def report_learning_handler(
         tenant_id: str,
         config: dict,
@@ -850,6 +887,7 @@ def _register_automation_handlers(
     runtime.register_handler("analysis.run", analysis_handler)
     runtime.register_handler("topic-data.refresh", topic_data_batch_handler)
     runtime.register_handler("analysis.monitor", metric_monitor_handler)
+    runtime.register_handler("metric.subscription.snapshot", metric_subscription_handler)
     runtime.register_handler("report.weekly_learning", report_learning_handler)
     runtime.register_handler("market.evaluate", market_evaluate_handler)
     runtime.register_handler("memory.extract", memory_extraction_handler)
@@ -867,8 +905,8 @@ def _ensure_topic_data_batch_task(runtime: AutomationRuntime, tenant_id: str, ow
         "trigger_type": "schedule",
         "schedule_expression": "0 2 * * *",
         "handler_ref": "topic-data.refresh",
-        "task_config": {"schedule_timezone": "Asia/Shanghai", "source": "Origin_Data", "target": "Topic_Data"},
-        "retry_policy": {"max_attempts": 2, "base_delay_seconds": 60},
+        "task_config": {"schedule_timezone": "Asia/Shanghai", "source": "Data_Crawler/<机构名>", "target": "Topic_Data/<机构名>"},
+        "retry_policy": {"max_attempts": 3, "base_delay_seconds": 600, "fixed_delay": True},
         "timeout_seconds": 3_600,
         "max_concurrency": 1,
     }
@@ -885,7 +923,10 @@ def _ensure_topic_data_batch_task(runtime: AutomationRuntime, tenant_id: str, ow
             str(existing["automation_task_id"]),
             {**definition, "status": "active"},
             owner_user_id,
-            int(existing.get("lock_version") or 1),
+            # A newly created SQLite task legitimately starts at revision 0.
+            # Treating that value as falsy made the local bootstrap submit
+            # revision 1, which is rejected before the service can start.
+            int(existing.get("lock_version", 0)),
         )
 def _seed_metric_dictionary_if_empty(
     metric_dictionary_store: InMemoryMetricDictionaryStore | SQLiteMetricDictionaryStore,
@@ -1027,6 +1068,24 @@ def _seed_system_integrations_if_empty(system_config_store: InMemorySystemConfig
                     )
         except Exception:
             continue
+
+
+def _seed_account_default_models(system_config_store: object, user_directory_store: object) -> None:
+    """Backfill environment-backed defaults for all known accounts on startup."""
+
+    list_profiles = getattr(user_directory_store, "list_profiles", None)
+    if not callable(list_profiles):
+        return
+    try:
+        ensure_default_models_for_accounts(
+            system_config_store,
+            (str(profile.user_id) for profile in list_profiles()),
+            updated_by=SUPER_ADMIN_USER_ID,
+        )
+    except Exception:
+        # Default provisioning must never prevent the API from starting.  Model
+        # updates and new-account provisioning will safely retry later.
+        return
 
 
 def build_local_authz_seed() -> tuple[list[Role], list[RoleAssignment], list[PermissionPolicy], dict[str, set[str]]]:

@@ -48,6 +48,39 @@ export async function saveMetricDictionaryItem({
   });
 }
 
+export type MetricDictionaryImportResult = {
+  tenant_id: string;
+  created: MetricDictionaryItem[];
+  created_count: number;
+  skipped_count: number;
+  skipped_names: string[];
+};
+
+export async function importMetricDictionaryWorkbook({
+  tenantId,
+  userId = getDefaultUserId(),
+  file,
+}: MetricDictionaryParams & { file: File }): Promise<MetricDictionaryImportResult> {
+  const fileContentBase64 = await fileToBase64(file);
+  return apiRequest<MetricDictionaryImportResult>("/api/metric-dictionary/import", {
+    method: "POST",
+    context: { tenantId, userId },
+    body: { file_name: file.name, file_content_base64: fileContentBase64 },
+  });
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("指标文件读取失败，请重新选择。"));
+    reader.onload = () => {
+      const value = String(reader.result || "");
+      resolve(value.includes(",") ? value.split(",", 2)[1] : value);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export async function deleteMetricDictionaryItem({
   tenantId,
   userId = getDefaultUserId(),

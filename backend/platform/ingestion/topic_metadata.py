@@ -42,7 +42,7 @@ class CSVTopicMetadataService:
     ) -> dict[str, Any]:
         topic = self.store.get_topic_definition(tenant_id, topic_table_id)
         decomposition = self.parse_sql(str(topic.get("sql") or ""), dialect)
-        csv_tables = self.csv_source.table_assets()
+        csv_tables = self.csv_source.for_tenant(tenant_id).table_assets()
         return {
             "topic_table_id": topic_table_id,
             "status": "csv_catalog",
@@ -70,7 +70,7 @@ class CSVTopicMetadataService:
             "table_count": len(csv_tables),
             "schema_changed_tables": [],
             "synced_at": None,
-            "message": "当前项目只读取 Origin_Data 文件夹中的 CSV；主题表元数据不再调用外部数据接入。",
+            "message": "当前机构只读取 Data Crawler 对应目录中的 CSV；主题表元数据不再调用外部数据接入。",
         }
 
     def status(self, tenant_id: str, topic_table_id: str) -> dict[str, Any]:
@@ -78,7 +78,7 @@ class CSVTopicMetadataService:
             "topic_table_id": topic_table_id,
             "status": "csv_catalog",
             "source_mode": "csv_folder",
-            "csv_file_count": len(self.csv_source.table_assets()),
+            "csv_file_count": len(self.csv_source.for_tenant(tenant_id).table_assets()),
         }
 
     def executions(self, tenant_id: str, topic_table_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:

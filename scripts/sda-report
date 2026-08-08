@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+SOURCE=$0
+while [ -h "$SOURCE" ]; do
+  SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$SOURCE")" && pwd)
+  TARGET=$(readlink "$SOURCE")
+  case $TARGET in
+    /*) SOURCE=$TARGET ;;
+    *) SOURCE=$SOURCE_DIR/$TARGET ;;
+  esac
+done
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SOURCE")" && pwd)
+# Backwards-compatible command name. New integrations must use `SDA`.
+exec "$SCRIPT_DIR/SDA" "$@"

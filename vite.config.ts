@@ -26,8 +26,6 @@ export default defineConfig({
       output: {
         manualChunks: {
           react: ['react', 'react-dom', 'react-router'],
-          charts: ['recharts'],
-          pdfExport: ['html2canvas', 'jspdf'],
         },
       },
     },

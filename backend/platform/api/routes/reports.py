@@ -2,13 +2,27 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 from urllib.parse import parse_qs
 
+from backend.authz import normalize_tenant_id
+from backend.authz.seed import OPERATING_TENANTS
 from backend.platform.api.support import first_query_value, send_route_exception
 from backend.platform.memory import MemoryRecord
 from backend.platform.reports.weekly_learning import WeeklyReportLearningEngine
+from backend.platform.tenancy import ExecutionContext
+
+
+def _institution_label(tenant_id: str) -> str:
+    return str(tenant_id or "").split(":", 1)[-1].strip()
+
+
+def _institution_tenant_id(institution: str, fallback_tenant_id: str) -> str:
+    """Resolve a recognised display label without accepting an arbitrary scope."""
+    label = str(institution or "").strip()
+    return normalize_tenant_id(label) if label in OPERATING_TENANTS else fallback_tenant_id
 
 
 def handle_report_analysis_results_get(handler: Any, query: str) -> None:
@@ -75,6 +89,15 @@ def handle_report_analysis_result_upsert(handler: Any) -> None:
             "analysisTaskId": task_id,
             "ownerUserId": context.user_id,
             "visibility": str(result.get("visibility") or "private"),
+            # Tenant ownership is server-authoritative.  A browser may supply
+            # a detected upload institution for context, but it may not change
+            # the tenant that owns this execution or report.
+            "currentInstitution": _institution_label(context.tenant_id),
+            "analysisInstitution": (
+                str(result.get("analysisInstitution") or "").strip()
+                if isinstance(result.get("analysisInstitution"), str)
+                else ""
+            ) or _institution_label(task.get("tenant_id") if task else context.tenant_id),
         }
         saved = handler.services.report_store.upsert_analysis_result(
             context.tenant_id,
@@ -120,6 +143,161 @@ def handle_report_analysis_result_delete(handler: Any, query: str) -> None:
             actor_user_id=context.user_id,
         )
         handler._send_json({"tenant_id": context.tenant_id, "result_id": result_id, "deleted": deleted})
+    except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def handle_report_analysis_result_save_weekly(handler: Any) -> None:
+    """Make one owned saved analysis selectable from the weekly-report menu."""
+
+    try:
+        payload = handler._read_json()
+        context = handler._request_context(payload=payload)
+        handler._require_report_permission(context, "create")
+        result = _owned_saved_analysis(handler, context, str(payload.get("result_id") or ""))
+        hydrated = _hydrate_saved_analysis(handler, context.user_id, context.tenant_id, result)
+        saved = handler.services.report_store.upsert_analysis_result(
+            context.tenant_id,
+            {
+                **result,
+                "topicData": hydrated.get("topicData") or result.get("topicData"),
+                "weeklyReportEligible": True,
+                "weeklyReportSavedAt": datetime.now(timezone.utc).isoformat(),
+            },
+            updated_by=context.user_id,
+        )
+        handler._write_audit(
+            context,
+            "report.analysis.save_weekly",
+            "saved_analysis_result",
+            str(saved.get("id") or ""),
+            {"source": (saved.get("source") or {}).get("channel", "self_analysis")},
+        )
+        handler._send_json({"tenant_id": context.tenant_id, "result": _hydrate_saved_analysis(handler, context.user_id, context.tenant_id, saved)})
+    except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def handle_report_analysis_result_save_experience(handler: Any) -> None:
+    """Persist an owner-scoped, evidence-backed experience-memory candidate."""
+
+    try:
+        payload = handler._read_json()
+        context = handler._request_context(payload=payload)
+        handler._require_report_permission(context, "create")
+        handler._require_memory_permission(context, "create")
+        result = _owned_saved_analysis(handler, context, str(payload.get("result_id") or ""))
+        hydrated = _hydrate_saved_analysis(handler, context.user_id, context.tenant_id, result)
+        topic_data = hydrated.get("topicData") if isinstance(hydrated.get("topicData"), dict) else {}
+        rows = hydrated.get("rows") if isinstance(hydrated.get("rows"), list) else []
+        content = {
+            "kind": "saved_analysis_experience",
+            "report": {
+                "report_id": str(result.get("id") or ""),
+                "title": str(result.get("title") or ""),
+                "query": str(result.get("query") or ""),
+                "plan": str(result.get("plan") or ""),
+                "summary": str(hydrated.get("summary") or result.get("summary") or ""),
+                "saved_at": str(result.get("savedAt") or ""),
+                "source_channel": str((result.get("source") or {}).get("channel") or "self_analysis"),
+            },
+            "data_snapshot": {
+                "topic_reference": {
+                    "reference_type": str(topic_data.get("reference_type") or ""),
+                    "reference_id": str(topic_data.get("reference_id") or ""),
+                    "updated_at": str(topic_data.get("updated_at") or ""),
+                },
+                "row_count": int(topic_data.get("row_count") or len(rows)),
+                "rows": rows,
+            },
+            "institution_scope": {
+                "analysis_institution": str(result.get("analysisInstitution") or _institution_label(context.tenant_id)),
+                "current_institution": str(result.get("currentInstitution") or _institution_label(context.tenant_id)),
+                "uploaded_data_institutions": list(result.get("uploadedDataInstitutions") or []),
+            },
+        }
+        content_hash = _stable_hash(content)
+        analysis_tenant_id = _institution_tenant_id(
+            str(content["institution_scope"]["analysis_institution"]), context.tenant_id
+        )
+        scopes = [(analysis_tenant_id, "analysis")]
+        if analysis_tenant_id != context.tenant_id:
+            # The same data-backed conclusion remains available from the
+            # current institution for comparison, but each copy has an
+            # explicit scope and is recalled only inside that scope.
+            scopes.append((context.tenant_id, "current_location"))
+        else:
+            scopes = [(context.tenant_id, "analysis_and_current_location")]
+
+        records: list[dict[str, Any]] = []
+        idempotent = True
+        unavailable_scopes: list[str] = []
+        for memory_tenant_id, scope_role in scopes:
+            if memory_tenant_id != context.tenant_id:
+                try:
+                    handler.services.permission_broker.require_resource(
+                        ExecutionContext(user_id=context.user_id, tenant_id=memory_tenant_id),
+                        "memory:*",
+                        "create",
+                    )
+                except PermissionError:
+                    unavailable_scopes.append(_institution_label(memory_tenant_id))
+                    continue
+            memory_id = f"mem_report_experience_{content_hash[:24]}_{scope_role}"
+            memory_payload = {
+                "memory_id": memory_id,
+                "memory_type": "analysis_case",
+                "subject_type": "user",
+                "subject_id": context.user_id,
+                "title": f"报告经验 · {str(result.get('title') or result.get('query') or '未命名报告')}",
+                "content": {**content, "memory_scope_role": scope_role, "memory_tenant": _institution_label(memory_tenant_id)},
+                "source_trace_id": str(result.get("analysisTaskId") or result.get("id") or ""),
+                "confidence": 0.8,
+                "evidence": {
+                    "evidence_type": "saved_analysis_report",
+                    "evidence_id": str(result.get("id") or ""),
+                    "evidence_hash": _stable_hash({"content_hash": content_hash, "scope_role": scope_role}),
+                },
+            }
+            try:
+                record = handler.services.memory_service.create_candidate(
+                    memory_tenant_id, memory_payload, context.user_id
+                )
+                idempotent = False
+            except ValueError as exc:
+                if str(exc) != "memory_candidate_rejected_or_duplicate":
+                    raise
+                record = handler.services.memory_service.get(memory_tenant_id, memory_id)
+                if record.get("subject_type") != "user" or record.get("subject_id") != context.user_id:
+                    raise PermissionError("memory_record_not_owned")
+            records.append(record)
+        if not records:
+            raise PermissionError("analysis_memory_scope_unavailable")
+        record = next((item for item in records if item.get("tenant_id") == context.tenant_id), records[0])
+        handler._write_audit(
+            context,
+            "report.analysis.save_experience",
+            "memory_record",
+            str(record.get("memory_id") or ""),
+            {
+                "report_id": str(result.get("id") or ""),
+                "content_hash": content_hash,
+                "memory_tenants": [_institution_label(str(item.get("tenant_id") or "")) for item in records],
+                "unavailable_tenants": unavailable_scopes,
+            },
+        )
+        message = "已固化为当前账号的经验记忆候选；复核通过后才会参与后续召回。"
+        if unavailable_scopes:
+            message += f" 未在未授权机构写入经验：{'、'.join(unavailable_scopes)}。"
+        handler._send_json(
+            {
+                "tenant_id": context.tenant_id,
+                "record": record,
+                "records": records,
+                "idempotent": idempotent,
+                "message": message,
+            }
+        )
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
         send_route_exception(handler, exc)
 
@@ -502,6 +680,22 @@ def _hydrate_saved_analysis(handler: Any, user_id: str, tenant_id: str, result: 
         "execution_id": task.get("execution_id"),
         "publication_gate": (task.get("review") or {}).get("publication_gate"),
     }
+
+
+def _owned_saved_analysis(handler: Any, context: Any, result_id: str) -> dict[str, Any]:
+    normalized_id = str(result_id or "").strip()
+    if not normalized_id:
+        raise ValueError("result_id is required.")
+    result = handler.services.report_store.get_analysis_result(
+        context.tenant_id,
+        normalized_id,
+        actor_user_id=context.user_id,
+    )
+    if result is None:
+        raise KeyError("saved_analysis_result_not_found")
+    if str(result.get("ownerUserId") or "") != context.user_id:
+        raise PermissionError("saved_analysis_owner_required")
+    return result
 
 
 def _bind_weekly_report_evidence(handler: Any, context: Any, version: dict[str, Any]) -> dict[str, Any]:

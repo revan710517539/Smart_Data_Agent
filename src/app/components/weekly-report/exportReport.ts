@@ -1,5 +1,3 @@
-import html2canvas from "html2canvas";
-import { jsPDF } from "jspdf";
 import type { CommentItem, TableBlock, WeeklyInstitutionReport } from "./domain";
 
 export type WeeklyExportFormat = "html" | "pdf";
@@ -23,6 +21,10 @@ export function weeklyExportHtml(documentNode: HTMLElement, report: WeeklyInstit
 }
 
 export async function downloadWeeklyExportPdf(documentNode: HTMLElement, filename: string) {
+  const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+    import("html2canvas"),
+    import("jspdf"),
+  ]);
   const host = document.createElement("div");
   host.className = "weekly-export-pdf-host";
   host.style.cssText = "position:absolute;left:-100000px;top:0;width:1120px;background:#fff;padding:28px;";

@@ -24,6 +24,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { operatingTenantNames } from "../../data/operatingTenants";
+import { institutionNameFromTenant } from "../../data/operatingTenants";
 import { usePlatformContext } from "../../platform/PlatformContext";
 import {
   deleteAccessUser,
@@ -120,11 +121,11 @@ export const allPermissionMenus = permissionMenus;
 export const allPermissionDataScopes = permissionDataScopes;
 
 export const fallbackAuditLogs = [
-  { time: "09:32", user: "胥京波", action: "导出报表", target: "月度经营分析报告", ip: "10.12.*.* " },
-  { time: "09:15", user: "胥京波", action: "登录系统", target: "—", ip: "10.12.*.* " },
-  { time: "08:42", user: "李娜", action: "创建分析任务", target: "M1逾期率归因分析", ip: "10.15.*.* " },
-  { time: "08:30", user: "赵敏", action: "修改预警规则", target: "动支率持续下降", ip: "10.18.*.* " },
-  { time: "昨日 17:30", user: "王强", action: "查看机构数据", target: "华东分行穿透报表", ip: "10.20.*.* " },
+  { time: "09:32", institution: "华兴银行", user: "胥京波", action: "导出报表", target: "月度经营分析报告", ip: "10.12.*.* " },
+  { time: "09:15", institution: "华兴银行", user: "胥京波", action: "登录系统", target: "—", ip: "10.12.*.* " },
+  { time: "08:42", institution: "广州银行", user: "李娜", action: "创建分析任务", target: "M1逾期率归因分析", ip: "10.15.*.* " },
+  { time: "08:30", institution: "广州银行", user: "赵敏", action: "修改预警规则", target: "动支率持续下降", ip: "10.18.*.* " },
+  { time: "昨日 17:30", institution: "郑州银行", user: "王强", action: "查看机构数据", target: "华东分行穿透报表", ip: "10.20.*.* " },
 ];
 
 export const systemConfig = [
@@ -285,8 +286,6 @@ export function modelSourceLabel(source: string) {
   return modelSourceOptions.includes(source) ? source : modelSourceOptions[0];
 }
 
-export const defaultRelayModelOptions = ["deepseek-v4-flash", "gpt-5.3-codex-spark", "qwen-plus", "glm-5", "deepseek-r1"];
-
 export const modelOptionDescriptions: Record<string, string> = {
   "deepseek-v4-flash": "适合经营分析、归因判断和长文本总结，响应速度较快。",
   "deepseek-v4-pro": "适合复杂推理、策略分析和多步骤经营诊断。",
@@ -304,17 +303,8 @@ export function modelOptionDescription(modelName: string) {
   return modelOptionDescriptions[modelName] || "由中转站返回的可调用模型，可用于智能分析、SQL生成和报告总结。";
 }
 
-export function defaultModelOptionsForSource(source: string, modelName: string) {
-  if (modelSourceLabel(source) === "中转站") return defaultRelayModelOptions;
-  const directModel = modelName.trim();
-  return directModel ? [directModel] : [];
-}
-
 export function availableModelOptions(model: ModelIntegration) {
-  const options = model.availableModels?.length
-    ? model.availableModels
-    : defaultModelOptionsForSource(model.modelName, model.name);
-  return Array.from(new Set([...(model.enabledModels || []), ...options])).filter(Boolean);
+  return Array.from(new Set([...(model.enabledModels || []), ...(model.availableModels || [])])).filter(Boolean);
 }
 
 export const speechCapabilityDescriptions: Record<string, { title: string; model: string; description: string }[]> = {
@@ -371,6 +361,7 @@ export function getSettingsSection(pathname: string): SettingsSection {
 export function formatAuditLog(log: AuditLog) {
   return {
     time: formatAuditTime(log.created_at),
+    institution: institutionNameFromTenant(log.tenant_id) || "全局",
     user: log.actor_user_id,
     action: auditActionLabels[log.action] || log.action,
     target: log.target_id || log.target_type,

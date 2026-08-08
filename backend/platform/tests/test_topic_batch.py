@@ -21,7 +21,8 @@ class TopicDataBatchServiceTest(unittest.TestCase):
     def test_batch_reads_origin_csv_and_overwrites_current_topic_data(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            (root / "loan.csv").write_text(
+            (root / "tenant_a").mkdir()
+            (root / "tenant_a" / "loan.csv").write_text(
                 "tenant_id,branch_name,product_line,customer_segment,month,drawdown_amount,loan_balance,m1_overdue_balance\n"
                 "*,A,经营贷,小微,2026-07,20,100,4\n"
                 "*,B,消费贷,个人,2026-07,10,50,1\n",
@@ -58,7 +59,8 @@ class TopicDataBatchServiceTest(unittest.TestCase):
     def test_missing_source_table_is_explicit_failure(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            (root / "minimal.csv").write_text("tenant_id,value\n*,1\n", encoding="utf-8")
+            (root / "tenant_a").mkdir()
+            (root / "tenant_a" / "minimal.csv").write_text("tenant_id,value\n*,1\n", encoding="utf-8")
             assets = InMemoryDataAssetStore(seed_defaults=False)
             assets.upsert_item(
                 "tenant_a", "topic_table",
@@ -75,7 +77,8 @@ class TopicDataBatchServiceTest(unittest.TestCase):
     def test_voice_origin_csv_supports_customer_and_channel_legacy_topics(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            (root / "voice.csv").write_text(
+            (root / "tenant_a").mkdir()
+            (root / "tenant_a" / "voice.csv").write_text(
                 "tenant_id,branch_name,product_line,month,channel,customer_segment,loan_amount,drawdown_rate,drawdown_amount,eligible_amount\n"
                 "*,上海分行,经营贷,2026-07,客户经理,小微,100,0.5,50,200\n",
                 encoding="utf-8",

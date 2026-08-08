@@ -16,6 +16,15 @@ from .model_modules import (
     resolve_model_for_application,
     select_model_for_application,
 )
+from .default_models import (
+    DEFAULT_RELAY_MODEL_API_BASE,
+    DEFAULT_RELAY_MODEL_API_KEY_ENV,
+    DEFAULT_RELAY_MODEL_ID,
+    DEFAULT_MODEL_TEMPLATE_SCOPE,
+    configure_default_relay_model,
+    ensure_default_models_for_account,
+    ensure_default_models_for_accounts,
+)
 
 __all__ = [
     "InMemorySystemConfigStore",
@@ -34,4 +43,11 @@ __all__ = [
     "require_model_for_application",
     "resolve_model_for_application",
     "select_model_for_application",
+    "DEFAULT_RELAY_MODEL_ID",
+    "DEFAULT_MODEL_TEMPLATE_SCOPE",
+    "DEFAULT_RELAY_MODEL_API_BASE",
+    "DEFAULT_RELAY_MODEL_API_KEY_ENV",
+    "ensure_default_models_for_account",
+    "ensure_default_models_for_accounts",
+    "configure_default_relay_model",
 ]

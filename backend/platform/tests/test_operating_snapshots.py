@@ -26,6 +26,18 @@ class OperatingSnapshotTest(unittest.TestCase):
         self.assertTrue(loan["evidence"]["policy_enforced_at_source"])
         self.assertTrue(loan["evidence"]["evidence_id"].startswith("snap_"))
 
+    def test_authorized_dashboard_labels_each_tenant_and_does_not_discover_tenants(self) -> None:
+        snapshot = self.services.operating_snapshot_service.build_authorized_dashboard(
+            ("tenant_demo", "tenant:华兴银行"), "u_admin"
+        )
+        loan = snapshot["datasets"]["loan_operation"]
+        self.assertEqual(snapshot["scope"], "authorized_tenants")
+        self.assertEqual(snapshot["tenant_ids"], ["tenant_demo", "tenant:华兴银行"])
+        self.assertEqual(loan["evidence"]["tenant_count"], 2)
+        self.assertTrue(loan["rows"])
+        self.assertTrue(all("institution_name" in row for row in loan["rows"]))
+        self.assertTrue(all(" · " in str(row.get("branch_name") or "") for row in loan["rows"]))
+
     def test_missing_funnel_dataset_returns_unavailable_not_fabricated_stages(self) -> None:
         snapshot = self.services.operating_snapshot_service.build("business_funnel", "tenant_demo", "u_admin")
         funnel = snapshot["datasets"]["funnel_operation"]

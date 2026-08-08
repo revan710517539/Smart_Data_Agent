@@ -10,6 +10,7 @@ RUN npm config set registry https://registry.npmmirror.com \
 COPY index.html tsconfig.json vite.config.ts postcss.config.mjs ./
 COPY public ./public
 COPY src ./src
+COPY scripts ./scripts
 RUN npm run typecheck && npm run build
 
 FROM python:3.13-slim-bookworm AS runtime-base

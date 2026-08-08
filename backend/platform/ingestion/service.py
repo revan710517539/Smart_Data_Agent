@@ -393,7 +393,10 @@ class DataAcquisitionService:
             **self.store.bundle(tenant_id),
             "source_mode": "csv_folder",
             "source_read_only": True,
-            "csv_source": self.csv_source.snapshot(),
+            # The acquisition overview must expose the same institution-bound
+            # catalog as the raw-table tab. Never disclose the shared root or
+            # another institution's delivery inventory.
+            "csv_source": self.csv_source.for_tenant(tenant_id).snapshot(),
         }
 
     def read_csv_source_file(self, relative_path: str) -> bytes:

@@ -44,6 +44,22 @@ class EgressSecurityTest(unittest.TestCase):
             with self.subTest(url=url), self.assertRaises(EgressPolicyError):
                 validate_outbound_url(url)
 
+    def test_private_egress_exception_is_limited_to_the_exact_provider_host(self) -> None:
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.228.128.154", 443))]
+        with patch("backend.platform.security.egress.socket.getaddrinfo", return_value=addresses):
+            self.assertEqual(
+                validate_outbound_url(
+                    "https://sk.360teams.com/api/token/agent/device/code/create",
+                    private_host_exceptions=("sk.360teams.com",),
+                ),
+                "https://sk.360teams.com/api/token/agent/device/code/create",
+            )
+            with self.assertRaises(EgressPolicyError):
+                validate_outbound_url(
+                    "https://attacker.example/internal",
+                    private_host_exceptions=("sk.360teams.com",),
+                )
+
     def test_model_checks_can_explicitly_allow_public_http_relay(self) -> None:
         with patch(
             "backend.platform.security.egress.socket.getaddrinfo",
@@ -156,6 +172,7 @@ class EgressSecurityTest(unittest.TestCase):
 
         self.assertEqual(result["status"], "failed")
         self.assertFalse(result["callable"])
+        self.assertEqual(result["error_code"], "dns_resolution_failed")
         self.assertIn("域名无法解析", result["message"])
 
     def test_model_integration_classifies_timeout_as_transient(self) -> None:

@@ -222,9 +222,8 @@ class AutomationRuntime:
         attempt_no = int(run.get("attempt_no") or 1)
         if retryable and attempt_no < max_attempts:
             base_seconds = max(1, min(int(policy.get("base_delay_seconds", 30)), 86_400))
-            next_retry = (
-                datetime.now(timezone.utc) + timedelta(seconds=min(86_400, base_seconds * (2 ** (attempt_no - 1))))
-            ).isoformat()
+            delay_seconds = base_seconds if bool(policy.get("fixed_delay")) else min(86_400, base_seconds * (2 ** (attempt_no - 1)))
+            next_retry = (datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)).isoformat()
             failed = self.store.finish_run(
                 tenant_id,
                 run_id,
@@ -372,6 +371,12 @@ def _deliver(
     if channel == "in_app":
         return f"inapp:{event['outbox_event_id']}"
     if channel == "webhook":
+        if str(config.get("provider") or "").strip() == "360teams_self":
+            from backend.platform.integrations.teams import send_markdown_to_self
+            from backend.platform.automation.metric_subscription import render_teams_metric_markdown
+
+            title, text = render_teams_metric_markdown(dict(event.get("payload") or {}))
+            return send_markdown_to_self(str(config.get("access_token") or ""), title, text)
         url = validate_outbound_url(str(config.get("url") or ""))
         body = json.dumps(
             {

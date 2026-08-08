@@ -40,6 +40,7 @@ from .data_acquisition import (
     handle_data_acquisition_get,
     handle_latest_acquisition_csv_get,
 )
+from .external_reports import handle_external_report_import
 from .asr import (
     FUN_ASR_REALTIME_PATH,
     FUN_ASR_RUNTIME_CONFIG_PATH,
@@ -76,6 +77,13 @@ from .automation import (
     handle_subscription_delete,
     handle_subscription_update,
     handle_subscriptions_get,
+    handle_teams_connection_auth_poll,
+    handle_teams_connection_auth_start,
+    handle_teams_connection_get,
+    handle_teams_metric_subscription_enable,
+    handle_teams_metric_subscription_test,
+    handle_teams_metric_subscription_auth_poll,
+    handle_teams_metric_subscription_auth_start,
 )
 from .mcp import (
     handle_mcp_call,
@@ -95,6 +103,7 @@ from .lineage import handle_lineage_get
 from .metrics import (
     handle_metric_dictionary_delete,
     handle_metric_dictionary_get,
+    handle_metric_dictionary_import,
     handle_metric_dictionary_replace,
     handle_metric_dictionary_upsert,
 )
@@ -112,6 +121,8 @@ from .navigation import handle_navigation_get
 from .operating_snapshot import handle_operating_snapshot_get
 from .reports import (
     handle_report_analysis_result_delete,
+    handle_report_analysis_result_save_experience,
+    handle_report_analysis_result_save_weekly,
     handle_report_analysis_result_upsert,
     handle_report_analysis_results_get,
     handle_report_comment_create,
@@ -176,6 +187,7 @@ GET_ROUTE_HANDLERS = {
     "/api/analysis/history": handle_analysis_history_get,
     "/api/analysis/run-status": handle_analysis_run_status,
     "/api/subscriptions": handle_subscriptions_get,
+    "/api/teams/connection": handle_teams_connection_get,
     "/api/market-monitoring": handle_market_get,
     "/api/email-daily": handle_daily_email_get,
     "/api/operating-snapshot": handle_operating_snapshot_get,
@@ -201,9 +213,13 @@ POST_ROUTE_HANDLERS = {
     "/api/system-config/speech-integration/test": handle_system_speech_integration_test,
     "/api/system-config/system-param": handle_system_param_upsert,
     "/api/metric-dictionary": handle_metric_dictionary_upsert,
+    "/api/metric-dictionary/import": handle_metric_dictionary_import,
     "/api/access/user": handle_access_user_upsert,
     "/api/access/role-policy": handle_access_role_policy_save,
     "/api/reports/analysis-result": handle_report_analysis_result_upsert,
+    "/api/reports/analysis-result/save-weekly": handle_report_analysis_result_save_weekly,
+    "/api/reports/analysis-result/save-experience": handle_report_analysis_result_save_experience,
+    "/api/integrations/reports": handle_external_report_import,
     "/api/reports/comment": handle_report_comment_create,
     "/api/reports/weekly-version": handle_weekly_report_version_save,
     "/api/reports/weekly-version/analyze": handle_weekly_report_version_analyze,
@@ -230,6 +246,12 @@ POST_ROUTE_HANDLERS = {
     "/api/automation/run": handle_automation_run_create,
     "/api/automation/run/cancel": handle_automation_run_cancel,
     "/api/subscription": handle_subscription_create,
+    "/api/teams/connection/auth/start": handle_teams_connection_auth_start,
+    "/api/teams/connection/auth/poll": handle_teams_connection_auth_poll,
+    "/api/teams/metric-subscription/enable": handle_teams_metric_subscription_enable,
+    "/api/teams/metric-subscription/test": handle_teams_metric_subscription_test,
+    "/api/teams/metric-subscription/auth/start": handle_teams_metric_subscription_auth_start,
+    "/api/teams/metric-subscription/auth/poll": handle_teams_metric_subscription_auth_poll,
     "/api/market-monitoring/source": handle_market_source_create,
     "/api/market-monitoring/entity": handle_market_entity_create,
     "/api/market-monitoring/observation": handle_market_observation_create,

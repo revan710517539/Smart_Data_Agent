@@ -68,8 +68,9 @@ def test_model_integration(model: dict[str, Any]) -> dict[str, Any]:
         result.update({"transient": False, "latency_ms": _elapsed_ms(started_at)})
         return result
     except EgressPolicyError as exc:
-        result = _result(model_id, model_name, source, False, _egress_policy_message(exc), [], "", tested_at)
-        result.update({"error_code": "egress_policy_rejected", "transient": False, "latency_ms": _elapsed_ms(started_at)})
+        error_code, message, transient = _classify_egress_policy_error(exc)
+        result = _result(model_id, model_name, source, False, message, [], "", tested_at)
+        result.update({"error_code": error_code, "transient": transient, "latency_ms": _elapsed_ms(started_at)})
         return result
     except Exception as exc:
         error_code, message, transient = _classify_model_test_error(exc)
@@ -160,14 +161,15 @@ def call_model_completion(model: dict[str, Any], prompt: str) -> dict[str, Any]:
             "latency_ms": _elapsed_ms(started_at),
         }
     except EgressPolicyError as exc:
+        error_code, message, _transient = _classify_egress_policy_error(exc)
         return {
             "model_id": model_id,
             "model_name": model_name,
             "source": source,
             "status": "failed",
             "callable": False,
-            "error_code": "egress_policy_rejected",
-            "message": _egress_policy_message(exc),
+            "error_code": error_code,
+            "message": message,
             "response_preview": "",
             "used_model": model_for_call,
             "called_at": called_at,
@@ -178,15 +180,16 @@ def call_model_completion(model: dict[str, Any], prompt: str) -> dict[str, Any]:
             "usage_source": "estimated",
             "latency_ms": _elapsed_ms(started_at),
         }
-    except Exception:
+    except Exception as exc:
+        error_code, message, _transient = _classify_model_test_error(exc)
         return {
             "model_id": model_id,
             "model_name": model_name,
             "source": source,
             "status": "failed",
             "callable": False,
-            "error_code": "model_provider_unavailable",
-            "message": "模型调用失败，请通过 request_id 查询服务端日志。",
+            "error_code": error_code,
+            "message": message,
             "response_preview": "",
             "used_model": model_for_call,
             "called_at": called_at,
@@ -269,13 +272,14 @@ def call_model_text_completion(
             "model_id": model_id,
             "used_model": used_model,
         }
-    except EgressPolicyError:
-        error_code = "egress_policy_rejected"
-    except Exception:
-        error_code = "model_provider_unavailable"
+    except EgressPolicyError as exc:
+        error_code, message, _transient = _classify_egress_policy_error(exc)
+    except Exception as exc:
+        error_code, message, _transient = _classify_model_test_error(exc)
     return {
         "status": "failed",
         "error_code": error_code,
+        "message": message,
         "response_text": "",
         "request_hash": request_hash,
         "response_hash": "",
@@ -311,17 +315,33 @@ def _result(
     }
 
 
-def _egress_policy_message(exc: EgressPolicyError) -> str:
+def _classify_egress_policy_error(exc: EgressPolicyError) -> tuple[str, str, bool]:
     detail = str(exc).strip()
     if "cannot be resolved" in detail:
-        return "模型地址域名无法解析，请检查 API 地址是否写错或 DNS 是否可用。"
+        return (
+            "dns_resolution_failed",
+            "模型地址域名无法解析：运行 Smart Data Agent 后端的服务器无法解析该地址。请在该服务器接入企业 DNS/VPN，或改用该服务器可解析的企业网关 API 地址后重试。",
+            False,
+        )
+    if "has no resolved address" in detail:
+        return (
+            "dns_resolution_failed",
+            "运行 Smart Data Agent 后端的服务器未获得模型地址的解析结果。请检查企业 DNS/VPN 或网关地址后重试。",
+            False,
+        )
     if "scheme must be" in detail:
-        return "模型地址协议不符合服务端出站安全策略，请使用允许的 http/https 地址。"
+        return "egress_policy_rejected", "模型地址协议不符合服务端出站安全策略，请使用允许的 http/https 地址。", False
     if "blocked address" in detail:
-        return "模型地址解析到内网或受限地址，已被服务端出站安全策略拦截。"
+        return "egress_policy_rejected", "模型地址解析到内网或受限地址，已被服务端出站安全策略拦截。", False
     if "not allowlisted" in detail:
-        return "模型地址不在服务端出站白名单内。"
-    return "模型地址不符合服务端出站安全策略。"
+        return "egress_policy_rejected", "模型地址不在服务端出站白名单内。", False
+    return "egress_policy_rejected", "模型地址不符合服务端出站安全策略。", False
+
+
+def _egress_policy_message(exc: EgressPolicyError) -> str:
+    """Compatibility helper for callers that require the user-facing message."""
+
+    return _classify_egress_policy_error(exc)[1]
 
 
 def _is_demo_model(model: dict[str, Any]) -> bool:

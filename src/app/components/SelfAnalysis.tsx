@@ -4,11 +4,18 @@ import { usePlatformContext } from "../platform/PlatformContext";
 import type { MetricDictionaryItem } from "../data/metricDictionary";
 import { cancelAsyncAnalysisRun, deleteAnalysisHistoryTask, fetchAnalysisTask, fetchAnalysisHistory, fetchAnalysisHistoryDetail, waitForSelfAnalysis, type AnalysisProgressStep, type AnalysisTraceSpan, type BackendAnalysisPlan, type BackendAnalysisResponse } from "../services/analysisApi";
 import { ExecutionHistoryDrawer } from "./self-analysis/ExecutionHistoryDrawer";
+import { VoiceInputPopover } from "./self-analysis/VoiceInputPopover";
 import { AnalysisProgressPanel } from "./self-analysis/AnalysisProgressPanel";
 import { completedProgressSteps, configuredModelForModule, modelApplicationModuleForTrigger, modelApplicationSelection, modelInvocationIssue, modelsForModule, speechApplicationModuleForTarget } from "./self-analysis/analysisRuntime";
 import { createRealtimeSpeakerGateState, extractRealtimeVoiceAnalysisCommand, gateRealtimeSpeakerFrame, isRealtimeVoiceTrigger, type RealtimeSpeakerGateState, type RealtimeVoiceTrigger } from "./self-analysis/realtimeVoice";
 import { fetchMetricDictionary } from "../services/metricDictionaryApi";
-import { deleteSavedAnalysisResult, fetchSavedAnalysisResults, saveSavedAnalysisResult } from "../services/reportApi";
+import {
+  deleteSavedAnalysisResult,
+  fetchSavedAnalysisResults,
+  saveAnalysisResultAsExperience,
+  saveAnalysisResultToWeeklyReport,
+  saveSavedAnalysisResult,
+} from "../services/reportApi";
 import {
   fetchDataAssets,
   fetchTopicData,
@@ -22,6 +29,7 @@ import { demoFallbackDisabledMessage, isDemoFallbackEnabled } from "../services/
 import { modelApplicationModuleLabel } from "../data/modelApplicationModules";
 import { runApplicationAction } from "../services/applicationApi";
 import { fetchAnalysisRuntimeConfig, type FunAsrRuntimeIntegration, type ModelIntegration } from "../services/systemConfigApi";
+import { findConfiguredTextModel, readPersistedTextModelSelection } from "../services/modelSelectionStore";
 import { ArrowUp, AudioLines, Sparkles, Clock, Star, ArrowUpRight, BarChart3, PieChartIcon, TrendingUp, Table2, Download, BookmarkPlus, History, Lightbulb, ChevronDown, Code2, Mic, Plus, Upload, X, ChevronsDown, ChevronsUp, Eye, Pencil, Trash2, Check } from "lucide-react";
 import { AnalysisVisualCard, RawDataTable } from "./self-analysis/ResultViews";
 import {
@@ -41,6 +49,7 @@ import {
   type AnalysisTopicShortcut,
   type TopicShortcutMenuState,
   type KnowledgeFileAttachment,
+  detectAttachmentInstitutions,
   type AnalysisDataTableSelection,
   type AnalysisRow,
   type AudioContextConstructorLike,
@@ -633,11 +642,14 @@ export function SelfAnalysis() {
   const [conversationTurns, setConversationTurns] = useState<AnalysisConversationTurn[]>([]);
   const [analysisTopicShortcuts, setAnalysisTopicShortcuts] = useState<AnalysisTopicShortcut[]>([]);
   const [savedAnalysisResults, setSavedAnalysisResults] = useState<SavedAnalysisResult[]>([]);
+  const [reportSourceFilter, setReportSourceFilter] = useState("all");
   const [savedAnalysisLoadError, setSavedAnalysisLoadError] = useState("");
   const [expandedReportId, setExpandedReportId] = useState("");
   const [editingReportId, setEditingReportId] = useState<string | null>(null);
   const [reportTitleDraft, setReportTitleDraft] = useState("");
   const [reportActionError, setReportActionError] = useState("");
+  const [reportActionNotice, setReportActionNotice] = useState("");
+  const [reportActionLoadingId, setReportActionLoadingId] = useState("");
   const [reportLoadingId, setReportLoadingId] = useState("");
   const [analysisTopicsLoaded, setAnalysisTopicsLoaded] = useState(false);
   const [analysisTopicsExpanded, setAnalysisTopicsExpanded] = useState(false);
@@ -812,6 +824,23 @@ export function SelfAnalysis() {
     setAnalysisTopicShortcuts([]);
   }, [activeView, tenantId, userId]);
 
+  const reportSourceOptions = Array.from(
+    new Map(
+      savedAnalysisResults
+        .map((result) => result.source?.channel ? [result.source.channel, result.source.label || result.source.channel] as const : null)
+        .filter((item): item is readonly [string, string] => Boolean(item)),
+    ).entries(),
+  );
+  const visibleSavedAnalysisResults = reportSourceFilter === "all"
+    ? savedAnalysisResults
+    : savedAnalysisResults.filter((result) => result.source?.channel === reportSourceFilter);
+
+  useEffect(() => {
+    if (reportSourceFilter !== "all" && !reportSourceOptions.some(([channel]) => channel === reportSourceFilter)) {
+      setReportSourceFilter("all");
+    }
+  }, [reportSourceFilter, reportSourceOptions]);
+
   useEffect(() => {
     if (activeView !== "query" || !conversationSessionId) return;
     saveConversationState(tenantId, userId, {
@@ -888,7 +917,13 @@ export function SelfAnalysis() {
         const nextModels = models.length ? models : isDemoFallbackEnabled() ? fallbackAnalysisModels : [];
         setAvailableModels(nextModels);
         const analysisModels = modelsForModule(nextModels, "intelligent_analysis_reasoning");
-        setSelectedModel((current) => current && hasSelectableAnalysisModel(analysisModels, current) ? current : firstSelectableAnalysisModel(analysisModels));
+        const preferredModel = findConfiguredTextModel(
+          analysisModels,
+          readPersistedTextModelSelection(tenantId, userId),
+        );
+        setSelectedModel(preferredModel && hasSelectableAnalysisModel(analysisModels, preferredModel)
+          ? preferredModel
+          : firstSelectableAnalysisModel(analysisModels));
       } catch {
         if (cancelled) return;
         setFunAsrIntegration(null);
@@ -896,7 +931,13 @@ export function SelfAnalysis() {
         const demoModels = isDemoFallbackEnabled() ? fallbackAnalysisModels : [];
         setAvailableModels(demoModels);
         const analysisModels = modelsForModule(demoModels, "intelligent_analysis_reasoning");
-        setSelectedModel((current) => current && hasSelectableAnalysisModel(analysisModels, current) ? current : firstSelectableAnalysisModel(analysisModels));
+        const preferredModel = findConfiguredTextModel(
+          analysisModels,
+          readPersistedTextModelSelection(tenantId, userId),
+        );
+        setSelectedModel(preferredModel && hasSelectableAnalysisModel(analysisModels, preferredModel)
+          ? preferredModel
+          : firstSelectableAnalysisModel(analysisModels));
       }
     };
     void syncModels();
@@ -1728,6 +1769,7 @@ export function SelfAnalysis() {
       return;
     }
     setReportActionError("");
+    setReportActionNotice("");
     setExpandedReportId(result.id);
     setReportLoadingId(result.id);
     try {
@@ -1774,6 +1816,37 @@ export function SelfAnalysis() {
     }
   };
 
+  const saveSavedReportToWeekly = async (result: SavedAnalysisResult) => {
+    setReportActionLoadingId(`${result.id}:weekly`);
+    setReportActionError("");
+    setReportActionNotice("");
+    try {
+      const response = await saveAnalysisResultToWeeklyReport({ tenantId, userId, resultId: result.id });
+      const saved = response.result as SavedAnalysisResult;
+      setSavedAnalysisResults((current) => current.map((item) => item.id === result.id ? saved : item));
+      window.dispatchEvent(new CustomEvent("smart-data-agent-analysis-saved", { detail: saved }));
+      setReportActionNotice("已存入经营周报的分析模块下拉框；在周报页面勾选后即可展示。");
+    } catch (error) {
+      setReportActionError(apiErrorMessage(error, "存周报失败"));
+    } finally {
+      setReportActionLoadingId("");
+    }
+  };
+
+  const saveSavedReportAsExperience = async (result: SavedAnalysisResult) => {
+    setReportActionLoadingId(`${result.id}:experience`);
+    setReportActionError("");
+    setReportActionNotice("");
+    try {
+      const response = await saveAnalysisResultAsExperience({ tenantId, userId, resultId: result.id });
+      setReportActionNotice(response.message || "已固化为当前账号的经验记忆候选；复核通过后可用于后续提炼与召回。");
+    } catch (error) {
+      setReportActionError(apiErrorMessage(error, "存经验失败"));
+    } finally {
+      setReportActionLoadingId("");
+    }
+  };
+
   const saveAnalysisResult = async () => {
     const title = query || "未命名分析结果";
     const result: SavedAnalysisResult = {
@@ -1787,6 +1860,9 @@ export function SelfAnalysis() {
       rows: analysisRows,
       analysisTaskId,
       visibility: "private",
+      analysisInstitution: detectedAnalysisInstitution(knowledgeFiles, selectedInstitution),
+      currentInstitution: selectedInstitution,
+      uploadedDataInstitutions: Array.from(new Set(knowledgeFiles.flatMap((file) => file.detectedInstitutions || detectAttachmentInstitutions(file.name, file.contentPreview || "")))),
     };
     setSaveMessage("保存中...");
     try {
@@ -2250,6 +2326,11 @@ export function SelfAnalysis() {
                       <span key={file.id} className="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-[#e5e5ea] bg-[#fafbfc] px-2 py-1 text-[11px] text-[#636366]">
                         <Upload className="h-3 w-3 shrink-0 text-[#8a8a8e]" />
                         <span className="truncate">{file.name}</span>
+                        {file.detectedInstitutions?.length === 1 && (
+                          <span className="shrink-0 rounded bg-[#eef4ff] px-1 py-0.5 text-[10px] text-[#2466b0]" title="仅用于提示，不会切换当前机构或扩大数据权限">
+                            识别：{file.detectedInstitutions[0]}
+                          </span>
+                        )}
                         <button type="button" onClick={() => removeKnowledgeFile(file.id)} className="shrink-0 text-[#aeaeb2] hover:text-[#1d1d1f]">
                           <X className="h-3 w-3" />
                         </button>
@@ -2268,7 +2349,7 @@ export function SelfAnalysis() {
                   </div>
                 )}
                 <div
-                  className={`relative border border-[#d1d1d6] bg-white transition-colors focus-within:border-[#aeaeb2] ${
+                  className={`relative border border-[#d1d1d6] bg-white transition-colors focus-within:border-[#d1d1d6] ${
                     analysisInputCollapsed ? "rounded-2xl px-3 py-1.5 pr-[78px]" : "rounded-[22px] px-4 py-2"
                   }`}
                 >
@@ -2296,7 +2377,7 @@ export function SelfAnalysis() {
                       }}
                       placeholder="用自然语言描述你想分析的问题，如：本月各分行放款金额排名..."
                       rows={1}
-                      className={`relative z-10 w-full resize-none bg-transparent px-0 py-0 text-[13px] leading-[1.5] outline-none placeholder:text-[#aeaeb2] ${
+                      className={`relative z-10 w-full resize-none bg-transparent px-0 py-0 text-[13px] leading-[1.5] outline-none placeholder:text-[#aeaeb2] focus:!outline-none focus:!shadow-none focus-visible:!outline-none focus-visible:!shadow-none ${
                         analysisInputCollapsed ? "h-6 min-h-[24px] overflow-hidden text-[#3a3a3c]" : "min-h-[32px]"
                       } ${
                         query && !analysisInputCollapsed ? "text-transparent caret-[#3a3a3c] selection:bg-[#dce9ff]" : "text-[#3a3a3c]"
@@ -2649,11 +2730,18 @@ export function SelfAnalysis() {
               <h3 className="text-[13px] text-[#1d1d1f]">我的报告</h3>
               <p className="mt-1 text-[11px] text-[#aeaeb2]">报告、最近查询和快捷键统一读取 Topic_Data 中保留的最新数据。</p>
             </div>
-            <span className="rounded-md bg-[#f2f2f7] px-2 py-1 text-[11px] text-[#636366]">{savedAnalysisResults.length} 份</span>
+            <span className="rounded-md bg-[#f2f2f7] px-2 py-1 text-[11px] text-[#636366]">{visibleSavedAnalysisResults.length} 份</span>
+          </div>
+          <div className="mb-4 flex flex-wrap gap-1.5" aria-label="报告来源筛选">
+            <button type="button" onClick={() => setReportSourceFilter("all")} className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${reportSourceFilter === "all" ? "bg-[#1d1d1f] text-white" : "bg-[#f2f2f7] text-[#636366] hover:bg-[#e5e5ea]"}`}>全部</button>
+            {reportSourceOptions.map(([channel, label]) => (
+              <button key={channel} type="button" onClick={() => setReportSourceFilter(channel)} className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${reportSourceFilter === channel ? "bg-[#1d1d1f] text-white" : "bg-[#f2f2f7] text-[#636366] hover:bg-[#e5e5ea]"}`}>{label}</button>
+            ))}
           </div>
           {reportActionError && <div className="mb-3 rounded-lg border border-[#ffd0d0] bg-[#fff5f5] px-3 py-2 text-[11px] text-[#d93025]">{reportActionError}</div>}
+          {reportActionNotice && <div className="mb-3 rounded-lg border border-[#d7efd9] bg-[#eef8f1] px-3 py-2 text-[11px] text-[#258a3f]">{reportActionNotice}</div>}
           <div className="space-y-1.5">
-            {savedAnalysisResults.map((result) => (
+            {visibleSavedAnalysisResults.map((result) => (
               <div key={result.id} className="overflow-hidden rounded-lg bg-[#fafbfc]">
                 <div
                   className="flex cursor-pointer items-center gap-3 p-3 transition-colors hover:bg-[#f2f2f7]"
@@ -2680,7 +2768,10 @@ export function SelfAnalysis() {
                         {result.title || result.query}
                       </span>
                     )}
-                    <div className="mt-0.5 text-[11px] text-[#c7c7cc]">{result.savedAt || "时间未记录"}{result.topicData?.updated_at ? ` · 数据更新 ${new Date(result.topicData.updated_at).toLocaleString("zh-CN", { hour12: false })}` : ""}</div>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-[#c7c7cc]">
+                      {result.source?.channel && <span className="inline-flex items-center gap-1 rounded bg-[#eef3ff] px-1.5 py-0.5 text-[#4169a8]"><Sparkles className="h-3 w-3" />{result.source.label || result.source.channel}</span>}
+                      <span>{result.savedAt || "时间未记录"}{result.topicData?.updated_at ? ` · 数据更新 ${new Date(result.topicData.updated_at).toLocaleString("zh-CN", { hour12: false })}` : ""}</span>
+                    </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
                     {editingReportId === result.id ? (
@@ -2694,7 +2785,29 @@ export function SelfAnalysis() {
                 </div>
                 {expandedReportId === result.id && (
                   <div className="border-t border-[#ececf0] bg-white p-4">
-                    <div className="mb-3 text-[12px] font-medium text-[#1d1d1f]">可视化图形与结论</div>
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-[12px] font-medium text-[#1d1d1f]">可视化图形与结论</div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void saveSavedReportToWeekly(result)}
+                          disabled={reportActionLoadingId === `${result.id}:weekly`}
+                          className="inline-flex h-7 items-center gap-1 rounded-md border border-[#e5e5ea] bg-white px-2.5 text-[11px] text-[#3a3a3c] transition-colors hover:bg-[#f2f2f7] disabled:cursor-wait disabled:opacity-60"
+                        >
+                          <BookmarkPlus className="h-3.5 w-3.5" />
+                          {reportActionLoadingId === `${result.id}:weekly` ? "保存中" : result.weeklyReportEligible ? "已存周报" : "存周报"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void saveSavedReportAsExperience(result)}
+                          disabled={reportActionLoadingId === `${result.id}:experience`}
+                          className="inline-flex h-7 items-center gap-1 rounded-md border border-[#e5e5ea] bg-white px-2.5 text-[11px] text-[#3a3a3c] transition-colors hover:bg-[#f2f2f7] disabled:cursor-wait disabled:opacity-60"
+                        >
+                          <Lightbulb className="h-3.5 w-3.5" />
+                          {reportActionLoadingId === `${result.id}:experience` ? "固化中" : "存经验"}
+                        </button>
+                      </div>
+                    </div>
                     {reportLoadingId === result.id ? (
                       <div className="rounded-lg bg-[#fafbfc] px-3 py-8 text-center text-[12px] text-[#8a8a8e]">正在从 Topic_Data 读取该报告的最新数据…</div>
                     ) : <>
@@ -2708,9 +2821,9 @@ export function SelfAnalysis() {
                 )}
               </div>
             ))}
-            {!savedAnalysisResults.length && (
+            {!visibleSavedAnalysisResults.length && (
               <div className="rounded-lg bg-[#fafbfc] p-3 text-[11px] text-[#aeaeb2]">
-                {savedAnalysisLoadError || "暂无服务端已保存的报告"}
+                {savedAnalysisLoadError || (reportSourceFilter === "all" ? "暂无服务端已保存的报告" : "该来源暂无报告")}
               </div>
             )}
           </div>
@@ -2854,90 +2967,7 @@ export function SelfAnalysis() {
   );
 }
 
-function VoiceInputPopover({
-  transcript,
-  listening,
-  error,
-  onTranscriptChange,
-  onAnalyze,
-  onCancel,
-}: {
-  transcript: string;
-  listening: boolean;
-  error: string;
-  onTranscriptChange: (value: string) => void;
-  onAnalyze: () => void;
-  onCancel: () => void;
-}) {
-  const bars = [24, 38, 56, 44, 68, 52, 34, 60, 42, 30, 48, 36];
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/10 px-4 pt-[150px]">
-      <style>{`
-        @keyframes voice-level {
-          0%, 100% { transform: scaleY(0.45); opacity: 0.45; }
-          50% { transform: scaleY(1); opacity: 1; }
-        }
-      `}</style>
-      <div className="w-full max-w-[420px] overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/[0.12]">
-        <div className="border-b border-[#f0f0f2] px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-[13px] text-[#1d1d1f]">语音录入</div>
-              <div className="mt-0.5 text-[11px] text-[#aeaeb2]">
-                {listening ? "Fun-ASR 正在接收本机语音输入" : "可编辑识别文本后开始分析"}
-              </div>
-            </div>
-            <span className={`h-2 w-2 rounded-full ${listening ? "bg-[#34c759]" : "bg-[#c7c7cc]"}`} />
-          </div>
-        </div>
-        <div className="bg-[#fafbfc] px-4 py-5">
-          <div className="flex h-[104px] items-center justify-center gap-1.5 rounded-lg border border-[#f0f0f2] bg-white">
-            {bars.map((height, index) => (
-              <span
-                key={`${height}_${index}`}
-                className="w-1.5 origin-center rounded-full bg-[#8e8e93]"
-                style={{
-                  height,
-                  animationName: listening ? "voice-level" : undefined,
-                  animationDuration: listening ? "980ms" : undefined,
-                  animationTimingFunction: listening ? "ease-in-out" : undefined,
-                  animationIterationCount: listening ? "infinite" : undefined,
-                  animationDelay: listening ? `${index * 80}ms` : undefined,
-                  opacity: listening ? undefined : 0.35,
-                  transform: listening ? undefined : "scaleY(0.45)",
-                }}
-              />
-            ))}
-          </div>
-        </div>
-        <div className="px-4 pb-4">
-          <textarea
-            value={transcript}
-            onChange={(event) => onTranscriptChange(event.target.value)}
-            placeholder="语音识别文本会显示在这里，可直接修改。"
-            className="min-h-[112px] w-full resize-none rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[13px] leading-[1.7] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
-          />
-          {error && <div className="mt-2 text-[11px] text-[#d93025]">{error}</div>}
-          <div className="mt-3 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={onCancel}
-              className="rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[12px] text-[#636366] hover:bg-[#f2f2f7]"
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              onClick={onAnalyze}
-              disabled={!transcript.trim()}
-              className="rounded-lg bg-[#1d1d1f] px-4 py-2 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-40"
-            >
-              开始
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+function detectedAnalysisInstitution(files: KnowledgeFileAttachment[], currentInstitution: string) {
+  const detected = Array.from(new Set(files.flatMap((file) => file.detectedInstitutions || detectAttachmentInstitutions(file.name, file.contentPreview || ""))));
+  return detected.length === 1 ? detected[0] : currentInstitution;
 }

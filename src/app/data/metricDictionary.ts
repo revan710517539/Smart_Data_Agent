@@ -14,6 +14,8 @@ export type MetricDictionaryItem = {
   tenantId?: string;
   visibleInstitutions?: string[];
   visibleRoles?: string[];
+  /** Built-in, clearly labelled metric used only for an explicit Teams send test. */
+  isTestMetric?: boolean;
   /** Optional governed execution fields. Descriptive metrics remain documentation-only. */
   metricCode?: string;
   datasetId?: string;

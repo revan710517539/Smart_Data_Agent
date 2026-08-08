@@ -43,6 +43,48 @@ ASGIReceive = Callable[[], Awaitable[dict[str, Any]]]
 ASGISend = Callable[[dict[str, Any]], Awaitable[None]]
 
 
+def _scope_header(scope: dict[str, Any], expected_name: str) -> str:
+    expected = expected_name.lower().encode("ascii")
+    for name, value in scope.get("headers") or []:
+        if bytes(name).lower() == expected:
+            return bytes(value).decode("latin-1")
+    return ""
+
+
+def _select_precompressed_static_asset(candidate: Path, accept_encoding: str) -> tuple[Path, str | None]:
+    accepted = _accepted_content_encodings(accept_encoding)
+    selected: tuple[Path, str | None] = (candidate, None)
+    selected_quality = 0.0
+    for content_encoding, suffix in (("br", ".br"), ("gzip", ".gz")):
+        variant = candidate.with_name(candidate.name + suffix)
+        quality = accepted.get(content_encoding, accepted.get("*", 0.0))
+        if quality > selected_quality and variant.is_file():
+            selected = (variant, content_encoding)
+            selected_quality = quality
+    return selected
+
+
+def _has_precompressed_static_asset(candidate: Path) -> bool:
+    return any(candidate.with_name(candidate.name + suffix).is_file() for suffix in (".br", ".gz"))
+
+
+def _accepted_content_encodings(value: str) -> dict[str, float]:
+    accepted: dict[str, float] = {}
+    for item in value.lower().split(","):
+        parts = [part.strip() for part in item.split(";")]
+        if not parts or not parts[0]:
+            continue
+        quality = 1.0
+        for parameter in parts[1:]:
+            if parameter.startswith("q="):
+                try:
+                    quality = max(0.0, min(float(parameter[2:]), 1.0))
+                except ValueError:
+                    quality = 0.0
+        accepted[parts[0]] = quality
+    return accepted
+
+
 class ASGIRequestAdapter(AnalysisAPIHandler):
     """Run the existing governed route boundary without a ThreadingHTTPServer.
 
@@ -134,7 +176,11 @@ class SmartDataAgentASGI:
             and not str(scope.get("path") or "/").startswith(("/api/", "/mcp"))
             and self.static_root is not None
         ):
-            static = await asyncio.to_thread(self._read_static, str(scope.get("path") or "/"))
+            static = await asyncio.to_thread(
+                self._read_static,
+                str(scope.get("path") or "/"),
+                _scope_header(scope, "accept-encoding"),
+            )
             if static is not None:
                 status, headers, response_body = static
                 await send({"type": "http.response.start", "status": status, "headers": headers})
@@ -252,7 +298,11 @@ class SmartDataAgentASGI:
         )
         await send({"type": "http.response.body", "body": b'{"error":"unsupported_asgi_scope"}'})
 
-    def _read_static(self, request_path: str) -> tuple[int, list[tuple[bytes, bytes]], bytes] | None:
+    def _read_static(
+        self,
+        request_path: str,
+        accept_encoding: str = "",
+    ) -> tuple[int, list[tuple[bytes, bytes]], bytes] | None:
         if self.static_root is None or not self.static_root.is_dir():
             return None
         relative = request_path.lstrip("/") or "index.html"
@@ -265,18 +315,24 @@ class SmartDataAgentASGI:
             candidate = self.static_root / "index.html"
         if not candidate.is_file():
             return None
-        body = candidate.read_bytes()
+        selected, content_encoding = _select_precompressed_static_asset(candidate, accept_encoding)
+        body = selected.read_bytes()
         content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
         cache_control = "public, max-age=31536000, immutable" if candidate.name != "index.html" else "no-cache"
+        headers: list[tuple[bytes, bytes]] = [
+            (b"content-type", content_type.encode("ascii")),
+            (b"content-length", str(len(body)).encode("ascii")),
+            (b"cache-control", cache_control.encode("ascii")),
+            (b"x-content-type-options", b"nosniff"),
+            (b"x-frame-options", b"DENY"),
+        ]
+        if content_encoding:
+            headers.append((b"content-encoding", content_encoding.encode("ascii")))
+        if content_encoding or _has_precompressed_static_asset(candidate):
+            headers.append((b"vary", b"Accept-Encoding"))
         return (
             int(HTTPStatus.OK),
-            [
-                (b"content-type", content_type.encode("ascii")),
-                (b"content-length", str(len(body)).encode("ascii")),
-                (b"cache-control", cache_control.encode("ascii")),
-                (b"x-content-type-options", b"nosniff"),
-                (b"x-frame-options", b"DENY"),
-            ],
+            headers,
             body,
         )
 

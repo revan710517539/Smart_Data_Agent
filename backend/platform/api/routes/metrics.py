@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import parse_qs
 
-from backend.platform.api.support import first_query_value, send_route_exception
+from backend.platform.api.support import MAX_UPLOAD_BODY_BYTES, first_query_value, send_route_exception
 from backend.authz.models import RoleLevel
+from backend.platform.metrics.excel_import import parse_metric_workbook
 
 
 def handle_metric_dictionary_get(handler: Any, query: str) -> None:
@@ -19,8 +20,17 @@ def handle_metric_dictionary_get(handler: Any, query: str) -> None:
                 context.tenant_id,
                 {role.name for role in roles if role.tenant_id == context.tenant_id},
                 context.user_id,
-                is_super_admin=any(role.level == RoleLevel.SUPER_ADMIN for role in roles),
+                # Data Assets is always scoped by the left-navigation
+                # institution.  A super administrator may switch institutions,
+                # but may not receive another institution's dictionary merely
+                # because they have global administration permission.
+                is_super_admin=False,
             )
+            metrics = [
+                item
+                for item in metrics
+                if str(item.get("tenantId") or context.tenant_id) == context.tenant_id
+            ]
         else:
             list_all = getattr(handler.services.metric_dictionary_store, "list_all", None)
             metrics = list_all() if callable(list_all) else handler.services.metric_dictionary_store.list(context.tenant_id)
@@ -79,6 +89,42 @@ def handle_metric_dictionary_upsert(handler: Any) -> None:
         send_route_exception(handler, exc)
 
 
+def handle_metric_dictionary_import(handler: Any) -> None:
+    try:
+        payload = handler._read_json(MAX_UPLOAD_BODY_BYTES)
+        context = handler._request_context(payload=payload)
+        handler._require_metric_permission(context, "create")
+        file_name = str(payload.get("file_name") or "").strip()
+        if not file_name.lower().endswith(".xlsx"):
+            raise ValueError("请上传 .xlsx 格式的指标文件。")
+        rows = parse_metric_workbook(str(payload.get("file_content_base64") or ""))
+        existing = handler.services.metric_dictionary_store.list(context.tenant_id)
+        existing_names = {str(metric.get("metricName") or "").strip() for metric in existing}
+        used_ids = {str(metric.get("metricId") or "").strip() for metric in existing}
+        next_number = _next_metric_number(used_ids)
+        seen_names: set[str] = set()
+        skipped: list[str] = []
+        created: list[dict[str, Any]] = []
+        for metric in rows:
+            name = metric["metricName"].strip()
+            if name in existing_names or name in seen_names:
+                skipped.append(name)
+                continue
+            while f"M{next_number:05d}" in used_ids:
+                next_number += 1
+            normalized = _normalize_metric_visibility(handler, context, {**metric, "metricId": f"M{next_number:05d}"})
+            created.append(normalized)
+            seen_names.add(name)
+            used_ids.add(normalized["metricId"])
+            next_number += 1
+        for metric in created:
+            handler.services.metric_dictionary_store.upsert(context.tenant_id, metric, updated_by=context.user_id)
+        handler._write_audit(context, "metric.dictionary.import", "metric_dictionary", "xlsx", {"file_name": file_name, "created": len(created), "skipped": len(skipped)})
+        handler._send_json({"tenant_id": context.tenant_id, "created": created, "created_count": len(created), "skipped_count": len(skipped), "skipped_names": skipped[:20]})
+    except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
+        send_route_exception(handler, exc)
+
+
 def handle_metric_dictionary_delete(handler: Any, query: str) -> None:
     try:
         params = parse_qs(query)
@@ -112,9 +158,6 @@ def _metric_visible_to_context(handler: Any, context: Any, metric: dict[str, Any
     if created_by and created_by == context.user_id and metric_tenant_id == context.tenant_id:
         return True
     roles = _context_roles(handler, context)
-    if any(role.level == RoleLevel.SUPER_ADMIN for role in roles):
-        return True
-
     tenant_label = context.tenant_id.removeprefix("tenant:")
     visible_institutions = _string_list(metric.get("visibleInstitutions"))
     visible_roles = _string_list(metric.get("visibleRoles"))
@@ -163,3 +206,8 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item or "").strip()]
+
+
+def _next_metric_number(metric_ids: set[str]) -> int:
+    values = [int(metric_id[1:]) for metric_id in metric_ids if metric_id.startswith("M") and metric_id[1:].isdigit()]
+    return max(values, default=-1) + 1

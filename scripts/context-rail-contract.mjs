@@ -21,7 +21,7 @@ const routeError = read("src/app/components/RouteErrorPage.tsx");
 const checks = [
   [rail.includes('data-context-rail-collapse="true"'), "右栏必须保留整体收起入口"],
   [rail.includes('data-context-rail-edge-zone="true"'), "收起后必须保留右边缘悬浮感应区"],
-  [rail.includes("onMouseMove") && rail.includes("setEdgeY(event.clientY)"), "边缘展开按钮必须跟随鼠标纵向位置"],
+  [rail.includes('style={{ top: "50%" }}') && !rail.includes("setEdgeY") && !rail.includes("clientY"), "右侧边缘展开按钮必须固定在垂直中线，不得随鼠标移动"],
   [rail.includes("contextRailRevealEvent") && rail.includes("setCollapsed(false)") && rail.includes("onTabChange(detail.tab)"), "点击页面标注时必须自动展开右栏并切换到对应评论或 AI 页签"],
   [rail.includes('data-context-rail-scroll="true"') && rail.includes("overflow-y-auto"), "右栏必须使用独立纵向滚动容器"],
   [rail.includes('activeTab === "comments" ? "" : "hidden"') && rail.includes('activeTab === "analysis" ? "" : "hidden"'), "评论和 AI 标签切换不得卸载内部状态"],
@@ -63,7 +63,7 @@ const checks = [
   [comments.includes("let nextTop = startTop") && comments.includes("const displayTop = nextTop") && !comments.includes(".sort((a, b) => a.anchorTop - b.anchorTop)"), "评论卡必须从顶部开始按列表顺序自上而下排列，不得按正文锚点制造大段空白"],
   [comments.includes("activeDraftId || activeCommentId") && comments.includes("scroller.scrollTo") && comments.includes("CSS.escape(entryId)"), "点击评论标注后右栏必须自动滚动定位到对应评论或草稿"],
   [comments.includes("formatCommentTimestamp(comment.time)") && comments.includes("formatCommentTimestamp(reply.time)") && comments.includes('return `${year}-${month}-${day} ${hour}:${minute}:${second}`'), "评论和追评时间必须只显示年月日与时分秒，不得暴露毫秒或时区信息"],
-  [layout.includes('data-agent-sidebar-expand-zone="true"') && layout.includes("setSidebarEdgeY(event.clientY)") && layout.includes("fixed bottom-0 left-0 top-0") && layout.includes("sidebarEdgeVisible"), "左侧菜单折叠后必须在整条左边缘显示并跟随鼠标移动展开按钮"],
+  [layout.includes('data-agent-sidebar-expand-zone="true"') && layout.includes('style={{ top: "50%" }}') && !layout.includes("setSidebarEdgeY") && !layout.includes("clientY") && layout.includes("sidebarEdgeVisible"), "左侧菜单折叠后必须在整条左边缘显示居中稳定的展开按钮"],
   [dashboard.includes("summarizeContextValue(p.kpis)") && dashboard.includes("summarizeContextValue(dualTrend)") && dashboard.includes("summarizeContextValue(bankProductData)") && !dashboard.includes("JSON.stringify(p.kpis)"), "多机构分析的指标、图表和表格评论目标必须使用可读摘要，不得生成 JSON 乱码"],
   [routes.includes("canSafelyReloadRouteImport") && routes.includes("routeImportRetryKey") && routes.includes("errorElement: createElement(RouteErrorPage)"), "动态页面模块失效时必须限制自动重载次数并提供路由错误边界"],
   [routeError.includes('data-route-error="true"') && routeError.includes("重新加载页面") && routeError.includes("返回多机构分析"), "路由异常不得显示默认英文白屏，必须提供系统风格恢复操作"],

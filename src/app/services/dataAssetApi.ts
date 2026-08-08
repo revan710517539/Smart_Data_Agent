@@ -239,7 +239,7 @@ export type DataAssetBundle = {
   tenant_id: string;
   status?: "loading" | "ready";
   message?: string;
-  source_mode?: "csv_folder";
+  source_mode?: "csv_folder" | "knowledge_only";
   csv_source?: {
     mode: "csv_folder";
     root: string;
@@ -282,6 +282,7 @@ export type DataAssetItemType =
 type DataAssetParams = {
   tenantId: string;
   userId?: string;
+  scope?: "knowledge";
 };
 
 export type RawFileUpload = {
@@ -296,8 +297,10 @@ export type RawFileUpload = {
 export async function fetchDataAssets({
   tenantId,
   userId = getDefaultUserId(),
+  scope,
 }: DataAssetParams): Promise<DataAssetBundle> {
-  return apiRequest<DataAssetBundle>("/api/data-assets", {
+  const query = scope ? `?${new URLSearchParams({ scope }).toString()}` : "";
+  return apiRequest<DataAssetBundle>(`/api/data-assets${query}`, {
     method: "GET",
     context: { tenantId, userId },
   });

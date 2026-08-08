@@ -168,6 +168,73 @@ class OperatingSnapshotService:
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 
+    def build_authorized_dashboard(
+        self,
+        tenant_ids: tuple[str, ...],
+        user_id: str,
+        filters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate only the already-authorized tenant snapshots for the dashboard.
+
+        Authorization intentionally belongs to the HTTP route.  This service
+        receives only the approved tenant IDs and never discovers or scans
+        tenants by itself.  Every row is labelled before it leaves the
+        service, so equal branch names from two institutions cannot be mixed
+        in the multi-institution UI.
+        """
+        approved = tuple(dict.fromkeys(str(item).strip() for item in tenant_ids if str(item).strip()))
+        if not approved:
+            raise PermissionError("dashboard_tenant_scope_empty")
+        snapshots = [self.build("dashboard", tenant_id, user_id, filters) for tenant_id in approved]
+        dataset_keys = tuple(SNAPSHOT_QUERIES["dashboard"][index]["key"] for index in range(len(SNAPSHOT_QUERIES["dashboard"])))
+        datasets: dict[str, Any] = {}
+        data_modes: set[str] = set()
+        every_dataset_ready = True
+        every_dataset_publishable = True
+        for dataset_key in dataset_keys:
+            rows: list[dict[str, Any]] = []
+            evidence_ids: list[str] = []
+            ready = 0
+            publishable = True
+            for tenant_id, snapshot in zip(approved, snapshots):
+                dataset = dict(snapshot["datasets"].get(dataset_key) or {})
+                evidence = dict(dataset.get("evidence") or {})
+                if dataset.get("status") == "ready":
+                    ready += 1
+                    data_modes.add(str(evidence.get("data_mode") or "unknown"))
+                    evidence_ids.append(str(evidence.get("evidence_id") or ""))
+                    publishable = publishable and bool(evidence.get("publishable"))
+                    rows.extend(_label_dashboard_rows(dataset.get("rows"), tenant_id))
+                else:
+                    publishable = False
+            status = "ready" if ready == len(approved) else "partial" if ready else "unavailable"
+            every_dataset_ready = every_dataset_ready and status == "ready"
+            every_dataset_publishable = every_dataset_publishable and publishable and status == "ready"
+            datasets[dataset_key] = {
+                "status": status,
+                "rows": rows,
+                "query": {"row_count": len(rows), "tenant_count": len(approved)},
+                "evidence": {
+                    "evidence_id": "multi_" + hashlib.sha256("|".join(sorted(evidence_ids)).encode("utf-8")).hexdigest()[:24],
+                    "data_source": "authorized_tenant_aggregate",
+                    "data_mode": "real" if data_modes == {"real"} else "mock" if data_modes == {"mock"} else "mixed" if data_modes else "unavailable",
+                    "publishable": publishable and status == "ready",
+                    "aggregation_semantics_complete": True,
+                    "policy_enforced_at_source": True,
+                    "tenant_count": len(approved),
+                },
+            }
+        return {
+            "view": "dashboard",
+            "scope": "authorized_tenants",
+            "tenant_ids": list(approved),
+            "status": "ready" if every_dataset_ready else "partial" if any(item["status"] != "unavailable" for item in datasets.values()) else "unavailable",
+            "data_modes": sorted(data_modes),
+            "publishable": every_dataset_publishable,
+            "datasets": datasets,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
 
 def _dataset_payload(result: Any) -> dict[str, Any]:
     semantic = dict(result.semantic_info or {})
@@ -202,3 +269,18 @@ def _dataset_payload(result: Any) -> dict[str, Any]:
             "provider_query_id": str(semantic.get("provider_query_id") or ""),
         },
     }
+
+
+def _label_dashboard_rows(value: Any, tenant_id: str) -> list[dict[str, Any]]:
+    institution = str(tenant_id).split(":", 1)[-1] or tenant_id
+    rows: list[dict[str, Any]] = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        branch = str(row.get("branch_name") or "").strip()
+        row["institution_name"] = institution
+        if branch:
+            row["branch_name"] = f"{institution} · {branch}"
+        rows.append(row)
+    return rows

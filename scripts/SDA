@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+SOURCE=$0
+while [ -h "$SOURCE" ]; do
+  SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$SOURCE")" && pwd)
+  TARGET=$(readlink "$SOURCE")
+  case $TARGET in
+    /*) SOURCE=$TARGET ;;
+    *) SOURCE=$SOURCE_DIR/$TARGET ;;
+  esac
+done
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SOURCE")" && pwd)
+exec python3 "$SCRIPT_DIR/sda_report.py" "$@"

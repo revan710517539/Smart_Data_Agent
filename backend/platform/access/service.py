@@ -289,7 +289,6 @@ class AccessControlService:
             if not role:
                 raise ValueError(f"unknown role: {assignment.role_id}")
             self._require_can_grant_role(context, assignment.tenant_id, role)
-            self._require_single_default_admin(profile.user_id, assignment.tenant_id, role)
 
         saved = self.user_store.upsert_profile(profile)
         self.policy_repository.replace_user_assignments(saved.user_id, assignments)
@@ -389,14 +388,6 @@ class AccessControlService:
             return
         if not self.permission_broker.enforcer.can_manage_role(context.user_id, tenant_id, role.role_id):
             raise PermissionError(f"Permission denied: cannot grant role {role.name}")
-
-    def _require_single_default_admin(self, user_id: str, tenant_id: str, role: Role) -> None:
-        if role.name != "管理员" or role.level != RoleLevel.TENANT_ADMIN:
-            return
-        for assignment in self.policy_repository.list_user_assignments():
-            if assignment.user_id == user_id or assignment.tenant_id != tenant_id or assignment.role_id != role.role_id:
-                continue
-            raise ValueError(f"{_tenant_label(tenant_id)} 已有默认机构管理员。")
 
     def _is_super_admin(self, user_id: str) -> bool:
         for assignment in self.policy_repository.list_user_assignments(user_id):

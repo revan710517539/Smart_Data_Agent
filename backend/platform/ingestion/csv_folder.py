@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import os
 import re
 import threading
 import time
@@ -12,12 +13,20 @@ from typing import Any
 
 
 class CSVFolderSource:
-    """Read-only view of CSV files delivered to the project Origin_Data folder."""
+    """Read-only view of one institution's Data Crawler delivery folder."""
+
+    # The local Data Crawler checkout is the development delivery root.  It is
+    # deliberately treated exactly like a deployed mount: callers must still
+    # resolve an institution subdirectory through ``for_tenant``.  Production
+    # must provide SMART_DATA_AGENT_DATA_CRAWLER_ROOT instead of relying on
+    # this workstation-specific path.
+    local_data_crawler_root = Path("/Users/revan/Documents/playwright/examples/data-crawler/data/csv")
+    container_data_crawler_root = Path("/app/data")
 
     default_max_file_bytes = 128 * 1024 * 1024
     default_max_files = 500
-    # Origin_Data is delivered in daily batches, not written by interactive
-    # page traffic.  A short process-local cache avoids re-walking a mounted
+    # Data Crawler delivers daily batches, not interactive page traffic. A
+    # short process-local cache avoids re-walking a mounted
     # folder (which can take seconds on macOS/network volumes) for every
     # data-management and analysis-picker request.  Scheduled processing
     # explicitly bypasses this cache before it transforms the daily delivery.
@@ -39,13 +48,45 @@ class CSVFolderSource:
         self._table_assets_cache: dict[int, list[dict[str, Any]]] = {}
         self._catalog_lock = threading.RLock()
         self._catalog_ready = threading.Event()
+        self._tenant_sources: dict[str, "CSVFolderSource"] = {}
 
     @classmethod
     def from_environment(cls) -> "CSVFolderSource":
-        # Smart Data Agent is a consumer of the project Origin_Data directory.
-        # Every CSV below it is a read-only source table.
-        root = Path(__file__).resolve().parents[3] / "Origin_Data"
+        # A deployed Smart Data Agent reads the container mount directly from
+        # /app/data/<机构名>. The workstation root is only the local analogue.
+        # Neither path may fall back to legacy Origin_Data or another tenant.
+        configured = str(os.getenv("SMART_DATA_AGENT_DATA_CRAWLER_ROOT") or "").strip()
+        if configured:
+            # An explicit server setting wins even while the path is not
+            # mounted.  That state must fail closed as an empty tenant catalog,
+            # rather than silently reading a local or legacy directory.
+            root = Path(configured).expanduser()
+        elif cls.container_data_crawler_root.is_dir():
+            root = cls.container_data_crawler_root
+        elif cls.local_data_crawler_root.is_dir():
+            root = cls.local_data_crawler_root
+        else:
+            # Preserve the deployment contract even when neither mount has
+            # arrived yet: the tenant catalog remains empty until /app/data is
+            # mounted, never silently reverts to a legacy shared directory.
+            root = cls.container_data_crawler_root
         return cls(root)
+
+    def for_tenant(self, tenant_id: str) -> "CSVFolderSource":
+        """Return the sole approved raw-data directory for one tenant.
+
+        No fallback to the crawler root is permitted: if the institution folder
+        is absent, the caller receives an empty catalog rather than another
+        institution's files.
+        """
+        directory = _tenant_directory_name(tenant_id)
+        with self._catalog_lock:
+            source = self._tenant_sources.get(directory)
+            if source is None:
+                source = CSVFolderSource(self.root / directory, max_file_bytes=self.max_file_bytes, max_files=self.max_files)
+                self._tenant_sources[directory] = source
+                threading.Thread(target=source.prime_catalog, name=f"csv-catalog-{directory}", daemon=True).start()
+            return source
 
     def prime_catalog(self) -> None:
         """Build the read-only catalog before the API begins serving traffic."""
@@ -244,7 +285,7 @@ class CSVFolderSource:
             "id": f"csv_{identity}",
             "tableNameEn": f"csv_{identity[:12]}",
             "tableNameCn": display_name,
-            "source": "项目 Origin_Data 文件夹",
+            "source": "当前机构 Data Crawler 文件夹",
             "tableType": "csv_file",
             "primaryKey": _first_matching_code(field_codes, ("id", "编号", "主键", "流水")),
             "dateField": _first_matching_code(field_codes, ("date", "time", "日期", "时间")),
@@ -252,7 +293,7 @@ class CSVFolderSource:
             "customerField": _first_matching_code(field_codes, ("customer", "client", "客户")),
             "description": f"{relative_path} · CSV 原始数据，共 {metadata['row_count']} 行、{len(fields)} 个字段。",
             "updateFrequency": "随文件更新自动刷新",
-            "restrictions": "项目 Origin_Data 文件夹内的只读 CSV；不支持页面爬取、外部连接或在线写入。",
+            "restrictions": "当前机构 Data Crawler 文件夹内的只读 CSV；不支持页面爬取、外部连接或在线写入。",
             "exampleSql": f"-- CSV 文件：{relative_path}\nSELECT * FROM {f'csv_{identity[:12]}'} LIMIT 100;",
             "fields": fields,
             "updatedAt": metadata["modified_at"],
@@ -292,6 +333,14 @@ class CSVFolderSource:
                 superseded.append(file)
         selected = sorted(newest_by_identity.values(), key=lambda item: str(item.get("relative_path") or ""))
         return selected, superseded
+
+
+def _tenant_directory_name(tenant_id: str) -> str:
+    """Map the authenticated tenant code to one safe crawler directory name."""
+    name = str(tenant_id or "").strip().split(":", 1)[-1].strip()
+    if not name or name in {".", ".."} or "/" in name or "\\" in name or "\x00" in name:
+        raise ValueError("csv_source_tenant_directory_invalid")
+    return name
 
 
 def _decode_csv_text(content: bytes) -> str:

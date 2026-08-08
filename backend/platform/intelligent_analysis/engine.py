@@ -579,6 +579,7 @@ def _safe_invocation(completion: dict[str, Any], prompt_template_id: str) -> dic
             "usage_source",
             "model_id",
             "used_model",
+            "message",
         )
         if completion.get(key) not in (None, "")
     }

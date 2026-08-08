@@ -23,6 +23,13 @@ import { runApplicationAction } from "../services/applicationApi";
 import { fetchNavigation } from "../services/navigationApi";
 import { preloadRoutePath } from "../routePreload";
 import { AgentSupervisor } from "./agent-supervisor/AgentSupervisor";
+import { fetchSystemConfig } from "../services/systemConfigApi";
+import {
+  configuredTextModelOptions,
+  persistTextModelSelection,
+  readPersistedTextModelSelection,
+  type TextModelOption,
+} from "../services/modelSelectionStore";
 
 type MenuItem = {
   key: string;
@@ -115,11 +122,12 @@ export function Layout() {
   const [expandedMenus, setExpandedMenus] = useState<string[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarEdgeVisible, setSidebarEdgeVisible] = useState(false);
-  const [sidebarEdgeY, setSidebarEdgeY] = useState(() => Math.round(window.innerHeight / 2));
   const [allowedMenuKeys, setAllowedMenuKeys] = useState<Set<string> | null>(new Set());
   const [navigationStatus, setNavigationStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [institutionOpen, setInstitutionOpen] = useState(false);
   const [todoReturnPath, setTodoReturnPath] = useState("/");
+  const [textModelOptions, setTextModelOptions] = useState<TextModelOption[]>([]);
+  const [selectedTextModelId, setSelectedTextModelId] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -152,6 +160,36 @@ export function Layout() {
   const currentMenuKey = menuKeyForPath(menuItems, location.pathname);
   const accessFallbackPath = firstAllowedMenuPath(menuItems, allowedMenuKeys) || "/";
   const isTodoPage = location.pathname === "/agent/todos";
+  const isSmartAnalysisPage = location.pathname === "/self-analysis/query";
+
+  useEffect(() => {
+    if (isSmartAnalysisPage) return;
+    let cancelled = false;
+    const syncTextModels = async () => {
+      try {
+        const response = await fetchSystemConfig({ tenantId, userId });
+        if (cancelled) return;
+        const options = configuredTextModelOptions(response.models);
+        const persisted = readPersistedTextModelSelection(tenantId, userId);
+        const selected = options.find((option) => option.id === `${persisted?.integrationId || ""}::${persisted?.selectedModelName || ""}`)
+          || options[0];
+        setTextModelOptions(options);
+        setSelectedTextModelId(selected?.id || "");
+        if (selected && selected.id !== `${persisted?.integrationId || ""}::${persisted?.selectedModelName || ""}`) {
+          persistTextModelSelection(tenantId, userId, selected);
+        }
+      } catch {
+        if (!cancelled) {
+          setTextModelOptions([]);
+          setSelectedTextModelId("");
+        }
+      }
+    };
+    void syncTextModels();
+    return () => {
+      cancelled = true;
+    };
+  }, [isSmartAnalysisPage, tenantId, userId]);
 
   useEffect(() => {
     if (!isTodoPage) {
@@ -190,13 +228,8 @@ export function Layout() {
         <div
           className="fixed bottom-0 left-0 top-0 z-[60] hidden w-10 lg:block"
           data-agent-sidebar-expand-zone="true"
-          onMouseEnter={(event) => {
+          onMouseEnter={() => {
             setSidebarEdgeVisible(true);
-            setSidebarEdgeY(event.clientY);
-          }}
-          onMouseMove={(event) => {
-            setSidebarEdgeVisible(true);
-            setSidebarEdgeY(event.clientY);
           }}
           onMouseLeave={() => setSidebarEdgeVisible(false)}
         >
@@ -207,7 +240,7 @@ export function Layout() {
             title="展开菜单"
             data-agent-sidebar-expand="true"
             className={`fixed left-2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#d9d9de] bg-white/95 text-[#636366] shadow-lg shadow-black/10 backdrop-blur transition-all duration-150 hover:bg-[#f2f2f7] hover:text-[#1d1d1f] ${sidebarEdgeVisible ? "scale-100 opacity-100" : "pointer-events-none scale-90 opacity-0"}`}
-            style={{ top: Math.max(28, Math.min(window.innerHeight - 28, sidebarEdgeY)) }}
+            style={{ top: "50%" }}
           >
             <PanelLeftOpen className="h-4 w-4" />
           </button>
@@ -344,6 +377,32 @@ export function Layout() {
             );
           })}
         </nav>
+
+        {!isSmartAnalysisPage && (
+          <div className="px-4 pb-3">
+            <label className="mb-1.5 block text-[10px] font-medium text-[#8a8a8e]" htmlFor="shared-text-model-selector">当前模型</label>
+            <div className="relative">
+              <select
+                id="shared-text-model-selector"
+                aria-label="选择全局文本模型"
+                value={selectedTextModelId}
+                disabled={!textModelOptions.length}
+                onChange={(event) => {
+                  const next = textModelOptions.find((option) => option.id === event.target.value);
+                  if (!next) return;
+                  setSelectedTextModelId(next.id);
+                  persistTextModelSelection(tenantId, userId, next);
+                }}
+                className="h-8 w-full appearance-none rounded-lg border border-[#e5e5ea] bg-white px-2.5 pr-7 text-[11px] text-[#3a3a3c] outline-none transition-colors hover:bg-[#f8f8fa] focus:border-[#8a8a8e] disabled:cursor-not-allowed disabled:bg-[#fafbfc] disabled:text-[#aeaeb2]"
+              >
+                {textModelOptions.length ? textModelOptions.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                )) : <option value="">未配置文本模型</option>}
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#8a8a8e]" />
+            </div>
+          </div>
+        )}
 
         {/* User */}
         <div className="px-4 py-3.5 border-t border-[#ebebf0]">

@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+# WorkBuddy adds a plugin's bin/ directory to the Bash tool PATH. The default
+# works while this versioned plugin is used from the Smart_Data_Agent checkout.
+PLUGIN_ROOT=${CODEBUDDY_PLUGIN_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}
+CLI=${SMART_DATA_AGENT_REPORT_CLI:-"$PLUGIN_ROOT/../../scripts/SDA"}
+
+if [ ! -x "$CLI" ]; then
+  echo "SDA: CLI unavailable; set SMART_DATA_AGENT_REPORT_CLI to the executable SDA path." >&2
+  exit 127
+fi
+
+exec "$CLI" "$@"

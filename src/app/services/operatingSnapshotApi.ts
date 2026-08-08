@@ -2,7 +2,7 @@ import { apiRequest } from "./apiClient";
 import { getDefaultTenantId, getDefaultUserId } from "./apiContext";
 
 export type SnapshotDataset = {
-  status: "ready" | "unavailable";
+  status: "ready" | "partial" | "unavailable";
   rows: Record<string, unknown>[];
   error_code?: string;
   query?: { sql_hash: string; parameters: Record<string, unknown>; row_count: number };
@@ -25,6 +25,8 @@ export type OperatingSnapshot = {
   publishable: boolean;
   datasets: Record<string, SnapshotDataset>;
   generated_at: string;
+  scope?: "authorized_tenants";
+  tenant_ids?: string[];
 };
 
 export function fetchOperatingSnapshot({

@@ -1,0 +1,17 @@
+{
+  "description": "Require explicit structured publication before a sync-enabled analysis ends.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "If the user requested that this analysis be synchronized to Smart Data Agent and no successful `SDA publish --channel workbuddy` command has been run in this conversation, return {\"ok\":false,\"reason\":\"请先按 smart-data-agent-report Skill 生成结构化报告并执行 SDA publish；不要上传整段对话转录。\"}. Otherwise return {\"ok\":true}.",
+            "continueOnBlock": true,
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

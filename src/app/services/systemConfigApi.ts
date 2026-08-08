@@ -74,6 +74,8 @@ export type SystemDataParam = {
   value: string;
   category: "data" | "security" | "system" | string;
   description: string;
+  tenantId?: string;
+  institution?: string;
 };
 
 export type ModelIntegrationTestResult = {

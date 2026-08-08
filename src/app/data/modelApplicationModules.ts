@@ -1,4 +1,5 @@
 export const modelApplicationModuleOptions = [
+  { value: "global_text_model", label: "全局文本模型（非语音）" },
   { value: "realtime_voice_input", label: "实时语音录入" },
   { value: "popup_voice_input", label: "弹窗语音录入" },
   { value: "intelligent_analysis_reasoning", label: "智能分析推理分析" },

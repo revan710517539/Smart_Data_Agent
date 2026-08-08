@@ -2,7 +2,7 @@
 
 :root {
   --font-size: 16px;
-  --background: #ffffff;
+  --background: #f6f7f9;
   --foreground: oklch(0.145 0 0);
   --card: #ffffff;
   --card-foreground: oklch(0.145 0 0);
@@ -167,8 +167,107 @@
     @apply border-border outline-ring/50;
   }
 
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    background: #f6f7f9;
+  }
+
+  html {
+    /* Prevent a vertical scrollbar appearing/disappearing from shifting the
+       workspace horizontally when a full-screen modal locks page scrolling. */
+    scrollbar-gutter: stable;
+  }
+
   body {
     @apply bg-background text-foreground;
+    overflow-x: hidden;
+    text-rendering: optimizeLegibility;
+  }
+
+  /*
+   * The application deliberately uses color, border and shadow transitions
+   * only.  Controls never change their layout metrics on hover, so page
+   * content, modal footers and form rows stay visually anchored.
+   */
+  button,
+  [role="button"],
+  select,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+  textarea {
+    transition-property: background-color, border-color, color, box-shadow, outline-color, opacity !important;
+    transition-duration: 140ms !important;
+    transition-timing-function: ease-out !important;
+  }
+
+  button:focus-visible,
+  [role="button"]:focus-visible,
+  select:focus-visible,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid rgba(10, 102, 194, 0.48) !important;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px rgba(10, 102, 194, 0.10) !important;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):focus,
+  select:focus,
+  textarea:focus {
+    border-color: #8caed3 !important;
+    background-color: #ffffff;
+    box-shadow: 0 0 0 3px rgba(10, 102, 194, 0.08) !important;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    button:not(:disabled):hover,
+    [role="button"]:not([aria-disabled="true"]):hover,
+    select:not(:disabled):hover,
+    input:not(:disabled):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):hover,
+    textarea:not(:disabled):hover {
+      border-color: rgba(10, 102, 194, 0.40) !important;
+      box-shadow: 0 5px 16px rgba(24, 39, 75, 0.07), 0 0 0 2px rgba(10, 102, 194, 0.07) !important;
+    }
+  }
+
+  button:disabled,
+  select:disabled,
+  input:disabled,
+  textarea:disabled {
+    box-shadow: none !important;
+  }
+
+  [role="dialog"] {
+    overscroll-behavior: contain;
+  }
+
+  /*
+   * The app scrolls inside [data-agent-main-shell], rather than on body. A
+   * body-only lock therefore lets the page behind a fixed modal keep moving.
+   * Every mounted full-screen overlay uses `fixed inset-0`; lock the actual
+   * scroll owner while keeping each modal's own overflow-y-auto region usable.
+   * The collapsed Agent overlay is excluded until it is interactive.
+   */
+  html:has([class~="fixed"][class~="inset-0"]:not(.pointer-events-none)),
+  body:has([class~="fixed"][class~="inset-0"]:not(.pointer-events-none)) {
+    overflow: hidden !important;
+    overscroll-behavior: none;
+  }
+
+  [data-agent-main-shell]:has([class~="fixed"][class~="inset-0"]:not(.pointer-events-none)) {
+    overflow: hidden !important;
+    overscroll-behavior: none;
+  }
+
+  /* Dialog/alert-dialog/drawer content may be rendered through a React portal
+     directly under body, so it is not a descendant of the main shell. */
+  body:has([class~="fixed"][class~="inset-0"]:not(.pointer-events-none)) [data-agent-main-shell] {
+    overflow: hidden !important;
+    overscroll-behavior: none;
+  }
+
+  [class~="fixed"][class~="inset-0"]:not(.pointer-events-none) {
+    overscroll-behavior: contain;
   }
 
   /**

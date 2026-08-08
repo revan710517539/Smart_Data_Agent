@@ -84,10 +84,7 @@ import {
   maskApiSecret,
   speechProviderLabel,
   modelSourceLabel,
-  defaultRelayModelOptions,
-  modelOptionDescriptions,
   modelOptionDescription,
-  defaultModelOptionsForSource,
   availableModelOptions,
   speechCapabilityDescriptions,
   speechCapabilityOptions,
@@ -254,7 +251,10 @@ export function SystemSettings() {
       return;
     }
     const previousModels = modelIntegrations;
-    const availableModels = defaultModelOptionsForSource(modelForm.modelName, modelForm.name);
+    // Relay model names are discovered from the configured endpoint during a
+    // connection test.  Do not present a local static catalog as if it came
+    // from the customer's relay.
+    const availableModels: string[] = [];
     const nextModel: ModelIntegration = {
       id: `model_${Date.now()}`,
       name: nextName,
@@ -313,7 +313,7 @@ export function SystemSettings() {
     const nextSource = modelSourceLabel(patch.modelName || model.modelName);
     const availableModels =
       patch.availableModels ??
-      (model.availableModels?.length ? model.availableModels : defaultModelOptionsForSource(nextSource, nextName));
+      (model.availableModels?.length ? model.availableModels : []);
     const rawEnabledModels = patch.enabledModels ?? model.enabledModels ?? [];
     const enabledModels =
       patch.enabledModels !== undefined
@@ -495,12 +495,17 @@ export function SystemSettings() {
   };
 
   const updateSystemDataParam = async (param: SystemDataParam, value: string) => {
+    if (param.tenantId && param.tenantId !== tenantId) {
+      setConfigNotice(`请先在左上角切换到${param.institution || param.tenantId}，再修改该机构参数。`);
+      return;
+    }
     const previousParams = systemDataParams;
     const nextParam = { ...param, value };
-    setSystemDataParams((current) => current.map((item) => (item.id === param.id ? nextParam : item)));
+    const sameParam = (item: SystemDataParam) => item.id === param.id && (item.tenantId || tenantId) === (param.tenantId || tenantId);
+    setSystemDataParams((current) => current.map((item) => (sameParam(item) ? nextParam : item)));
     try {
       const response = await saveSystemDataParam({ tenantId, param: nextParam });
-      setSystemDataParams((current) => current.map((item) => (item.id === param.id ? response.param : item)));
+      setSystemDataParams((current) => current.map((item) => (sameParam(item) ? { ...response.param, tenantId, institution: selectedInstitution } : item)));
       setConfigNotice("系统数据参数已同步到后端。");
     } catch (error) {
       if (isDemoFallbackEnabled()) {
@@ -627,41 +632,6 @@ export function SystemSettings() {
         <p className="text-[13px] text-[#aeaeb2] mt-1">用户管理 · 角色权限 · 审计日志 · 系统配置</p>
       </div>
 
-      <div className="mb-6 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
-        <section className="rounded-xl border border-[#f0f0f2] bg-white p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="text-[13px] text-[#1d1d1f]">用户与角色概览</div>
-            <span className="text-[11px] text-[#aeaeb2]">当前机构</span>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { label: "角色数", value: String(roles.length), icon: Shield, color: "#636366" },
-              { label: "总用户数", value: String(users.length), icon: Users, color: "#636366" },
-              { label: "今日登录", value: "42", icon: Key, color: "#636366" },
-              { label: "在线用户", value: String(users.filter((user) => user.status === "active").length), icon: CheckCircle2, color: "#636366" },
-            ].map((s) => (
-              <div key={s.label} className="rounded-lg bg-[#fafbfc] p-3">
-                <div className="mb-2 flex items-center justify-between"><s.icon className="h-4 w-4" style={{ color: s.color }} /></div>
-                <div className="text-[21px] tracking-tight text-gray-900">{s.value}</div>
-                <div className="mt-0.5 text-[11px] text-gray-400">{s.label}</div>
-              </div>
-            ))}
-          </div>
-        </section>
-        <AccessConfigCard
-          title="模型接入"
-          subtitle="统一维护大模型与语音转文字接入"
-          icon={Key}
-          items={[
-            `${modelIntegrations.length} 个大模型接入`,
-            `${speechIntegrations.length} 个语音转文字接入`,
-            modelIntegrations.map((item) => item.name).join("、") || "暂无大模型配置",
-            speechIntegrations.map((item) => `${item.name}(${speechProviderLabel(item.provider)})`).join("、") || "暂无语音配置",
-          ]}
-          onEdit={() => setAccessModal("model")}
-        />
-      </div>
-
       {(activeTab === "users" || activeTab === "roles") && accessNotice && (
         <div className="mb-4 rounded-lg border border-[#d7efd9] bg-[#eef8f1] px-3 py-2 text-[12px] text-[#258a3f]">
           {accessNotice}
@@ -778,6 +748,7 @@ export function SystemSettings() {
             <thead>
               <tr className="text-gray-400 text-[11px]">
                 <th className="text-left py-2.5 px-3">时间</th>
+                <th className="text-left py-2.5 px-3">机构</th>
                 <th className="text-left py-2.5 px-3">用户</th>
                 <th className="text-left py-2.5 px-3">操作</th>
                 <th className="text-left py-2.5 px-3">对象</th>
@@ -788,6 +759,7 @@ export function SystemSettings() {
               {(auditRows.length ? auditRows : isDemoFallbackEnabled() ? fallbackAuditLogs : []).map((log, i) => (
                 <tr key={i} className="border-t border-gray-50 text-gray-700 hover:bg-[#f5f5f7]">
                   <td className="py-3 px-3 text-gray-400">{log.time}</td>
+                  <td className="py-3 px-3 text-gray-600">{log.institution}</td>
                   <td className="py-3 px-3">{log.user}</td>
                   <td className="py-3 px-3">
                     <span className="text-[10px] bg-[#f5f5f7] px-2 py-0.5 rounded-full">{log.action}</span>
@@ -798,7 +770,7 @@ export function SystemSettings() {
               ))}
               {!auditRows.length && !isDemoFallbackEnabled() && (
                 <tr className="border-t border-gray-50">
-                  <td className="px-3 py-6 text-center text-[12px] text-[#8a8a8e]" colSpan={5}>
+                  <td className="px-3 py-6 text-center text-[12px] text-[#8a8a8e]" colSpan={6}>
                     暂无后端审计日志，或当前角色无权查看。
                   </td>
                 </tr>
@@ -815,7 +787,20 @@ export function SystemSettings() {
               {configNotice}
             </div>
           )}
-          <SystemDataParamsPanel params={systemDataParams} onSave={updateSystemDataParam} />
+          <section className="flex items-center justify-between rounded-xl border border-[#f0f0f2] bg-white px-5 py-4">
+            <div>
+              <h3 className="text-[14px] text-[#1d1d1f]">模型接入管理</h3>
+              <p className="mt-1 text-[12px] text-[#8a8a8e]">统一用户下的大模型可在已授权机构间复用；语音接入独立管理。</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAccessModal("model")}
+              className="rounded-lg border border-[#d8d8dc] bg-white px-3 py-2 text-[12px] text-[#1d1d1f] shadow-sm"
+            >
+              管理模型
+            </button>
+          </section>
+          <SystemDataParamsPanel params={systemDataParams} currentTenantId={tenantId} onSave={updateSystemDataParam} />
         </div>
       )}
 
@@ -860,6 +845,7 @@ export function SystemSettings() {
           institutionOptions={isSuperAdmin ? operatingTenantNames : visibleInstitutions}
           rolePermissions={permissionInstitutions}
           canGrantAdminRole={isSuperAdmin}
+          canGrantSuperAdminRole={isSuperAdmin}
           onChange={(key, value) => setUserForm((current) => ({ ...current, [key]: value }))}
           onTenantRolesChange={(tenantRoles) => setUserForm((current) => ({ ...current, tenantRoles }))}
           onSave={saveUser}
@@ -932,6 +918,7 @@ function UserEditorModal({
   institutionOptions,
   rolePermissions,
   canGrantAdminRole,
+  canGrantSuperAdminRole,
   onChange,
   onTenantRolesChange,
   onSave,
@@ -942,6 +929,7 @@ function UserEditorModal({
   institutionOptions: string[];
   rolePermissions: InstitutionPermission[];
   canGrantAdminRole: boolean;
+  canGrantSuperAdminRole: boolean;
   onChange: (key: UserFormKey, value: string) => void;
   onTenantRolesChange: (tenantRoles: AccessTenantRole[]) => void;
   onSave: () => void;
@@ -964,6 +952,13 @@ function UserEditorModal({
   };
   const removeTenantRole = (index: number) => {
     onTenantRolesChange(form.tenantRoles.filter((_, roleIndex) => roleIndex !== index));
+  };
+  const toggleSuperAdminRole = () => {
+    onTenantRolesChange(
+      isGlobalSuperAdmin
+        ? [{ tenant: availableInstitutions[0], role: "操作员" }]
+        : [{ tenant: "全部机构", role: "超级管理员" }],
+    );
   };
 
   return (
@@ -992,16 +987,31 @@ function UserEditorModal({
           <div className="md:col-span-2 rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-3">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-[12px] text-[#1d1d1f]">机构角色授权</span>
-              {!isGlobalSuperAdmin && (
-                <button
-                  type="button"
-                  onClick={addTenantRole}
-                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#636366] hover:bg-white"
-                >
-                  <Plus className="h-3 w-3" />
-                  添加授权
-                </button>
-              )}
+              <div className="flex items-center gap-1">
+                {canGrantSuperAdminRole && (
+                  <label className="inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#636366] hover:bg-white">
+                    <input
+                      type="radio"
+                      name="super-admin-role"
+                      checked={isGlobalSuperAdmin}
+                      onClick={toggleSuperAdminRole}
+                      readOnly
+                      className="h-3 w-3 accent-[#1d1d1f]"
+                    />
+                    授予超级管理员权限
+                  </label>
+                )}
+                {!isGlobalSuperAdmin && (
+                  <button
+                    type="button"
+                    onClick={addTenantRole}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#636366] hover:bg-white"
+                  >
+                    <Plus className="h-3 w-3" />
+                    添加授权
+                  </button>
+                )}
+              </div>
             </div>
             <div className="space-y-2">
               {form.tenantRoles.map((role, index) => {
@@ -1055,11 +1065,6 @@ function UserEditorModal({
               })}
             </div>
           </div>
-          {isGlobalSuperAdmin && (
-            <div className="md:col-span-2 rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-3 text-[12px] leading-[1.7] text-[#636366]">
-              超级管理员是全局唯一角色，不属于任何单个机构；这里只允许维护姓名、邮箱、部门和状态，不允许改成机构角色。
-            </div>
-          )}
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-[#f0f0f2] px-5 py-4">
           <button
@@ -1689,9 +1694,11 @@ function roleLabel(role: AccessRoleConfig) {
 
 function SystemDataParamsPanel({
   params,
+  currentTenantId,
   onSave,
 }: {
   params: SystemDataParam[];
+  currentTenantId: string;
   onSave: (param: SystemDataParam, value: string) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -1709,24 +1716,30 @@ function SystemDataParamsPanel({
       </div>
       <div className="space-y-2">
         {params.map((cfg) => {
-          const value = drafts[cfg.id] ?? cfg.value;
+          const identity = `${cfg.tenantId || currentTenantId}:${cfg.id}`;
+          const editable = !cfg.tenantId || cfg.tenantId === currentTenantId;
+          const value = drafts[identity] ?? cfg.value;
           return (
-            <div key={cfg.id} className="grid gap-3 rounded-lg bg-[#fafbfc] p-4 transition-colors hover:bg-[#f2f2f7] md:grid-cols-[minmax(0,1fr)_260px_64px] md:items-center">
+            <div key={identity} className="grid gap-3 rounded-lg bg-[#fafbfc] p-4 transition-colors hover:bg-[#f2f2f7] md:grid-cols-[minmax(0,1fr)_260px_64px] md:items-center">
               <div>
-                <div className="text-[13px] text-gray-800">{cfg.name}</div>
+                <div className="flex items-center gap-2 text-[13px] text-gray-800"><span>{cfg.name}</span>{cfg.institution && <span className="rounded bg-[#eef4ff] px-1.5 py-0.5 text-[10px] text-[#2466b0]">{cfg.institution}</span>}</div>
                 <div className="mt-0.5 text-[11px] text-gray-400">
                   {cfg.category === "security" ? "安全配置" : cfg.category === "data" ? "数据配置" : "系统配置"} · {cfg.description}
                 </div>
               </div>
               <input
                 value={value}
-                onChange={(event) => setDrafts((current) => ({ ...current, [cfg.id]: event.target.value }))}
-                className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
+                disabled={!editable}
+                title={editable ? undefined : `切换到${cfg.institution || "对应机构"}后可修改`}
+                onChange={(event) => setDrafts((current) => ({ ...current, [identity]: event.target.value }))}
+                className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc] disabled:cursor-not-allowed disabled:bg-[#f2f2f7] disabled:text-[#aeaeb2]"
               />
               <button
                 type="button"
                 onClick={() => onSave(cfg, value)}
-                className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[12px] text-[#636366] hover:bg-[#f2f2f7]"
+                disabled={!editable}
+                title={editable ? undefined : `切换到${cfg.institution || "对应机构"}后可修改`}
+                className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[12px] text-[#636366] hover:bg-[#f2f2f7] disabled:cursor-not-allowed disabled:bg-[#f2f2f7] disabled:text-[#aeaeb2]"
               >
                 <Edit3 className="h-3.5 w-3.5" />
                 保存
@@ -1877,7 +1890,7 @@ function ModelAccessModal({
       <div className="flex h-[min(760px,86vh)] w-full max-w-[1200px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
         <ModalHeader
           title="模型接入管理"
-          desc="统一维护系统可调用的大模型、可选子模型和语音转文字能力；业务页面只选择这里已启用的模型配置。"
+          desc="模型按账号统一保存，账号下所有机构共用；可选子模型以测试接口的实际返回为准。"
           onClose={onClose}
         />
         <div className="border-b border-[#f0f0f2] px-5 pt-4">
@@ -2018,7 +2031,7 @@ function ModelAccessModal({
                         <div className="rounded-lg border border-[#f0f0f2] bg-white p-2">
                           <div className="mb-2 flex items-center justify-between gap-2">
                             <span className="text-[11px] text-[#8a8a8e]">可选模型</span>
-                            {!result && !model.availableModels?.length && <span className="text-[10px] text-[#aeaeb2]">未测试时显示默认候选</span>}
+                            {!result && !model.availableModels?.length && <span className="text-[10px] text-[#aeaeb2]">请先测试以同步实际可选模型</span>}
                             {result?.available_models?.length ? <span className="text-[10px] text-[#aeaeb2]">测试返回模型已同步</span> : null}
                           </div>
                           <div className="grid gap-2 md:grid-cols-2">

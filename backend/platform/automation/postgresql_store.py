@@ -11,7 +11,7 @@ from backend.platform.database.identity import PostgreSQLIdentityResolver
 from backend.platform.database.postgresql import PostgreSQLConnectionPool
 from backend.platform.security.secrets import decrypt_secret, encrypt_secret
 
-from .store import TASK_TYPES, _next_run, _object, _required, _schedule_timezone, _subscription_fields
+from .store import TEAMS_CONNECTION_EVENT_TYPE, TASK_TYPES, _next_run, _object, _required, _schedule_timezone, _subscription_fields
 
 
 class PostgreSQLAutomationStore:
@@ -515,9 +515,51 @@ class PostgreSQLAutomationStore:
             tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
             owner_key = PostgreSQLIdentityResolver.user_id(connection, owner_user_id)
             with connection.cursor() as cursor:
-                cursor.execute(self._subscription_select() + " WHERE s.tenant_id=%s AND s.subscriber_user_id=%s AND s.status<>'disabled' ORDER BY s.updated_at DESC", (tenant_key, owner_key))
+                cursor.execute(
+                    self._subscription_select()
+                    + " WHERE s.tenant_id=%s AND s.subscriber_user_id=%s AND s.status<>'disabled' AND s.event_types <> %s::jsonb ORDER BY s.updated_at DESC",
+                    (tenant_key, owner_key, _json([TEAMS_CONNECTION_EVENT_TYPE])),
+                )
                 rows = cursor.fetchall()
         return [self._subscription_row(row, False) for row in rows]
+
+    def get_teams_connection(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        *,
+        reveal_config: bool = False,
+    ) -> dict[str, Any] | None:
+        with self.pool.connection() as connection:
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
+            owner_key = PostgreSQLIdentityResolver.user_id(connection, owner_user_id)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self._subscription_select()
+                    + " WHERE s.tenant_id=%s AND s.subscriber_user_id=%s AND s.status<>'disabled' AND s.event_types = %s::jsonb ORDER BY s.updated_at DESC LIMIT 1",
+                    (tenant_key, owner_key, _json([TEAMS_CONNECTION_EVENT_TYPE])),
+                )
+                row = cursor.fetchone()
+        return self._subscription_row(row, reveal_config) if row else None
+
+    def upsert_teams_connection(self, tenant_id: str, owner_user_id: str, access_token: str) -> dict[str, Any]:
+        token = _required(access_token, "teams_access_token", 8_192)
+        current = self.get_teams_connection(tenant_id, owner_user_id, reveal_config=True)
+        payload = {
+            "subscription_name": "360Teams 连接",
+            "event_types": [TEAMS_CONNECTION_EVENT_TYPE],
+            "channel_type": "webhook",
+            "channel_config": {"provider": "360teams_self", "access_token": token},
+        }
+        if current is None:
+            return self.create_subscription(tenant_id, payload, owner_user_id)
+        return self.update_subscription(
+            tenant_id,
+            str(current["subscription_id"]),
+            payload,
+            owner_user_id,
+            int(current["lock_version"]),
+        )
 
     def enqueue_outbox_event(
         self,
@@ -694,7 +736,7 @@ class PostgreSQLAutomationStore:
                     FROM platform_notification_deliveries d
                     JOIN platform_subscriptions s ON s.subscription_id=d.subscription_id
                     JOIN platform_outbox_events e ON e.outbox_event_id=d.outbox_event_id
-                    WHERE d.tenant_id=%s AND s.subscriber_user_id=%s AND d.channel='in_app'
+                    WHERE d.tenant_id=%s AND s.subscriber_user_id=%s
                     ORDER BY d.created_at DESC LIMIT %s
                     """,
                     (tenant_key,owner_key,max(1,min(int(limit),500))),
@@ -789,6 +831,10 @@ class PostgreSQLAutomationStore:
             result["channel_config"]=_json_value(decrypt_secret(raw),{})
         else:
             result["channel_config"]={"configured":True}
+            raw=bytes(cipher).decode("utf-8") if isinstance(cipher,(bytes,bytearray,memoryview)) else str(cipher)
+            provider=str(_json_value(decrypt_secret(raw),{}).get("provider") or "").strip()
+            if provider:
+                result["channel_provider"]=provider
         return result
 
     def _delivery(self, tenant_id: str, delivery_id: str) -> dict[str, Any]:

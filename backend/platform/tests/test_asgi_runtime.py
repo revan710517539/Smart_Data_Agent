@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from backend.platform.api.asgi import SmartDataAgentASGI
 from backend.platform.bootstrap import build_local_platform
@@ -68,6 +71,32 @@ class ASGIRuntimeTest(unittest.TestCase):
         self.assertTrue(result["semantic_info"]["metric_definitions_bound"])
         self.assertTrue(result["evidence"]["evidence_id"].startswith("ev_"))
 
+    def test_static_assets_negotiate_precompressed_brotli_and_gzip_variants(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = b"console.log('compressed static asset');" * 20
+            (root / "app.js").write_bytes(source)
+            (root / "app.js.br").write_bytes(b"brotli-variant")
+            (root / "app.js.gz").write_bytes(gzip.compress(source))
+            app = SmartDataAgentASGI(self.services, owns_services=False, static_root=root)
+
+            status, headers, body = asyncio.run(self._raw_request(app, "GET", "/app.js", headers=[(b"accept-encoding", b"br, gzip")]))
+            self.assertEqual(status, 200)
+            self.assertEqual(headers["content-encoding"], "br")
+            self.assertEqual(headers["vary"], "Accept-Encoding")
+            self.assertEqual(body, b"brotli-variant")
+
+            status, headers, body = asyncio.run(self._raw_request(app, "GET", "/app.js", headers=[(b"accept-encoding", b"br;q=0.5, gzip")]))
+            self.assertEqual(status, 200)
+            self.assertEqual(headers["content-encoding"], "gzip")
+            self.assertEqual(gzip.decompress(body), source)
+
+            status, headers, body = asyncio.run(self._raw_request(app, "GET", "/app.js"))
+            self.assertEqual(status, 200)
+            self.assertNotIn("content-encoding", headers)
+            self.assertEqual(headers["vary"], "Accept-Encoding")
+            self.assertEqual(body, source)
+
     def test_fun_asr_websocket_ping_uses_asgi_auth_origin_and_message_contract(self) -> None:
         sent = asyncio.run(self._websocket_ping())
         self.assertEqual(sent[0]["type"], "websocket.accept")
@@ -122,6 +151,18 @@ class ASGIRuntimeTest(unittest.TestCase):
         body: bytes = b"",
         headers: list[tuple[bytes, bytes]] | None = None,
     ) -> tuple[int, dict[str, str], dict]:
+        status, response_headers, response_body = await self._raw_request(self.app, method, path, body=body, headers=headers)
+        return status, response_headers, json.loads(response_body.decode("utf-8"))
+
+    async def _raw_request(
+        self,
+        app: SmartDataAgentASGI,
+        method: str,
+        path: str,
+        *,
+        body: bytes = b"",
+        headers: list[tuple[bytes, bytes]] | None = None,
+    ) -> tuple[int, dict[str, str], bytes]:
         sent: list[dict] = []
         received = False
 
@@ -138,7 +179,7 @@ class ASGIRuntimeTest(unittest.TestCase):
 
         request_headers = list(headers or [])
         request_headers.append((b"content-length", str(len(body)).encode("ascii")))
-        await self.app(
+        await app(
             {
                 "type": "http",
                 "method": method,
@@ -156,7 +197,7 @@ class ASGIRuntimeTest(unittest.TestCase):
             name.decode("latin-1"): value.decode("latin-1")
             for name, value in start["headers"]
         }
-        return start["status"], response_headers, json.loads(response["body"].decode("utf-8"))
+        return start["status"], response_headers, response["body"]
 
 
 if __name__ == "__main__":

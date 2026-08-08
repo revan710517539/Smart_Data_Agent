@@ -95,7 +95,7 @@ async function main() {
   await navigate(cdp, `${appUrl}/`);
   await waitForEval(cdp, `JSON.parse(localStorage.getItem(${JSON.stringify(authStorageKey)}))?.user?.id === "u_super_admin"`);
   await navigate(cdp, `${appUrl}/settings/config`, 30_000);
-  await waitForEval(cdp, `location.pathname === "/settings/config" && document.body.innerText.includes("模型接入") && document.body.innerText.includes("用户与角色概览")`);
+  await waitForEval(cdp, `location.pathname === "/settings/config" && document.body.innerText.includes("模型接入管理") && !document.body.innerText.includes("用户与角色概览")`);
   await assertEval(
     cdp,
     `JSON.parse(localStorage.getItem(${JSON.stringify(authStorageKey)}))?.user?.id === "u_super_admin"`,
@@ -174,14 +174,14 @@ async function main() {
   await waitForEval(cdp, `document.body.innerText.includes("角色权限")`);
 
   await navigate(cdp, `${appUrl}/agent/skills`);
-  await waitForEval(cdp, `document.body.innerText.includes("周报分析") && document.body.innerText.includes("运营日常分析") && document.body.innerText.includes("风险策略分析")`);
+  await waitForEval(cdp, `document.body.innerText.includes("Skill插件") && [...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增场景")) && [...document.querySelectorAll("button")].some((button) => button.textContent.trim() === "主题")`);
   await waitForEval(cdp, `[...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增场景"))`);
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.includes("新增场景"))?.click()`);
   await waitForEval(cdp, `Boolean(document.querySelector('[role="dialog"][aria-label*="新增场景"]'))`);
   await assertEval(cdp, `(() => { const rect = document.querySelector('[role="dialog"][aria-label*="新增场景"]').getBoundingClientRect(); return Math.abs(rect.left + rect.width / 2 - innerWidth / 2) < 12 && rect.top > 20 && rect.bottom < innerHeight - 20; })()`, "new scene must open as a centered system modal");
   await cdp.evaluate(`document.querySelector('button[aria-label="关闭场景弹窗"]')?.click()`);
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.trim() === "主题")?.click()`);
-  await waitForEval(cdp, `document.body.innerText.includes("描述性分析") && document.body.innerText.includes("可疑交易分析") && document.body.innerText.includes("逾期风险分析")`);
+  await waitForEval(cdp, `document.body.innerText.includes("Skill插件") && [...document.querySelectorAll("button")].some((button) => button.textContent.trim() === "场景")`);
   await waitForEval(cdp, `[...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增主题"))`);
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.includes("新增主题"))?.click()`);
   await waitForEval(cdp, `Boolean(document.querySelector('[role="dialog"][aria-label*="新增主题"]'))`);
@@ -195,9 +195,9 @@ async function main() {
   await assertEval(cdp, `(() => { const selects = [...document.querySelectorAll("select")]; return selects.some((node) => [...node.options].some((option) => option.textContent.includes("按时间倒排"))) && selects.some((node) => [...node.options].some((option) => option.textContent.includes("全部状态"))); })()`, "knowledge memory must expose the same sort and status controls as behavior habits");
 
   await navigate(cdp, `${appUrl}/data-assets/data-management`);
-  await waitForEval(cdp, `document.body.innerText.includes("原始表读取 Origin_Data") && document.body.innerText.includes("每页 10 条") && document.body.innerText.includes("原始表") && document.body.innerText.includes("主题表")`);
+  await waitForEval(cdp, `document.body.innerText.includes("原始表仅读取当前机构") && document.body.innerText.includes("原始表") && document.body.innerText.includes("主题表")`);
   await assertEval(cdp, `!document.body.innerText.includes("新增原始表") && !document.body.innerText.includes("数据接入") && !document.body.innerText.includes("爬虫")`, "CSV-only data management must not expose retired raw-upload, data-access, or crawler controls");
-  await assertEval(cdp, `(() => { const text = document.body.innerText; return text.includes("原始表 27") && text.includes("1 / 3") && Boolean(document.querySelector('button[aria-label^="展开"]')); })()`, "data management must paginate the latest Origin_Data CSV catalog and expose expandable file records");
+  await assertEval(cdp, `(() => { const text = document.body.innerText; return text.includes("/app/data/华兴银行/") && !text.includes("Origin_Data"); })()`, "data management must describe the selected institution Data Crawler folder and never expose the retired shared Origin_Data source");
 
   await navigate(cdp, `${appUrl}/agent/tasks`);
   await waitForEval(cdp, `document.body.innerText.includes("自动化任务") && [...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增自动化任务"))`);
@@ -244,8 +244,8 @@ async function main() {
   await cdp.evaluate(`document.querySelector('button[aria-label="关闭编辑分析配置"]')?.click()`);
 
   await navigate(cdp, `${appUrl}/settings/config`);
-  await waitForEval(cdp, `location.pathname === "/settings/config" && document.body.innerText.includes("模型接入") && document.body.innerText.includes("用户与角色概览")`);
-  await cdp.evaluate(`document.querySelector('button[aria-label="编辑模型接入"]')?.click()`);
+  await waitForEval(cdp, `location.pathname === "/settings/config" && document.body.innerText.includes("模型接入管理") && !document.body.innerText.includes("用户与角色概览")`);
+  await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.trim() === "管理模型")?.click()`);
   await waitForEval(cdp, `document.body.innerText.includes("模型接入管理") && document.body.innerText.includes("应用模块")`);
   await assertEval(cdp, `["智能分析推理分析","周报结论重新生成","自动分析任务","记忆模块","Skill自学习与演化"].every((label) => [...document.querySelectorAll("option")].some((option) => option.textContent.trim() === label)) && ![...document.querySelectorAll("option")].some((option) => option.textContent.trim() === "爬虫异常优化")`, "large-model application dropdown must expose the current governed LLM application modules");
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.trim() === "语音转文字")?.click()`);

@@ -18,6 +18,7 @@ from backend.platform.storage import connect_sqlite
 
 
 TASK_TYPES = {"acquisition", "analysis", "report", "export", "notification", "quality", "market_monitoring", "custom"}
+TEAMS_CONNECTION_EVENT_TYPE = "system.teams.connection"
 
 
 class SQLiteAutomationStore:
@@ -517,10 +518,54 @@ class SQLiteAutomationStore:
 
     def list_subscriptions(self, tenant_id: str, owner_user_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
-            "SELECT * FROM platform_subscriptions WHERE tenant_id = ? AND owner_user_id = ? AND status <> 'disabled' ORDER BY updated_at DESC",
-            (tenant_id, owner_user_id),
+            """
+            SELECT * FROM platform_subscriptions
+            WHERE tenant_id = ? AND owner_user_id = ? AND status <> 'disabled'
+              AND event_types <> ?
+            ORDER BY updated_at DESC
+            """,
+            (tenant_id, owner_user_id, _json([TEAMS_CONNECTION_EVENT_TYPE])),
         ).fetchall()
         return [_subscription_row(row, False) for row in rows]
+
+    def get_teams_connection(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        *,
+        reveal_config: bool = False,
+    ) -> dict[str, Any] | None:
+        """Return this user's internal 360Teams credential record, never a shared token."""
+        row = self._conn.execute(
+            """
+            SELECT * FROM platform_subscriptions
+            WHERE tenant_id = ? AND owner_user_id = ? AND status <> 'disabled'
+              AND event_types = ?
+            ORDER BY updated_at DESC LIMIT 1
+            """,
+            (tenant_id, owner_user_id, _json([TEAMS_CONNECTION_EVENT_TYPE])),
+        ).fetchone()
+        return _subscription_row(row, reveal_config) if row else None
+
+    def upsert_teams_connection(self, tenant_id: str, owner_user_id: str, access_token: str) -> dict[str, Any]:
+        """Persist a user-owned encrypted Teams credential without exposing it to clients."""
+        token = _required(access_token, "teams_access_token", 8_192)
+        current = self.get_teams_connection(tenant_id, owner_user_id, reveal_config=True)
+        payload = {
+            "subscription_name": "360Teams 连接",
+            "event_types": [TEAMS_CONNECTION_EVENT_TYPE],
+            "channel_type": "webhook",
+            "channel_config": {"provider": "360teams_self", "access_token": token},
+        }
+        if current is None:
+            return self.create_subscription(tenant_id, payload, owner_user_id)
+        return self.update_subscription(
+            tenant_id,
+            str(current["subscription_id"]),
+            payload,
+            owner_user_id,
+            int(current["lock_version"]),
+        )
 
     def record_provider_callback(
         self,
@@ -733,7 +778,7 @@ class SQLiteAutomationStore:
               ON s.tenant_id = d.tenant_id AND s.subscription_id = d.subscription_id
             JOIN platform_outbox_events e
               ON e.tenant_id = d.tenant_id AND e.outbox_event_id = d.outbox_event_id
-            WHERE d.tenant_id = ? AND s.owner_user_id = ? AND d.channel_type = 'in_app'
+            WHERE d.tenant_id = ? AND s.owner_user_id = ?
             ORDER BY d.created_at DESC LIMIT ?
             """,
             (tenant_id, owner_user_id, max(1, min(int(limit), 500))),
@@ -816,8 +861,11 @@ def _subscription_row(row: sqlite3.Row, reveal_config: bool) -> dict[str, Any]:
     if reveal_config:
         result["channel_config"] = _load(decrypt_secret(str(result.pop("channel_config_secret"))), {})
     else:
-        result.pop("channel_config_secret", None)
+        safe_config = _load(decrypt_secret(str(result.pop("channel_config_secret"))), {})
         result["channel_config"] = {"configured": True}
+        provider = str(safe_config.get("provider") or "").strip()
+        if provider:
+            result["channel_provider"] = provider
     return result
 
 
@@ -833,8 +881,12 @@ def _subscription_fields(payload: dict[str, Any]) -> dict[str, Any]:
     channel_config = _object(payload.get("channel_config", payload.get("channelConfig", {})))
     if channel_type == "email" and "@" not in str(channel_config.get("recipient") or ""):
         raise ValueError("notification_email_recipient_required")
-    if channel_type == "webhook" and not str(channel_config.get("url") or "").startswith("https://"):
-        raise ValueError("https_webhook_url_required")
+    if channel_type == "webhook":
+        if str(channel_config.get("provider") or "").strip() == "360teams_self":
+            if not str(channel_config.get("access_token") or "").strip():
+                raise ValueError("teams_access_token_required")
+        elif not str(channel_config.get("url") or "").startswith("https://"):
+            raise ValueError("https_webhook_url_required")
     return {
         "subscription_name": name,
         "event_types": normalized_events,

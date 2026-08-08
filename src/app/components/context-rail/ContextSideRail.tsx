@@ -26,7 +26,6 @@ export function ContextSideRail({
   const storageKey = `smart_data_agent_context_rail_collapsed:${pageKey}`;
   const [collapsed, setCollapsed] = useState(() => window.localStorage.getItem(storageKey) === "true");
   const [edgeVisible, setEdgeVisible] = useState(false);
-  const [edgeY, setEdgeY] = useState(Math.round(window.innerHeight / 2));
 
   useEffect(() => {
     window.localStorage.setItem(storageKey, String(collapsed));
@@ -76,13 +75,8 @@ export function ContextSideRail({
           <div
             className="fixed bottom-0 right-0 top-0 z-[110] w-10"
             data-context-rail-edge-zone="true"
-            onMouseEnter={(event) => {
+            onMouseEnter={() => {
               setEdgeVisible(true);
-              setEdgeY(event.clientY);
-            }}
-            onMouseMove={(event) => {
-              setEdgeVisible(true);
-              setEdgeY(event.clientY);
             }}
             onMouseLeave={() => setEdgeVisible(false)}
           >
@@ -92,7 +86,7 @@ export function ContextSideRail({
               title="展开右侧栏"
               onClick={() => setCollapsed(false)}
               className={`fixed right-2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#d9d9de] bg-white text-[#636366] shadow-lg shadow-black/10 transition-all hover:bg-[#f2f2f7] hover:text-[#1d1d1f] ${edgeVisible ? "scale-100 opacity-100" : "pointer-events-none scale-90 opacity-0"}`}
-              style={{ top: Math.max(28, Math.min(window.innerHeight - 28, edgeY)) }}
+              style={{ top: "50%" }}
               data-context-rail-expand="true"
             >
               <PanelRightOpen className="h-4 w-4" />

@@ -311,7 +311,7 @@ export async function waitForSelfAnalysis({
   pageContext = {},
   requestId = crypto.randomUUID(),
   onRun,
-  pollIntervalMs = 600,
+  pollIntervalMs = 1_500,
   deadlineMs = 15 * 60 * 1000,
 }: RunSelfAnalysisParams & {
   onRun?: (run: AsyncAnalysisRun) => void;

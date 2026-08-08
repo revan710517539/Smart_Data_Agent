@@ -21,13 +21,20 @@ def handle_data_assets_get(handler: Any, query: str) -> None:
         params = parse_qs(query)
         context = handler._request_context(params=params)
         handler._require_asset_permission(context, "read")
-        csv_catalog = handler.services.data_acquisition_service.csv_source
+        scope = str((params.get("scope") or [""])[0]).strip().lower()
+        if scope == "knowledge":
+            bundle = handler.services.data_asset_store.list_bundle(context.tenant_id)
+            bundle["raw_tables"] = []
+            bundle["topic_tables"] = []
+            handler._send_json({"tenant_id": context.tenant_id, **bundle, "source_mode": "knowledge_only", "count": {key: len(value) for key, value in bundle.items()}})
+            return
+        csv_catalog = handler.services.data_acquisition_service.csv_source.for_tenant(context.tenant_id)
         if not csv_catalog.catalog_ready:
             handler._send_json(
                 {
                     "tenant_id": context.tenant_id,
                     "status": "loading",
-                    "message": "Origin_Data CSV 目录正在准备中，请稍候重试。",
+                    "message": "当前机构的 Data Crawler 原始数据目录正在准备中，请稍候重试。",
                     "source_mode": "csv_folder",
                 },
                 headers={"Retry-After": "1"},
@@ -40,7 +47,8 @@ def handle_data_assets_get(handler: Any, query: str) -> None:
             if str(item.get("toolType") or "").casefold() not in {"browser_collector", "page_collector"}
         ]
         csv_source = csv_catalog.snapshot()
-        # Raw tables are generated directly from the project CSV directory.
+        # Raw tables are generated only from the selected institution's
+        # Data Crawler directory. Never merge or fall back to another tenant.
         # Do not merge in legacy stored raw-table records: they may describe a
         # deleted upload or retired external source and would make the data
         # management page disagree with the analysis picker.

@@ -17,6 +17,7 @@ def validate_outbound_url(
     url: str,
     *,
     allowed_schemes: tuple[str, ...] = ("https",),
+    private_host_exceptions: tuple[str, ...] = (),
 ) -> str:
     parsed = urlparse(str(url or "").strip())
     scheme = parsed.scheme.lower()
@@ -32,7 +33,7 @@ def validate_outbound_url(
         raise EgressPolicyError("Production egress requires SMART_DATA_AGENT_EGRESS_ALLOWED_HOSTS.")
     if allowlist and not _host_matches(host, allowlist):
         raise EgressPolicyError(f"Outbound host is not allowlisted: {host}")
-    allow_private = _host_matches(host, private_allowlist)
+    allow_private = _host_matches(host, private_allowlist) or _host_matches(host, private_host_exceptions)
     port = parsed.port or (443 if scheme in {"https", "wss"} else 80)
     try:
         addresses = _resolve_addresses(host, port)
@@ -53,20 +54,30 @@ def safe_urlopen(
     timeout: float,
     context: ssl.SSLContext,
     allowed_schemes: tuple[str, ...] = ("https",),
+    private_host_exceptions: tuple[str, ...] = (),
 ):
-    validate_outbound_url(request.full_url, allowed_schemes=allowed_schemes)
-    opener = build_opener(_ValidatingRedirectHandler(allowed_schemes), HTTPSHandler(context=context))
+    validate_outbound_url(
+        request.full_url,
+        allowed_schemes=allowed_schemes,
+        private_host_exceptions=private_host_exceptions,
+    )
+    opener = build_opener(_ValidatingRedirectHandler(allowed_schemes, private_host_exceptions), HTTPSHandler(context=context))
     return opener.open(request, timeout=timeout)
 
 
 class _ValidatingRedirectHandler(HTTPRedirectHandler):
-    def __init__(self, allowed_schemes: tuple[str, ...]) -> None:
+    def __init__(self, allowed_schemes: tuple[str, ...], private_host_exceptions: tuple[str, ...] = ()) -> None:
         super().__init__()
         self._allowed_schemes = allowed_schemes
+        self._private_host_exceptions = private_host_exceptions
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
         resolved = urljoin(req.full_url, newurl)
-        validate_outbound_url(resolved, allowed_schemes=self._allowed_schemes)
+        validate_outbound_url(
+            resolved,
+            allowed_schemes=self._allowed_schemes,
+            private_host_exceptions=self._private_host_exceptions,
+        )
         current = urlparse(req.full_url)
         target = urlparse(resolved)
         if (current.scheme.lower(), current.hostname, current.port) != (

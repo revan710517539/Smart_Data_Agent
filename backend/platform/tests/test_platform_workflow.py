@@ -1592,6 +1592,58 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertTrue(delete_payload["deleted"])
             self.assertFalse(can_read_after_delete)
 
+    def test_http_access_user_upsert_allows_one_user_to_administer_multiple_institutions(self) -> None:
+        primary_tenant_id = normalize_tenant_id("华兴银行")
+        secondary_tenant_id = normalize_tenant_id("广州银行")
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                body = json.dumps(
+                    {
+                        "user": {
+                            "id": "u_multi_institution_admin",
+                            "name": "多机构管理员",
+                            "department": "华兴银行",
+                            "email": "multi-institution-admin@bank.com",
+                            "status": "active",
+                            "lastLogin": "未登录",
+                            "tenantRoles": [
+                                {"tenant": "华兴银行", "role": "管理员"},
+                                {"tenant": "广州银行", "role": "管理员"},
+                            ],
+                        },
+                        "user_id": "u_super_admin",
+                        "tenant_id": primary_tenant_id,
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                connection.request("POST", "/api/access/user", body=body, headers={"Content-Type": "application/json"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+
+                can_manage_primary = server.services.permission_broker.enforcer.enforce(
+                    "u_multi_institution_admin", primary_tenant_id, "role:*", "manage", {"tenant_id": primary_tenant_id},
+                )
+                can_manage_secondary = server.services.permission_broker.enforcer.enforce(
+                    "u_multi_institution_admin", secondary_tenant_id, "role:*", "manage", {"tenant_id": secondary_tenant_id},
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(
+            payload["user"]["tenantRoles"],
+            [{"tenant": "华兴银行", "role": "管理员"}, {"tenant": "广州银行", "role": "管理员"}],
+        )
+        self.assertTrue(can_manage_primary)
+        self.assertTrue(can_manage_secondary)
+
     def test_access_role_policy_save_rewrites_rbac_policies(self) -> None:
         tenant_id = normalize_tenant_id("华兴银行")
         permission = {
@@ -1992,7 +2044,7 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertEqual(nav_payload["tenant_id"], normalize_tenant_id("郑州银行"))
         self.assertNotIn("settings.users", nav_payload["menu_keys"])
 
-    def test_access_user_grants_support_multi_tenant_and_single_default_admin(self) -> None:
+    def test_access_user_grants_support_multi_tenant_and_multiple_institution_admins(self) -> None:
         with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -2060,8 +2112,8 @@ class PlatformWorkflowTest(unittest.TestCase):
             multi_payload["user"]["tenantRoles"],
             [{"tenant": "郑州银行", "role": "操作员"}, {"tenant": "南京银行", "role": "操作员"}],
         )
-        self.assertEqual(duplicate_admin_response.status, 400)
-        self.assertEqual(duplicate_admin_payload["error"], "invalid_request")
+        self.assertEqual(duplicate_admin_response.status, 200)
+        self.assertEqual(duplicate_admin_payload["user"]["tenantRoles"], [{"tenant": "华兴银行", "role": "管理员"}])
 
     def test_http_metric_dictionary_is_tenant_scoped(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -2190,9 +2242,12 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertEqual(get_response.status, 200)
             self.assertIn("M90000", {metric["metricId"] for metric in get_payload["metrics"]})
             self.assertEqual(other_response.status, 200)
-            self.assertEqual([metric["metricId"] for metric in other_payload["metrics"]], ["M90002"])
+            # A visibility rule is not a cross-tenant data-asset grant. The
+            # left navigation tenant is the hard boundary for the system's
+            # metric dictionary and self-analysis picker.
+            self.assertEqual(other_payload["metrics"], [])
             self.assertEqual(shared_visible_response.status, 200)
-            self.assertEqual([metric["metricId"] for metric in shared_visible_payload["metrics"]], ["M90002"])
+            self.assertEqual(shared_visible_payload["metrics"], [])
             self.assertEqual(denied_delete_response.status, 403)
             self.assertEqual(denied_delete_payload["error"], "permission_denied")
             self.assertEqual(delete_response.status, 200)
@@ -2243,7 +2298,7 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertEqual([metric["metricId"] for metric in visible_for_admin], ["M_VISIBILITY"])
         self.assertEqual(hidden_for_operator, [])
 
-    def test_http_system_config_is_tenant_scoped_and_masks_secrets(self) -> None:
+    def test_http_system_config_shares_account_models_across_institutions_and_masks_secrets(self) -> None:
         with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -2428,7 +2483,9 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertIn("system.speech.upsert", {log["action"] for log in audit_payload["logs"]})
             self.assertEqual(other_response.status, 200)
             self.assertEqual(other_payload["config_scope"], other_tenant_id)
-            self.assertNotIn("model_test", {model["id"] for model in other_payload["models"]})
+            self.assertIn("model_test", {model["id"] for model in other_payload["models"]})
+            other_model = next(model for model in other_payload["models"] if model["id"] == "model_test")
+            self.assertEqual(other_model["value"], "******")
             self.assertNotIn("speech_test", {integration["id"] for integration in other_payload["speech_integrations"]})
             self.assertEqual(delete_model_response.status, 200)
             self.assertTrue(delete_model_payload["deleted"])
@@ -2563,6 +2620,65 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertEqual(saved_model["testResponse"], "previous-ok")
         self.assertEqual(saved_model["availableModels"], ["qwen-plus", "deepseek-v3"])
         self.assertEqual(saved_model["enabledModels"], ["qwen-plus"])
+
+    def test_first_failed_model_test_keeps_saved_integration_draft(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                tenant_id = normalize_tenant_id("华兴银行")
+                model = {
+                    "id": "model_dns_failure",
+                    "name": "DNS 失败模型",
+                    "modelName": "中转站",
+                    "key": "https://relay.example.invalid/v1",
+                    "value": "configured-key",
+                    "applicationModule": "global_text_model",
+                    "status": "available",
+                }
+                save_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                save_conn.request(
+                    "POST",
+                    "/api/system-config/model",
+                    body=json.dumps({"user_id": "u_super_admin", "tenant_id": tenant_id, "model": model}, ensure_ascii=False).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                self.assertEqual(save_conn.getresponse().status, 200)
+                with patch(
+                    "backend.platform.api.routes.settings.test_model_integration",
+                    return_value={
+                        "model_id": "model_dns_failure",
+                        "model_name": "DNS 失败模型",
+                        "source": "中转站",
+                        "callable": False,
+                        "status": "failed",
+                        "message": "服务器无法解析模型地址域名",
+                        "available_models": [],
+                        "response_preview": "",
+                        "tested_at": "2026-08-07T00:00:00+00:00",
+                        "error_code": "dns_resolution_failed",
+                        "transient": False,
+                    },
+                ):
+                    test_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                    test_conn.request(
+                        "POST",
+                        "/api/system-config/model/test",
+                        body=json.dumps({"user_id": "u_super_admin", "tenant_id": tenant_id, "model_id": "model_dns_failure"}, ensure_ascii=False).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    response = test_conn.getresponse()
+                    payload = json.loads(response.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["model"]["status"], "draft")
+        self.assertEqual(payload["model"]["testStatus"], "failed")
 
     def test_model_integrations_allow_same_api_address_but_require_unique_name(self) -> None:
         with TemporaryDirectory() as tmpdir:

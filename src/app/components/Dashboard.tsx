@@ -48,12 +48,7 @@ export function Dashboard() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchOperatingSnapshot({
-      tenantId,
-      userId,
-      view: "dashboard",
-      filters: selectedBank === "全部分行" ? {} : { branch_name: selectedBank },
-    })
+    fetchOperatingSnapshot({ tenantId, userId, view: "dashboard" })
       .then((result) => {
         if (!cancelled) {
           setSnapshot(result);
@@ -72,7 +67,7 @@ export function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [selectedBank, tenantId, userId]);
+  }, [tenantId, userId]);
 
   useEffect(() => {
     setAnalysisTarget(null);
@@ -87,7 +82,7 @@ export function Dashboard() {
     setActiveDraftId(null);
   }, [selectedBank, tenantId, userId]);
 
-  const dashboardModel = useMemo(() => buildDashboardModel(snapshot), [snapshot]);
+  const dashboardModel = useMemo(() => buildDashboardModel(snapshot, selectedBank), [selectedBank, snapshot]);
   const { banks, productKpis, consumerRisk, businessRisk, bankProductData, dualTrend, radarData, insights } = dashboardModel;
 
   const runDashboardAction = (action: string, payload: Record<string, unknown> = {}) =>
@@ -569,8 +564,11 @@ type DashboardBankRow = {
   bBalance?: number;
 };
 
-function buildDashboardModel(snapshot: OperatingSnapshot | null) {
-  const datasetRows = (key: string) => snapshot?.datasets[key]?.status === "ready" ? snapshot.datasets[key].rows : [];
+function buildDashboardModel(snapshot: OperatingSnapshot | null, selectedBank = "全部分行") {
+  const datasetRows = (key: string) => {
+    const rows = snapshot?.datasets[key]?.status === "ready" ? snapshot.datasets[key].rows : [];
+    return selectedBank === "全部分行" ? rows : rows.filter((row) => row.branch_name === selectedBank);
+  };
   const loanRows = datasetRows("loan_operation");
   const riskRows = datasetRows("risk_operation");
   const loanTrendRows = datasetRows("loan_product_trend");

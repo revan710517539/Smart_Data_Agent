@@ -1,0 +1,15 @@
+{
+  "name": "smart-data-agent-local",
+  "description": "Local development marketplace for Smart Data Agent report publishing.",
+  "owner": {
+    "name": "Smart Data Agent"
+  },
+  "plugins": [
+    {
+      "name": "smart-data-agent-report",
+      "description": "Publish a completed WorkBuddy analysis to Smart Data Agent My Reports.",
+      "version": "0.1.0",
+      "source": "../workbuddy-smart-data-report"
+    }
+  ]
+}

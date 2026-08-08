@@ -5,6 +5,7 @@ from typing import Any
 
 
 MODEL_APPLICATION_MODULES: dict[str, str] = {
+    "global_text_model": "全局文本模型（非语音）",
     "realtime_voice_input": "实时语音录入",
     "popup_voice_input": "弹窗语音录入",
     "intelligent_analysis_reasoning": "智能分析推理分析",
@@ -13,6 +14,8 @@ MODEL_APPLICATION_MODULES: dict[str, str] = {
     "memory_extraction": "记忆模块",
     "skill_evolution_learning": "Skill自学习与演化",
 }
+
+VOICE_APPLICATION_MODULES = {"realtime_voice_input", "popup_voice_input"}
 
 # Existing saved integrations are never deleted merely because a retired
 # feature is removed.  The former collector-repair binding is presented as the
@@ -48,8 +51,6 @@ def list_models_for_application(
     reveal_secret: bool = True,
 ) -> list[dict[str, Any]]:
     module_key = normalize_application_module(application_module, allow_empty=False)
-    list_owned = getattr(system_config_store, "list_models_owned_by", None)
-    models = list(system_config_store.list_models(tenant_id, reveal_secret=reveal_secret))
     account_models: list[dict[str, Any]] = []
     if user_id:
         try:
@@ -61,14 +62,20 @@ def list_models_for_application(
             )
         except Exception:
             account_models = []
-    if user_id and callable(list_owned):
-        models.extend(list_owned(user_id, tenant_id, reveal_secret=reveal_secret))
+    # Account-owned integrations are intentionally considered first.  A model
+    # added by an account administrator is shared by every institution of that
+    # account and must take precedence over a legacy institution copy with the
+    # same integration ID.
+    models = [*account_models, *system_config_store.list_models(tenant_id, reveal_secret=reveal_secret)]
     resolved: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for model in models:
+        model_module = normalize_application_module(model.get("applicationModule"))
         if (
-            normalize_application_module(model.get("applicationModule")) != module_key
+            model_module != module_key
+            and not (model_module == "global_text_model" and module_key not in VOICE_APPLICATION_MODULES)
             or str(model.get("status") or "available") not in {"available", "draft"}
+            or str(model.get("testStatus") or "").strip().lower() == "failed"
         ):
             continue
         identity = (str(model.get("id") or ""), module_key)

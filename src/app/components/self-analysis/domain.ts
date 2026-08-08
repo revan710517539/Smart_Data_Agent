@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import { useLocation } from "react-router";
 import { usePlatformContext } from "../../platform/PlatformContext";
+import { operatingTenantNames } from "../../data/operatingTenants";
 import type { MetricDictionaryItem } from "../../data/metricDictionary";
 import {
   cancelAsyncAnalysisRun,
@@ -20,23 +21,6 @@ import { apiErrorMessage, getApiBaseUrl } from "../../services/apiClient";
 import { demoFallbackDisabledMessage } from "../../services/apiContext";
 import { runApplicationAction } from "../../services/applicationApi";
 import { fetchSystemConfig, type ModelIntegration } from "../../services/systemConfigApi";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  Legend,
-  RadarChart,
-  Radar,
-  PolarGrid,
-  PolarAngleAxis,
-  PolarRadiusAxis,
-} from "recharts";
 import {
   ArrowUp,
   AudioLines,
@@ -137,6 +121,7 @@ export type KnowledgeFileAttachment = {
   type: string;
   lastModified: number;
   contentPreview?: string;
+  detectedInstitutions?: string[];
 };
 export type AnalysisDataTableSelection = {
   id: string;
@@ -200,9 +185,22 @@ export type SavedAnalysisResult = {
   savedAt: string;
   rows: unknown[];
   analysisTaskId: string;
+  analysisInstitution?: string;
+  currentInstitution?: string;
+  uploadedDataInstitutions?: string[];
+  weeklyReportEligible?: boolean;
+  weeklyReportSavedAt?: string;
   visibility?: "private" | "tenant";
   ownerUserId?: string;
   updatedBy?: string;
+  source?: {
+    channel: string;
+    label: string;
+    bindingId?: string;
+    runId?: string;
+    reportId?: string;
+    url?: string;
+  } | null;
   topicData?: {
     reference_type: "history" | "shortcut" | "topic" | "report";
     reference_id: string;
@@ -1097,5 +1095,16 @@ export async function readKnowledgeAttachment(file: File): Promise<KnowledgeFile
     type: file.type || "application/octet-stream",
     lastModified: file.lastModified,
     contentPreview,
+    detectedInstitutions: detectAttachmentInstitutions(attachmentName, contentPreview),
   };
+}
+
+/**
+ * A convenience hint only: it never controls authorization or changes the
+ * active tenant.  Matching is deterministic and restricted to the governed
+ * institution catalogue, avoiding a model call over a user-uploaded file.
+ */
+export function detectAttachmentInstitutions(fileName: string, contentPreview = "") {
+  const source = `${fileName}\n${contentPreview}`.toLocaleLowerCase("zh-CN");
+  return operatingTenantNames.filter((institution) => source.includes(institution.toLocaleLowerCase("zh-CN")));
 }

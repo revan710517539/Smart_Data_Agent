@@ -25,8 +25,13 @@ class TopicDataBatchService:
             # The daily batch is the authoritative freshness boundary.  It
             # deliberately bypasses the interactive catalog cache so newly
             # delivered Origin_Data files are always selected before SQL runs.
-            catalog = self.csv_source.table_assets(force=True)
-            imported = self._load_csv_catalog(connection, catalog, tenant_id)
+            tenant_source = self.csv_source.for_tenant(tenant_id)
+            catalog = tenant_source.table_assets(force=True)
+            if not catalog:
+                # The automation runtime turns this into the task's bounded
+                # retry policy. No cross-tenant fallback is allowed.
+                raise RuntimeError("tenant_raw_source_files_missing")
+            imported = self._load_csv_catalog(connection, catalog, tenant_id, tenant_source)
             outcomes: list[dict[str, Any]] = []
             for topic in topics:
                 topic_id = str(topic.get("id") or "")
@@ -53,7 +58,7 @@ class TopicDataBatchService:
         finally:
             connection.close()
 
-    def _load_csv_catalog(self, connection: sqlite3.Connection, catalog: list[dict[str, Any]], tenant_id: str) -> int:
+    def _load_csv_catalog(self, connection: sqlite3.Connection, catalog: list[dict[str, Any]], tenant_id: str, tenant_source: Any) -> int:
         """Load current Origin_Data files and expose audited compatibility views.
 
         Earlier seeded topic SQL names two semantic fact tables.  Origin_Data
@@ -81,7 +86,7 @@ class TopicDataBatchService:
             # Read the protected source once for transformation; list APIs remain
             # preview-only and never return this complete dataset to the browser.
             source_headers = [str(field.get("fieldNameCn") or "") for field in fields]
-            _, source_rows = self.csv_source.read_rows(path, max_rows=50_000)
+            _, source_rows = tenant_source.read_rows(path, max_rows=50_000)
             values = [
                 tuple(str(row.get(header) or "") for header in source_headers)
                 for row in source_rows

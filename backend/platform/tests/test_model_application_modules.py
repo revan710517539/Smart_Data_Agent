@@ -114,6 +114,18 @@ class ModelApplicationModuleTest(unittest.TestCase):
         self.assertEqual(application_module_label("skill_evolution_learning"), "Skill自学习与演化")
         self.assertEqual(list_models_for_application(store, "tenant_demo", "skill_evolution_learning"), [])
 
+    def test_failed_model_is_retained_for_repair_but_not_routable(self) -> None:
+        store = InMemorySystemConfigStore()
+        failed_model = self._model("failed_relay", "待修复中转站", "global_text_model")
+        failed_model["status"] = "draft"
+        failed_model["testStatus"] = "failed"
+        store.upsert_model("tenant_demo", failed_model)
+
+        self.assertEqual(
+            list_models_for_application(store, "tenant_demo", "intelligent_analysis_reasoning"),
+            [],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

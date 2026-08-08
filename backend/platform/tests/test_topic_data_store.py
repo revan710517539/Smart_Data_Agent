@@ -44,11 +44,11 @@ class TopicDataStoreTest(unittest.TestCase):
             topic = store.read_reference(
                 tenant_id="tenant_a", user_id="user_a", reference_type="topic", reference_id="topic_a"
             )
-            self.assertEqual(topic["folder"], "topics/tenant_a/topic_a/current")
+            self.assertEqual(topic["folder"], "tenant_a/topics/topic_a/current")
             self.assertEqual(topic["rows"], [{"amount": "2"}])
             self.assertEqual(topic["manifest"]["version_id"], "current")
-            self.assertFalse((Path(tmpdir) / "Topic_Data" / "topics" / "tenant_a" / "topic_a" / "versions").exists())
-            index = json.loads((Path(tmpdir) / "Topic_Data" / "index.json").read_text(encoding="utf-8"))
+            self.assertFalse((Path(tmpdir) / "Topic_Data" / "tenant_a" / "topics" / "topic_a" / "versions").exists())
+            index = json.loads((Path(tmpdir) / "Topic_Data" / "tenant_a" / "index.json").read_text(encoding="utf-8"))
             self.assertEqual(index["entries"]["tenant_a:user_a:topic:topic_a"]["version_count"], 1)
 
     def test_saved_report_migration_uses_one_current_snapshot(self) -> None:

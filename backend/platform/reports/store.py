@@ -13,7 +13,9 @@ from uuid import uuid4
 
 ANALYSIS_RESULT_FIELDS = (
     "id", "title", "query", "plan", "summary", "visualTypes", "savedAt",
-    "analysisTaskId", "ownerUserId", "visibility", "topicData",
+    "analysisTaskId", "ownerUserId", "visibility", "topicData", "source",
+    "weeklyReportEligible", "weeklyReportSavedAt", "analysisInstitution",
+    "currentInstitution", "uploadedDataInstitutions",
 )
 
 
@@ -1394,13 +1396,38 @@ def _normalize_analysis_result(result: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(visual_types, dict):
         normalized["visualTypes"] = {"primary": "bar", "secondary": "table"}
     normalized["analysisTaskId"] = str(normalized.get("analysisTaskId") or "").strip()
+    normalized["analysisInstitution"] = str(normalized.get("analysisInstitution") or "").strip()[:120]
+    normalized["currentInstitution"] = str(normalized.get("currentInstitution") or "").strip()[:120]
+    uploaded_institutions = normalized.get("uploadedDataInstitutions")
+    normalized["uploadedDataInstitutions"] = [
+        str(item).strip()[:120]
+        for item in uploaded_institutions if str(item).strip()
+    ][:20] if isinstance(uploaded_institutions, list) else []
     topic_data = normalized.get("topicData")
     is_topic_data_report = isinstance(topic_data, dict) and str(topic_data.get("reference_type") or "") == "report"
     if not normalized["analysisTaskId"] and not is_topic_data_report:
         raise ValueError("analysisTaskId is required unless the report has a Topic_Data snapshot.")
     normalized["ownerUserId"] = str(normalized.get("ownerUserId") or "").strip()
+    normalized["weeklyReportEligible"] = bool(normalized.get("weeklyReportEligible"))
+    normalized["weeklyReportSavedAt"] = (
+        str(normalized.get("weeklyReportSavedAt") or "").strip()
+        if normalized["weeklyReportEligible"]
+        else ""
+    )
     visibility = str(normalized.get("visibility") or "private").strip()
     normalized["visibility"] = visibility if visibility in {"private", "tenant"} else "private"
+    source = normalized.get("source")
+    if isinstance(source, dict) and str(source.get("channel") or "").strip():
+        normalized["source"] = {
+            "channel": str(source.get("channel") or "").strip()[:64],
+            "label": str(source.get("label") or source.get("channel") or "").strip()[:120],
+            "bindingId": str(source.get("bindingId") or "").strip()[:120],
+            "runId": str(source.get("runId") or "").strip()[:500],
+            "reportId": str(source.get("reportId") or "").strip()[:500],
+            "url": str(source.get("url") or "").strip()[:2000],
+        }
+    else:
+        normalized["source"] = None
     normalized["rows"] = []
     if not normalized["savedAt"]:
         normalized["savedAt"] = "未记录"

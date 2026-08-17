@@ -43,6 +43,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
   // the local API responds.
   const [isSessionResolved, setIsSessionResolved] = useState(true);
   const [tenantCatalog, setTenantCatalog] = useState<string[]>(operatingTenantNames);
+  const [tenantCatalogStatus, setTenantCatalogStatus] = useState<"loading" | "ready" | "unavailable">("loading");
   const [tenantIdByInstitution, setTenantIdByInstitution] = useState<Record<string, string>>(() =>
     Object.fromEntries(operatingTenantNames.map((name) => [name, tenantIdFromInstitution(name)])),
   );
@@ -54,7 +55,9 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
   );
   const authorizedInstitutions = normalizeSelectableInstitutions(authSession?.institutions || []);
   const institutions = hasGlobalTenantAccess
-    ? tenantCatalog
+    ? tenantCatalogStatus === "ready" || !authorizedInstitutions.length
+      ? tenantCatalog
+      : authorizedInstitutions
     : authSession
       ? authorizedInstitutions
       : tenantCatalog;
@@ -70,10 +73,13 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         if (!cancelled && names.length) {
           setTenantCatalog(names);
           setTenantIdByInstitution(buildTenantIdCatalog(response.tenants));
+          setTenantCatalogStatus("ready");
+        } else if (!cancelled) {
+          setTenantCatalogStatus("unavailable");
         }
       } catch {
         if (!cancelled) {
-          setTenantCatalog(operatingTenantNames);
+          setTenantCatalogStatus("unavailable");
         }
       }
     };

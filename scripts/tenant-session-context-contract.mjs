@@ -13,6 +13,21 @@ assert.match(
 );
 assert.match(
   source,
+  /tenantCatalogStatus === "ready" \|\| !authorizedInstitutions\.length[\s\S]*?\? tenantCatalog[\s\S]*?: authorizedInstitutions/,
+  "已认证全局会话必须等待权威目录成功加载，加载中或失败时保留签发机构",
+);
+assert.match(
+  source,
+  /setTenantCatalogStatus\("unavailable"\)/,
+  "租户目录失败必须显式关闭，不能回退静态目录并改写认证上下文",
+);
+assert.doesNotMatch(
+  source,
+  /catch \{[\s\S]{0,120}setTenantCatalog\(operatingTenantNames\)/,
+  "租户目录失败不得把已认证会话切到静态演示机构",
+);
+assert.match(
+  source,
   /tenant_id: resolveTenantIdForInstitution\(target, authSession, tenantIdByInstitution\)/,
   "切换显示名时必须从目录解析权威租户 ID",
 );

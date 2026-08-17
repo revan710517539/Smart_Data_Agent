@@ -46,6 +46,7 @@ const checks = [
   [apiClient.includes("context?.tenantId") && apiClient.includes("context?.userId"), "缓存键必须隔离租户和用户"],
   [apiClient.includes("method !== \"GET\"") && apiClient.includes("clearApiReadCache"), "成功写操作必须让读取缓存失效"],
   [apiClient.includes("apiReadCacheGeneration") && apiClient.includes("apiReadInflight.clear()"), "写操作后旧并发读取不得重新写回缓存"],
+  [apiClient.includes("sessionRefreshRequest") && apiClient.includes("refreshSessionOnce"), "并发 401 必须合并为一次会话刷新，避免旋转 refresh token 互相失效"],
   [visualCards.includes('data-visual-report-data-loading="true"') && visualCards.indexOf("if (loading)") < visualCards.indexOf("<AnalysisVisualCard"), "真实数据投影完成前不得把标准图表挂载为空态"],
   [visualBuilder.includes("reportLoading") && visualBuilder.includes("catalogLoading"), "报表框架与数据目录必须渐进加载"],
   [visualBuilder.includes('if (view !== "editor" || catalogLoadedRef.current) return;') && visualBuilder.indexOf("fetchVisualReports({ tenantId, userId })") < visualBuilder.indexOf('fetchDataAssets({ tenantId, userId, scope: "visualization" })'), "可视化报表落地页必须仅读取报表骨架，进入编辑器后再准备专用目录"],

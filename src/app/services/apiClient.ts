@@ -25,6 +25,7 @@ const apiBase = (import.meta.env.VITE_ANALYSIS_API_URL || "").replace(/\/$/, "")
 const apiReadCache = new Map<string, ApiReadCacheEntry>();
 const apiReadInflight = new Map<string, Promise<unknown>>();
 let apiReadCacheGeneration = 0;
+let sessionRefreshRequest: Promise<boolean> | null = null;
 
 export const sessionRevalidationEvent = "smart-data-agent:session-revalidation-required";
 
@@ -151,12 +152,7 @@ async function executeApiRequest<T>(path: string, options: ApiRequestOptions): P
       !(body instanceof FormData) &&
       !(body instanceof Blob)
     ) {
-      const refreshResponse = await fetch(`${apiBase}/api/auth/refresh`, {
-        method: "POST",
-        credentials: "include",
-        headers: { Accept: "application/json" },
-      });
-      if (refreshResponse.ok) {
+      if (await refreshSessionOnce()) {
         return apiRequest<T>(path, {
           ...options,
           readCache: false,
@@ -195,6 +191,23 @@ async function executeApiRequest<T>(path: string, options: ApiRequestOptions): P
   } finally {
     window.clearTimeout(timeoutId);
   }
+}
+
+function refreshSessionOnce(): Promise<boolean> {
+  if (sessionRefreshRequest) return sessionRefreshRequest;
+  let request: Promise<boolean>;
+  request = fetch(`${apiBase}/api/auth/refresh`, {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  })
+    .then((response) => response.ok)
+    .catch(() => false)
+    .finally(() => {
+      if (sessionRefreshRequest === request) sessionRefreshRequest = null;
+    });
+  sessionRefreshRequest = request;
+  return request;
 }
 
 function apiReadCacheKey(path: string, options: ApiRequestOptions) {

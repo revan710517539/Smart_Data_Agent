@@ -1,12 +1,12 @@
 {
-  "description": "Require explicit structured publication before a sync-enabled analysis ends.",
+  "description": "Complete system synchronization and review-only evidence return after Universal Bridge data or actions are used.",
   "hooks": {
     "Stop": [
       {
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "If the user requested that this analysis be synchronized to Smart Data Agent and no successful `SDA publish --channel workbuddy` command has been run in this conversation, return {\"ok\":false,\"reason\":\"请先按 smart-data-agent-report Skill 生成结构化报告并执行 SDA publish；不要上传整段对话转录。\"}. Otherwise return {\"ok\":true}.",
+            "prompt": "If a successful `SDA bridge --channel workbuddy read` or `action` command occurred in this conversation, require the corresponding successful `sync` when an analysis result exists and always require a later successful `evidence` call with the same exact system and operation ID. Otherwise return {\"ok\":false,\"reason\":\"请先按 Universal Bridge Skill 将结果同步到准确系统，并回传有界、待复核的操作证据；不要上传对话全文、原始文件或原始数据行。\"}. If no Bridge data/action was used, or the required calls succeeded, return {\"ok\":true}.",
             "continueOnBlock": true,
             "timeout": 30
           }

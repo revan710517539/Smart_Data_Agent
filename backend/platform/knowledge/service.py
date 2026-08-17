@@ -192,9 +192,68 @@ class KnowledgeService:
             "scan": {"status": scan.status, "engine": scan.engine, "signature": scan.signature},
         }
 
+    def upload_message_board_image(self, tenant_id: str, payload: dict[str, Any], actor_user_id: str) -> dict[str, Any]:
+        file_name = str(payload.get("file_name") or payload.get("fileName") or "").strip()
+        if not file_name or len(file_name) > 500 or "/" in file_name or "\\" in file_name:
+            raise ValueError("invalid_file_name")
+        encoded = str(payload.get("content_base64") or payload.get("contentBase64") or "").strip()
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("invalid_content_base64") from exc
+        if not content or len(content) > self.max_report_image_bytes:
+            raise ValueError("invalid_message_board_image_size")
+        content_type, suffix = _detect_safe_image(content)
+        message_id = str(payload.get("message_id") or payload.get("messageId") or "").strip()
+        if not message_id:
+            raise ValueError("message_board_image_resource_required")
+        scan = self.scanner.scan(content)
+        stored = self.object_store.put(tenant_id, content, suffix=suffix)
+        artifact = self.acquisition_store.create_artifact(
+            tenant_id,
+            object_uri=stored.object_uri,
+            content_hash=stored.content_hash,
+            content_type=content_type,
+            size_bytes=stored.size_bytes,
+            status="active" if scan.status == "clean" else "quarantined",
+            created_by=actor_user_id,
+            artifact_type="image",
+        )
+        ensure_reference = getattr(self.store, "ensure_artifact_reference", None)
+        if callable(ensure_reference):
+            ensure_reference(tenant_id, artifact["artifact_id"])
+        attachment = self.store.create_attachment(
+            tenant_id,
+            artifact_id=artifact["artifact_id"],
+            owner_user_id=actor_user_id,
+            resource_id=message_id,
+            resource_type="message_board_image",
+            file_name=file_name,
+            detected_content_type=content_type,
+            scan_status=scan.status,
+            processing_status="ready" if scan.status == "clean" else "failed",
+            classification=str(payload.get("classification") or "internal"),
+        )
+        return {
+            "status": "ready" if scan.status == "clean" else "quarantined",
+            "attachment": attachment,
+            "artifact": _public_artifact(artifact),
+            "content_url": f"/api/message-board/attachment?attachment_id={attachment['attachment_id']}",
+            "scan": {"status": scan.status, "engine": scan.engine, "signature": scan.signature},
+        }
+
     def get_report_image_content(self, tenant_id: str, attachment_id: str) -> tuple[dict[str, Any], bytes]:
         attachment = self.store.get_attachment(tenant_id, attachment_id)
         if attachment.get("resource_type") != "weekly_report_image":
+            raise PermissionError("attachment_resource_type_mismatch")
+        if attachment.get("scan_status") != "clean" or attachment.get("processing_status") != "ready":
+            raise PermissionError("attachment_is_not_publishable")
+        artifact, content = self.object_store_artifact(tenant_id, str(attachment["artifact_id"]))
+        return {"attachment": attachment, "artifact": _public_artifact(artifact)}, content
+
+    def get_message_board_image_content(self, tenant_id: str, attachment_id: str) -> tuple[dict[str, Any], bytes]:
+        attachment = self.store.get_attachment(tenant_id, attachment_id)
+        if attachment.get("resource_type") != "message_board_image":
             raise PermissionError("attachment_resource_type_mismatch")
         if attachment.get("scan_status") != "clean" or attachment.get("processing_status") != "ready":
             raise PermissionError("attachment_is_not_publishable")

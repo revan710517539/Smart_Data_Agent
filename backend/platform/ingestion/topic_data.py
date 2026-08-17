@@ -237,6 +237,12 @@ class TopicDataStore:
             "summary": str(intelligent.get("analysis_summary") or "") or "\n".join(str(item) for item in task.get("conclusions", []) if item),
             "sql": str(result.get("sql") or ""),
             "python_script": str(result.get("python_script") or ""),
+            "schema_mapping": (
+                result.get("semantic_info", {}).get("schema_mapping", {})
+                if isinstance(result.get("semantic_info"), dict)
+                and isinstance(result.get("semantic_info", {}).get("schema_mapping"), dict)
+                else {}
+            ),
             "evidence_id": str(evidence.get("evidence_id") or ""),
             "row_count": len(rows),
             "columns": _columns(rows),

@@ -24,7 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from backend.authz import PostgreSQLPolicyRepository, SUPER_ADMIN_USER_ID, build_default_rbac_seed
 from backend.authz.models import RoleAssignment
 from backend.platform.database.identity import PostgreSQLIdentityResolver
-from backend.platform.database.postgresql import PostgreSQLConnectionPool, apply_postgresql_schema
+from backend.platform.database import MySQLConnectionPool, MySQLStoreConnectionPool, apply_mysql_schema
 
 
 def main() -> None:
@@ -48,11 +48,12 @@ def main() -> None:
     users = _load_users(args.users_file)
     _validate_users(users)
 
-    pool = PostgreSQLConnectionPool(args.database_url, min_size=1, max_size=3)
+    raw_pool = MySQLConnectionPool(args.database_url, min_size=1, max_size=3)
+    pool = MySQLStoreConnectionPool(raw_pool)
     try:
         if not args.skip_schema:
-            with pool.connection() as connection:
-                apply_postgresql_schema(args.database_url, connection=connection)
+            with raw_pool.connection() as connection:
+                apply_mysql_schema(args.database_url, connection=connection)
         with pool.connection() as connection:
             try:
                 tenant_id = PostgreSQLIdentityResolver.ensure_tenant(connection, tenant_code, args.tenant_name)
@@ -83,6 +84,17 @@ def main() -> None:
                         (tenant_id, args.tenant_name, super_user_id),
                     )
                     root_org_id = _value(cursor.fetchone(), "org_unit_id", 0)
+                    cursor.execute(
+                        """
+                        INSERT INTO platform_user_tenant_memberships(
+                            tenant_id,user_id,org_unit_id,membership_status,joined_at
+                        ) VALUES (%s,%s,%s,'active',now())
+                        ON CONFLICT (tenant_id,user_id) DO UPDATE SET
+                            org_unit_id=EXCLUDED.org_unit_id,membership_status='active',
+                            joined_at=COALESCE(platform_user_tenant_memberships.joined_at,now())
+                        """,
+                        (tenant_id, super_user_id, root_org_id),
+                    )
                 department_ids: dict[str, Any] = {}
                 for department in sorted({str(user.get("department") or "").strip() for user in users} - {""}):
                     org_code = "DEPT_" + hashlib.sha256(department.encode("utf-8")).hexdigest()[:12].upper()

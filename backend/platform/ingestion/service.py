@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from backend.platform.data_access import HTTPJSONSourceClient
@@ -11,6 +14,8 @@ from backend.platform.security.sql_validation import validate_read_only_sql_cand
 
 from .artifacts import LocalArtifactObjectStore
 from .csv_folder import CSVFolderSource
+from .unified_raw import STATIC_PATH_PREFIX, STATIC_SHEET_VERSION, STATIC_WORKBOOK_VERSION, UnifiedRawTableSource
+from .workbook import parse_static_workbook, safe_workbook_stem
 from .sandbox import RestrictedRowTransformSandbox
 from .repair import ModelAcquisitionRepairGenerator
 
@@ -35,7 +40,11 @@ class DataAcquisitionService:
         self.model_call_repository = model_call_repository
         self.transform_sandbox = RestrictedRowTransformSandbox()
         self.repair_generator = ModelAcquisitionRepairGenerator(system_config_store, self.transform_sandbox)
-        self.csv_source = CSVFolderSource.from_environment()
+        self.csv_source = UnifiedRawTableSource(
+            CSVFolderSource.from_environment(),
+            data_asset_store,
+            object_store,
+        )
         self.data_asset_store = data_asset_store
         self.automation_runtime: Any | None = None
 
@@ -348,11 +357,14 @@ class DataAcquisitionService:
             ".csv": "text/csv; charset=utf-8",
             ".tsv": "text/tab-separated-values; charset=utf-8",
             ".json": "application/json; charset=utf-8",
+            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         }
         if suffix not in content_types:
             raise ValueError("unsupported_raw_file_type")
         if not content or len(content) > self.max_raw_file_bytes:
             raise ValueError("invalid_raw_file_upload_size")
+        if suffix == ".xlsx":
+            return self._upload_static_workbook(tenant_id, normalized_name, content, actor_user_id)
         try:
             text = content.decode("utf-8-sig")
         except UnicodeDecodeError as exc:
@@ -386,6 +398,128 @@ class DataAcquisitionService:
             "content_hash": artifact["content_hash"],
             "content_type": artifact["content_type"],
             "size_bytes": artifact["size_bytes"],
+        }
+
+    def _upload_static_workbook(
+        self,
+        tenant_id: str,
+        file_name: str,
+        content: bytes,
+        actor_user_id: str,
+    ) -> dict[str, Any]:
+        if self.data_asset_store is None:
+            raise RuntimeError("static_workbook_asset_store_required")
+        content_hash = hashlib.sha256(content).hexdigest()
+        manifest_id = f"static_workbook_{content_hash[:24]}"
+        existing = self.data_asset_store.get_item(tenant_id, "raw_table", manifest_id)
+        if existing and existing.get("staticWorkbookVersion") == STATIC_WORKBOOK_VERSION:
+            return self._static_workbook_result(existing, duplicate=True)
+
+        sheets = parse_static_workbook(file_name, content)
+        workbook_object = self.object_store.put(tenant_id, content, ".xlsx")
+        workbook_artifact = self.store.create_artifact(
+            tenant_id,
+            object_uri=workbook_object.object_uri,
+            content_hash=workbook_object.content_hash,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            size_bytes=workbook_object.size_bytes,
+            status="active",
+            created_by=actor_user_id,
+            artifact_type="other",
+        )
+        workbook_stem = safe_workbook_stem(file_name)
+        generated_tables: list[dict[str, Any]] = []
+        with tempfile.TemporaryDirectory(prefix="sda-static-workbook-") as temporary_root:
+            for index, sheet in enumerate(sheets, start=1):
+                sheet_hash = hashlib.sha256(
+                    f"{content_hash}:{sheet.name}:{index}".encode("utf-8")
+                ).hexdigest()
+                csv_object = self.object_store.put(tenant_id, sheet.csv_bytes, ".csv")
+                csv_artifact = self.store.create_artifact(
+                    tenant_id,
+                    object_uri=csv_object.object_uri,
+                    content_hash=csv_object.content_hash,
+                    content_type="text/csv; charset=utf-8",
+                    size_bytes=csv_object.size_bytes,
+                    status="active",
+                    created_by=actor_user_id,
+                    artifact_type="other",
+                )
+                sheet_directory = Path(temporary_root) / str(index)
+                sheet_directory.mkdir(parents=True)
+                sheet_file = sheet_directory / f"{workbook_stem}_{sheet.name}.csv"
+                sheet_file.write_bytes(sheet.csv_bytes)
+                inferred = CSVFolderSource(sheet_directory).table_assets(force=True)[0]
+                sheet_id = f"static_sheet_{sheet_hash[:24]}"
+                table_name = f"{workbook_stem}_{sheet.name}"
+                source_key = hashlib.sha256(f"static:{tenant_id}:{sheet_hash}".encode("utf-8")).hexdigest()[:32]
+                generated_tables.append({
+                    **inferred,
+                    "id": sheet_id,
+                    "tableNameEn": f"static_{sheet_hash[:16]}",
+                    "tableNameCn": table_name[:160],
+                    "source": "用户上传的静态工作簿",
+                    "tableType": "static_file",
+                    "description": f"{file_name} · {sheet.name} · 静态原始表，共 {sheet.row_count} 行、{sheet.column_count} 个字段。",
+                    "updateFrequency": "静态，不自动更新",
+                    "restrictions": "用户上传的不可变静态快照；只读，不跟随 Data Crawler 更新。",
+                    "exampleSql": f"-- 静态工作簿：{file_name} / {sheet.name}\nSELECT * FROM static_{sheet_hash[:16]} LIMIT 100;",
+                    "fileName": f"{workbook_stem}_{sheet.name}.csv",
+                    "relativePath": f"{STATIC_PATH_PREFIX}{manifest_id}/{sheet_id}",
+                    "sourceKey": source_key,
+                    "schemaVersion": csv_object.content_hash[:16],
+                    "contentHash": csv_object.content_hash,
+                    "sizeBytes": csv_object.size_bytes,
+                    "objectUri": csv_object.object_uri,
+                    "artifactId": csv_artifact["artifact_id"],
+                    "sourcePlatform": "静态工作簿",
+                    "workbookName": file_name,
+                    "sheetName": sheet.name,
+                    "staticSheetVersion": STATIC_SHEET_VERSION,
+                    "sourceReadOnly": True,
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                })
+
+        first = generated_tables[0]
+        manifest = {
+            "id": manifest_id,
+            "tableNameEn": f"static_workbook_{content_hash[:16]}",
+            "tableNameCn": workbook_stem,
+            "source": "用户上传的静态工作簿",
+            "description": f"{file_name} · {len(generated_tables)} 个非空 Sheet，按 Sheet 发布为不可变静态原始表。",
+            "fields": [dict(field) for field in first.get("fields", [])],
+            "staticWorkbookVersion": STATIC_WORKBOOK_VERSION,
+            "fileName": file_name,
+            "contentHash": content_hash,
+            "sizeBytes": len(content),
+            "objectUri": workbook_object.object_uri,
+            "artifactId": workbook_artifact["artifact_id"],
+            "sheets": generated_tables,
+            "sourceReadOnly": True,
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        saved = self.data_asset_store.upsert_item(
+            tenant_id,
+            "raw_table",
+            manifest,
+            updated_by=actor_user_id,
+            lifecycle_status="active",
+        )
+        return self._static_workbook_result(saved, duplicate=False)
+
+    @staticmethod
+    def _static_workbook_result(manifest: dict[str, Any], *, duplicate: bool) -> dict[str, Any]:
+        return {
+            "file_name": str(manifest.get("fileName") or ""),
+            "artifact_id": str(manifest.get("artifactId") or ""),
+            "object_uri": str(manifest.get("objectUri") or ""),
+            "content_hash": str(manifest.get("contentHash") or ""),
+            "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "size_bytes": int(manifest.get("sizeBytes") or 0),
+            "tables": [dict(table) for table in manifest.get("sheets", []) if isinstance(table, dict)],
+            "table_count": len(manifest.get("sheets", [])),
+            "duplicate": duplicate,
+            "immutable": True,
         }
 
     def bundle(self, tenant_id: str) -> dict[str, Any]:

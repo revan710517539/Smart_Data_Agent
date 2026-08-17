@@ -6,15 +6,17 @@ import unittest
 
 from backend.platform.api.routes.analysis import run_analysis
 from backend.platform.bootstrap import build_local_platform
+from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
 
 
 class LineageTest(unittest.TestCase):
     def test_analysis_records_bidirectional_metric_dataset_query_evidence_lineage(self) -> None:
         services = build_local_platform()
+        attach_governed_test_warehouse(services)
         self.addCleanup(services.close)
         task = run_analysis(
             services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="各分行放款金额和动支率",
         )
@@ -50,8 +52,9 @@ class LineageTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "platform.sqlite"
             first = build_local_platform(db_path)
+            attach_governed_test_warehouse(first)
             try:
-                task = run_analysis(first, "u_admin", "tenant_demo", "各分行放款金额")
+                task = run_analysis(first, "u_super_admin", "tenant_demo", "各分行放款金额")
             finally:
                 first.close()
             second = build_local_platform(db_path)

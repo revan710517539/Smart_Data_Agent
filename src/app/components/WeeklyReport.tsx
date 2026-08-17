@@ -7,6 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import {
   ArrowDown,
@@ -14,11 +15,11 @@ import {
   CheckCircle2,
   Download,
   FileText,
+  GripVertical,
   Image as ImageIcon,
   MessageSquareText,
   MoreHorizontal,
   RefreshCcw,
-  Save,
   Send,
   ThumbsUp,
 } from "lucide-react";
@@ -57,7 +58,7 @@ import {
 } from "../services/reportApi";
 import { isDemoFallbackEnabled } from "../services/apiContext";
 import { fetchReportImageObjectUrl, uploadReportImage } from "../services/reportAttachmentApi";
-import { buildWeeklyAnalysisModules, CoreMetricChart, SavedAnalysisEmbed, WeeklyAnalysisModuleMenu, loadWeeklyAnalysisModulePreferences, weeklyAnalysisModuleStorageKey, type WeeklyAnalysisModule, type WeeklyAnalysisModuleSettings } from "./weekly-report/AnalysisModules";
+import { buildWeeklyAnalysisModules, CoreMetricChart, SavedAnalysisEmbed, WeeklyAnalysisModuleMenu, loadWeeklyAnalysisModulePreferences, weeklyAnalysisModuleStorageKey, type WeeklyAnalysisModule, type WeeklyAnalysisModuleSettings, type WeeklyDataModule } from "./weekly-report/AnalysisModules";
 import {
   type AnalysisStatus,
   type ReportStatus,
@@ -135,6 +136,9 @@ import { revealContextRail } from "./context-rail/ContextSideRail";
 import { AnalysisProgressPanel } from "./self-analysis/AnalysisProgressPanel";
 import { applyWeeklyCoreMetricSnapshot, buildWeeklyCoreMetricRows } from "./weekly-report/CoreMetrics";
 import { downloadWeeklyExport, downloadWeeklyExportPdf, prepareWeeklyExportDocument, weeklyExportFilename, weeklyExportHtml, type WeeklyExportFormat } from "./weekly-report/exportReport";
+import { PageDataModeToggle, PageDataVisualizationModules, usePageDataComposer } from "./page-data/PageDataComposer";
+import { useVisualReportCollection } from "./visual-report/VisualReportLibrary";
+import { VisualReportCards } from "./visual-report/VisualReportCards";
 
 const WEEKLY_CORE_ANALYSIS_PROMPT = "结合在贷余额、放款金额、新增余额三个指标在不同机构、日期甚至客户经理下的数据表现，融合调用的指标记忆、skill进行分析，最终形成分析结论";
 
@@ -144,7 +148,9 @@ export function WeeklyReport() {
   const analysisRunRef = useRef<Record<string, string>>({});
   const autoAnalysisStartedRef = useRef<Set<string>>(new Set());
   const { selectedInstitution, tenantId, userId, userName } = usePlatformContext();
-  const [reports, setReports] = useState(() => createWeeklyReports(selectedInstitution, userId));
+  const weeklyPageData = usePageDataComposer({ pageCode: "weekly_report", moduleKey: "weekly_report", railPageKey: "weekly-report" });
+  const weeklyVisualReports = useVisualReportCollection("weekly");
+  const [reports, setReports] = useState(() => createWeeklyReports(selectedInstitution, userName, userId));
   const [, setSavedAt] = useState(
     isDemoFallbackEnabled() ? "当前为显式演示模板" : "尚未绑定真实分析证据，当前草稿不可发布",
   );
@@ -174,7 +180,7 @@ export function WeeklyReport() {
   const [selectedCommentTarget, setSelectedCommentTarget] = useState<CommentTarget | null>(null);
   const [analysisTarget, setAnalysisTarget] = useState<CommentTarget | null>(null);
   const [analysisSelectionTargets, setAnalysisSelectionTargets] = useState<CommentTarget[]>([]);
-  const [rightRailTab, setRightRailTab] = useState<"comments" | "analysis">("comments");
+  const [rightRailTab, setRightRailTab] = useState<"comments" | "analysis" | "message-board">("comments");
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [expandedReplyInputs, setExpandedReplyInputs] = useState<Record<string, boolean>>({});
   const [expandedCommentReplies, setExpandedCommentReplies] = useState<Record<string, boolean>>({});
@@ -245,16 +251,63 @@ export function WeeklyReport() {
     preferences: analysisModuleSettings.preferences,
     orderCustomized: analysisModuleSettings.orderCustomized,
   }), [analysisModuleSettings, coreMetricBlock, savedAnalysisResults]);
+  const weeklyDataItems = useMemo<WeeklyDataModule[]>(() => {
+    const preferenceById = new Map(analysisModuleSettings.preferences.map((item) => [item.id, item]));
+    const defaults: WeeklyDataModule[] = [
+      ...weeklyPageData.assets.map((asset) => ({
+        id: `page-data:${asset.id}`,
+        kind: "page-data" as const,
+        title: asset.name,
+        subtitle: `页面数据 · 原始表：${asset.sourceTableName}`,
+        visible: weeklyPageData.layoutIds.includes(asset.id),
+        deletable: false,
+        sourceId: asset.id,
+      })),
+      ...analysisModules.filter((module) => module.kind === "core").map((module) => ({
+        id: module.id,
+        kind: "core" as const,
+        title: module.title,
+        subtitle: `页面数据 · 分析时间：${module.analysisTime}`,
+        visible: module.visible,
+        deletable: false,
+        sourceId: module.id,
+      })),
+      ...weeklyVisualReports.reports.map((report) => ({
+        id: `visual-report:${report.id}`,
+        kind: "visual-report" as const,
+        title: report.title,
+        subtitle: `可视化报表 · ${report.cards.length} 个图表`,
+        visible: preferenceById.get(`visual-report:${report.id}`)?.visible ?? true,
+        deletable: true,
+        sourceId: report.id,
+      })),
+      ...analysisModules.filter((module) => module.kind === "saved").map((module) => ({
+        id: module.id,
+        kind: "saved-analysis" as const,
+        title: module.title,
+        subtitle: `智能分析 · 分析时间：${module.analysisTime}`,
+        visible: module.visible,
+        deletable: true,
+        sourceId: module.savedAnalysisId || module.id,
+      })),
+    ];
+    if (!analysisModuleSettings.orderCustomized) return defaults;
+    const itemById = new Map(defaults.map((item) => [item.id, item]));
+    return [
+      ...analysisModuleSettings.preferences.map((item) => itemById.get(item.id)).filter((item): item is WeeklyDataModule => Boolean(item)),
+      ...defaults.filter((item) => !preferenceById.has(item.id)),
+    ];
+  }, [analysisModuleSettings.orderCustomized, analysisModuleSettings.preferences, analysisModules, weeklyPageData.assets, weeklyPageData.layoutIds, weeklyVisualReports.reports]);
 
   useEffect(() => {
-    setReports(createWeeklyReports(selectedInstitution, userId));
+    setReports(createWeeklyReports(selectedInstitution, userName, userId));
     setViewingHistoryVersionId(null);
     setSelectedAnalysisId("");
     setAnalysisTarget(null);
     setAnalysisSelectionTargets([]);
     setRightRailTab("comments");
     setSavedAt(isDemoFallbackEnabled() ? "当前为显式演示模板" : "尚未绑定真实分析证据，当前草稿不可发布");
-  }, [selectedInstitution, tenantId, userId]);
+  }, [selectedInstitution, tenantId, userId, userName]);
 
   useEffect(() => {
     setAnalysisModuleSettings(loadWeeklyAnalysisModulePreferences(tenantId, userId));
@@ -266,9 +319,9 @@ export function WeeklyReport() {
   useEffect(() => {
     window.localStorage.setItem(
       weeklyAnalysisModuleStorageKey(tenantId, userId),
-      JSON.stringify({ version: 3, orderCustomized: analysisModuleSettings.orderCustomized, preferences: analysisModules.map(({ id, visible }) => ({ id, visible })) }),
+      JSON.stringify({ version: 4, orderCustomized: analysisModuleSettings.orderCustomized, preferences: weeklyDataItems.map(({ id, visible }) => ({ id, visible })) }),
     );
-  }, [analysisModuleSettings.orderCustomized, analysisModules, tenantId, userId]);
+  }, [analysisModuleSettings.orderCustomized, tenantId, userId, weeklyDataItems]);
 
   useEffect(() => {
     let cancelled = false;
@@ -409,11 +462,11 @@ export function WeeklyReport() {
       try {
         const response = await fetchReportComments({ tenantId, userId, reportId: activeReport.id });
         if (!cancelled) {
-          setComments(normalizeComments(response.comments));
+          setComments(normalizeComments(response.comments, userId, userName));
           commentRevisionRef.current = Number(response.revision || 0);
         }
       } catch {
-        if (!cancelled) setComments(isDemoFallbackEnabled() ? loadLocalReportComments(tenantId, activeReport.id) : []);
+        if (!cancelled) setComments(isDemoFallbackEnabled() ? loadLocalReportComments(tenantId, activeReport.id, userId, userName) : []);
       }
     };
 
@@ -421,7 +474,7 @@ export function WeeklyReport() {
     return () => {
       cancelled = true;
     };
-  }, [activeReport.id, tenantId, userId]);
+  }, [activeReport.id, tenantId, userId, userName]);
 
   function enqueueCommentMutation(
     execute: (expectedRevision: number) => Promise<{ comments: ReportComment[]; revision: number }>,
@@ -433,13 +486,13 @@ export function WeeklyReport() {
         try {
           const response = await execute(commentRevisionRef.current);
           commentRevisionRef.current = Number(response.revision || commentRevisionRef.current + 1);
-          setComments(normalizeComments(response.comments));
+          setComments(normalizeComments(response.comments, userId, userName));
           return;
         } catch {
           try {
             const latest = await fetchReportComments({ tenantId, userId, reportId });
             commentRevisionRef.current = Number(latest.revision || 0);
-            setComments(normalizeComments(latest.comments));
+            setComments(normalizeComments(latest.comments, userId, userName));
           } catch {
             break;
           }
@@ -692,21 +745,51 @@ export function WeeklyReport() {
 
   function toggleAnalysisModule(module: WeeklyAnalysisModule) {
     const nextVisible = !module.visible;
-    setAnalysisModuleSettings((current) => ({ ...current, preferences: analysisModules.map((item) => ({ id: item.id, visible: item.id === module.id ? nextVisible : item.visible })) }));
+    setAnalysisModuleSettings((current) => ({ ...current, preferences: weeklyDataItems.map((item) => ({ id: item.id, visible: item.id === module.id ? nextVisible : item.visible })) }));
     if (module.kind === "saved" && module.savedAnalysisId) {
       setSelectedAnalysisId(nextVisible ? module.savedAnalysisId : selectedAnalysisId === module.savedAnalysisId ? "" : selectedAnalysisId);
     }
   }
 
-  function moveAnalysisModule(sourceId: string, targetId: string) {
+  function toggleWeeklyDataItem(item: WeeklyDataModule) {
+    if (weeklyPageData.mode !== "edit") return;
+    if (item.kind === "page-data") {
+      weeklyPageData.toggleAsset(item.sourceId);
+      return;
+    }
+    if (item.kind === "visual-report") {
+      setAnalysisModuleSettings((current) => ({ ...current, preferences: weeklyDataItems.map((currentItem) => ({ id: currentItem.id, visible: currentItem.id === item.id ? !item.visible : currentItem.visible })) }));
+      return;
+    }
+    const analysisModule = analysisModules.find((module) => module.id === item.id);
+    if (analysisModule) toggleAnalysisModule(analysisModule);
+  }
+
+  function moveWeeklyDataItem(sourceId: string, targetId: string) {
+    if (weeklyPageData.mode !== "edit") return;
     if (!sourceId || sourceId === targetId) return;
-    const next = analysisModules.map(({ id, visible }) => ({ id, visible }));
+    const next = weeklyDataItems.map(({ id, visible }) => ({ id, visible }));
     const sourceIndex = next.findIndex((item) => item.id === sourceId);
     const targetIndex = next.findIndex((item) => item.id === targetId);
     if (sourceIndex < 0 || targetIndex < 0) return;
     const [source] = next.splice(sourceIndex, 1);
     next.splice(targetIndex, 0, source);
     setAnalysisModuleSettings({ preferences: next, orderCustomized: true });
+  }
+
+  async function deleteWeeklyDataItem(item: WeeklyDataModule) {
+    if (weeklyPageData.mode !== "edit" || !item.deletable) return;
+    if (item.kind === "visual-report") {
+      const report = weeklyVisualReports.reports.find((candidate) => candidate.id === item.sourceId);
+      if (!report) return;
+      const removed = await weeklyVisualReports.remove(report);
+      if (removed) setAnalysisModuleSettings((current) => ({ ...current, preferences: current.preferences.filter((preference) => preference.id !== item.id) }));
+      return;
+    }
+    if (item.kind === "saved-analysis") {
+      const module = analysisModules.find((candidate) => candidate.id === item.id);
+      if (module) await deleteAnalysisModule(module);
+    }
   }
   async function deleteAnalysisModule(module: WeeklyAnalysisModule) {
     if (module.kind !== "saved" || !module.savedAnalysisId || !window.confirm(`确认删除“${module.title}”吗？`)) return;
@@ -1343,17 +1426,11 @@ export function WeeklyReport() {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => void saveReportVersion()}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-[#e5e5ea] rounded-lg text-[12px] text-[#636366] hover:bg-[#f2f2f7] transition-colors"
-          >
-            <Save className="w-3.5 h-3.5" />
-            保存版本
-          </button>
+          <PageDataModeToggle controller={weeklyPageData} onSave={saveReportVersion} className="weekly-report-page-data-mode-toggle" />
           <div className="relative" data-weekly-history-menu="true">
             <button
               onClick={() => void openReportHistory()}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-[#e5e5ea] rounded-lg text-[12px] text-[#636366] hover:bg-[#f2f2f7] transition-colors"
+              className="flex h-8 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#636366] transition-colors hover:bg-[#f2f2f7]"
             >
               <FileText className="w-3.5 h-3.5" />
               历史版本
@@ -1397,7 +1474,7 @@ export function WeeklyReport() {
           </div>
           <button
             onClick={() => void exportReport()}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1d1d1f] text-white rounded-lg text-[12px] hover:bg-[#2c2c2e] transition-colors"
+            className="flex h-8 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white transition-colors hover:bg-[#2c2c2e]"
           >
             <Download className="w-3.5 h-3.5" />
             导出
@@ -1433,7 +1510,7 @@ export function WeeklyReport() {
                   { label: "汇报人", key: "reporters" as const, value: activeReport.reporters },
                   { label: "报告周期", key: "period" as const, value: activeReport.period },
                 ].map((item) => (
-                  <div key={item.label} className="rounded-lg bg-[#fafbfc] px-2.5 py-1.5" data-report-meta-key={item.key}>
+                  <div key={item.label} className="rounded-lg px-2.5 py-1.5" data-report-meta-key={item.key}>
                     <div className="text-[10px] text-[#aeaeb2] mb-1">{item.label}</div>
                     <input
                       value={item.value}
@@ -1461,54 +1538,78 @@ export function WeeklyReport() {
                       {isLoadingReportEvidence ? "校验中" : viewingHistoryVersionId ? "载入最新" : "载入报告"}
                     </button>
                   )}
-                  <WeeklyAnalysisModuleMenu modules={analysisModules} onToggle={toggleAnalysisModule} onMove={moveAnalysisModule} onDelete={deleteAnalysisModule} />
+                  <WeeklyAnalysisModuleMenu
+                    items={weeklyDataItems}
+                    editable={weeklyPageData.mode === "edit"}
+                    loading={weeklyPageData.loading || weeklyVisualReports.loading}
+                    notice={weeklyPageData.notice || weeklyVisualReports.error}
+                    onToggle={toggleWeeklyDataItem}
+                    onMove={moveWeeklyDataItem}
+                    onDelete={(item) => void deleteWeeklyDataItem(item)}
+                  />
                 </div>
               </div>
               <div className="space-y-4">
-                {analysisModules.filter((module) => module.visible).map((module) => {
-                  if (module.kind === "saved") {
-                    const result = savedAnalysisResults.find((item) => item.id === module.savedAnalysisId);
-                    return result ? <SavedAnalysisEmbed key={module.id} result={result} /> : null;
+                {weeklyDataItems.filter((item) => item.visible).map((item) => {
+                  let content: ReactNode;
+                  if (item.kind === "page-data") {
+                    content = weeklyPageData.loading ? null : <PageDataVisualizationModules controller={weeklyPageData} className="" assetIds={[item.sourceId]} showEditorControls={false} layoutEditable={weeklyPageData.mode === "edit"} />;
+                  } else if (item.kind === "visual-report") {
+                    const report = weeklyVisualReports.reports.find((candidate) => candidate.id === item.sourceId);
+                    content = report ? <section className="rounded-xl border border-[#eef1ef] bg-white p-4" data-weekly-visual-report={report.id}>
+                      <div className="mb-3"><h5 className="text-[12px] text-[#1d1d1f]">{report.title}</h5><p className="mt-1 text-[10px] text-[#9ba19e]">来自可视化报表 · {report.cards.length} 个图表</p></div>
+                      <VisualReportCards report={report} railPageKey="weekly-report" layoutEditable={weeklyPageData.mode === "edit"} />
+                    </section> : null;
+                  } else if (item.kind === "saved-analysis") {
+                    const module = analysisModules.find((candidate) => candidate.id === item.id);
+                    const result = module?.savedAnalysisId ? savedAnalysisResults.find((candidate) => candidate.id === module.savedAnalysisId) : undefined;
+                    content = result ? <SavedAnalysisEmbed result={result} /> : null;
+                  } else {
+                    content = mainSections.flatMap((section) => section.blocks).map((block) =>
+                      block.type === "table" ? (
+                        <ReportTable
+                          key={block.id}
+                          block={block}
+                          selectedTargetId={selectedCommentTarget?.id}
+                          onSelectTarget={setSelectedCommentTarget}
+                          onOpenComment={openCommentDraft}
+                          onOpenAnalysis={openContextAnalysis}
+                          onAnalyze={() => generateAnalysis(block)}
+                          onConfirm={() => confirmAnalysis(block.id)}
+                          onAnalysisChange={(items) => {
+                            const wasAnalyzing = block.analysis.status === "分析中";
+                            stopBlockAnalysis(block.id);
+                            updateBlock(block.id, (current) =>
+                              current.type === "table"
+                                ? {
+                                    ...current,
+                                    analysis: {
+                                      status: wasAnalyzing ? "已停止" : hasMeaningfulRichContent(items) ? "待确认" : "未生成",
+                                      conclusion: serializeContentItems(items),
+                                      contentItems: items,
+                                    },
+                                  }
+                                : current,
+                            );
+                          }}
+                          comments={visibleAnnotations}
+                          highlightedCommentId={highlightedAnnotationId}
+                          onCreateTextComment={prepareTextComment}
+                          onAnnotationClick={activateTextAnnotation}
+                          imageUploadContext={{ tenantId, userId, reportId: activeReport.id }}
+                          analysisProgress={analysisProgressByBlock[block.id] || []}
+                          analysisError={analysisErrorByBlock[block.id] || ""}
+                        />
+                      ) : null,
+                    );
                   }
-                  return mainSections.flatMap((section) => section.blocks).map((block) =>
-                    block.type === "table" ? (
-                      <ReportTable
-                        key={block.id}
-                        block={block}
-                        selectedTargetId={selectedCommentTarget?.id}
-                        onSelectTarget={setSelectedCommentTarget}
-                        onOpenComment={openCommentDraft}
-                        onOpenAnalysis={openContextAnalysis}
-                        onAnalyze={() => generateAnalysis(block)}
-                        onConfirm={() => confirmAnalysis(block.id)}
-                        onAnalysisChange={(items) => {
-                          const wasAnalyzing = block.analysis.status === "分析中";
-                          stopBlockAnalysis(block.id);
-                          updateBlock(block.id, (current) =>
-                            current.type === "table"
-                              ? {
-                                  ...current,
-                                  analysis: {
-                                    status: wasAnalyzing ? "已停止" : hasMeaningfulRichContent(items) ? "待确认" : "未生成",
-                                    conclusion: serializeContentItems(items),
-                                    contentItems: items,
-                                  },
-                                }
-                              : current,
-                          );
-                        }}
-                        comments={visibleAnnotations}
-                        highlightedCommentId={highlightedAnnotationId}
-                        onCreateTextComment={prepareTextComment}
-                        onAnnotationClick={activateTextAnnotation}
-                        imageUploadContext={{ tenantId, userId, reportId: activeReport.id }}
-                        analysisProgress={analysisProgressByBlock[block.id] || []}
-                        analysisError={analysisErrorByBlock[block.id] || ""}
-                      />
-                    ) : null,
-                  );
+                  if (!content) return null;
+                  return <div key={item.id} className="relative" onDragOver={(event) => { if (weeklyPageData.mode === "edit") event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); moveWeeklyDataItem(event.dataTransfer.getData("text/x-weekly-data-item"), item.id); }} data-weekly-visual-order-item={item.id}>
+                    {weeklyPageData.mode === "edit" && <div className="weekly-report-print-hidden mb-1 flex h-7 items-center rounded-lg border border-dashed border-[#d8e5dd] bg-[#f8fbf9] px-2 text-[10px] text-[#718078]" draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/x-weekly-data-item", item.id); }} data-weekly-visual-order-handle={item.id}><span className="inline-flex cursor-grab items-center gap-1.5 active:cursor-grabbing"><GripVertical className="h-3.5 w-3.5" />拖动调整呈现顺序</span></div>}
+                    {content}
+                  </div>;
                 })}
-                {!analysisModules.some((module) => module.visible) ? <div className="rounded-lg border border-dashed border-[#e5e5ea] px-4 py-10 text-center text-[12px] text-[#aeaeb2]">当前未显示分析模块，可通过右上角下拉按钮重新启用。</div> : null}
+                {!weeklyDataItems.some((item) => item.visible) ? <div className="rounded-lg border border-dashed border-[#e5e5ea] px-4 py-10 text-center text-[12px] text-[#aeaeb2]">当前未显示周报数据，可切换到编辑后通过右上角按钮重新启用。</div> : null}
               </div>
             </section>
 
@@ -1589,7 +1690,7 @@ export function WeeklyReport() {
           pageTitle="经营周报"
           overallPrompt="结合当前经营周报页面及其关联指标数据，对本周业绩变化、机构差异、风险信号和下一步行动进行总体分析。"
           focusTargetId={selectedCommentTarget?.id}
-          focusTarget={rightRailTab === "analysis" ? selectedCommentTarget : null}
+          focusTarget={rightRailTab === "analysis" || rightRailTab === "message-board" ? selectedCommentTarget : null}
           onAnalysisTargetActivate={(target) => setSelectedCommentTarget(target)}
           onAnalysisTargetDismiss={(target) => {
             setAnalysisTarget((current) => current?.id === target.id ? null : current);
@@ -2851,17 +2952,15 @@ function TextSection({
     const replacementItems: RichContentItem[] = [
       ...(beforeText.length ? [{ ...item, text: beforeText }] : []),
       ...imageItems,
-      ...(afterText.length ? [{ id: afterParagraphId, type: "paragraph" as const, text: afterText }] : []),
+      { id: afterParagraphId, type: "paragraph" as const, text: afterText },
     ];
     const nextItems = [...items];
     nextItems.splice(index, 1, ...replacementItems);
     commit(nextItems);
     window.setTimeout(() => {
-      const focusId = afterText.length ? afterParagraphId : beforeText.length ? item.id : null;
-      if (!focusId) return;
-      const nextEditor = document.querySelector(`textarea[data-comment-editor-id="${focusId}"]`) as HTMLTextAreaElement | null;
+      const nextEditor = document.querySelector(`textarea[data-comment-editor-id="${afterParagraphId}"]`) as HTMLTextAreaElement | null;
       if (!nextEditor) return;
-      const offset = afterText.length ? 0 : nextEditor.value.length;
+      const offset = 0;
       nextEditor.focus();
       nextEditor.setSelectionRange(offset, offset);
     }, 0);

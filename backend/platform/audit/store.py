@@ -23,10 +23,16 @@ class AuditEventStore(Protocol):
     ) -> dict[str, Any]:
         ...
 
-    def list(self, tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    def list(self, tenant_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         ...
 
-    def list_for_tenants(self, tenant_ids: list[str], limit: int = 50) -> list[dict[str, Any]]:
+    def count(self, tenant_id: str) -> int:
+        ...
+
+    def list_for_tenants(self, tenant_ids: list[str], limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        ...
+
+    def count_for_tenants(self, tenant_ids: list[str]) -> int:
         ...
 
 
@@ -48,20 +54,29 @@ class InMemoryAuditEventStore:
         self._events.append(event)
         return dict(event)
 
-    def list(self, tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
-        return [
+    def list(self, tenant_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        events = [
             dict(event)
             for event in reversed(self._events)
             if event["tenant_id"] in (tenant_id, "*")
-        ][: max(1, min(int(limit or 50), 200))]
+        ]
+        return events[_bounded_offset(offset): _bounded_offset(offset) + _bounded_limit(limit)]
 
-    def list_for_tenants(self, tenant_ids: list[str], limit: int = 50) -> list[dict[str, Any]]:
+    def count(self, tenant_id: str) -> int:
+        return sum(1 for event in self._events if event["tenant_id"] in (tenant_id, "*"))
+
+    def list_for_tenants(self, tenant_ids: list[str], limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         allowed = set(tenant_ids)
-        return [
+        events = [
             dict(event)
             for event in reversed(self._events)
             if event["tenant_id"] in allowed or event["tenant_id"] == "*"
-        ][: max(1, min(int(limit or 50), 200))]
+        ]
+        return events[_bounded_offset(offset): _bounded_offset(offset) + _bounded_limit(limit)]
+
+    def count_for_tenants(self, tenant_ids: list[str]) -> int:
+        allowed = set(tenant_ids)
+        return sum(1 for event in self._events if event["tenant_id"] in allowed or event["tenant_id"] == "*")
 
 
 class SQLiteAuditEventStore:
@@ -130,39 +145,35 @@ class SQLiteAuditEventStore:
             )
         return event
 
-    def list(self, tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
-        bounded_limit = max(1, min(int(limit or 50), 200))
+    def list(self, tenant_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        bounded_limit = _bounded_limit(limit)
+        bounded_offset = _bounded_offset(offset)
         rows = self._conn.execute(
             """
             SELECT event_id, tenant_id, actor_user_id, action, target_type, target_id,
                    detail, ip_address, created_at
             FROM platform_audit_events
             WHERE tenant_id IN (?, '*')
-            ORDER BY created_at DESC
-            LIMIT ?
+            ORDER BY created_at DESC, event_id DESC
+            LIMIT ? OFFSET ?
             """,
-            (tenant_id, bounded_limit),
+            (tenant_id, bounded_limit, bounded_offset),
         ).fetchall()
-        return [
-            {
-                "event_id": row["event_id"],
-                "tenant_id": row["tenant_id"],
-                "actor_user_id": row["actor_user_id"],
-                "action": row["action"],
-                "target_type": row["target_type"],
-                "target_id": row["target_id"],
-                "detail": json.loads(row["detail"] or "{}"),
-                "ip_address": row["ip_address"],
-                "created_at": row["created_at"],
-            }
-            for row in rows
-        ]
+        return [_sqlite_row_to_event(row) for row in rows]
 
-    def list_for_tenants(self, tenant_ids: list[str], limit: int = 50) -> list[dict[str, Any]]:
+    def count(self, tenant_id: str) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS count FROM platform_audit_events WHERE tenant_id IN (?, '*')",
+            (tenant_id,),
+        ).fetchone()
+        return int(row["count"] if row is not None else 0)
+
+    def list_for_tenants(self, tenant_ids: list[str], limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         allowed = sorted({str(item).strip() for item in tenant_ids if str(item).strip()})
         if not allowed:
             return []
-        bounded_limit = max(1, min(int(limit or 50), 200))
+        bounded_limit = _bounded_limit(limit)
+        bounded_offset = _bounded_offset(offset)
         placeholders = ", ".join("?" for _ in allowed)
         rows = self._conn.execute(
             f"""
@@ -170,25 +181,45 @@ class SQLiteAuditEventStore:
                    detail, ip_address, created_at
             FROM platform_audit_events
             WHERE tenant_id IN ({placeholders}) OR tenant_id = '*'
-            ORDER BY created_at DESC
-            LIMIT ?
+            ORDER BY created_at DESC, event_id DESC
+            LIMIT ? OFFSET ?
             """,
-            (*allowed, bounded_limit),
+            (*allowed, bounded_limit, bounded_offset),
         ).fetchall()
-        return [
-            {
-                "event_id": row["event_id"],
-                "tenant_id": row["tenant_id"],
-                "actor_user_id": row["actor_user_id"],
-                "action": row["action"],
-                "target_type": row["target_type"],
-                "target_id": row["target_id"],
-                "detail": json.loads(row["detail"] or "{}"),
-                "ip_address": row["ip_address"],
-                "created_at": row["created_at"],
-            }
-            for row in rows
-        ]
+        return [_sqlite_row_to_event(row) for row in rows]
+
+    def count_for_tenants(self, tenant_ids: list[str]) -> int:
+        allowed = sorted({str(item).strip() for item in tenant_ids if str(item).strip()})
+        if not allowed:
+            return 0
+        placeholders = ", ".join("?" for _ in allowed)
+        row = self._conn.execute(
+            f"SELECT COUNT(*) AS count FROM platform_audit_events WHERE tenant_id IN ({placeholders}) OR tenant_id = '*'",
+            allowed,
+        ).fetchone()
+        return int(row["count"] if row is not None else 0)
+
+
+def _bounded_limit(limit: int) -> int:
+    return max(1, min(int(limit or 50), 200))
+
+
+def _bounded_offset(offset: int) -> int:
+    return max(0, int(offset or 0))
+
+
+def _sqlite_row_to_event(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "event_id": row["event_id"],
+        "tenant_id": row["tenant_id"],
+        "actor_user_id": row["actor_user_id"],
+        "action": row["action"],
+        "target_type": row["target_type"],
+        "target_id": row["target_id"],
+        "detail": json.loads(row["detail"] or "{}"),
+        "ip_address": row["ip_address"],
+        "created_at": row["created_at"],
+    }
 
 
 def _normalize_event(

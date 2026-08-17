@@ -17,11 +17,17 @@ from .store import (
     _normalize_analysis_result,
     _normalize_comments,
     _normalize_daily_report_run,
+    _normalize_saved_analysis_visualizations,
     _normalize_weekly_ai_task,
     _prepare_weekly_report_version,
     _resolved_reason,
     _server_comment_from_draft,
 )
+
+
+_WEEKLY_REPORT_TAG = "system:weekly-report"
+_WEEKLY_REPORT_SAVED_AT_PREFIX = "system:weekly-report-saved-at:"
+_PRESENTATION_CONFIG_TAG_PREFIX = "system:presentation-config:"
 
 
 class PostgreSQLReportStore:
@@ -51,6 +57,20 @@ class PostgreSQLReportStore:
                 rows = cursor.fetchall()
         return [self._saved_analysis_row(row) for row in rows]
 
+    def get_analysis_result(self, tenant_id: str, result_id: str, actor_user_id: str | None = None) -> dict[str, Any] | None:
+        with self.pool.connection() as connection:
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
+            actor_key = PostgreSQLIdentityResolver.user_id(connection, actor_user_id, required=False) if actor_user_id else None
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self._saved_analysis_select()
+                    + " WHERE s.tenant_id=%s AND s.saved_result_key=%s AND s.archived_at IS NULL"
+                    + (" AND (s.owner_user_id=%s OR s.visibility='tenant')" if actor_user_id else ""),
+                    (tenant_key, result_id, actor_key) if actor_user_id else (tenant_key, result_id),
+                )
+                row = cursor.fetchone()
+        return self._saved_analysis_row(row) if row else None
+
     def upsert_analysis_result(self, tenant_id: str, result: dict[str, Any], updated_by: str | None = None) -> dict[str, Any]:
         normalized = _normalize_analysis_result(result)
         if not updated_by:
@@ -61,23 +81,37 @@ class PostgreSQLReportStore:
             task_key = self._analysis_task_uuid(connection, tenant_key, normalized["analysisTaskId"])
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT owner_user_id FROM platform_saved_analysis_results WHERE tenant_id=%s AND saved_result_key=%s FOR UPDATE",
+                    "SELECT owner_user_id,tags FROM platform_saved_analysis_results WHERE tenant_id=%s AND saved_result_key=%s FOR UPDATE",
                     (tenant_key, normalized["id"]),
                 )
                 existing = cursor.fetchone()
                 if existing and _value(existing, "owner_user_id", 0) != actor_key:
                     raise PermissionError("saved_analysis_owner_required")
+                tags = _json_value(_value(existing, "tags", 1), []) if existing else []
+                tags = [str(tag) for tag in tags if isinstance(tag, str)] if isinstance(tags, list) else []
+                tags = [tag for tag in tags if not tag.startswith(_PRESENTATION_CONFIG_TAG_PREFIX)]
+                if normalized["visualizations"]:
+                    tags.append(_PRESENTATION_CONFIG_TAG_PREFIX + _json(normalized["visualizations"]))
+                if normalized["weeklyReportEligible"]:
+                    tags = [
+                        tag for tag in tags
+                        if tag != _WEEKLY_REPORT_TAG and not tag.startswith(_WEEKLY_REPORT_SAVED_AT_PREFIX)
+                    ]
+                    tags.extend([
+                        _WEEKLY_REPORT_TAG,
+                        f'{_WEEKLY_REPORT_SAVED_AT_PREFIX}{normalized["weeklyReportSavedAt"]}',
+                    ])
                 cursor.execute(
                     """
                     INSERT INTO platform_saved_analysis_results(
                         tenant_id,saved_result_key,analysis_task_id,owner_user_id,title,visibility,folder,tags,created_by
-                    ) VALUES (%s,%s,%s,%s,%s,%s,'','[]'::jsonb,%s)
+                    ) VALUES (%s,%s,%s,%s,%s,%s,'',%s::jsonb,%s)
                     ON CONFLICT (tenant_id,saved_result_key) DO UPDATE SET
                         analysis_task_id=EXCLUDED.analysis_task_id,title=EXCLUDED.title,
-                        visibility=EXCLUDED.visibility,archived_at=NULL,updated_at=now(),
+                        visibility=EXCLUDED.visibility,tags=EXCLUDED.tags,archived_at=NULL,updated_at=now(),
                         lock_version=platform_saved_analysis_results.lock_version+1
                     """,
-                    (tenant_key,normalized["id"],task_key,actor_key,normalized["title"],normalized["visibility"],actor_key),
+                    (tenant_key,normalized["id"],task_key,actor_key,normalized["title"],normalized["visibility"],_json(tags),actor_key),
                 )
         saved = next((item for item in self.list_analysis_results(tenant_id, updated_by) if item["id"] == normalized["id"]), None)
         if saved is None:
@@ -457,19 +491,28 @@ class PostgreSQLReportStore:
     # SQL projections and internal helpers -------------------------------------
     @staticmethod
     def _saved_analysis_select() -> str:
-        return """SELECT s.saved_result_key AS id,s.title,t.user_query AS query,t.response_snapshot,
-            s.created_at AS saved_at,t.task_key AS analysis_task_id,owner.external_subject AS owner_user_id,s.visibility
+        return """SELECT s.saved_result_key AS id,s.title,t.question AS query,t.response_snapshot,
+            s.created_at AS saved_at,t.task_key AS analysis_task_id,owner.external_subject AS owner_user_id,s.visibility,s.tags
             FROM platform_saved_analysis_results s JOIN platform_analysis_tasks t ON t.analysis_task_id=s.analysis_task_id
             JOIN platform_user_profiles owner ON owner.user_id=s.owner_user_id"""
 
     @staticmethod
     def _saved_analysis_row(row: Any) -> dict[str,Any]:
         snapshot=_json_value(_value(row,"response_snapshot",3),{})
+        tags=_json_value(_value(row,"tags",8),[])
+        tags=[str(tag) for tag in tags if isinstance(tag,str)] if isinstance(tags,list) else []
+        weekly_saved_at=next((tag[len(_WEEKLY_REPORT_SAVED_AT_PREFIX):] for tag in tags if tag.startswith(_WEEKLY_REPORT_SAVED_AT_PREFIX)),"")
+        presentation_tag=next((tag[len(_PRESENTATION_CONFIG_TAG_PREFIX):] for tag in tags if tag.startswith(_PRESENTATION_CONFIG_TAG_PREFIX)),"")
+        try:
+            visualizations=_normalize_saved_analysis_visualizations(json.loads(presentation_tag)) if presentation_tag else []
+        except (TypeError,ValueError,json.JSONDecodeError):
+            visualizations=[]
         return {"id":str(_value(row,"id",0)),"title":str(_value(row,"title",1)),"query":str(_value(row,"query",2)),
             "plan":str(snapshot.get("plan") or ""),"summary":str(snapshot.get("summary") or snapshot.get("answer") or ""),
             "visualTypes":snapshot.get("visualTypes") if isinstance(snapshot.get("visualTypes"),dict) else {"primary":"bar","secondary":"table"},
             "savedAt":_iso(_value(row,"saved_at",4)),"analysisTaskId":str(_value(row,"analysis_task_id",5)),
-            "ownerUserId":str(_value(row,"owner_user_id",6)),"visibility":str(_value(row,"visibility",7)),"rows":[]}
+            "ownerUserId":str(_value(row,"owner_user_id",6)),"visibility":str(_value(row,"visibility",7)),"rows":[],
+            "visualizations":visualizations,"weeklyReportEligible":_WEEKLY_REPORT_TAG in tags,"weeklyReportSavedAt":weekly_saved_at}
 
     @staticmethod
     def _version_select() -> str:
@@ -530,14 +573,19 @@ class PostgreSQLReportStore:
     def _comments(self,connection:Any,tenant_key:Any,report_key:Any)->list[dict[str,Any]]:
         with connection.cursor() as cursor:
             cursor.execute("""SELECT c.comment_id,c.comment_key,c.client_request_id,c.comment_body,c.anchor,c.status,
-                author.external_subject AS author,c.created_at,c.resolved_at,resolver.external_subject AS resolved_by,c.lock_version
+                COALESCE(NULLIF(TRIM(author.display_name), ''), author.external_subject) AS author,
+                c.created_at,c.resolved_at,
+                COALESCE(NULLIF(TRIM(resolver.display_name), ''), resolver.external_subject) AS resolved_by,
+                c.lock_version
                 FROM platform_report_comments c JOIN platform_user_profiles author ON author.user_id=c.author_user_id
                 LEFT JOIN platform_user_profiles resolver ON resolver.user_id=c.resolved_by
                 WHERE c.tenant_id=%s AND c.report_id=%s AND c.status<>'deleted' ORDER BY c.created_at""",(tenant_key,report_key))
             rows=cursor.fetchall()
             result=[]
             for row in rows:
-                cursor.execute("""SELECT r.reply_key AS id,author.external_subject AS author,r.created_at AS time,r.reply_body AS text
+                cursor.execute("""SELECT r.reply_key AS id,
+                    COALESCE(NULLIF(TRIM(author.display_name), ''), author.external_subject) AS author,
+                    r.created_at AS time,r.reply_body AS text
                     FROM platform_report_comment_replies r JOIN platform_user_profiles author ON author.user_id=r.author_user_id
                     WHERE r.comment_id=%s AND r.status='active' ORDER BY r.created_at""",(_value(row,"comment_id",0),))
                 replies=[_row(reply) for reply in cursor.fetchall()]

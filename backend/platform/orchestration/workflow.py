@@ -127,6 +127,14 @@ class AnalysisWorkflow:
             question,
             tenant_id=context.tenant_id,
         )
+        task.analysis_plan = _apply_page_analysis_context(task.analysis_plan, context.page_context)
+        selected_raw_table = _selected_raw_table(context.page_context)
+        if selected_raw_table is not None:
+            task.analysis_plan = _build_temporary_raw_table_plan(
+                task.analysis_plan,
+                selected_raw_table,
+                question,
+            )
         if self.learning_service is not None:
             learned_skills = self.learning_service.resolve_analysis_skills(
                 context,
@@ -212,6 +220,7 @@ class AnalysisWorkflow:
                     "context": {
                         "analysis_plan": task.analysis_plan,
                         "task_type": task_type,
+                        "selected_raw_table": selected_raw_table or {},
                         "connection_id": str(
                             context.page_context.get("connection_id")
                             or context.page_context.get("selected_connection_id")
@@ -396,6 +405,18 @@ class AnalysisWorkflow:
 
     def _select_intent_rule(self, context: ExecutionContext, question: str) -> AnalysisIntentRule:
         base = self.planning_catalog.select(question)
+        page_hint = _analysis_plan_hint(context.page_context)
+        if page_hint is not None:
+            return AnalysisIntentRule(
+                rule_id=f"page_context:{page_hint['dataset_id']}",
+                task_type=base.task_type,
+                terms=(),
+                dataset_id=page_hint["dataset_id"],
+                metrics=tuple(page_hint["metrics"]),
+                dimensions=tuple(page_hint["dimensions"]),
+                chart_types=tuple(page_hint["chart_types"] or base.chart_types),
+                analysis_angles=tuple(page_hint["analysis_angles"] or base.analysis_angles),
+            )
         asset_context = context.page_context.get("asset_context")
         tables = asset_context.get("selected_data_tables") if isinstance(asset_context, dict) else []
         selected = next(
@@ -452,7 +473,7 @@ class AnalysisWorkflow:
         output = task.skill_results[0] if task.skill_results else {}
         task.review = self._review_result(task.analysis_plan, output, intelligent_analysis)
         semantic_info = output.get("semantic_info", {}) if isinstance(output.get("semantic_info"), dict) else {}
-        task.execution_mode = str(semantic_info.get("execution_mode") or "mock")
+        task.execution_mode = _task_execution_mode(semantic_info)
         task.status = "completed" if task.review.get("status") == "passed" else "review_required"
         if self.agent_runtime and task.agent_group_run:
             evidence = output.get("evidence", {}) if isinstance(output.get("evidence"), dict) else {}
@@ -819,13 +840,7 @@ class AnalysisWorkflow:
     @staticmethod
     def _build_data_processing_script() -> str:
         return '''def process_data(data, context):
-    processed = []
-    metrics = context.get("metrics", [])
-    for row in data:
-        item = dict(row)
-        for metric in metrics:
-            item[metric] = round(float(row.get(metric, 0) or 0), 6)
-        processed.append(item)
+    processed = [dict(row) for row in data]
     return {
         "rows": processed,
         "quality": {
@@ -872,11 +887,183 @@ def _string_values(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item or "").strip()]
 
 
+def _selected_raw_table(page_context: dict[str, Any]) -> dict[str, Any] | None:
+    asset_context = page_context.get("asset_context") if isinstance(page_context, dict) else None
+    selected = asset_context.get("selected_data_tables") if isinstance(asset_context, dict) else []
+    raw_tables = [
+        table
+        for table in selected or []
+        if isinstance(table, dict)
+        and not str(table.get("datasetId") or "").strip()
+        and str(table.get("relativePath") or "").strip()
+    ]
+    if not raw_tables:
+        return None
+    if len(raw_tables) != 1 or len([table for table in selected or [] if isinstance(table, dict)]) != 1:
+        raise ValueError("analysis_selected_raw_table_requires_single_source")
+    return raw_tables[0]
+
+
+def _build_temporary_raw_table_plan(
+    base_plan: dict[str, Any],
+    table: dict[str, Any],
+    question: str,
+) -> dict[str, Any]:
+    fields = [field for field in table.get("fields") or [] if isinstance(field, dict)]
+    normalized_question = str(question or "").casefold()
+    normalized_fields = [
+        {
+            "code": str(field.get("fieldNameEn") or "").strip(),
+            "name": str(field.get("fieldNameCn") or field.get("fieldNameEn") or "").strip(),
+            "type": str(field.get("type") or "string").strip().lower(),
+            "is_time": bool(field.get("isTime")) or str(field.get("type") or "").lower() in {"date", "datetime"},
+        }
+        for field in fields
+        if str(field.get("fieldNameEn") or "").strip()
+    ]
+    numeric = [field for field in normalized_fields if field["type"] in {"integer", "decimal", "number", "float"}]
+    non_numeric = [field for field in normalized_fields if field not in numeric]
+    matched_numeric = [
+        field for field in numeric
+        if any(token and token.casefold() in normalized_question for token in (field["code"], field["name"]))
+    ]
+    matched_dimensions = [
+        field for field in non_numeric
+        if any(token and token.casefold() in normalized_question for token in (field["code"], field["name"]))
+    ]
+    metrics = (matched_numeric or numeric)[:20]
+    synthetic_count = not metrics
+    if synthetic_count:
+        metrics = [{"code": "row_count", "name": "记录数", "type": "integer", "is_time": False}]
+    preferred_dimensions = [*matched_dimensions, *[field for field in non_numeric if field["is_time"]], *non_numeric]
+    dimensions = list({field["code"]: field for field in preferred_dimensions}.values())[:4]
+    dataset_id = str(table.get("tableNameEn") or table.get("code") or table.get("id") or "selected_raw_csv").strip()
+    version = str(table.get("schemaVersion") or table.get("schemaFingerprint") or table.get("contentHash") or "temporary")[:64]
+    grain = "、".join(field["name"] for field in dimensions) or "整张原始表"
+    definitions = []
+    for metric in metrics:
+        label = metric["name"]
+        aggregation = "count" if metric["code"] == "row_count" else "avg" if any(token in label for token in ("率", "比例", "均值", "平均", "户均")) else "sum"
+        definitions.append({
+            "metric_code": metric["code"],
+            "metric_name": label,
+            "dataset_id": dataset_id,
+            "aggregation": aggregation,
+            "numerator": "",
+            "denominator": "",
+            "multiplier": 1,
+            "unit": "%" if "率" in label else "",
+            "grain": grain,
+            "version": version,
+            "source": "temporary_table_schema",
+        })
+    plan = dict(base_plan)
+    plan.update({
+        "dataset_id": dataset_id,
+        "metrics": [metric["code"] for metric in metrics],
+        "metric_definitions": definitions,
+        "dimensions": [field["code"] for field in dimensions],
+        "filters": {"tenant_id": "__context_tenant__"},
+        "limit": min(max(1, int(base_plan.get("limit") or 50)), 500),
+        "sort": {"metric": metrics[0]["code"], "direction": "desc"},
+        "chart_types": ["line", "table"] if any(field["is_time"] for field in dimensions) else ["column", "table"],
+        "analysis_angles": [
+            "仅使用用户明确选择的当前机构原始 CSV",
+            "指标口径由字段类型确定性生成并标记为临时口径",
+            "临时口径不写回指标字典，需用户结合业务定义复核",
+        ],
+        "business_focus": f"分析用户选择的原始表“{table.get('tableNameCn') or table.get('name') or dataset_id}”",
+        "temporary_metric_semantics": True,
+        "temporary_metric_source": "selected_raw_csv",
+        "synthetic_row_count_metric": synthetic_count,
+    })
+    return plan
+
+
 def _normalized_chart_types(value: Any) -> list[str]:
     aliases = {"bar": "column", "radar": "table", "pie": "table"}
     allowed = {"column", "line", "table"}
     normalized = [aliases.get(item.lower(), item.lower()) for item in _string_values(value)]
     return list(dict.fromkeys(item for item in normalized if item in allowed))
+
+
+def _analysis_plan_hint(page_context: Any) -> dict[str, Any] | None:
+    """Accept a bounded page-owned semantic hint; execution still enforces catalog and tenant access."""
+
+    payload = page_context.get("analysis_plan_hint") if isinstance(page_context, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    dataset_id = str(payload.get("dataset_id") or "").strip()[:240]
+    metrics = _string_values(payload.get("metrics"))[:20]
+    dimensions = _string_values(payload.get("dimensions"))[:20]
+    if not dataset_id or not metrics or not dimensions:
+        return None
+    return {
+        "dataset_id": dataset_id,
+        "metrics": metrics,
+        "dimensions": dimensions,
+        "chart_types": _normalized_chart_types(payload.get("chart_types"))[:8],
+        "analysis_angles": _string_values(payload.get("analysis_angles"))[:20],
+    }
+
+
+def _apply_page_analysis_context(plan: dict[str, Any], page_context: Any) -> dict[str, Any]:
+    """Bind visible page filters without allowing the browser to change tenant scope."""
+
+    if not isinstance(page_context, dict):
+        return plan
+    preferences = page_context.get("visualization_preferences")
+    if isinstance(preferences, dict):
+        requested_metrics = _string_values(preferences.get("metrics"))
+        requested_dimensions = _string_values(preferences.get("dimensions"))
+        current_metrics = _string_values(plan.get("metrics"))
+        current_dimensions = _string_values(plan.get("dimensions"))
+        safe_metrics = [item for item in requested_metrics if item in current_metrics]
+        safe_dimensions = [item for item in requested_dimensions if item in current_dimensions]
+        if safe_metrics or safe_dimensions:
+            plan = {
+                **plan,
+                "metrics": [*safe_metrics, *[item for item in current_metrics if item not in safe_metrics]],
+                "dimensions": [*safe_dimensions, *[item for item in current_dimensions if item not in safe_dimensions]],
+                "visualization_preference_binding": {"source": "user_question", "safe_existing_fields_only": True},
+            }
+    raw_filters = page_context.get("filters")
+    if not isinstance(raw_filters, dict):
+        return plan
+    allowed = {
+        "product_line", "branch_name", "month", "customer_segment", "channel", "stat_date", "stat_week"
+    }
+    filters = {
+        str(key): value
+        for key, value in raw_filters.items()
+        if str(key) in allowed and value not in (None, "", "all", "全部", "全部分行")
+        and isinstance(value, (str, int, float, bool))
+    }
+    if not filters:
+        return plan
+    return {
+        **plan,
+        "filters": {**dict(plan.get("filters") or {}), **filters},
+        "page_filter_binding": {
+            "source": "authenticated_page_context",
+            "filters": filters,
+            "tenant_override_allowed": False,
+        },
+    }
+
+
+def _task_execution_mode(semantic_info: dict[str, Any]) -> str:
+    """Map adapter-specific modes onto the persisted task execution contract."""
+
+    mode = str(semantic_info.get("execution_mode") or "").strip().lower()
+    if mode in {"real", "mock", "degraded"}:
+        return mode
+    data_source = str(semantic_info.get("data_source") or "").strip().lower()
+    if "mock" in mode or "mock" in data_source:
+        return "mock"
+    if mode or data_source:
+        return "real"
+    return "degraded"
 
 
 def _metric_matches_question(definition: dict[str, Any], normalized_question: str) -> bool:

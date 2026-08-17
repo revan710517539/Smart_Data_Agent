@@ -22,6 +22,7 @@ from .store import (
     _normalize_model,
     _normalize_speech_integration,
     _normalize_system_param,
+    account_system_config_scope,
 )
 
 
@@ -46,7 +47,7 @@ class PostgreSQLSystemConfigStore:
 
     def list_models_owned_by(self, user_id: str, tenant_id: str, reveal_secret: bool = False) -> list[dict[str, Any]]:
         with self.pool.connection() as connection:
-            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, account_system_config_scope(user_id))
             with connection.cursor() as cursor:
                 cursor.execute(
                     self._model_select() + " WHERE m.tenant_id = %s ORDER BY m.integration_code",
@@ -154,12 +155,11 @@ class PostgreSQLSystemConfigStore:
 
     def list_speech_integrations_owned_by(self, user_id: str, tenant_id: str, reveal_secret: bool = False) -> list[dict[str, str]]:
         with self.pool.connection() as connection:
-            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
-            user_key = PostgreSQLIdentityResolver.user_id(connection, user_id, required=False)
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, account_system_config_scope(user_id))
             with connection.cursor() as cursor:
                 cursor.execute(
-                    self._speech_select() + " WHERE s.tenant_id = %s OR s.created_by = %s ORDER BY s.integration_code",
-                    (tenant_key, user_key),
+                    self._speech_select() + " WHERE s.tenant_id = %s ORDER BY s.integration_code",
+                    (tenant_key,),
                 )
                 rows = cursor.fetchall()
         return _dedupe([self._speech_from_row(row, reveal_secret) for row in rows])

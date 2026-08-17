@@ -19,6 +19,7 @@ import {
   type FunAsrProxyEvent,
 } from "../self-analysis/domain";
 import { agentActionRegistry, type AgentActionDefinition } from "./actionRegistry";
+import { boundedInteractionText, trackInteraction } from "../../services/interactionTelemetry";
 
 type Message = {
   id: string;
@@ -52,7 +53,7 @@ const highImpactTerms = /删除|保存|提交|发布|启用|停用|退出|确认
 const supervisorRealtimeVoiceSilenceMs = 3_000;
 
 const navigationActions = [
-  { id: "dashboard", label: "打开多机构分析", description: "进入多机构经营分析首页", path: "/" },
+  { id: "dashboard", label: "打开多机构分析", description: "进入多机构经营分析首页", path: "/dashboard" },
   { id: "weekly-report", label: "打开经营周报", description: "进入经营周报", path: "/weekly-report" },
   { id: "supervision", label: "打开机构督导", description: "进入机构督导", path: "/supervision" },
   { id: "customers", label: "打开客群分析", description: "进入客群分析", path: "/customers" },
@@ -138,6 +139,7 @@ export function AgentSupervisor() {
   const pageLabel = useMemo(() => `${selectedInstitution} · ${location.pathname}`, [location.pathname, selectedInstitution]);
 
   const appendMessage = (message: Omit<Message, "id">) => {
+    if (message.role !== "user") trackInteraction({ eventName: "assistant_reply", resourceType: "agent_supervisor", extension: { reply: boundedInteractionText(message.content), role: message.role } });
     setMessages((current) => [...current, { ...message, id: crypto.randomUUID() }]);
   };
 
@@ -363,6 +365,7 @@ export function AgentSupervisor() {
   const submit = async (override?: string) => {
     const question = (override ?? input).trim();
     if (!question || running) return;
+    trackInteraction({ eventName: "assistant_question_submit", resourceType: "agent_supervisor", extension: { question: boundedInteractionText(question) } });
     const userMessage: Message = { id: crypto.randomUUID(), role: "user", content: question };
     setMessages((current) => {
       const next = [...current, userMessage];
@@ -460,28 +463,30 @@ export function AgentSupervisor() {
           )}
           <section className="flex h-full min-w-0 flex-1 flex-col bg-white">
             <header className="flex items-start justify-between border-b border-[#ebebf0] px-4 py-3">
-              <div><div className="flex items-center gap-1.5 text-[10px] tracking-[0.12em] text-[#8a8a8e]"><Bot className="h-3.5 w-3.5" />AGENT SUPERVISOR</div><div className="mt-1 flex items-center gap-2 text-[14px] text-[#1d1d1f]"><strong>系统 Agent 总管</strong><button type="button" onClick={() => setHistoryOpen((value) => !value)} title="历史对话" aria-label="历史对话"><History className="h-3.5 w-3.5 text-[#8a8a8e]" /></button></div><p className="mt-0.5 max-w-[270px] truncate text-[10px] text-[#aeaeb2]">{pageLabel}</p></div>
+              <div><div className="flex items-center gap-1.5 text-[10px] tracking-[0.12em] text-[#8a8a8e]"><Bot className="h-3.5 w-3.5" />AGENT WORKSPACE</div><div className="mt-1 flex items-center gap-2 text-[14px] text-[#1d1d1f]"><strong>系统 Agent 总管</strong><button type="button" onClick={() => setHistoryOpen((value) => !value)} title="历史对话" aria-label="历史对话"><History className="h-3.5 w-3.5 text-[#8a8a8e]" /></button></div><p className="mt-0.5 max-w-[270px] truncate text-[10px] text-[#aeaeb2]">{pageLabel}</p></div>
               <button type="button" onClick={() => { stopVoiceInput(); setOpen(false); }} aria-label="关闭 Agent 总管" className="rounded-md p-1 text-[#8a8a8e] hover:bg-[#f2f2f7]"><X className="h-4 w-4" /></button>
             </header>
+            <div className="contents">
             <div className="flex flex-wrap gap-1 border-b border-[#f0f0f2] px-3 py-2">
-              <QuickAction icon={Eye} label="当前页" onClick={() => void submit("当前页面有什么内容和操作")} />
-              <QuickAction icon={Database} label="查指标" onClick={() => void submit("有哪些指标和指标口径")} />
-              <QuickAction icon={BrainCircuit} label="查记忆" onClick={() => void submit("有哪些记忆")} />
-              <QuickAction icon={Sparkles} label="查 Skill" onClick={() => void submit("有哪些 Skill")} />
-              <QuickAction icon={ExternalLink} label="自助分析" onClick={() => { const action = actions.find((item) => item.id === "analysis"); if (action) void executeAction(action); }} />
+              <QuickAction icon={Eye} label="当前页" onClick={() => { trackInteraction({ eventName: "assistant_current_page_click", resourceType: "agent_supervisor" }); void submit("当前页面有什么内容和操作"); }} />
+              <QuickAction icon={Database} label="查指标" onClick={() => { trackInteraction({ eventName: "assistant_metric_click", resourceType: "agent_supervisor" }); void submit("有哪些指标和指标口径"); }} />
+              <QuickAction icon={BrainCircuit} label="查记忆" onClick={() => { trackInteraction({ eventName: "assistant_memory_click", resourceType: "agent_supervisor" }); void submit("有哪些记忆"); }} />
+              <QuickAction icon={Sparkles} label="查 Skill" onClick={() => { trackInteraction({ eventName: "assistant_skill_click", resourceType: "agent_supervisor" }); void submit("有哪些 Skill"); }} />
+              <QuickAction icon={ExternalLink} label="自助分析" onClick={() => { trackInteraction({ eventName: "assistant_analysis_click", resourceType: "agent_supervisor" }); const action = actions.find((item) => item.id === "analysis"); if (action) void executeAction(action); }} />
             </div>
             <div ref={messagesPanelRef} className="flex-1 space-y-3 overflow-y-auto p-3">
               {messages.map((message) => <MessageCard key={message.id} message={message} />)}
             </div>
             {pendingAction && <div className="flex items-center gap-2 border-t border-[#f1d6b8] bg-[#fff7ed] px-3 py-2 text-[11px] text-[#9a5a09]"><ShieldCheck className="h-4 w-4 shrink-0" /><span className="min-w-0 flex-1">确认执行：{pendingAction.label}</span><button type="button" onClick={() => setPendingAction(null)} className="rounded px-2 py-1 hover:bg-white">取消</button><button type="button" onClick={() => void executeAction(pendingAction, true)} className="rounded bg-[#1d1d1f] px-2 py-1 text-white">确认</button></div>}
             <form className="border-t border-[#ebebf0] p-3" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-              <div className="flex gap-1.5"><input ref={inputRef} value={input} onChange={(event) => { const value = event.target.value; setInput(value); if (voiceActiveRef.current) resetVoiceTranscript(value); }} placeholder="问指标、记忆、Skill，或说“打开/点击/填写…”" className="min-w-0 flex-1 rounded-lg bg-[#f2f2f7] px-3 py-2 text-[12px] outline-none ring-0 focus:bg-white focus:ring-1 focus:ring-[#c7c7cc]" /><button type="button" onClick={() => void startVoiceInput("manual")} className={`rounded-lg px-2.5 transition ${voiceMode === "manual" ? "bg-[#1d1d1f] text-white" : "bg-[#f2f2f7] text-[#636366] hover:bg-[#e5e5ea]"}`} aria-label={voiceMode === "manual" ? "停止语音录入" : "语音录入"} title="语音录入：转写后点击发送执行"><Mic className={`h-4 w-4 ${voiceMode === "manual" ? "animate-pulse" : ""}`} /></button><button type="button" onClick={() => void startVoiceInput("realtime")} className={`rounded-lg px-2.5 transition ${voiceMode === "realtime" ? "bg-[#1d1d1f] text-white" : "bg-[#f2f2f7] text-[#636366] hover:bg-[#e5e5ea]"}`} aria-label={voiceMode === "realtime" ? "停止实时语音交互" : "实时语音交互"} title="实时语音：停顿 3 秒自动执行"><AudioLines className={`h-4 w-4 ${voiceMode === "realtime" ? "animate-pulse" : ""}`} /></button><button disabled={!input.trim() || running} className="rounded-lg bg-[#1d1d1f] px-3 text-white disabled:opacity-40" aria-label="发送指令">{running ? <ListChecks className="h-4 w-4 animate-pulse" /> : <Send className="h-4 w-4" />}</button></div>
+              <div className="flex gap-1.5"><input ref={inputRef} value={input} onChange={(event) => { const value = event.target.value; setInput(value); if (voiceActiveRef.current) resetVoiceTranscript(value); }} placeholder="问指标、记忆、Skill，或说“打开/点击/填写…”" className="min-w-0 flex-1 rounded-lg bg-[#f2f2f7] px-3 py-2 text-[12px] outline-none ring-0 focus:bg-white focus:ring-1 focus:ring-[#c7c7cc]" /><button type="button" onClick={() => { trackInteraction({ eventName: "assistant_voice_click", resourceType: "agent_supervisor" }); void startVoiceInput("manual"); }} className={`rounded-lg px-2.5 transition ${voiceMode === "manual" ? "bg-[#1d1d1f] text-white" : "bg-[#f2f2f7] text-[#636366] hover:bg-[#e5e5ea]"}`} aria-label={voiceMode === "manual" ? "停止语音录入" : "语音录入"} title="语音录入：转写后点击发送执行"><Mic className={`h-4 w-4 ${voiceMode === "manual" ? "animate-pulse" : ""}`} /></button><button type="button" onClick={() => { trackInteraction({ eventName: "assistant_realtime_voice_click", resourceType: "agent_supervisor" }); void startVoiceInput("realtime"); }} className={`rounded-lg px-2.5 transition ${voiceMode === "realtime" ? "bg-[#1d1d1f] text-white" : "bg-[#f2f2f7] text-[#636366] hover:bg-[#e5e5ea]"}`} aria-label={voiceMode === "realtime" ? "停止实时语音交互" : "实时语音交互"} title="实时语音：停顿 3 秒自动执行"><AudioLines className={`h-4 w-4 ${voiceMode === "realtime" ? "animate-pulse" : ""}`} /></button><button disabled={!input.trim() || running} className="rounded-lg bg-[#1d1d1f] px-3 text-white disabled:opacity-40" aria-label="发送指令">{running ? <ListChecks className="h-4 w-4 animate-pulse" /> : <Send className="h-4 w-4" />}</button></div>
               <p className="mt-1.5 text-[10px] text-[#aeaeb2]" aria-live="polite">{voiceNotice || "会实时扫描当前页面的菜单、按钮、下拉框、输入框和弹窗。写入、删除、发布、启停均须确认；演练数据会明确标识为不可发布。"}</p>
             </form>
+            </div>
           </section>
         </div>
       )}
-      <button type="button" onClick={() => { if (open) stopVoiceInput(); setOpen((value) => !value); window.setTimeout(() => inputRef.current?.focus(), 80); }} aria-label="打开 Agent 总管" aria-expanded={open} className="pointer-events-auto absolute bottom-6 right-6 flex h-12 w-12 items-center justify-center rounded-full bg-[#1d1d1f] text-white shadow-xl shadow-black/20 transition-colors hover:bg-[#2c2c2e]"><Bot className="h-5 w-5" /><span className="absolute right-0 top-0 h-3 w-3 rounded-full border-2 border-white bg-[#34c759]" /></button>
+      <button type="button" onClick={() => { trackInteraction({ eventName: "assistant_robot_click", resourceType: "agent_supervisor", extension: { open: !open } }); if (open) stopVoiceInput(); setOpen((value) => !value); window.setTimeout(() => inputRef.current?.focus(), 80); }} aria-label="打开 Agent 总管" aria-expanded={open} className="pointer-events-auto absolute bottom-6 right-6 flex h-12 w-12 items-center justify-center rounded-full bg-[#1d1d1f] text-white shadow-xl shadow-black/20 transition-colors hover:bg-[#2c2c2e]"><Bot className="h-5 w-5" /><span className="absolute right-0 top-0 h-3 w-3 rounded-full border-2 border-white bg-[#34c759]" /></button>
     </div>
   );
 }

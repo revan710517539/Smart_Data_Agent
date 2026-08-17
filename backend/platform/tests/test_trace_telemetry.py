@@ -7,6 +7,7 @@ import unittest
 from backend.platform.api.routes.analysis import run_analysis
 from backend.platform.bootstrap import build_local_platform
 from backend.platform.observability import TraceRecorder
+from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
 
 
 class TraceTelemetryTest(unittest.TestCase):
@@ -31,8 +32,9 @@ class TraceTelemetryTest(unittest.TestCase):
     def test_persisted_trace_query_is_tenant_scoped(self) -> None:
         with TemporaryDirectory() as tmpdir:
             services = build_local_platform(Path(tmpdir) / "platform.sqlite")
+            attach_governed_test_warehouse(services)
             try:
-                task = run_analysis(services, "u_admin", "tenant_demo", "各分行放款金额")
+                task = run_analysis(services, "u_super_admin", "tenant_demo", "各分行放款金额")
                 trace_id = str(task["trace_id"])
                 self.assertTrue(services.task_repository.trace_belongs_to_tenant("tenant_demo", trace_id))
                 self.assertFalse(services.task_repository.trace_belongs_to_tenant("tenant_other", trace_id))

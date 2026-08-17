@@ -1,0 +1,37 @@
+services:
+  smart-data-agent:
+    build:
+      context: .
+      target: runtime
+    ports:
+      - "${SMART_DATA_AGENT_HTTP_PORT:-8787}:8787"
+    environment:
+      SMART_DATA_AGENT_ENV: development
+      SMART_DATA_AGENT_AUTH_MODE: development
+      SMART_DATA_AGENT_AUTH_SECRET: "${SMART_DATA_AGENT_AUTH_SECRET:?set SMART_DATA_AGENT_AUTH_SECRET in the protected environment}"
+      SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD: "${SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD:?set SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD in the protected environment}"
+      SMART_DATA_AGENT_CORS_ORIGINS: "${SMART_DATA_AGENT_CORS_ORIGINS:?set the public HTTPS origin}"
+      SMART_DATA_AGENT_DATABASE_URL: "${SMART_DATA_AGENT_DATABASE_URL:?set the protected MySQL URL}"
+      SMART_DATA_AGENT_DB_POOL_MIN: "${SMART_DATA_AGENT_DB_POOL_MIN:-2}"
+      SMART_DATA_AGENT_DB_POOL_MAX: "${SMART_DATA_AGENT_DB_POOL_MAX:-20}"
+      SMART_DATA_AGENT_AUTO_MIGRATE: "${SMART_DATA_AGENT_AUTO_MIGRATE:-true}"
+      SMART_DATA_AGENT_DATA_WAREHOUSE: csv
+      SMART_DATA_AGENT_DATA_CRAWLER_ROOT: /app/data
+      SMART_DATA_AGENT_OBJECT_STORE: local
+      SMART_DATA_AGENT_OBJECT_ROOT: /app/runtime/artifacts
+      SMART_DATA_AGENT_NON_STRUCTURED_ROOT: /app/runtime/non_structured
+      SMART_DATA_AGENT_STATIC_ROOT: /app/dist
+      SMART_DATA_AGENT_EMBEDDED_WORKER: "${SMART_DATA_AGENT_EMBEDDED_WORKER:-true}"
+    network_mode: bridge
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - "${SMART_DATA_AGENT_DATA_CRAWLER_HOST_ROOT:-/opt/smart-data-agent/src/app/data}:/app/data:ro"
+      - "${SMART_DATA_AGENT_MYSQL_CA_HOST_PATH:-/var/lib/mysql80/ca.pem}:/run/secrets/mysql_ca.pem:ro"
+      - smart-data-agent-runtime:/app/runtime
+      - smart-data-agent-topic-data:/app/Topic_Data
+    restart: unless-stopped
+
+volumes:
+  smart-data-agent-runtime:
+  smart-data-agent-topic-data:

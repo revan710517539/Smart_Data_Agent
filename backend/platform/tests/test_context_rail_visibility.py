@@ -7,12 +7,14 @@ from urllib.parse import quote
 
 from backend.platform.api.routes.analysis import run_analysis
 from backend.platform.api.server import create_server
+from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
 
 
 class ContextRailVisibilityTest(unittest.TestCase):
     def test_comments_are_tenant_shared_and_analysis_is_tenant_user_private(self) -> None:
         with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            attach_governed_test_warehouse(server.services)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
@@ -22,7 +24,7 @@ class ContextRailVisibilityTest(unittest.TestCase):
                     port,
                     "POST",
                     "/api/reports/comment",
-                    "u_admin",
+                    "u_super_admin",
                     "tenant_demo",
                     {
                         "report_id": report_id,
@@ -83,7 +85,7 @@ class ContextRailVisibilityTest(unittest.TestCase):
                     port,
                     "DELETE",
                     "/api/reports/comment",
-                    "u_admin",
+                    "u_super_admin",
                     "tenant_demo",
                     {
                         "report_id": report_id,
@@ -102,7 +104,7 @@ class ContextRailVisibilityTest(unittest.TestCase):
         self.assertEqual(peer_view["comments"][0]["text"], "请复核这一指标。")
         self.assertEqual(reply_status, 200)
         self.assertEqual(replied["comments"][0]["replies"][0]["text"], "已复核，口径一致。")
-        self.assertEqual(created["comment"]["author"], "平台管理员")
+        self.assertEqual(created["comment"]["author"], "胥京波")
         self.assertEqual(replied["comments"][0]["replies"][0]["author"], "平台复核员")
         self.assertEqual(other_tenant_status, 200)
         self.assertEqual(other_tenant_view["comments"], [])

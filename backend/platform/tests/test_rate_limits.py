@@ -8,6 +8,7 @@ import unittest
 
 from backend.platform.api.server import create_server
 from backend.platform.security import InMemoryRateLimiter
+from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
 
 
 class RateLimitsTest(unittest.TestCase):
@@ -26,6 +27,7 @@ class RateLimitsTest(unittest.TestCase):
     def test_analysis_user_limit_returns_429_without_executing_eleventh_request(self) -> None:
         with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            attach_governed_test_warehouse(server.services)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             statuses: list[int] = []
@@ -45,7 +47,7 @@ class RateLimitsTest(unittest.TestCase):
                         ).encode("utf-8"),
                         headers={
                             "Content-Type": "application/json",
-                            "X-User-Id": "u_admin",
+                            "X-User-Id": "u_super_admin",
                             "X-Tenant-Id": "tenant_demo",
                         },
                     )

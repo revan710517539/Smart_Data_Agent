@@ -272,6 +272,18 @@ class AutomationRuntime:
 def _public_handler_failure(exc: Exception) -> tuple[str, str, bool]:
     message = str(exc)
     if isinstance(exc, PermissionError):
+        if "selected_data_asset_not_published_or_not_authorized" in message:
+            return (
+                "analysis_selected_data_asset_unavailable",
+                "所选数据表已更新、下线或不属于当前机构，请重新选择数据表后重试。",
+                False,
+            )
+        if "selected_submodel_not_enabled_for_application_module" in message or "selected_model_not_registered_for_application_module" in message:
+            return (
+                "analysis_selected_model_unavailable",
+                "所选模型或子模型已更新，请从默认模型重新选择后重试。",
+                False,
+            )
         if "skill:supersonic.query:execute" in message:
             return (
                 "analysis_query_permission_denied",
@@ -280,6 +292,12 @@ def _public_handler_failure(exc: Exception) -> tuple[str, str, bool]:
             )
         return "automation_permission_denied", "当前角色没有执行此任务所需的权限。", False
     if isinstance(exc, (ValueError, KeyError, TypeError, AttributeError, AssertionError)):
+        if "analysis_production_data_table_required" in message:
+            return (
+                "analysis_production_data_table_required",
+                "请先在智能分析输入框左侧点击“+”，选择当前机构的数据表后再开始分析。",
+                False,
+            )
         detail = " ".join(message.split())[:180]
         return (
             "automation_request_invalid",

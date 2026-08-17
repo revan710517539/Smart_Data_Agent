@@ -20,9 +20,35 @@ export type SavedAnalysisResult = {
     primary: string;
     secondary: string;
   };
+  visualizations?: Array<{
+    id: string;
+    key?: "primary" | "secondary";
+    title: string;
+    type: string;
+    config?: {
+      metricFields: string[];
+      dimensionFields: string[];
+      filters: Record<string, string[]>;
+      filterGroups?: Array<{
+        id: string;
+        rules: Array<{
+          id: string;
+          field: string;
+          operator: "in" | "not_in" | "contains" | "not_contains";
+          values: string[];
+        }>;
+      }>;
+      sumFilteredRows: boolean;
+      comboLineFields: string[];
+    };
+  }>;
   savedAt: string;
   rows: unknown[];
   analysisTaskId: string;
+  sql?: string;
+  pythonScript?: string;
+  analysisScenarios?: string;
+  selectedDataTables?: unknown[];
   ownerUserId?: string;
   visibility?: "private" | "tenant";
   updatedBy?: string;
@@ -92,6 +118,7 @@ export async function fetchSavedAnalysisResults({
   return apiRequest<SavedAnalysisResultsResponse>("/api/reports/analysis-results", {
     method: "GET",
     context: { tenantId, userId },
+    readCache: { ttlMs: 10_000, tags: ["saved-analysis-results"] },
   });
 }
 

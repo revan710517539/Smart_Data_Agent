@@ -2,7 +2,7 @@
 
 - 领域：指标语义
 - 用途：不可变指标口径、公式、分子分母、粒度和来源版本。
-- 生产数据库：PostgreSQL
+- 结构化运行主库：MySQL 8.x
 
 ## 字段结构
 
@@ -24,8 +24,14 @@
 | `allowed_dimensions` | `JSONB` | NOT NULL DEFAULT '[]'::jsonb | 允许维度 ID。 |
 | `effective_from` | `TIMESTAMPTZ` | NOT NULL | 生效起点。 |
 | `effective_to` | `TIMESTAMPTZ` | 无 | 失效时间。 |
-| `status` | `VARCHAR(24)` | NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','review','published','superseded','rejected')) | 版本状态。 |
+| `status` | `VARCHAR(24)` | NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','review','published','superseded','rejected','archived')) | 版本状态。 |
 | `checksum` | `CHAR(64)` | NOT NULL | 口径 hash。 |
+| `parent_version_id` | `UUID` | REFERENCES platform_metric_versions(metric_version_id) ON DELETE RESTRICT | 来源版本；回滚和修订均创建新版本。 |
+| `submitted_by` | `UUID` | REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT | 提交复核人。 |
+| `submitted_at` | `TIMESTAMPTZ` | 无 | 提交复核时间。 |
+| `reviewed_by` | `UUID` | REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT | 审批人。 |
+| `reviewed_at` | `TIMESTAMPTZ` | 无 | 审批时间。 |
+| `review_comment` | `TEXT` | NOT NULL DEFAULT '' | 审批意见。 |
 | `created_by` | `UUID` | REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL | 创建人。 |
 | `created_at` | `TIMESTAMPTZ` | NOT NULL DEFAULT now() | 创建时间，统一 UTC。 |
 | `updated_at` | `TIMESTAMPTZ` | NOT NULL DEFAULT now() | 最后更新时间，统一 UTC。 |

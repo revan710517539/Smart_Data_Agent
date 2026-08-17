@@ -65,10 +65,12 @@ _MENU_LABEL_TO_KEYS = {
     "市场与客户洞察": {"market-customer", "market-customer.segment", "market-customer.competition"},
     "客群分析": {"market-customer.segment"},
     "竞品分析": {"market-customer.competition"},
-    "自助分析": {"self-analysis", "self-analysis.smart-analysis", "self-analysis.my-reports"},
+    "自助分析": {"self-analysis", "self-analysis.visual-reports", "self-analysis.smart-analysis", "self-analysis.my-reports", "self-analysis.analysis-config", "task-workbench.skills"},
+    "可视化报表": {"self-analysis.visual-reports"},
     "智能分析": {"self-analysis.smart-analysis"},
     "我的报告": {"self-analysis.my-reports"},
-    "任务工作台": {"task-workbench", "task-workbench.todos", "task-workbench.tasks", "task-workbench.skills"},
+    "我的报表": {"self-analysis.my-reports"},
+    "任务工作台": {"task-workbench", "task-workbench.todos", "task-workbench.tasks"},
     "待办任务": {"task-workbench.todos"},
     "自动化任务": {"task-workbench.tasks"},
     "Skill插件": {"task-workbench.skills"},
@@ -87,7 +89,7 @@ _MENU_LABEL_TO_KEYS = {
     "审计日志": {"settings.audit"},
     "系统配置": {"settings.config"},
 }
-_MANDATORY_MENU_KEYS: set[str] = set()
+_MANDATORY_MENU_KEYS: set[str] = {"settings.audit", "settings.config"}
 _SYSTEM_ROLE_NAMES = {"管理员", "操作员"}
 
 

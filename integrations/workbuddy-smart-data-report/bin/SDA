@@ -1,14 +1,22 @@
 #!/bin/sh
 set -eu
 
-# WorkBuddy adds a plugin's bin/ directory to the Bash tool PATH. The default
-# works while this versioned plugin is used from the Smart_Data_Agent checkout.
+# WorkBuddy adds a plugin's bin/ directory to the POSIX tool PATH. The bundled
+# Python client also works from WorkBuddy's versioned plugin cache.
 PLUGIN_ROOT=${CODEBUDDY_PLUGIN_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}
-CLI=${SMART_DATA_AGENT_REPORT_CLI:-"$PLUGIN_ROOT/../../scripts/SDA"}
+CLI=${SMART_DATA_AGENT_REPORT_CLI:-}
 
-if [ ! -x "$CLI" ]; then
-  echo "SDA: CLI unavailable; set SMART_DATA_AGENT_REPORT_CLI to the executable SDA path." >&2
+if [ -n "$CLI" ]; then
+  if [ ! -x "$CLI" ]; then
+    echo "SDA: SMART_DATA_AGENT_REPORT_CLI is not executable." >&2
+    exit 127
+  fi
+  exec "$CLI" "$@"
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "SDA: Python 3 is required to publish a report." >&2
   exit 127
 fi
 
-exec "$CLI" "$@"
+exec python3 "$PLUGIN_ROOT/bin/sda_report.py" "$@"

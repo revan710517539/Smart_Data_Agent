@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { BookOpen, ChevronRight, Pencil, Plus, Trash2, Wrench, X } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
 import {
@@ -9,6 +9,8 @@ import {
   type ExternalToolAsset,
 } from "../services/dataAssetApi";
 import { apiErrorMessage } from "../services/apiClient";
+import { displayedAnalysisSkills } from "../services/analysisSkillCatalog";
+import { DataPageSelector, useClientPagination } from "./ui/DataPageSelector";
 
 const emptySkill = (category: "场景" | "主题"): AnalysisSkillAsset => ({
   id: "",
@@ -46,7 +48,9 @@ export function SkillPluginManager() {
   const load = async () => {
     setLoading(true);
     try {
-      const bundle = await fetchDataAssets({ tenantId, userId });
+      // Skills use only governed knowledge/configuration assets.  They must not
+      // disappear while the selected institution's CSV catalog is refreshing.
+      const bundle = await fetchDataAssets({ tenantId, userId, scope: "knowledge" });
       setSkills(bundle.analysis_skills || []);
       setTools(bundle.external_tools || []);
       setMemoryOptions([
@@ -66,10 +70,8 @@ export function SkillPluginManager() {
     void load();
   }, [tenantId, userId]);
 
-  const visibleSkills = useMemo(
-    () => skills.filter((skill) => skill.category === activeCategory).sort((a, b) => a.sortOrder - b.sortOrder),
-    [activeCategory, skills],
-  );
+  const visibleSkills = displayedAnalysisSkills(skills).filter((skill) => skill.category === activeCategory);
+  const skillPagination = useClientPagination(visibleSkills);
 
   const save = async () => {
     if (!draft?.name.trim() || !draft.description.trim()) {
@@ -81,7 +83,7 @@ export function SkillPluginManager() {
         tenantId,
         userId,
         itemType: "analysis_skill",
-        item: draft.category === "主题" ? { ...draft, outputFormat: "" } : draft,
+        item: normalizeDraftReferences(draft, memoryOptions, tools),
       });
       setDraft(null);
       setNotice("Skill 解决方案已保存。");
@@ -126,29 +128,32 @@ export function SkillPluginManager() {
         {notice ? <div className="mt-4 rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[12px] text-[#636366]">{notice}</div> : null}
 
         <div className="mt-5 overflow-hidden rounded-2xl border border-[#e5e5ea] bg-white">
-          <div className="grid grid-cols-[minmax(220px,1.2fr)_minmax(260px,1.5fr)_minmax(220px,1fr)_120px] border-b border-[#f0f0f2] bg-[#fafbfc] px-5 py-3 text-[11px] text-[#8a8a8e]">
-            <span>Skill名称</span><span>解决方案定位</span><span>关联能力</span><span className="text-right">操作</span>
+          <div className="flex items-center justify-between border-b border-[#f0f0f2] bg-[#fafbfc] px-5 py-2">
+            <div className="grid flex-1 grid-cols-[minmax(220px,1.2fr)_minmax(260px,1.5fr)_minmax(220px,1fr)_120px] text-[11px] text-[#8a8a8e]"><span>Skill名称</span><span>解决方案定位</span><span>关联能力</span><span className="text-right">操作</span></div>
+            {skillPagination.paginated && <DataPageSelector page={skillPagination.page} totalPages={skillPagination.totalPages} shownCount={skillPagination.items.length} totalCount={skillPagination.total} onChange={skillPagination.setPage} ariaLabel="Skill分页" compact />}
           </div>
           {loading ? <div className="px-5 py-14 text-center text-[12px] text-[#aeaeb2]">正在读取 Skill 解决方案…</div> : null}
           {!loading && !visibleSkills.length ? <div className="px-5 py-14 text-center text-[12px] text-[#aeaeb2]">暂无{activeCategory} Skill，可点击右上角新增。</div> : null}
-          {visibleSkills.map((skill) => (
-            <div key={skill.id} className="grid grid-cols-[minmax(220px,1.2fr)_minmax(260px,1.5fr)_minmax(220px,1fr)_120px] items-center gap-4 border-b border-[#f5f5f7] px-5 py-4 last:border-b-0">
+          {skillPagination.items.map((skill) => {
+            const availableMemoryCount = skill.memoryRefs.length;
+            const availableToolCount = skill.toolRefs.filter((id) => tools.some((tool) => tool.id === id && tool.enabled)).length;
+            return <div key={skill.id} className="grid grid-cols-[minmax(220px,1.2fr)_minmax(260px,1.5fr)_minmax(220px,1fr)_120px] items-center gap-4 border-b border-[#f5f5f7] px-5 py-4 last:border-b-0">
               <div className="min-w-0">
                 <div className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${skill.enabled ? "bg-[#34c759]" : "bg-[#c7c7cc]"}`} /><span className="truncate text-[13px] text-[#1d1d1f]">{skill.name}</span></div>
                 <div className="mt-1 truncate text-[11px] text-[#aeaeb2]">{skill.id} · v{skill.assetVersion || 1}</div>
               </div>
               <div className="line-clamp-2 text-[12px] leading-5 text-[#636366]">{skill.description}</div>
               <div className="space-y-1 text-[11px] text-[#8a8a8e]">
-                <div className="flex items-center gap-1.5"><BookOpen className="h-3 w-3" />{skill.memoryRefs.length} 项记忆</div>
-                <div className="flex items-center gap-1.5"><Wrench className="h-3 w-3" />{skill.toolRefs.length} 个工具</div>
+                <div className="flex items-center gap-1.5"><BookOpen className="h-3 w-3" />{availableMemoryCount} 项记忆</div>
+                <div className="flex items-center gap-1.5"><Wrench className="h-3 w-3" />{availableToolCount} 个工具</div>
               </div>
               <div className="flex justify-end gap-1">
-                <button type="button" onClick={() => setDraft({ ...skill })} className="rounded-md p-2 text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f]" aria-label={`编辑${skill.name}`}><Pencil className="h-3.5 w-3.5" /></button>
+                <button type="button" onClick={() => setDraft(normalizeDraftReferences(skill, memoryOptions, tools))} className="rounded-md p-2 text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f]" aria-label={`编辑${skill.name}`}><Pencil className="h-3.5 w-3.5" /></button>
                 <button type="button" onClick={() => void remove(skill)} className="rounded-md p-2 text-[#8a8a8e] hover:bg-[#fff1f0] hover:text-[#d93025]" aria-label={`删除${skill.name}`}><Trash2 className="h-3.5 w-3.5" /></button>
                 <ChevronRight className="mt-2 h-3.5 w-3.5 text-[#d1d1d6]" />
               </div>
             </div>
-          ))}
+          })}
         </div>
       </div>
 
@@ -174,11 +179,10 @@ function SkillEditor({
   onClose: () => void;
   onSave: () => void;
 }) {
-  const toolOptions = tools.map((tool) => ({
+  const toolOptions = tools.filter((tool) => tool.enabled).map((tool) => ({
     id: tool.id,
     label: tool.name,
-    meta: `${tool.provider} · ${tool.enabled ? "已接入" : "未启用"}`,
-    disabled: !tool.enabled,
+    meta: `${tool.provider} · 已接入`,
   }));
   const themeOptions = skills
     .filter((skill) => skill.category === "主题" && skill.id !== draft.id)
@@ -219,10 +223,23 @@ function ReferencePicker({
   emptyText: string;
   onChange: (value: string[]) => void;
 }) {
-  const knownIds = new Set(options.map((option) => option.id));
-  const missing = value.filter((id) => !knownIds.has(id));
   const toggle = (id: string) => onChange(value.includes(id) ? value.filter((item) => item !== id) : [...value, id]);
-  return <div><span className="mb-2 block text-[11px] text-[#636366]">{label}</span><div className="grid grid-cols-2 gap-2">{options.map((option) => <label key={option.id} className={`flex items-start gap-2 rounded-lg border border-[#f0f0f2] p-3 text-[11px] ${option.disabled && !value.includes(option.id) ? "cursor-not-allowed opacity-45" : "text-[#3a3a3c]"}`}><input type="checkbox" checked={value.includes(option.id)} disabled={option.disabled && !value.includes(option.id)} onChange={() => toggle(option.id)} /><span className="min-w-0"><span className="block truncate text-[12px]">{option.label}</span><span className="mt-0.5 block truncate text-[#aeaeb2]">{option.meta}</span></span></label>)}{!options.length ? <div className="col-span-2 rounded-lg border border-dashed border-[#e5e5ea] px-3 py-4 text-center text-[11px] text-[#aeaeb2]">{emptyText}</div> : null}{missing.map((id) => <label key={id} className="col-span-2 flex items-center gap-2 rounded-lg border border-[#ffe0b2] bg-[#fffaf1] px-3 py-2 text-[11px] text-[#9a6200]"><input type="checkbox" checked onChange={() => toggle(id)} /><span>历史引用 {id}（当前目录已不存在）</span></label>)}</div></div>;
+  return <div><span className="mb-2 block text-[11px] text-[#636366]">{label}</span><div className="grid grid-cols-2 gap-2">{options.map((option) => <label key={option.id} className="flex items-start gap-2 rounded-lg border border-[#f0f0f2] p-3 text-[11px] text-[#3a3a3c]"><input type="checkbox" checked={value.includes(option.id)} onChange={() => toggle(option.id)} /><span className="min-w-0"><span className="block truncate text-[12px]">{option.label}</span><span className="mt-0.5 block truncate text-[#aeaeb2]">{option.meta}</span></span></label>)}{!options.length ? <div className="col-span-2 rounded-lg border border-dashed border-[#e5e5ea] px-3 py-4 text-center text-[11px] text-[#aeaeb2]">{emptyText}</div> : null}</div></div>;
+}
+
+function normalizeDraftReferences(
+  draft: AnalysisSkillAsset,
+  memoryOptions: SkillReferenceOption[],
+  tools: ExternalToolAsset[],
+): AnalysisSkillAsset {
+  const memoryIds = new Set(memoryOptions.map((option) => option.id));
+  const enabledToolIds = new Set(tools.filter((tool) => tool.enabled).map((tool) => tool.id));
+  return {
+    ...draft,
+    memoryRefs: draft.memoryRefs.filter((id) => memoryIds.has(id) || id.startsWith("learned-")),
+    toolRefs: draft.toolRefs.filter((id) => enabledToolIds.has(id)),
+    outputFormat: draft.category === "主题" ? "" : draft.outputFormat,
+  };
 }
 
 function Field({ label, value, onChange, multiline = false }: { label: string; value: string; onChange: (value: string) => void; multiline?: boolean }) {

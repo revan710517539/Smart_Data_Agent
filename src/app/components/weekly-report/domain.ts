@@ -201,7 +201,7 @@ export type PendingTextSelection = {
   left: number;
 };
 
-export type StoredVisualizationType = "table" | "column" | "bar" | "line" | "radar";
+export type StoredVisualizationType = "kpi" | "line" | "area" | "column" | "bar" | "stacked_bar" | "combo" | "donut" | "scatter" | "funnel" | "treemap" | "radar" | "table" | "pivot";
 export type SavedAnalysisResult = {
   id: string;
   title: string;
@@ -317,7 +317,11 @@ export function serializeContentItems(items: RichContentItem[]) {
     .join("\n");
 }
 
-export function createWeeklyReports(selectedInstitution = "当前机构", currentUserId = ""): WeeklyInstitutionReport[] {
+export function createWeeklyReports(
+  selectedInstitution = "当前机构",
+  currentUserName = "",
+  currentUserId = "",
+): WeeklyInstitutionReport[] {
   const demoMode = isDemoFallbackEnabled();
   const makeTable = (
     reportId: string,
@@ -360,7 +364,7 @@ export function createWeeklyReports(selectedInstitution = "当前机构", curren
     institutionName,
     projectNo,
     meetingTime: demoMode ? "7月3日 周五" : "",
-    reporters: demoMode ? owner : currentUserId,
+    reporters: demoMode ? owner : currentUserName || currentUserId,
     period: getCurrentWorkweekPeriod(),
     status,
     owner,
@@ -516,11 +520,16 @@ export function reportCommentsStorageKey(tenantId: string, reportId: string) {
   return `${reportCommentsStoragePrefix}_${tenantId}_${reportId}`;
 }
 
-export function loadLocalReportComments(tenantId: string, reportId: string): CommentItem[] {
+export function loadLocalReportComments(
+  tenantId: string,
+  reportId: string,
+  currentUserId = "",
+  currentUserName = "",
+): CommentItem[] {
   try {
     const raw = window.localStorage.getItem(reportCommentsStorageKey(tenantId, reportId));
     const parsed = raw ? JSON.parse(raw) : [];
-    return normalizeComments(parsed);
+    return normalizeComments(parsed, currentUserId, currentUserName);
   } catch {
     return [];
   }
@@ -683,7 +692,7 @@ export function normalizeContentItems(prefix: string, value: unknown[]): RichCon
   return items.length ? items : createTextItems(prefix, "");
 }
 
-export function normalizeComments(value: unknown): CommentItem[] {
+export function normalizeComments(value: unknown, currentUserId = "", currentUserName = ""): CommentItem[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter((comment): comment is Record<string, unknown> => Boolean(comment) && typeof comment === "object")
@@ -702,10 +711,10 @@ export function normalizeComments(value: unknown): CommentItem[] {
       resolvedBy: typeof comment.resolvedBy === "string" ? comment.resolvedBy : undefined,
       resolvedReason: normalizeResolvedReason(comment.resolvedReason),
       targetKind: inferCommentTargetKind(comment),
-      author: String(comment.author || "当前用户"),
+      author: visibleCommentAuthor(comment.author, currentUserId, currentUserName),
       time: String(comment.time || ""),
       text: String(comment.text || ""),
-      replies: normalizeReplies(comment.replies),
+      replies: normalizeReplies(comment.replies, currentUserId, currentUserName),
     }))
     .filter((comment) => Boolean(comment.id && comment.targetId && comment.text));
 }
@@ -802,17 +811,27 @@ export function inferCommentItemTargetKind(comment: CommentItem): CommentTargetK
   return inferCommentTargetKind(comment as unknown as Record<string, unknown>);
 }
 
-export function normalizeReplies(value: unknown): CommentItem["replies"] {
+export function normalizeReplies(value: unknown, currentUserId = "", currentUserName = ""): CommentItem["replies"] {
   if (!Array.isArray(value)) return [];
   return value
     .filter((reply): reply is Record<string, unknown> => Boolean(reply) && typeof reply === "object")
     .map((reply) => ({
       id: String(reply.id || ""),
-      author: String(reply.author || "当前用户"),
+      author: visibleCommentAuthor(reply.author, currentUserId, currentUserName),
       time: String(reply.time || ""),
       text: String(reply.text || ""),
     }))
     .filter((reply) => Boolean(reply.id && reply.text));
+}
+
+export function visibleCommentAuthor(value: unknown, currentUserId = "", currentUserName = "") {
+  const storedAuthor = String(value || "").trim();
+  const normalizedUserId = currentUserId.trim();
+  const normalizedUserName = currentUserName.trim();
+  if (storedAuthor && normalizedUserId && storedAuthor === normalizedUserId) {
+    return normalizedUserName && normalizedUserName !== normalizedUserId ? normalizedUserName : "当前用户";
+  }
+  return storedAuthor || "未知用户";
 }
 
 export function normalizeSavedAnalysisResult(result: BackendSavedAnalysisResult | SavedAnalysisResult): SavedAnalysisResult {
@@ -876,9 +895,8 @@ function padDatePart(value: number) {
 }
 
 export function normalizeStoredVisualizationType(value: unknown): StoredVisualizationType {
-  return value === "table" || value === "column" || value === "bar" || value === "line" || value === "radar"
-    ? value
-    : "bar";
+  const allowed: StoredVisualizationType[] = ["kpi", "line", "area", "column", "bar", "stacked_bar", "combo", "donut", "scatter", "funnel", "treemap", "radar", "table", "pivot"];
+  return allowed.includes(value as StoredVisualizationType) ? value as StoredVisualizationType : "bar";
 }
 
 export function normalizeSavedAnalysisRows(rows: unknown): SavedAnalysisResult["rows"] {
@@ -998,9 +1016,18 @@ function formatCoreMetricAmount(value: unknown) {
 
 export function visualizationLabel(type: StoredVisualizationType) {
   const labels: Record<StoredVisualizationType, string> = {
+    kpi: "指标卡",
+    area: "面积图",
     table: "表格",
+    pivot: "交叉表",
     column: "柱状图",
     bar: "条形图",
+    stacked_bar: "堆叠条形图",
+    combo: "组合图",
+    donut: "环形图",
+    scatter: "散点图",
+    funnel: "漏斗图",
+    treemap: "树图",
     line: "趋势图",
     radar: "雷达图",
   };

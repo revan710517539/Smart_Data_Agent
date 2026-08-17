@@ -24,6 +24,9 @@ class AnalysisTaskRepository(Protocol):
     def list_tasks(self, tenant_id: str, user_id: str, limit: int = 50) -> list[dict[str, Any]]:
         ...
 
+    def execution_nodes(self, tenant_id: str, user_id: str, task_id: str) -> list[dict[str, Any]]:
+        ...
+
     def delete_task(self, tenant_id: str, user_id: str, task_id: str) -> bool:
         ...
 
@@ -83,6 +86,29 @@ class InMemoryAnalysisTaskRepository:
             if task.get("tenant_id") == tenant_id and task.get("user_id") == user_id
         ]
         return sorted(tasks, key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)[:limit]
+
+    def execution_nodes(self, tenant_id: str, user_id: str, task_id: str) -> list[dict[str, Any]]:
+        task = self._tasks.get(task_id)
+        if not task or task.get("tenant_id") != tenant_id or task.get("user_id") != user_id:
+            return []
+        nodes: list[dict[str, Any]] = []
+        previous_code = ""
+        for index, step in enumerate(task.get("plan") or []):
+            step_code = _analysis_step_code(index, step)
+            dependencies = list(step.get("dependencies") or ([previous_code] if previous_code else []))
+            nodes.append({
+                "step_code": step_code,
+                "sequence_no": index,
+                "step_type": _analysis_step_type(str(step.get("agent") or "Agent"), str(step.get("action") or "run")),
+                "status": str(step.get("status") or "succeeded"),
+                "input_refs": [{"depends_on": item} for item in dependencies],
+                "output_refs": [{"response_snapshot_pointer": f"/plan/{index}"}],
+                "attempt_no": max(1, int(step.get("attempt_no") or 1)),
+                "skill_version": str(step.get("skill_version") or "pinned"),
+                "error_code": str(step.get("error_code") or ""),
+            })
+            previous_code = step_code
+        return nodes
 
     def delete_task(self, tenant_id: str, user_id: str, task_id: str) -> bool:
         task = self._tasks.get(task_id)
@@ -732,7 +758,8 @@ def _analysis_model_call_from_invocation(
     stage: str,
     subject_type: str,
 ) -> dict[str, Any] | None:
-    model_id = str(invocation.get("model_id") or "").strip()
+    raw_model_id = str(invocation.get("model_id") or "").strip()
+    model_id, separator, legacy_submodel = raw_model_id.partition("::")
     request_hash = str(invocation.get("request_hash") or "").strip().lower()
     if not model_id or len(request_hash) != 64:
         return None
@@ -759,7 +786,7 @@ def _analysis_model_call_from_invocation(
         "execution_id": str(payload.get("execution_id") or task_id),
         "revision": revision,
         "model_integration_id": model_id,
-        "provider_model_name": str(invocation.get("used_model") or ""),
+        "provider_model_name": str(invocation.get("used_model") or (legacy_submodel if separator else "")),
         "prompt_template_id": str(invocation.get("prompt_template_id") or "") or None,
         "request_hash": request_hash,
         "response_hash": response_hash,
@@ -782,7 +809,8 @@ def _external_model_call(
     invocation: dict[str, Any],
     revision: int,
 ) -> dict[str, Any] | None:
-    model_id = str(invocation.get("model_id") or "").strip()
+    raw_model_id = str(invocation.get("model_id") or "").strip()
+    model_id, separator, legacy_submodel = raw_model_id.partition("::")
     request_hash = str(invocation.get("request_hash") or "").strip().lower()
     subject_type = str(subject_type or "").strip()
     subject_id = str(subject_id or "").strip()
@@ -808,7 +836,7 @@ def _external_model_call(
         "execution_id": "",
         "revision": revision,
         "model_integration_id": model_id,
-        "provider_model_name": str(invocation.get("used_model") or ""),
+        "provider_model_name": str(invocation.get("used_model") or (legacy_submodel if separator else "")),
         "prompt_template_id": str(invocation.get("prompt_template_id") or "") or None,
         "request_hash": request_hash,
         "response_hash": response_hash,
@@ -841,6 +869,27 @@ def _content_hash(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
+
+
+def _analysis_step_code(index: int, step: dict[str, Any]) -> str:
+    agent = str(step.get("agent") or "Agent")
+    action = str(step.get("action") or "run")
+    return f"{index:03d}:{agent}:{action}"[:120]
+
+
+def _analysis_step_type(agent: str, action: str) -> str:
+    text = f"{agent} {action}".lower()
+    if "query" in text or "supersonic" in text:
+        return "query"
+    if "python" in text or "visual" in text:
+        return "python"
+    if "review" in text or "validate" in text:
+        return "review"
+    if "skill" in text:
+        return "skill"
+    if "llm" in text or "model" in text or "insight" in text:
+        return "llm"
+    return "agent"
 
 
 def _freshness_status(snapshot: Any) -> str:

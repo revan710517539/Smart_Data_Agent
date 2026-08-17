@@ -797,7 +797,10 @@ class PostgreSQLAutomationStore:
     @staticmethod
     def _task_row(row: Any) -> dict[str, Any]:
         keys=("automation_task_id","tenant_id","task_code","task_name","task_type","trigger_type","schedule_expression","event_type","handler_ref","task_config","retry_policy","timeout_seconds","max_concurrency","status","next_run_at","owner_user_id","created_by","created_at","updated_at","lock_version")
-        return _mapped(row,keys)
+        result = _mapped(row,keys)
+        result["task_config"] = _json_value(result.get("task_config"), {})
+        result["retry_policy"] = _json_value(result.get("retry_policy"), {})
+        return result
 
     @staticmethod
     def _run_select() -> str:
@@ -812,7 +815,10 @@ class PostgreSQLAutomationStore:
     @staticmethod
     def _run_row(row: Any) -> dict[str, Any]:
         keys=("automation_run_id","tenant_id","automation_task_id","idempotency_key","trigger_type","trigger_payload","status","attempt_no","lease_owner","lease_expires_at","started_at","finished_at","next_retry_at","result_refs","error_code","error_summary","created_by","created_at","updated_at","lock_version")
-        return _mapped(row,keys)
+        result = _mapped(row,keys)
+        result["trigger_payload"] = _json_value(result.get("trigger_payload"), {})
+        result["result_refs"] = _json_value(result.get("result_refs"), [])
+        return result
 
     @staticmethod
     def _subscription_select() -> str:

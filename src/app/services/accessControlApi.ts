@@ -80,6 +80,7 @@ export async function fetchAccessUsers({
   return apiRequest<AccessUsersResponse>("/api/access/users", {
     method: "GET",
     context: { tenantId, userId },
+    readCache: { ttlMs: 8_000, tags: ["access-control"] },
   });
 }
 
@@ -117,6 +118,7 @@ export async function fetchAccessRolePolicies({
   return apiRequest<AccessRolePoliciesResponse>("/api/access/role-policies", {
     method: "GET",
     context: { tenantId, userId },
+    readCache: { ttlMs: 8_000, tags: ["access-control"] },
   });
 }
 

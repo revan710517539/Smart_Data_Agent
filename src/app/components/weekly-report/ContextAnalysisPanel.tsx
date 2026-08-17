@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, AudioLines, BarChart3, CheckCircle2, ChevronDown, ChevronUp, Database, LoaderCircle, Sparkles, Square } from "lucide-react";
+import { ArrowUp, AudioLines, BarChart3, CheckCircle2, ChevronDown, ChevronUp, Database, LoaderCircle, Maximize2, Minimize2, Sparkles, Square } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -12,9 +12,17 @@ import {
 import { waitForSelfAnalysis, type AnalysisProgressStep, type BackendAnalysisResponse } from "../../services/analysisApi";
 import { runApplicationAction } from "../../services/applicationApi";
 import { ApiRequestError } from "../../services/apiClient";
+import {
+  appendAnalysisTurn,
+  createAnalysisBranch,
+  ensureAnalysisWorkspace,
+  fetchAnalysisWorkspace,
+  type AnalysisThread,
+} from "../../services/analysisWorkspaceApi";
 import type { AnalysisSkillAsset, TopicTableAsset } from "../../services/dataAssetApi";
 import { fetchAnalysisRuntimeConfig } from "../../services/systemConfigApi";
 import { AnalysisProgressPanel } from "../self-analysis/AnalysisProgressPanel";
+import { TrustedArtifactPanel } from "../analysis-workspace/TrustedArtifactPanel";
 import { completedProgressSteps } from "../self-analysis/analysisRuntime";
 import {
   appendRealtimeVoiceText,
@@ -56,6 +64,8 @@ export function WeeklyContextAnalysisPanel({
   onActivate,
   onComplete,
   onStartedChange,
+  railWide = false,
+  onRailWideChange,
 }: {
   report: WeeklyInstitutionReport;
   target: CommentTarget | null;
@@ -74,6 +84,8 @@ export function WeeklyContextAnalysisPanel({
   onActivate?: () => void;
   onComplete?: () => void;
   onStartedChange?: (started: boolean) => void;
+  railWide?: boolean;
+  onRailWideChange?: (wide: boolean) => void;
 }) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -95,6 +107,7 @@ export function WeeklyContextAnalysisPanel({
   const analyzingRef = useRef(false);
   const lastAutoQuestionRef = useRef("");
   const queuedAnalysisRef = useRef<{ question: string; trigger: AnalysisTrigger } | null>(null);
+  const workspaceRef = useRef<{ workspaceId: string; threadId: string } | null>(null);
   const mountedRef = useRef(true);
 
   const [question, setQuestion] = useState("");
@@ -149,6 +162,50 @@ export function WeeklyContextAnalysisPanel({
     setCollapsed(false);
     if (!target?.selectedText?.trim()) window.setTimeout(() => inputRef.current?.focus(), 0);
   }, [target?.id, overallPrompt]);
+
+  useEffect(() => {
+    let cancelled = false;
+    workspaceRef.current = null;
+    const selectedDataPoint = target ? {
+      targetType: target.type === "数据" ? "table" as const : target.type === "文本" ? "text" as const : "chart" as const,
+      targetId: target.id,
+      label: target.label,
+      values: { blockId: target.blockId, selectedText: target.selectedText },
+    } : undefined;
+    ensureAnalysisWorkspace(`${pageKey}:${report.id}`, {
+      pageKey,
+      artifactId: report.id,
+      datasetSnapshot: {},
+      metricVersions: [],
+      filters: { institution: selectedInstitution },
+      selectedDataPoint,
+      allowedActions: ["follow_up", "branch", "merge", "trust", "freeze_report", "rerun"],
+      evidenceRefs: [],
+    }, { tenantId, userId }).then(async ({ workspace }) => {
+      const loaded = await fetchAnalysisWorkspace(workspace.workspace_id, { tenantId, userId });
+      if (cancelled) return;
+      let thread: AnalysisThread | undefined;
+      if (target) {
+        thread = loaded.threads.find((item) => item.anchor?.target_id === target.id);
+        if (!thread) {
+          const created = await createAnalysisBranch(
+            workspace.workspace_id,
+            loaded.threads.find((item) => !item.parent_thread_id)?.thread_id || null,
+            target.label || "图表分析分支",
+            { target_id: target.id, target_type: target.type, block_id: target.blockId },
+            { tenantId, userId },
+          );
+          thread = created.thread;
+        }
+      } else {
+        thread = loaded.threads.find((item) => !item.parent_thread_id);
+      }
+      if (!cancelled && thread) workspaceRef.current = { workspaceId: workspace.workspace_id, threadId: thread.thread_id };
+    }).catch(() => {
+      // Existing page analysis remains usable; the run itself will surface any API failure.
+    });
+    return () => { cancelled = true; };
+  }, [pageKey, report.id, selectedInstitution, target?.id, tenantId, userId]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -507,6 +564,21 @@ export function WeeklyContextAnalysisPanel({
       setResponse(nextResponse);
       setProgressSteps(completedProgressSteps(nextResponse));
       setActiveResultTab("visual");
+      const workspaceBinding = workspaceRef.current;
+      if (workspaceBinding && !nextResponse.workspace_turn) {
+        const answer = nextResponse.intelligent_analysis?.analysis_summary?.trim()
+          || nextResponse.conclusions?.filter((item) => item.trim()).join("\n")
+          || "本轮返回了数据产物，但没有生成文字结论。";
+        await appendAnalysisTurn(workspaceBinding.threadId, {
+          question: nextQuestion,
+          answer,
+          status: "completed",
+          intent: nextResponse.analysis_plan || {},
+          execution_plan: { progress_steps: completedProgressSteps(nextResponse), task_id: nextResponse.task_id },
+          artifact_refs: nextResponse.skill_results?.flatMap((result) => result.visualization_artifact ? [{ type: "visualization", task_id: nextResponse.task_id }] : []) || [],
+          evidence_refs: nextResponse.skill_results?.flatMap((result) => result.evidence ? [result.evidence] : []) || [],
+        }, { tenantId, userId });
+      }
       const hasReturnedData = Boolean(nextResponse.skill_results?.some((result) => (result.data || []).length))
         || Boolean(nextResponse.intelligent_analysis?.analysis_summary?.trim())
         || Boolean(nextResponse.conclusions?.some((item) => item.trim()));
@@ -539,7 +611,7 @@ export function WeeklyContextAnalysisPanel({
 
   return (
     <article
-      className={`overflow-hidden rounded-xl border bg-white shadow-sm transition-all ${active ? "border-[#8bb7e6] ring-2 ring-[#0a66c2]/15 shadow-[#0a66c2]/10" : "border-[#e5e5ea] shadow-black/[0.03]"}`}
+      className={`overflow-hidden rounded-xl border bg-white transition-colors ${active ? "border-[#3370ff]" : "border-[#e5e5ea]"}`}
       data-weekly-context-analysis="true"
       data-context-analysis-card={target?.id || "overall"}
       data-context-analysis-active={active ? "true" : "false"}
@@ -558,6 +630,9 @@ export function WeeklyContextAnalysisPanel({
         <div className="flex shrink-0 items-center gap-0.5">
           <button type="button" aria-label="已完成" title="已完成" onClick={onComplete} className="flex h-7 w-7 items-center justify-center rounded-full text-[#8a8a8e] transition-colors hover:bg-[#edf8f0] hover:text-[#34a853]">
             <CheckCircle2 className="h-4 w-4" />
+          </button>
+          <button type="button" aria-label={railWide ? "恢复右栏宽度" : "放大右栏"} title={railWide ? "恢复宽度" : "放大右栏"} onClick={() => onRailWideChange?.(!railWide)} className="flex h-7 w-7 items-center justify-center rounded-full text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f]" data-context-analysis-wide-toggle="true">
+            {railWide ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </button>
           <button type="button" aria-label={collapsed ? "展开分析卡片" : "折叠分析卡片"} title={collapsed ? "展开" : "折叠"} onClick={() => setCollapsed((value) => !value)} className="flex h-7 w-7 items-center justify-center rounded-full text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f]">
             {collapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
@@ -650,6 +725,7 @@ export function WeeklyContextAnalysisPanel({
               {activeResultTab === "data" && <ReferenceData rows={rows} running={isAnalyzing} />}
               {activeResultTab === "visual" && <AnalysisChart chart={chart} running={isAnalyzing} />}
               {activeResultTab === "summary" && <AnalysisSummary summary={summary} running={isAnalyzing} error={analysisError} />}
+              <TrustedArtifactPanel taskId={response?.task_id} compact />
             </div>
           </section>
           )}

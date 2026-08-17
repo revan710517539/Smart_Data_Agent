@@ -190,7 +190,6 @@ class SQLiteUserDirectoryStore:
 def default_user_profiles() -> list[UserProfile]:
     return [
         UserProfile("u_super_admin", "胥京波", "平台管理中心", "xujingbo-jk@qifu.com", "active", "今日 09:15"),
-        UserProfile("u_admin", "平台管理员", "平台管理中心", "admin@smart-data-agent.local", "active", "今日 09:30"),
         UserProfile("u_reviewer", "平台复核员", "经营分析中心", "reviewer@smart-data-agent.local", "active", "今日 09:20"),
         UserProfile("u_lina", "李娜", "华兴银行", "lina@bank.com", "active", "今日 08:42"),
         UserProfile("u_wangqiang", "王强", "广州银行", "wangqiang@bank.com", "active", "昨日 17:30"),

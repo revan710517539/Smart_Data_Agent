@@ -869,6 +869,23 @@ COMMENT ON COLUMN platform_data_asset_items.lock_version IS '乐观锁版本。'
 CREATE INDEX idx_platform_data_asset_items_tenant_updated ON platform_data_asset_items (tenant_id, updated_at, asset_item_id);
 CREATE UNIQUE INDEX uq_platform_data_asset_items ON platform_data_asset_items (tenant_id, item_type, item_code);
 
+CREATE TABLE platform_raw_table_external_references (
+  tenant_id UUID NOT NULL REFERENCES platform_tenants(tenant_id) ON DELETE CASCADE,
+  source_key VARCHAR(128) NOT NULL,
+  mode VARCHAR(16) NOT NULL CHECK (mode IN ('private','shared')),
+  schema_fingerprint VARCHAR(128) NOT NULL,
+  updated_by UUID NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, source_key)
+);
+COMMENT ON TABLE platform_raw_table_external_references IS 'CSV 原始表在 SDA 中的外部引用授权；不写入或修改 CSV 文件。';
+COMMENT ON COLUMN platform_raw_table_external_references.tenant_id IS '授权所属租户。';
+COMMENT ON COLUMN platform_raw_table_external_references.source_key IS '原始表的稳定来源键。';
+COMMENT ON COLUMN platform_raw_table_external_references.mode IS '外部引用模式；shared 才允许 Bridge 读取。';
+COMMENT ON COLUMN platform_raw_table_external_references.schema_fingerprint IS '授权时表结构指纹，结构变化后授权失效。';
+COMMENT ON COLUMN platform_raw_table_external_references.updated_by IS '最近明确授权或收回授权的用户。';
+COMMENT ON COLUMN platform_raw_table_external_references.updated_at IS '最近授权状态更新时间。';
+
 CREATE TABLE platform_system_data_params (
   system_param_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES platform_tenants(tenant_id) ON DELETE CASCADE,
@@ -1426,6 +1443,109 @@ CREATE INDEX idx_platform_application_actions_tenant_updated ON platform_applica
 CREATE UNIQUE INDEX uq_platform_application_action_key ON platform_application_actions (tenant_id, application_action_key);
 CREATE UNIQUE INDEX uq_platform_application_actions_idempotency ON platform_application_actions (tenant_id, module_code, action_code, idempotency_key);
 CREATE INDEX idx_platform_application_actions_actor ON platform_application_actions (tenant_id, actor_user_id, created_at);
+
+CREATE TABLE platform_bridge_bindings (
+  binding_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  binding_key VARCHAR(160) NOT NULL UNIQUE,
+  token_hash CHAR(64) NOT NULL UNIQUE,
+  channel VARCHAR(32) NOT NULL CHECK (channel IN ('workbuddy','codex','qwork')),
+  tenant_id UUID NOT NULL REFERENCES platform_tenants(tenant_id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE CASCADE,
+  visibility VARCHAR(16) NOT NULL DEFAULT 'private' CHECK (visibility IN ('private','tenant')),
+  display_label VARCHAR(120) NOT NULL,
+  device_name VARCHAR(160) NOT NULL,
+  created_at_epoch BIGINT NOT NULL,
+  revoked_at_epoch BIGINT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
+);
+COMMENT ON TABLE platform_bridge_bindings IS 'WorkBuddy、Codex、QWork 一次点击授权形成的可撤销 Bridge 设备绑定；只保存令牌哈希。';
+COMMENT ON COLUMN platform_bridge_bindings.binding_id IS '服务端生成的稳定主键。';
+COMMENT ON COLUMN platform_bridge_bindings.binding_key IS '不含密钥的稳定绑定标识。';
+COMMENT ON COLUMN platform_bridge_bindings.token_hash IS 'Bridge bearer token 的 SHA-256；明文不落库。';
+COMMENT ON COLUMN platform_bridge_bindings.channel IS '发起连接的客户端渠道。';
+COMMENT ON COLUMN platform_bridge_bindings.tenant_id IS '用户点击允许时明确选择的租户。';
+COMMENT ON COLUMN platform_bridge_bindings.user_id IS '完成浏览器授权的用户。';
+COMMENT ON COLUMN platform_bridge_bindings.visibility IS '报告默认可见范围。';
+COMMENT ON COLUMN platform_bridge_bindings.display_label IS '授权管理页展示名称。';
+COMMENT ON COLUMN platform_bridge_bindings.device_name IS '客户端提供的设备名称。';
+COMMENT ON COLUMN platform_bridge_bindings.created_at_epoch IS '创建时间的 Unix 秒值，供本地与 PostgreSQL 行为一致。';
+COMMENT ON COLUMN platform_bridge_bindings.revoked_at_epoch IS '撤销时间；非空即拒绝后续访问。';
+COMMENT ON COLUMN platform_bridge_bindings.created_at IS '创建时间，统一 UTC。';
+COMMENT ON COLUMN platform_bridge_bindings.updated_at IS '最后更新时间，统一 UTC。';
+COMMENT ON COLUMN platform_bridge_bindings.lock_version IS '乐观锁版本。';
+CREATE INDEX idx_platform_bridge_bindings_owner ON platform_bridge_bindings (tenant_id, user_id, channel, revoked_at_epoch);
+
+CREATE TABLE platform_analysis_workspaces (
+  workspace_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES platform_tenants(tenant_id) ON DELETE CASCADE,
+  workspace_key VARCHAR(160) NOT NULL,
+  owner_user_id UUID NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE CASCADE,
+  page_key VARCHAR(160) NOT NULL,
+  artifact_ref VARCHAR(240) NOT NULL DEFAULT '',
+  context_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived','deleted')),
+  created_by UUID REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
+);
+COMMENT ON TABLE platform_analysis_workspaces IS '页面、报告或自主分析对应的持久化分析工作区。';
+COMMENT ON COLUMN platform_analysis_workspaces.workspace_id IS '服务端生成的稳定主键。';
+COMMENT ON COLUMN platform_analysis_workspaces.tenant_id IS '所属租户。';
+COMMENT ON COLUMN platform_analysis_workspaces.workspace_key IS '租户内稳定工作区标识。';
+COMMENT ON COLUMN platform_analysis_workspaces.owner_user_id IS '工作区所有者。';
+COMMENT ON COLUMN platform_analysis_workspaces.page_key IS '页面或业务场景编码。';
+COMMENT ON COLUMN platform_analysis_workspaces.artifact_ref IS '关联报表或可视化产物引用。';
+COMMENT ON COLUMN platform_analysis_workspaces.context_snapshot IS '数据快照、指标版本、筛选器与授权动作。';
+COMMENT ON COLUMN platform_analysis_workspaces.status IS '工作区状态。';
+COMMENT ON COLUMN platform_analysis_workspaces.created_by IS '创建人。';
+COMMENT ON COLUMN platform_analysis_workspaces.created_at IS '创建时间，统一 UTC。';
+COMMENT ON COLUMN platform_analysis_workspaces.updated_at IS '最后更新时间，统一 UTC。';
+COMMENT ON COLUMN platform_analysis_workspaces.lock_version IS '乐观锁版本。';
+CREATE INDEX idx_platform_analysis_workspaces_tenant_updated ON platform_analysis_workspaces (tenant_id, updated_at, workspace_id);
+CREATE UNIQUE INDEX uq_platform_analysis_workspaces_key ON platform_analysis_workspaces (tenant_id, workspace_key);
+CREATE INDEX idx_platform_analysis_workspaces_owner ON platform_analysis_workspaces (tenant_id, owner_user_id, updated_at);
+
+CREATE TABLE platform_analysis_result_cache (
+  cache_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES platform_tenants(tenant_id) ON DELETE CASCADE,
+  cache_key CHAR(64) NOT NULL,
+  owner_user_id UUID NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE CASCADE,
+  authorization_hash CHAR(64) NOT NULL,
+  csv_snapshot_hash CHAR(64) NOT NULL,
+  semantic_version_hash CHAR(64) NOT NULL,
+  execution_version_hash CHAR(64) NOT NULL,
+  result_ref VARCHAR(240) NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  invalidated_at TIMESTAMPTZ,
+  invalidation_reason VARCHAR(120) NOT NULL DEFAULT '',
+  created_by UUID REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
+);
+COMMENT ON TABLE platform_analysis_result_cache IS '权限、CSV、语义和执行版本绑定的安全结果缓存索引。';
+COMMENT ON COLUMN platform_analysis_result_cache.cache_id IS '服务端生成的稳定主键。';
+COMMENT ON COLUMN platform_analysis_result_cache.tenant_id IS '所属租户。';
+COMMENT ON COLUMN platform_analysis_result_cache.cache_key IS '规范化缓存输入 SHA-256。';
+COMMENT ON COLUMN platform_analysis_result_cache.owner_user_id IS '缓存创建用户。';
+COMMENT ON COLUMN platform_analysis_result_cache.authorization_hash IS '授权策略快照摘要。';
+COMMENT ON COLUMN platform_analysis_result_cache.csv_snapshot_hash IS 'CSV 数据快照摘要。';
+COMMENT ON COLUMN platform_analysis_result_cache.semantic_version_hash IS '指标和语义版本摘要。';
+COMMENT ON COLUMN platform_analysis_result_cache.execution_version_hash IS 'Skill、模型和代码版本摘要。';
+COMMENT ON COLUMN platform_analysis_result_cache.result_ref IS '可信产物引用。';
+COMMENT ON COLUMN platform_analysis_result_cache.expires_at IS '缓存到期时间。';
+COMMENT ON COLUMN platform_analysis_result_cache.invalidated_at IS '失效时间。';
+COMMENT ON COLUMN platform_analysis_result_cache.invalidation_reason IS '失效原因稳定码。';
+COMMENT ON COLUMN platform_analysis_result_cache.created_by IS '创建人。';
+COMMENT ON COLUMN platform_analysis_result_cache.created_at IS '创建时间，统一 UTC。';
+COMMENT ON COLUMN platform_analysis_result_cache.updated_at IS '最后更新时间，统一 UTC。';
+COMMENT ON COLUMN platform_analysis_result_cache.lock_version IS '乐观锁版本。';
+CREATE INDEX idx_platform_analysis_result_cache_tenant_updated ON platform_analysis_result_cache (tenant_id, updated_at, cache_id);
+CREATE UNIQUE INDEX uq_platform_analysis_result_cache_key ON platform_analysis_result_cache (tenant_id, cache_key);
+CREATE INDEX idx_platform_analysis_result_cache_expiry ON platform_analysis_result_cache (tenant_id, expires_at, invalidated_at);
 
 CREATE TABLE platform_user_tenant_memberships (
   membership_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2401,6 +2521,82 @@ CREATE UNIQUE INDEX uq_platform_notification_delivery_key ON platform_notificati
 CREATE UNIQUE INDEX uq_platform_notification_deliveries ON platform_notification_deliveries (tenant_id, channel, idempotency_key);
 CREATE INDEX idx_platform_notification_deliveries_status ON platform_notification_deliveries (tenant_id, status, next_attempt_at);
 
+CREATE TABLE platform_bridge_enrollments (
+  enrollment_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  enrollment_key VARCHAR(160) NOT NULL UNIQUE,
+  device_code_hash CHAR(64) NOT NULL UNIQUE,
+  user_code_hash CHAR(64) NOT NULL UNIQUE,
+  channel VARCHAR(32) NOT NULL CHECK (channel IN ('workbuddy','codex','qwork')),
+  device_name VARCHAR(160) NOT NULL,
+  verifier_hash CHAR(64) NOT NULL,
+  status VARCHAR(16) NOT NULL CHECK (status IN ('pending','approved','consumed')),
+  tenant_id UUID REFERENCES platform_tenants(tenant_id) ON DELETE CASCADE,
+  user_id UUID REFERENCES platform_user_profiles(user_id) ON DELETE CASCADE,
+  approved_by UUID REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
+  expires_at_epoch BIGINT NOT NULL,
+  approved_at_epoch BIGINT,
+  consumed_at_epoch BIGINT,
+  binding_id UUID REFERENCES platform_bridge_bindings(binding_id) ON DELETE SET NULL,
+  created_at_epoch BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
+);
+COMMENT ON TABLE platform_bridge_enrollments IS '十分钟内有效、只能领取一次的 Bridge 设备授权事务。';
+COMMENT ON COLUMN platform_bridge_enrollments.enrollment_id IS '服务端生成的稳定主键。';
+COMMENT ON COLUMN platform_bridge_enrollments.enrollment_key IS '不含密钥的稳定授权事务标识。';
+COMMENT ON COLUMN platform_bridge_enrollments.device_code_hash IS '设备码 SHA-256；明文不落库。';
+COMMENT ON COLUMN platform_bridge_enrollments.user_code_hash IS '用户确认码 SHA-256；明文不落库。';
+COMMENT ON COLUMN platform_bridge_enrollments.channel IS '发起授权的客户端渠道。';
+COMMENT ON COLUMN platform_bridge_enrollments.device_name IS '客户端提供的设备名称。';
+COMMENT ON COLUMN platform_bridge_enrollments.verifier_hash IS '客户端 verifier 的 SHA-256，用于防止设备码被截获后领取。';
+COMMENT ON COLUMN platform_bridge_enrollments.status IS '一次性授权事务状态。';
+COMMENT ON COLUMN platform_bridge_enrollments.tenant_id IS '批准时绑定的明确租户。';
+COMMENT ON COLUMN platform_bridge_enrollments.user_id IS '批准时绑定的用户。';
+COMMENT ON COLUMN platform_bridge_enrollments.approved_by IS '在浏览器中点击允许的用户。';
+COMMENT ON COLUMN platform_bridge_enrollments.expires_at_epoch IS '授权事务过期的 Unix 秒值。';
+COMMENT ON COLUMN platform_bridge_enrollments.approved_at_epoch IS '批准时间。';
+COMMENT ON COLUMN platform_bridge_enrollments.consumed_at_epoch IS '令牌被客户端领取的时间；非空后禁止重放。';
+COMMENT ON COLUMN platform_bridge_enrollments.binding_id IS '领取后创建的设备绑定。';
+COMMENT ON COLUMN platform_bridge_enrollments.created_at_epoch IS '创建时间的 Unix 秒值。';
+COMMENT ON COLUMN platform_bridge_enrollments.created_at IS '创建时间，统一 UTC。';
+COMMENT ON COLUMN platform_bridge_enrollments.updated_at IS '最后更新时间，统一 UTC。';
+COMMENT ON COLUMN platform_bridge_enrollments.lock_version IS '乐观锁版本。';
+CREATE INDEX idx_platform_bridge_enrollments_expiry ON platform_bridge_enrollments (status, expires_at_epoch);
+
+CREATE TABLE platform_analysis_threads (
+  thread_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES platform_tenants(tenant_id) ON DELETE CASCADE,
+  workspace_id UUID NOT NULL REFERENCES platform_analysis_workspaces(workspace_id) ON DELETE CASCADE,
+  parent_thread_id UUID REFERENCES platform_analysis_threads(thread_id) ON DELETE RESTRICT,
+  root_thread_id UUID REFERENCES platform_analysis_threads(thread_id) ON DELETE RESTRICT,
+  title VARCHAR(240) NOT NULL DEFAULT '',
+  anchor JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('active','merged','archived')),
+  merged_into_thread_id UUID REFERENCES platform_analysis_threads(thread_id) ON DELETE RESTRICT,
+  created_by UUID REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
+);
+COMMENT ON TABLE platform_analysis_threads IS '总体分析及图表、指标、机构或数据点的分支线程。';
+COMMENT ON COLUMN platform_analysis_threads.thread_id IS '服务端生成的稳定主键。';
+COMMENT ON COLUMN platform_analysis_threads.tenant_id IS '所属租户。';
+COMMENT ON COLUMN platform_analysis_threads.workspace_id IS '所属工作区。';
+COMMENT ON COLUMN platform_analysis_threads.parent_thread_id IS '父线程；根线程为空。';
+COMMENT ON COLUMN platform_analysis_threads.root_thread_id IS '根线程；创建根线程后回填自身。';
+COMMENT ON COLUMN platform_analysis_threads.title IS '线程标题。';
+COMMENT ON COLUMN platform_analysis_threads.anchor IS '图表、文本、指标或数据点锚点。';
+COMMENT ON COLUMN platform_analysis_threads.status IS '线程状态。';
+COMMENT ON COLUMN platform_analysis_threads.merged_into_thread_id IS '合并目标线程。';
+COMMENT ON COLUMN platform_analysis_threads.created_by IS '创建人。';
+COMMENT ON COLUMN platform_analysis_threads.created_at IS '创建时间，统一 UTC。';
+COMMENT ON COLUMN platform_analysis_threads.updated_at IS '最后更新时间，统一 UTC。';
+COMMENT ON COLUMN platform_analysis_threads.lock_version IS '乐观锁版本。';
+CREATE INDEX idx_platform_analysis_threads_tenant_updated ON platform_analysis_threads (tenant_id, updated_at, thread_id);
+CREATE INDEX idx_platform_analysis_threads_workspace ON platform_analysis_threads (tenant_id, workspace_id, updated_at);
+CREATE INDEX idx_platform_analysis_threads_parent ON platform_analysis_threads (workspace_id, parent_thread_id);
+
 CREATE TABLE platform_agent_group_members (
   agent_group_id UUID NOT NULL REFERENCES platform_agent_groups(agent_group_id) ON DELETE CASCADE,
   agent_id UUID NOT NULL REFERENCES platform_agents(agent_id) ON DELETE RESTRICT,
@@ -2943,6 +3139,45 @@ COMMENT ON COLUMN platform_email_messages.lock_version IS '乐观锁版本。';
 CREATE INDEX idx_platform_email_messages_tenant_updated ON platform_email_messages (tenant_id, updated_at, email_message_id);
 CREATE UNIQUE INDEX uq_platform_email_messages_delivery ON platform_email_messages (delivery_id);
 
+CREATE TABLE platform_analysis_turns (
+  turn_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES platform_tenants(tenant_id) ON DELETE CASCADE,
+  thread_id UUID NOT NULL REFERENCES platform_analysis_threads(thread_id) ON DELETE CASCADE,
+  turn_no INTEGER NOT NULL CHECK (turn_no > 0),
+  actor_user_id UUID NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT,
+  question TEXT NOT NULL,
+  answer TEXT NOT NULL DEFAULT '',
+  intent JSONB NOT NULL DEFAULT '{}'::jsonb,
+  execution_plan JSONB NOT NULL DEFAULT '{}'::jsonb,
+  artifact_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status VARCHAR(24) NOT NULL CHECK (status IN ('clarification','queued','running','completed','partial','failed','cancelled')),
+  created_by UUID REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
+);
+COMMENT ON TABLE platform_analysis_turns IS '线程内不可变问题、回答、规划和证据轮次。';
+COMMENT ON COLUMN platform_analysis_turns.turn_id IS '服务端生成的稳定主键。';
+COMMENT ON COLUMN platform_analysis_turns.tenant_id IS '所属租户。';
+COMMENT ON COLUMN platform_analysis_turns.thread_id IS '所属线程。';
+COMMENT ON COLUMN platform_analysis_turns.turn_no IS '线程内单调轮次。';
+COMMENT ON COLUMN platform_analysis_turns.actor_user_id IS '发起用户。';
+COMMENT ON COLUMN platform_analysis_turns.question IS '本轮问题。';
+COMMENT ON COLUMN platform_analysis_turns.answer IS '本轮结论。';
+COMMENT ON COLUMN platform_analysis_turns.intent IS '结构化意图及置信度。';
+COMMENT ON COLUMN platform_analysis_turns.execution_plan IS '持久化 DAG 摘要。';
+COMMENT ON COLUMN platform_analysis_turns.artifact_refs IS '产物引用列表。';
+COMMENT ON COLUMN platform_analysis_turns.evidence_refs IS '证据引用列表。';
+COMMENT ON COLUMN platform_analysis_turns.status IS '轮次执行状态。';
+COMMENT ON COLUMN platform_analysis_turns.created_by IS '创建人。';
+COMMENT ON COLUMN platform_analysis_turns.created_at IS '创建时间，统一 UTC。';
+COMMENT ON COLUMN platform_analysis_turns.updated_at IS '最后更新时间，统一 UTC。';
+COMMENT ON COLUMN platform_analysis_turns.lock_version IS '乐观锁版本。';
+CREATE INDEX idx_platform_analysis_turns_tenant_updated ON platform_analysis_turns (tenant_id, updated_at, turn_id);
+CREATE UNIQUE INDEX uq_platform_analysis_turns_no ON platform_analysis_turns (thread_id, turn_no);
+CREATE INDEX idx_platform_analysis_turns_thread ON platform_analysis_turns (tenant_id, thread_id, created_at);
+
 CREATE TABLE platform_metric_versions (
   metric_version_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES platform_tenants(tenant_id) ON DELETE CASCADE,
@@ -2960,8 +3195,14 @@ CREATE TABLE platform_metric_versions (
   allowed_dimensions JSONB NOT NULL DEFAULT '[]'::jsonb,
   effective_from TIMESTAMPTZ NOT NULL,
   effective_to TIMESTAMPTZ,
-  status VARCHAR(24) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','review','published','superseded','rejected')),
+  status VARCHAR(24) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','review','published','superseded','rejected','archived')),
   checksum CHAR(64) NOT NULL,
+  parent_version_id UUID REFERENCES platform_metric_versions(metric_version_id) ON DELETE RESTRICT,
+  submitted_by UUID REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT,
+  submitted_at TIMESTAMPTZ,
+  reviewed_by UUID REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT,
+  reviewed_at TIMESTAMPTZ,
+  review_comment TEXT NOT NULL DEFAULT '',
   created_by UUID REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -2986,6 +3227,12 @@ COMMENT ON COLUMN platform_metric_versions.effective_from IS '生效起点。';
 COMMENT ON COLUMN platform_metric_versions.effective_to IS '失效时间。';
 COMMENT ON COLUMN platform_metric_versions.status IS '版本状态。';
 COMMENT ON COLUMN platform_metric_versions.checksum IS '口径 hash。';
+COMMENT ON COLUMN platform_metric_versions.parent_version_id IS '来源版本；回滚和修订均创建新版本。';
+COMMENT ON COLUMN platform_metric_versions.submitted_by IS '提交复核人。';
+COMMENT ON COLUMN platform_metric_versions.submitted_at IS '提交复核时间。';
+COMMENT ON COLUMN platform_metric_versions.reviewed_by IS '审批人。';
+COMMENT ON COLUMN platform_metric_versions.reviewed_at IS '审批时间。';
+COMMENT ON COLUMN platform_metric_versions.review_comment IS '审批意见。';
 COMMENT ON COLUMN platform_metric_versions.created_by IS '创建人。';
 COMMENT ON COLUMN platform_metric_versions.created_at IS '创建时间，统一 UTC。';
 COMMENT ON COLUMN platform_metric_versions.updated_at IS '最后更新时间，统一 UTC。';

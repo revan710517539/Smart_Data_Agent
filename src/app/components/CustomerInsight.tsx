@@ -16,6 +16,7 @@ import { usePlatformContext } from "../platform/PlatformContext";
 import { apiErrorMessage } from "../services/apiClient";
 import { runApplicationAction } from "../services/applicationApi";
 import { fetchOperatingSnapshot, type OperatingSnapshot } from "../services/operatingSnapshotApi";
+import { updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
 
 type ProductView = "consumer" | "business";
 const pieColors = ["#1d1d1f", "#3a3a3c", "#636366", "#8e8e93", "#aeaeb2", "#c7c7cc"];
@@ -62,6 +63,24 @@ export function CustomerInsight() {
 
   const model = useMemo(() => buildCustomerModel(snapshot, productView), [productView, snapshot]);
   const activeSegment = model.segments[Math.min(selectedSegment, Math.max(0, model.segments.length - 1))];
+
+  useEffect(() => {
+    if (!snapshot) return;
+    updateAnalysisWorkspacePageContext("customers", {
+      route: "customers",
+      filters: { branch_name: selectedBank === "全部分行" ? "" : selectedBank, product_line: productView === "consumer" ? "消费贷" : "经营贷", customer_segment: activeSegment?.name || "" },
+      dataset_snapshot: snapshotDatasetSnapshot(snapshot),
+      evidence_refs: snapshotEvidenceRefs(snapshot),
+      visualization: { product_view: productView, selected_segment: activeSegment || null, segment_count: model.segments.length },
+      analysis_plan_hint: {
+        dataset_id: "customer_operation_mart",
+        metrics: ["conversion_rate", "active_customer_count"],
+        dimensions: ["customer_segment", "product_line", "branch_name", "month"],
+        chart_types: ["column", "line", "table"],
+        analysis_angles: ["比较客群规模与转化表现", "解释当前机构和客群筛选下的差异边界"],
+      },
+    });
+  }, [activeSegment, model.segments.length, productView, selectedBank, snapshot]);
   const runCustomerInsightAction = (action: string, payload: Record<string, unknown> = {}) =>
     runApplicationAction({ tenantId, userId, moduleKey: "customer_insight", action, payload }).catch(() => undefined);
 
@@ -244,6 +263,9 @@ function buildCustomerModel(snapshot: OperatingSnapshot | null, productView: Pro
 function CustomerState({ message }: { message: string }) {
   return <div className="p-7"><h2 className="text-[18px] text-[#1d1d1f] tracking-tight">客群分析</h2><p className="text-[13px] text-[#aeaeb2] mt-1">消费贷个人客群 vs 经营贷企业客群 · 分行客群对比</p><div className="mt-6 rounded-xl border border-[#f0f0f2] bg-white px-6 py-16 text-center text-[12px] text-[#aeaeb2]">{message}</div></div>;
 }
+
+function snapshotEvidenceRefs(snapshot: OperatingSnapshot) { return Object.entries(snapshot.datasets).flatMap(([key, dataset]) => dataset.evidence.evidence_id ? [{ id: dataset.evidence.evidence_id, type: "operating_snapshot", label: key }] : []); }
+function snapshotDatasetSnapshot(snapshot: OperatingSnapshot) { return { id: snapshot.view, version: snapshot.generated_at, generatedAt: snapshot.generated_at }; }
 
 function Unavailable({ text }: { text: string }) {
   return <div className="flex min-h-[160px] items-center justify-center rounded-lg bg-[#fafbfc] px-6 text-center text-[11px] leading-6 text-[#aeaeb2]">{text}</div>;

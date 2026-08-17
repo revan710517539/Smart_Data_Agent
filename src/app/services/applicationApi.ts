@@ -59,6 +59,7 @@ export async function fetchApplicationModule<TState extends Record<string, unkno
   return apiRequest<ApplicationModuleResponse<TState>>(`/api/application/module?${params.toString()}`, {
     method: "GET",
     context: { tenantId, userId },
+    readCache: { ttlMs: 8_000, tags: ["application", `application:${moduleKey}`] },
   });
 }
 

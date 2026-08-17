@@ -2,7 +2,7 @@
 
 - 领域：身份权限
 - 用途：OIDC Authorization Code + PKCE 登录的一次性事务。
-- 生产数据库：PostgreSQL
+- 结构化运行主库：MySQL 8.x
 
 ## 字段结构
 

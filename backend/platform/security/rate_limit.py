@@ -108,6 +108,12 @@ def request_limits(path: str) -> tuple[int, int, int]:
 
     if path in {"/api/auth/login", "/api/auth/register", "/api/auth/oidc/start", "/api/auth/refresh"}:
         return (10, 0, 0)
+    if path in {
+        "/api/integrations/bridge/enrollment/start",
+        "/api/integrations/bridge/enrollment/poll",
+        "/api/integrations/bridge/enrollment/verify",
+    }:
+        return (30, 0, 0)
     if path in {"/api/analysis/run", "/api/analysis/run-async"}:
         return (60, 10, 50)
     if path in {"/api/system-config/model/test", "/api/system-config/data-connection/test"}:

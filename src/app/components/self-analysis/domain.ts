@@ -14,10 +14,14 @@ import { fetchSavedAnalysisResults, saveSavedAnalysisResult } from "../../servic
 import {
   fetchDataAssets,
   saveDataAssetItem,
+  type PageDataAsset,
+  type RawField,
   type RawTableAsset,
   type TopicTableAsset,
 } from "../../services/dataAssetApi";
 import { apiErrorMessage, getApiBaseUrl } from "../../services/apiClient";
+import { metricDefinitionText } from "./metricPreset";
+import { fieldMetadataMap, formatFieldValue, primaryKeyFields, type FieldDisplayMetadata } from "../../data/fieldSemantics";
 import { demoFallbackDisabledMessage } from "../../services/apiContext";
 import { runApplicationAction } from "../../services/applicationApi";
 import { fetchSystemConfig, type ModelIntegration } from "../../services/systemConfigApi";
@@ -46,10 +50,10 @@ import {
   ChevronsUp,
 } from "lucide-react";
 
-export type VisualizationType = "table" | "column" | "bar" | "line" | "radar";
+export type VisualizationType = "kpi" | "line" | "area" | "column" | "bar" | "stacked_bar" | "combo" | "donut" | "scatter" | "funnel" | "treemap" | "radar" | "table" | "pivot";
 export type ResultVisualKey = "primary" | "secondary";
 export type ResultMode = "thinking" | "visual" | "data" | "summary";
-export type SaveTarget = "report" | "topic" | "experience";
+export type SaveTarget = "mine" | "report" | "topic" | "experience";
 export type SelfAnalysisSection = "query" | "reports";
 export type ScriptTab = "sql" | "python" | "scenarios" | "summary";
 export type AnalysisSkillOption = {
@@ -125,12 +129,15 @@ export type KnowledgeFileAttachment = {
 };
 export type AnalysisDataTableSelection = {
   id: string;
-  kind: "raw" | "topic";
+  kind: "raw" | "topic" | "page_data";
   name: string;
   code: string;
   description: string;
   sql: string;
   fields: string;
+  fieldLabels?: Record<string, string>;
+  fieldMetadata?: Record<string, FieldDisplayMetadata>;
+  primaryKeys?: string[];
   datasetId?: string;
   metricCodes?: string[];
   defaultMetrics?: string[];
@@ -145,6 +152,9 @@ export type AnalysisRow = {
   amount: number;
   metricName: string;
   metricUnit: string;
+  metricDefinition?: string;
+  fieldLabels?: Record<string, string>;
+  fieldMetadata?: Record<string, FieldDisplayMetadata>;
   raw: Record<string, unknown>;
   completion: string;
   conversion: string;
@@ -182,9 +192,35 @@ export type SavedAnalysisResult = {
   plan: string;
   summary: string;
   visualTypes: Record<ResultVisualKey, VisualizationType>;
+  visualizations?: Array<{
+    id: string;
+    key?: ResultVisualKey;
+    title: string;
+    type: VisualizationType;
+    config?: {
+      metricFields: string[];
+      dimensionFields: string[];
+      filters: Record<string, string[]>;
+      filterGroups?: Array<{
+        id: string;
+        rules: Array<{
+          id: string;
+          field: string;
+          operator: "in" | "not_in" | "contains" | "not_contains";
+          values: string[];
+        }>;
+      }>;
+      sumFilteredRows: boolean;
+      comboLineFields: string[];
+    };
+  }>;
   savedAt: string;
   rows: unknown[];
   analysisTaskId: string;
+  sql?: string;
+  pythonScript?: string;
+  analysisScenarios?: string;
+  selectedDataTables?: unknown[];
   analysisInstitution?: string;
   currentInstitution?: string;
   uploadedDataInstitutions?: string[];
@@ -341,10 +377,14 @@ export function rawTableToSelection(table: RawTableAsset): AnalysisDataTableSele
     description: table.description,
     sql,
     fields,
+    fieldLabels: Object.fromEntries(table.fields.map((field) => [field.fieldNameEn, field.fieldNameCn || field.fieldNameEn])),
+    fieldMetadata: fieldMetadataMap(table.fields),
+    primaryKeys: primaryKeyFields(table.fields),
   };
 }
 
 export function topicTableToSelection(topic: TopicTableAsset): AnalysisDataTableSelection {
+  const topicFields = Array.isArray(topic.fields) ? topic.fields : [];
   return {
     id: topic.id,
     kind: "topic",
@@ -353,12 +393,89 @@ export function topicTableToSelection(topic: TopicTableAsset): AnalysisDataTable
     description: topic.description,
     sql: topic.sql,
     fields: formatTopicFields(topic.fields),
+    fieldLabels: Object.fromEntries(topicFields.map((field) => [field.fieldNameEn, field.fieldNameCn || field.fieldNameEn])),
+    fieldMetadata: fieldMetadataMap(topicFields),
+    primaryKeys: primaryKeyFields(topicFields),
     datasetId: topic.datasetId,
     metricCodes: topic.metricCodes,
     defaultMetrics: topic.defaultMetrics,
     dimensionCodes: topic.dimensionCodes,
     defaultDimensions: topic.defaultDimensions,
     chartTypes: topic.chartTypes,
+  };
+}
+
+export function pageDataToSelection(pageData: PageDataAsset): AnalysisDataTableSelection {
+  const fields = Array.isArray(pageData.sourceFields) ? pageData.sourceFields : [];
+  const code = `page_data_${pageData.id}`;
+  return {
+    id: pageData.id,
+    kind: "page_data",
+    name: pageData.name || pageData.sourceTableName || "多机构页面数据",
+    code,
+    description: "由跨机构表关系生成并经过权限、关系和版本校验的多机构页面数据。",
+    sql: "",
+    fields: fields.map((field) => `${field.fieldNameEn}(${field.fieldNameCn}:${field.type})`).join(", "),
+    fieldLabels: Object.fromEntries(fields.map((field) => [field.fieldNameEn, field.fieldNameCn || field.fieldNameEn])),
+    fieldMetadata: fieldMetadataMap(fields),
+    primaryKeys: primaryKeyFields(fields),
+    metricCodes: pageData.metricFields,
+    defaultMetrics: pageData.metricFields,
+    dimensionCodes: pageData.dimensionFields,
+    defaultDimensions: pageData.dimensionFields,
+    chartTypes: ["table", "column", "line", "bar", "pie"],
+  };
+}
+
+export function backendTableToSelection(value: unknown): AnalysisDataTableSelection | null {
+  if (!value || typeof value !== "object") return null;
+  const table = value as Record<string, unknown>;
+  const id = String(table.id || table.code || table.tableNameEn || "").trim();
+  const code = String(table.code || table.tableNameEn || id).trim();
+  if (!id || !code) return null;
+  const rawFields = Array.isArray(table.fields)
+    ? table.fields.filter((field): field is Record<string, unknown> => Boolean(field) && typeof field === "object")
+    : [];
+  const fieldLabels = Object.fromEntries(rawFields.map((field) => {
+    const fieldName = String(field.fieldNameEn || field.code || field.name || "").trim();
+    return [fieldName, String(field.fieldNameCn || field.label || field.explanation || fieldName).trim() || fieldName];
+  }).filter(([fieldName]) => Boolean(fieldName)));
+  const explicitKind = String(table.kind || "").toLowerCase();
+  const isPageData = explicitKind === "page_data";
+  const isRaw = !isPageData && (Boolean(table.tableNameEn) || explicitKind === "raw");
+  const typedFields: RawField[] = rawFields.map((field) => ({
+    fieldNameEn: String(field.fieldNameEn || field.code || field.name || "").trim(),
+    fieldNameCn: String(field.fieldNameCn || field.label || field.explanation || field.fieldNameEn || "").trim(),
+    type: String(field.type || "string"),
+    semanticRole: field.semanticRole === "metric" || field.semanticRole === "date" ? field.semanticRole : "dimension" as const,
+    dateFormat: field.dateFormat === "yyyy-MM-dd" ? "yyyy-MM-dd" as const : undefined,
+    isPrimaryKey: Boolean(field.isPrimaryKey),
+    isMetric: Boolean(field.isMetric),
+    isTime: Boolean(field.isTime),
+    explanation: String(field.explanation || ""),
+  }));
+  return {
+    id,
+    kind: isPageData ? "page_data" : isRaw ? "raw" : "topic",
+    name: String(table.name || table.tableNameCn || code).trim() || code,
+    code,
+    description: String(table.description || table.applicableScene || "").trim(),
+    sql: String(table.sql || table.exampleSql || "").trim(),
+    fields: rawFields.map((field) => {
+      const fieldName = String(field.fieldNameEn || field.code || field.name || "").trim();
+      const label = fieldLabels[fieldName] || fieldName;
+      const type = String(field.type || "").trim();
+      return `${fieldName}(${label}${type ? `:${type}` : ""})`;
+    }).filter(Boolean).join(", "),
+    fieldLabels,
+    fieldMetadata: fieldMetadataMap(typedFields),
+    primaryKeys: primaryKeyFields(typedFields),
+    datasetId: String(table.datasetId || "").trim() || undefined,
+    metricCodes: Array.isArray(table.metricCodes) ? table.metricCodes.map(String) : undefined,
+    defaultMetrics: Array.isArray(table.defaultMetrics) ? table.defaultMetrics.map(String) : undefined,
+    dimensionCodes: Array.isArray(table.dimensionCodes) ? table.dimensionCodes.map(String) : undefined,
+    defaultDimensions: Array.isArray(table.defaultDimensions) ? table.defaultDimensions.map(String) : undefined,
+    chartTypes: Array.isArray(table.chartTypes) ? table.chartTypes.map(String) : undefined,
   };
 }
 
@@ -811,27 +928,72 @@ export function hasSelectableAnalysisModel(models: ModelIntegration[], selected:
 export const autoReferenceSkillCategories: AnalysisSkillOption["category"][] = ["场景", "主题"];
 
 export const visualizationOptions: { type: VisualizationType; label: string; icon: typeof Table2 }[] = [
+  { type: "kpi", label: "指标卡", icon: BarChart3 },
   { type: "line", label: "趋势图", icon: TrendingUp },
+  { type: "area", label: "面积图", icon: TrendingUp },
   { type: "column", label: "柱状图", icon: BarChart3 },
+  { type: "bar", label: "条形图", icon: BarChart3 },
+  { type: "stacked_bar", label: "堆叠条形图", icon: BarChart3 },
+  { type: "combo", label: "组合图", icon: TrendingUp },
+  { type: "donut", label: "环形图", icon: PieChartIcon },
+  { type: "scatter", label: "散点图", icon: BarChart3 },
+  { type: "funnel", label: "漏斗图", icon: BarChart3 },
+  { type: "treemap", label: "树图", icon: Table2 },
+  { type: "radar", label: "雷达图", icon: BarChart3 },
   { type: "table", label: "多维表格", icon: Table2 },
+  { type: "pivot", label: "交叉表", icon: Table2 },
 ];
 
-function normalizedVisualizationType(type?: string): "line" | "column" | "table" | null {
+function normalizedVisualizationType(type?: string): VisualizationType | null {
   const normalized = String(type || "").trim().toLowerCase();
+  if (normalized === "kpi") return "kpi";
   if (normalized === "line") return "line";
-  if (normalized === "column" || normalized === "bar") return "column";
-  if (normalized === "table" || normalized === "radar" || normalized === "pie") return "table";
+  if (normalized === "area") return "area";
+  if (normalized === "column") return "column";
+  if (normalized === "bar") return "bar";
+  if (normalized === "stacked_bar") return "stacked_bar";
+  if (normalized === "combo") return "combo";
+  if (normalized === "donut" || normalized === "pie") return "donut";
+  if (normalized === "scatter") return "scatter";
+  if (normalized === "funnel") return "funnel";
+  if (normalized === "treemap") return "treemap";
+  if (normalized === "radar") return "radar";
+  if (normalized === "table") return "table";
+  if (normalized === "pivot" || normalized === "crosstab") return "pivot";
   return null;
+}
+
+export function visualizationPreferencesFromQuestion(question: string, tables: AnalysisDataTableSelection[] = []) {
+  const chartPatterns: Array<[RegExp, VisualizationType]> = [
+    [/指标卡|KPI/i, "kpi"], [/折线图|趋势图|趋势线|走势图/, "line"], [/面积图/, "area"],
+    [/柱状图|柱形图|纵向柱/, "column"], [/条形图|横向柱/, "bar"], [/堆叠/, "stacked_bar"],
+    [/组合图|柱线/, "combo"], [/环形图|饼图/, "donut"], [/散点图/, "scatter"],
+    [/漏斗图/, "funnel"], [/矩形树图|树图/, "treemap"], [/雷达图/, "radar"],
+    [/交叉表|透视表/, "pivot"], [/多维表|明细表|数据表|表格/, "table"],
+  ];
+  const chartTypes = chartPatterns.flatMap(([pattern, type]) => {
+    const match = question.match(pattern);
+    return match?.index === undefined ? [] : [{ index: match.index, type }];
+  }).sort((left, right) => right.index - left.index).map((item) => item.type);
+  const labels = Object.assign({}, ...tables.map((table) => table.fieldLabels || {})) as Record<string, string>;
+  const mentions = (fields: string[]) => fields.filter((field) => {
+    const label = labels[field] || field;
+    return Boolean(field && question.includes(field)) || Boolean(label && question.includes(label));
+  });
+  const metrics = mentions(Array.from(new Set(tables.flatMap((table) => [...(table.metricCodes || []), ...(table.defaultMetrics || [])]))));
+  const dimensions = mentions(Array.from(new Set(tables.flatMap((table) => [...(table.dimensionCodes || []), ...(table.defaultDimensions || [])]))));
+  return { explicit: chartTypes.length > 0 || metrics.length > 0 || dimensions.length > 0, chart_types: Array.from(new Set(chartTypes)), metrics, dimensions, source: "user_question" };
 }
 
 export function inferVisualTypes(
   question: string,
   tables: AnalysisDataTableSelection[] = [],
 ): Record<ResultVisualKey, VisualizationType> {
+  const requested = visualizationPreferencesFromQuestion(question, tables).chart_types;
   const tableContext = tables.flatMap((table) => [table.name, table.code, table.description, table.fields]).join(" ");
   const configuredTypes = Array.from(new Set(
     tables.flatMap((table) => table.chartTypes || []).map(normalizedVisualizationType).filter(
-      (type): type is "line" | "column" | "table" => Boolean(type),
+      (type): type is VisualizationType => Boolean(type),
     ),
   ));
   const hasQuestionTime = /趋势|走势|变化|波动|连续|环比|同比|月度|季度|年度|每日|每周|每月|日期|时间|上升|下降/i.test(question);
@@ -840,22 +1002,22 @@ export function inferVisualTypes(
   const tableHasTimeDimension = /月度|季度|年度|日期|时间|month|week|date|year/i.test(tableContext);
   const tableSuggestsComparison = /机构|分行|客群|产品|渠道|行业|风险|漏斗|对比|排名/i.test(tableContext);
 
-  let primary: "line" | "column" | "table";
-  if (hasQuestionTime) primary = "line";
+  let primary: VisualizationType;
+  if (requested[0]) primary = requested[0];
+  else if (hasQuestionTime) primary = "line";
+  else if (/交叉|透视|小计|多级表头/i.test(question)) primary = "pivot";
   else if (isQuestionDetail && !isQuestionComparison) primary = "table";
   else if (isQuestionComparison) primary = "column";
   else if (configuredTypes[0]) primary = configuredTypes[0];
   else if (tableHasTimeDimension) primary = "line";
   else primary = tableSuggestsComparison ? "column" : "table";
 
-  const secondary = configuredTypes.find((type) => type !== primary)
+  const secondary = requested.find((type) => type !== primary) || configuredTypes.find((type) => type !== primary)
     || (primary === "table" ? (hasQuestionTime || tableHasTimeDimension ? "line" : "column") : "table");
   return { primary, secondary };
 }
 
 export function visualizationLabel(type: VisualizationType) {
-  if (type === "bar") return "柱状图";
-  if (type === "radar") return "多维表格";
   return visualizationOptions.find((option) => option.type === type)?.label ?? "图表";
 }
 
@@ -908,17 +1070,21 @@ export function appendMetricReferences(plan: string, question: string, metrics: 
 
 export function formatBackendPlan(question: string, plan?: BackendAnalysisPlan) {
   if (!plan) return "";
+  const metricDefinitions = (plan.metric_definitions || [])
+    .map((definition) => metricDefinitionText(definition))
+    .join("；");
   return `查询问题：${question}
 分析数据集：${plan.dataset_id ?? "未识别"}
 分析维度：${(plan.dimensions ?? []).join("、") || "未识别"}
 应用指标：${(plan.metrics ?? []).join("、") || "未识别"}
+指标口径：${metricDefinitions || "未绑定指标字典口径；结果仅可按已选数据表字段复核。"}
 建议图形：${(plan.chart_types ?? []).join("、") || "table"}
 分析思路：${(plan.analysis_angles ?? []).join("；") || "按核心指标和维度聚合分析。"}
 专业判断：${plan.business_focus ?? "消费贷和经营贷需分别关注转化、动支、风险和经营稳定性。"}
 结论状态：尚未形成；只有服务端完成真实执行、证据绑定与复核后才展示业务结论。`;
 }
 
-export function mapBackendRows(response: BackendAnalysisResponse, _fallbackQuestion: string): AnalysisRow[] {
+export function mapBackendRows(response: BackendAnalysisResponse, _fallbackQuestion: string, selectedTables: AnalysisDataTableSelection[] = []): AnalysisRow[] {
   const firstResult = response.skill_results?.[0];
   const rows = firstResult?.data ?? [];
   if (!rows.length) return [];
@@ -928,6 +1094,17 @@ export function mapBackendRows(response: BackendAnalysisResponse, _fallbackQuest
     : {};
   const mappedMetrics = Array.isArray(mapping.metrics) ? mapping.metrics.map(String) : [];
   const mappedDimensions = Array.isArray(mapping.dimensions) ? mapping.dimensions.map(String) : [];
+  const backendFieldLabels = mapping.field_labels && typeof mapping.field_labels === "object"
+    ? Object.fromEntries(
+      Object.entries(mapping.field_labels as Record<string, unknown>)
+        .map(([field, label]) => [field, String(label || field)]),
+    )
+    : {};
+  const fieldLabels = {
+    ...Object.assign({}, ...selectedTables.map((table) => table.fieldLabels || {})),
+    ...backendFieldLabels,
+  };
+  const fieldMetadata = Object.assign({}, ...selectedTables.map((table) => table.fieldMetadata || {}));
   const metricCandidates = Array.from(new Set([
     firstResult?.visualization_artifact?.y,
     firstResult?.chart_spec?.y,
@@ -949,6 +1126,11 @@ export function mapBackendRows(response: BackendAnalysisResponse, _fallbackQuest
   const unitMap = semantic.metric_units && typeof semantic.metric_units === "object"
     ? (semantic.metric_units as Record<string, unknown>)
     : {};
+  const metricDefinitions = response.analysis_plan?.metric_definitions || [];
+  const selectedMetricDefinition = metricDefinitions.find((definition) =>
+    definition.metric_code === metricField || definition.metric_name === metricField,
+  );
+  const metricDefinition = metricDefinitionText(selectedMetricDefinition);
   return rows.slice(0, 200).map((sourceRow, index) => {
     const row = { ...sourceRow };
     const dimensionValue = dimensionFields.length
@@ -960,8 +1142,11 @@ export function mapBackendRows(response: BackendAnalysisResponse, _fallbackQuest
       productLine: backendDisplayValue(row.product_line),
       customerSegment: backendDisplayValue(row.customer_segment),
       amount: Number.isFinite(metricValue) ? metricValue : 0,
-      metricName: metricField,
+      metricName: String(selectedMetricDefinition?.metric_name || fieldLabels[metricField] || metricField),
       metricUnit: String(unitMap[metricField] || ""),
+      metricDefinition,
+      fieldLabels,
+      fieldMetadata,
       raw: row,
       completion: backendDisplayValue(row.completion_rate ?? row.balance_completion_rate),
       conversion: backendDisplayValue(row.conversion_rate),
@@ -975,25 +1160,30 @@ export function visualTypeFromBackend(type?: string): VisualizationType {
   return normalizedVisualizationType(type) || "column";
 }
 
-export function visualTypesFromBackend(response: BackendAnalysisResponse, fallback: Record<ResultVisualKey, VisualizationType>) {
+export function visualTypesFromBackend(response: BackendAnalysisResponse, fallback: Record<ResultVisualKey, VisualizationType>, question = "") {
   const chartTypes = response.analysis_plan?.chart_types ?? [];
   const suggestedTypes = (response.intelligent_analysis?.visualization_suggestions ?? [])
     .map((item) => String(item.type || ""))
     .filter(Boolean);
   const firstResult = response.skill_results?.[0];
+  const governedType = String(firstResult?.visualization_spec?.chart_type || "");
+  const governedAlternatives = firstResult?.visualization_spec?.alternatives || [];
   const normalizedTypes = Array.from(new Set([
+    governedType,
+    ...governedAlternatives,
     ...suggestedTypes,
     String(firstResult?.visualization_artifact?.type || ""),
     String(firstResult?.chart_spec?.type || ""),
     ...chartTypes,
   ].map(normalizedVisualizationType).filter(
-    (type): type is "line" | "column" | "table" => Boolean(type),
+    (type): type is VisualizationType => Boolean(type),
   )));
-  const primary = normalizedTypes[0] || normalizedVisualizationType(fallback.primary) || "column";
+  const requested = visualizationPreferencesFromQuestion(question).chart_types;
+  const primary = requested[0] || normalizedTypes[0] || normalizedVisualizationType(fallback.primary) || "column";
   const fallbackSecondary = normalizedVisualizationType(fallback.secondary);
   return {
     primary,
-    secondary: normalizedTypes.find((type) => type !== primary)
+    secondary: requested.find((type) => type !== primary) || normalizedTypes.find((type) => type !== primary)
       || (fallbackSecondary !== primary ? fallbackSecondary : null)
       || (primary === "table" ? "column" : "table"),
   } as Record<ResultVisualKey, VisualizationType>;
@@ -1047,8 +1237,9 @@ export function loadSavedAnalysisResults(): SavedAnalysisResult[] {
 
 export function downloadCsv(filename: string, rows: AnalysisRow[]) {
   const header = analysisRawFields(rows);
+  const fieldLabels = rows[0]?.fieldLabels || {};
   const csv = [
-    header.map(csvCell).join(","),
+    header.map((field) => csvCell(fieldLabels[field] || field)).join(","),
     ...rows.map((row) => header.map((field) => csvCell(row.raw[field])).join(",")),
   ].join("\n");
   const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
@@ -1073,10 +1264,8 @@ export function csvCell(value: unknown) {
   return `"${text.replaceAll('"', '""')}"`;
 }
 
-export function displayRawCell(value: unknown) {
-  if (value === null || value === undefined || value === "") return "—";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
+export function displayRawCell(value: unknown, metadata?: FieldDisplayMetadata) {
+  return formatFieldValue(value, metadata);
 }
 
 export async function readKnowledgeAttachment(file: File): Promise<KnowledgeFileAttachment> {

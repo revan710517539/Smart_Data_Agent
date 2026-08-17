@@ -255,6 +255,33 @@ class FunAsrProxyContractTest(unittest.TestCase):
         )
         self.assertEqual(selected["id"], "speech_untested")
 
+    def test_account_global_voice_integration_routes_to_both_voice_modules(self) -> None:
+        shared = {
+            "id": "speech_account_global", "name": "账号语音模型", "provider": "aliyun_fun_asr",
+            "apiBase": "https://speech.example/api/v1", "apiKey": "sk-configured",
+            "applicationModule": "global_voice_model", "status": "available", "testStatus": "connected",
+        }
+        legacy = {
+            **shared,
+            "id": "speech_tenant_legacy",
+            "name": "机构旧语音模型",
+            "applicationModule": "realtime_voice_input",
+        }
+
+        class Store:
+            def list_speech_integrations(self, tenant_id: str, reveal_secret: bool = False):
+                return [legacy]
+
+            def list_speech_integrations_owned_by(self, user_id: str, tenant_id: str, reveal_secret: bool = False):
+                return [shared]
+
+        handler = SimpleNamespace(services=SimpleNamespace(system_config_store=Store()))
+        for module in ("realtime_voice_input", "popup_voice_input"):
+            selected = _resolve_fun_asr_speech_integration(
+                handler, "tenant_demo", {"applicationModule": module}, {}, "u_admin",
+            )
+            self.assertEqual(selected["id"], "speech_account_global")
+
     def test_proxy_errors_are_stable_and_do_not_leak_exception_details(self) -> None:
         self.assertEqual(
             _public_fun_asr_error(ValueError("fun_asr_configuration_not_verified: secret detail")),

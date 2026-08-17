@@ -15,6 +15,16 @@ from .analysis import (
     handle_analysis_task_get,
     run_analysis,
 )
+from .analysis_workspace import (
+    handle_analysis_artifact_trust,
+    handle_analysis_execution_nodes,
+    handle_analysis_thread_branch,
+    handle_analysis_threads_merge,
+    handle_analysis_turn_append,
+    handle_analysis_visualization_plan,
+    handle_analysis_workspace_upsert,
+    handle_analysis_workspaces_get,
+)
 from .approvals import (
     handle_capability_approval_request,
     handle_capability_approval_review,
@@ -41,6 +51,39 @@ from .data_acquisition import (
     handle_latest_acquisition_csv_get,
 )
 from .external_reports import handle_external_report_import
+from .workbuddy_bridge import (
+    handle_codex_context_get,
+    handle_codex_data_get,
+    handle_codex_evidence_ingest,
+    handle_qwork_context_get,
+    handle_qwork_data_get,
+    handle_qwork_evidence_ingest,
+    handle_workbuddy_context_get,
+    handle_workbuddy_data_get,
+    handle_workbuddy_evidence_ingest,
+)
+from .bridge_enrollment import (
+    handle_bridge_binding_revoke,
+    handle_bridge_bindings_get,
+    handle_bridge_enrollment_approve,
+    handle_bridge_enrollment_poll,
+    handle_bridge_enrollment_preview,
+    handle_bridge_enrollment_start,
+    handle_bridge_enrollment_verify,
+)
+from .bridge_distribution import (
+    handle_bridge_distribution_checksum_get,
+    handle_bridge_distribution_manifest_get,
+    handle_bridge_distribution_package_get,
+)
+from .bridge_hub import (
+    handle_bridge_manifest_get,
+    handle_bridge_system_action,
+    handle_bridge_system_context,
+    handle_bridge_system_evidence,
+    handle_bridge_system_read,
+    handle_bridge_system_sync,
+)
 from .asr import (
     FUN_ASR_REALTIME_PATH,
     FUN_ASR_RUNTIME_CONFIG_PATH,
@@ -53,6 +96,10 @@ from .assets import (
     handle_data_asset_item_review,
     handle_data_asset_item_upsert,
     handle_data_assets_get,
+    handle_multi_institution_page_data_candidates_get,
+    handle_page_data_rows_get,
+    handle_table_relationship_catalog_get,
+    handle_raw_table_external_reference_update,
     handle_topic_data_get,
 )
 from .audit import handle_audit_logs_get
@@ -100,12 +147,19 @@ from .knowledge import (
     handle_knowledge_search_get,
 )
 from .lineage import handle_lineage_get
+from .interaction_events import handle_interaction_event_create
 from .metrics import (
     handle_metric_dictionary_delete,
     handle_metric_dictionary_get,
     handle_metric_dictionary_import,
     handle_metric_dictionary_replace,
     handle_metric_dictionary_upsert,
+    handle_metric_version_create,
+    handle_metric_version_diff_get,
+    handle_metric_version_impact_get,
+    handle_metric_version_rollback,
+    handle_metric_version_transition,
+    handle_metric_versions_get,
 )
 from .memory import handle_memory_candidate_create, handle_memory_candidate_review, handle_memory_get
 from .market import (
@@ -116,6 +170,17 @@ from .market import (
     handle_market_observation_create,
     handle_market_rule_create,
     handle_market_source_create,
+)
+from .message_board import (
+    handle_message_board_admin_get,
+    handle_message_board_admin_status_update,
+    handle_message_board_archive,
+    handle_message_board_attachment_get,
+    handle_message_board_create,
+    handle_message_board_delete,
+    handle_message_board_get,
+    handle_message_board_image_upload,
+    handle_message_board_update,
 )
 from .navigation import handle_navigation_get
 from .operating_snapshot import handle_operating_snapshot_get
@@ -170,7 +235,23 @@ GET_ROUTE_HANDLERS = {
     "/api/audit-logs": handle_audit_logs_get,
     "/api/system-config": handle_system_config_get,
     "/api/metric-dictionary": handle_metric_dictionary_get,
+    "/api/semantic/metric-versions": handle_metric_versions_get,
+    "/api/semantic/metric-versions/diff": handle_metric_version_diff_get,
+    "/api/semantic/metric-versions/impact": handle_metric_version_impact_get,
     "/api/data-assets": handle_data_assets_get,
+    "/api/data-assets/page-data/multi-institution-candidates": handle_multi_institution_page_data_candidates_get,
+    "/api/data-assets/table-relationships/catalog": handle_table_relationship_catalog_get,
+    "/api/data-assets/page-data/rows": handle_page_data_rows_get,
+    "/api/integrations/workbuddy/context": handle_workbuddy_context_get,
+    "/api/integrations/codex/context": handle_codex_context_get,
+    "/api/integrations/qwork/context": handle_qwork_context_get,
+    "/api/integrations/bridge/enrollment/verify": handle_bridge_enrollment_verify,
+    "/api/integrations/bridge/enrollment/preview": handle_bridge_enrollment_preview,
+    "/api/integrations/bridge/distribution/manifest": handle_bridge_distribution_manifest_get,
+    "/api/integrations/bridge/distribution/package": handle_bridge_distribution_package_get,
+    "/api/integrations/bridge/distribution/package.sha256": handle_bridge_distribution_checksum_get,
+    "/api/integrations/bridge/bindings": handle_bridge_bindings_get,
+    "/api/integrations/bridge/manifest": handle_bridge_manifest_get,
     "/api/topic-data": handle_topic_data_get,
     "/api/lineage": handle_lineage_get,
     "/api/data-acquisition": handle_data_acquisition_get,
@@ -186,9 +267,15 @@ GET_ROUTE_HANDLERS = {
     "/api/analysis/task": handle_analysis_task_get,
     "/api/analysis/history": handle_analysis_history_get,
     "/api/analysis/run-status": handle_analysis_run_status,
+    "/api/analysis/workspaces": handle_analysis_workspaces_get,
+    "/api/analysis/artifacts/trust": handle_analysis_artifact_trust,
+    "/api/analysis/executions/nodes": handle_analysis_execution_nodes,
     "/api/subscriptions": handle_subscriptions_get,
     "/api/teams/connection": handle_teams_connection_get,
     "/api/market-monitoring": handle_market_get,
+    "/api/message-board": handle_message_board_get,
+    "/api/message-board/admin": handle_message_board_admin_get,
+    "/api/message-board/attachment": handle_message_board_attachment_get,
     "/api/email-daily": handle_daily_email_get,
     "/api/operating-snapshot": handle_operating_snapshot_get,
     "/api/attachments/content": handle_attachment_content_get,
@@ -207,6 +294,11 @@ POST_ROUTE_HANDLERS = {
     "/api/analysis/run": handle_analysis_run,
     "/api/analysis/run-async": handle_analysis_run_async,
     "/api/analysis/run-cancel": handle_analysis_run_cancel,
+    "/api/analysis/workspaces": handle_analysis_workspace_upsert,
+    "/api/analysis/threads/branches": handle_analysis_thread_branch,
+    "/api/analysis/threads/turns": handle_analysis_turn_append,
+    "/api/analysis/threads/merge": handle_analysis_threads_merge,
+    "/api/analysis/visualization-plan": handle_analysis_visualization_plan,
     "/api/system-config/model": handle_system_model_upsert,
     "/api/system-config/model/test": handle_system_model_test,
     "/api/system-config/speech-integration": handle_system_speech_integration_upsert,
@@ -214,12 +306,30 @@ POST_ROUTE_HANDLERS = {
     "/api/system-config/system-param": handle_system_param_upsert,
     "/api/metric-dictionary": handle_metric_dictionary_upsert,
     "/api/metric-dictionary/import": handle_metric_dictionary_import,
+    "/api/semantic/metric-versions": handle_metric_version_create,
+    "/api/semantic/metric-versions/transition": handle_metric_version_transition,
+    "/api/semantic/metric-versions/rollback": handle_metric_version_rollback,
     "/api/access/user": handle_access_user_upsert,
     "/api/access/role-policy": handle_access_role_policy_save,
     "/api/reports/analysis-result": handle_report_analysis_result_upsert,
     "/api/reports/analysis-result/save-weekly": handle_report_analysis_result_save_weekly,
     "/api/reports/analysis-result/save-experience": handle_report_analysis_result_save_experience,
     "/api/integrations/reports": handle_external_report_import,
+    "/api/integrations/workbuddy/data": handle_workbuddy_data_get,
+    "/api/integrations/workbuddy/evidence": handle_workbuddy_evidence_ingest,
+    "/api/integrations/codex/data": handle_codex_data_get,
+    "/api/integrations/codex/evidence": handle_codex_evidence_ingest,
+    "/api/integrations/qwork/data": handle_qwork_data_get,
+    "/api/integrations/qwork/evidence": handle_qwork_evidence_ingest,
+    "/api/integrations/bridge/enrollment/start": handle_bridge_enrollment_start,
+    "/api/integrations/bridge/enrollment/approve": handle_bridge_enrollment_approve,
+    "/api/integrations/bridge/enrollment/poll": handle_bridge_enrollment_poll,
+    "/api/integrations/bridge/binding/revoke": handle_bridge_binding_revoke,
+    "/api/integrations/bridge/context": handle_bridge_system_context,
+    "/api/integrations/bridge/read": handle_bridge_system_read,
+    "/api/integrations/bridge/action": handle_bridge_system_action,
+    "/api/integrations/bridge/sync": handle_bridge_system_sync,
+    "/api/integrations/bridge/evidence": handle_bridge_system_evidence,
     "/api/reports/comment": handle_report_comment_create,
     "/api/reports/weekly-version": handle_weekly_report_version_save,
     "/api/reports/weekly-version/analyze": handle_weekly_report_version_analyze,
@@ -228,6 +338,7 @@ POST_ROUTE_HANDLERS = {
     "/api/data-assets/item": handle_data_asset_item_upsert,
     "/api/data-assets/raw-file": handle_data_asset_raw_file_upload,
     "/api/data-assets/item/review": handle_data_asset_item_review,
+    "/api/data-assets/raw-table/external-reference": handle_raw_table_external_reference_update,
     "/api/data-acquisition/source": handle_acquisition_source_create,
     "/api/data-acquisition/script": handle_acquisition_script_create,
     "/api/data-acquisition/script/review": handle_acquisition_script_review,
@@ -261,7 +372,10 @@ POST_ROUTE_HANDLERS = {
     "/api/email-daily/generate": handle_daily_email_generate,
     "/api/email-daily/send": handle_daily_email_send,
     "/api/application/action": handle_application_action_post,
+    "/api/interaction-events": handle_interaction_event_create,
     "/api/attachments/image": handle_report_image_upload,
+    "/api/message-board": handle_message_board_create,
+    "/api/message-board/image": handle_message_board_image_upload,
     "/api/capability-approval": handle_capability_approval_request,
     "/api/capability-approval/review": handle_capability_approval_review,
 }
@@ -271,10 +385,14 @@ PUT_ROUTE_HANDLERS = {
     "/api/subscription": handle_subscription_update,
     "/api/reports/comment": handle_report_comment_mutate,
     "/api/reports/comments": handle_report_comments_replace,
+    "/api/message-board": handle_message_board_update,
+    "/api/message-board/archive": handle_message_board_archive,
+    "/api/message-board/admin/status": handle_message_board_admin_status_update,
     "/api/metric-dictionary": handle_metric_dictionary_replace,
 }
 
 DELETE_ROUTE_HANDLERS = {
+    "/api/message-board": handle_message_board_delete,
     "/api/analysis/history": handle_analysis_history_delete,
     "/api/system-config/model": handle_system_model_delete,
     "/api/system-config/speech-integration": handle_system_speech_integration_delete,

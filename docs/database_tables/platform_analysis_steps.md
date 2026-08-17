@@ -2,7 +2,7 @@
 
 - 领域：智能分析
 - 用途：分析计划中每个 Agent/Skill/Review 步骤的可恢复执行记录。
-- 生产数据库：PostgreSQL
+- 结构化运行主库：MySQL 8.x
 
 ## 字段结构
 

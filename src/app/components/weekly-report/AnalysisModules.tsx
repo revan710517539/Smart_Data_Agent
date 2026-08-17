@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronsDown, Trash2 } from "lucide-react";
+import { ChevronsDown, Eye, EyeOff, GripVertical, Trash2 } from "lucide-react";
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { visualizationLabel, type SavedAnalysisResult, type StoredVisualizationType, type TableBlock } from "./domain";
 
@@ -16,6 +16,16 @@ export type WeeklyAnalysisModule = {
   visible: boolean;
   savedAnalysisId?: string;
   savedAnalysisIds?: string[];
+};
+
+export type WeeklyDataModule = {
+  id: string;
+  kind: "page-data" | "core" | "visual-report" | "saved-analysis";
+  title: string;
+  subtitle: string;
+  visible: boolean;
+  deletable: boolean;
+  sourceId: string;
 };
 
 export function buildWeeklyAnalysisModules({
@@ -111,7 +121,23 @@ export function loadWeeklyAnalysisModulePreferences(tenantId: string, userId: st
   }
 }
 
-export function WeeklyAnalysisModuleMenu({ modules, onToggle, onMove, onDelete }: { modules: WeeklyAnalysisModule[]; onToggle: (module: WeeklyAnalysisModule) => void; onMove: (sourceId: string, targetId: string) => void; onDelete: (module: WeeklyAnalysisModule) => void }) {
+export function WeeklyAnalysisModuleMenu({
+  items,
+  editable,
+  loading = false,
+  notice = "",
+  onToggle,
+  onMove,
+  onDelete,
+}: {
+  items: WeeklyDataModule[];
+  editable: boolean;
+  loading?: boolean;
+  notice?: string;
+  onToggle: (item: WeeklyDataModule) => void;
+  onMove: (sourceId: string, targetId: string) => void;
+  onDelete: (item: WeeklyDataModule) => void;
+}) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [draggedId, setDraggedId] = useState<string | null>(null);
@@ -128,15 +154,37 @@ export function WeeklyAnalysisModuleMenu({ modules, onToggle, onMove, onDelete }
     <div ref={menuRef} className="relative">
       <button type="button" aria-label="选择分析数据模块" title="分析数据" onClick={() => setOpen((value) => !value)} className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-colors ${open ? "border-[#c7c7cc] bg-[#f2f2f7] text-[#1d1d1f]" : "border-[#e5e5ea] bg-white text-[#8a8a8e] hover:bg-[#f8f8f8]"}`}><ChevronsDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} /></button>
       {open ? <div className="absolute right-0 z-50 mt-2 w-[360px] max-w-[82vw] rounded-xl border border-[#e5e5ea] bg-white p-2 shadow-xl shadow-black/10">
-        <div className="flex items-center justify-between px-2 pb-2 pt-1"><span className="text-[11px] text-[#636366]">分析模块</span><span className="text-[10px] text-[#aeaeb2]">拖动排序 · 点击显隐</span></div>
-        <div className="max-h-[360px] space-y-1 overflow-y-auto">{modules.map((module) => <div key={module.id} draggable onDragStart={() => setDraggedId(module.id)} onDragEnd={() => setDraggedId(null)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (draggedId) onMove(draggedId, module.id); setDraggedId(null); }} className={`flex w-full cursor-grab items-center rounded-lg border text-left active:cursor-grabbing ${module.visible ? "border-[#cdebd5] bg-[#eef8f1]" : "border-transparent bg-[#fafbfc] hover:border-[#e5e5ea] hover:bg-white"} ${draggedId === module.id ? "opacity-45" : ""}`}>
-          <button type="button" onClick={() => onToggle(module)} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left">
-            <span className={`h-2 w-2 shrink-0 rounded-full ${module.visible ? "bg-[#34a853]" : "bg-[#c7c7cc]"}`} />
-            <span className="min-w-0 flex-1"><span className={`block truncate text-[11px] ${module.visible ? "text-[#258a3f]" : "text-[#3a3a3c]"}`}>{module.title}</span><span className="mt-0.5 block truncate text-[9px] text-[#aeaeb2]">分析时间：{module.analysisTime}</span></span>
-            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] ${module.visible ? "bg-white text-[#258a3f]" : "bg-[#f2f2f7] text-[#8a8a8e]"}`}>{module.visible ? "显示中" : "已隐藏"}</span>
-          </button>
-          {module.kind === "saved" ? <button type="button" aria-label={`删除分析模块${module.title}`} title="删除分析模块" onClick={() => onDelete(module)} className="mr-2 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#aeaeb2] hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3.5 w-3.5" /></button> : null}
-        </div>)}</div>
+        <div className="flex items-center justify-between px-2 pb-2 pt-1"><span className="text-[11px] text-[#636366]">周报数据</span><span className="text-[10px] text-[#aeaeb2]">{editable ? "拖动排序 · 点击显隐" : "切换到编辑后可调整"}</span></div>
+        <div className="max-h-[360px] space-y-1 overflow-y-auto" data-weekly-unified-data-menu="true">
+          {loading ? <div className="px-3 py-4 text-center text-[11px] text-[#aeaeb2]">正在读取周报数据…</div> : items.map((item) => <div
+            key={item.id}
+            draggable={editable}
+            onDragStart={(event) => { if (!editable) return; setDraggedId(item.id); event.dataTransfer.effectAllowed = "move"; }}
+            onDragEnd={() => setDraggedId(null)}
+            onDragOver={(event) => { if (editable) event.preventDefault(); }}
+            onDrop={(event) => { event.preventDefault(); if (editable && draggedId) onMove(draggedId, item.id); setDraggedId(null); }}
+            className={`flex w-full items-center rounded-lg border text-left ${editable ? "cursor-grab active:cursor-grabbing" : "cursor-default"} ${item.visible ? "border-[#cdebd5] bg-[#eef8f1]" : "border-transparent bg-[#fafbfc] hover:border-[#e5e5ea] hover:bg-white"} ${draggedId === item.id ? "opacity-45" : ""}`}
+            data-weekly-data-item={item.id}
+            data-weekly-data-kind={item.kind}
+          >
+            <span className="ml-2 inline-flex h-7 w-5 shrink-0 items-center justify-center text-[#b2b8b4]" aria-hidden="true"><GripVertical className="h-3.5 w-3.5" /></span>
+            <span className="min-w-0 flex-1 px-1 py-2.5">
+              <span className={`block truncate text-[11px] ${item.visible ? "text-[#258a3f]" : "text-[#3a3a3c]"}`}>{item.title}</span>
+              <span className="mt-0.5 block truncate text-[9px] text-[#aeaeb2]">{item.subtitle}</span>
+            </span>
+            <button
+              type="button"
+              disabled={!editable}
+              aria-label={`${item.visible ? "隐藏" : "显示"}${item.title}`}
+              title={item.visible ? "隐藏" : "显示"}
+              onClick={() => onToggle(item)}
+              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${editable ? "text-[#7d8982] hover:bg-white hover:text-[#258a3f]" : "cursor-default text-[#c7c7cc]"}`}
+            >{item.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}</button>
+            {item.deletable ? <button type="button" disabled={!editable} aria-label={`删除${item.title}`} title="删除" onClick={() => onDelete(item)} className={`mr-2 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${editable ? "text-[#aeaeb2] hover:bg-[#fff0f0] hover:text-[#d93025]" : "cursor-default text-[#d1d1d6]"}`}><Trash2 className="h-3.5 w-3.5" /></button> : <span className="mr-2 h-7 w-7 shrink-0" aria-hidden="true" />}
+          </div>)}
+          {!loading && !items.length ? <div className="px-3 py-4 text-center text-[11px] text-[#aeaeb2]">暂无可编排的周报数据</div> : null}
+          {notice ? <div className="mx-2 mt-1 rounded-md bg-[#f7faf8] px-2 py-1.5 text-[10px] text-[#68736d]">{notice}</div> : null}
+        </div>
       </div> : null}
     </div>
   );

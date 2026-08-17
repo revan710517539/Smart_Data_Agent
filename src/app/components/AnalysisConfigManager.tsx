@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Eye, EyeOff, Pencil, Plus, Trash2, X } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
 import { apiErrorMessage } from "../services/apiClient";
+import { availableAnalysisSkills } from "../services/analysisSkillCatalog";
 import {
   deleteDataAssetItem,
   fetchDataAssets,
@@ -33,54 +34,80 @@ export function AnalysisConfigManager() {
   const [topicTables, setTopicTables] = useState<TopicTableAsset[]>([]);
   const [memories, setMemories] = useState<AnalysisMemoryOption[]>([]);
   const [draft, setDraft] = useState<AnalysisShortcutAsset | null>(null);
+  const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
+  const loadVersionRef = useRef(0);
 
-  const load = async () => {
+  const load = async ({ reset = false }: { reset?: boolean } = {}) => {
+    const loadVersion = ++loadVersionRef.current;
+    if (reset) {
+      setLoading(true);
+      setShortcuts([]);
+      setSkills([]);
+      setTopicTables([]);
+      setMemories([]);
+    }
     try {
-      const bundle = await fetchDataAssets({ tenantId, userId });
+      const [bundle, knowledgeBundle] = await Promise.all([
+        fetchDataAssets({ tenantId, userId }),
+        fetchDataAssets({ tenantId, userId, scope: "knowledge" }),
+      ]);
       const allShortcuts = bundle.analysis_shortcuts || [];
+      if (loadVersion !== loadVersionRef.current) return;
       const ownedShortcuts = allShortcuts.filter((item) => item.ownerUserId === userId);
       setShortcuts(
         (ownedShortcuts.length ? ownedShortcuts : allShortcuts.filter((item) => !item.ownerUserId))
           .sort((a, b) => a.sortOrder - b.sortOrder),
       );
-      setSkills((bundle.analysis_skills || []).filter((item) => item.enabled));
+      setSkills(availableAnalysisSkills(knowledgeBundle.analysis_skills || []));
       setTopicTables(
         [...(bundle.topic_tables || [])].sort((a, b) =>
           a.name.localeCompare(b.name, "zh-CN") || a.code.localeCompare(b.code),
         ),
       );
       setMemories([
-        ...(bundle.intents || []).filter(isActiveMemory).map(intentToMemoryOption),
-        ...(bundle.analysis_experiences || []).filter(isActiveMemory).map(experienceToMemoryOption),
-        ...(bundle.behavior_habits || []).filter(isActiveMemory).map(habitToMemoryOption),
+        ...(knowledgeBundle.intents || []).filter(isActiveMemory).map(intentToMemoryOption),
+        ...(knowledgeBundle.analysis_experiences || []).filter(isActiveMemory).map(experienceToMemoryOption),
+        ...(knowledgeBundle.behavior_habits || []).filter(isActiveMemory).map(habitToMemoryOption),
       ]);
     } catch (error) {
-      setNotice(apiErrorMessage(error, "分析配置加载失败"));
+      if (loadVersion === loadVersionRef.current) setNotice(apiErrorMessage(error, "分析配置加载失败"));
+    } finally {
+      if (loadVersion === loadVersionRef.current) setLoading(false);
     }
   };
 
   useEffect(() => {
-    void load();
+    void load({ reset: true });
+    return () => {
+      loadVersionRef.current += 1;
+    };
   }, [tenantId, userId]);
 
-  const save = async (value: AnalysisShortcutAsset) => {
+  const save = async (value: AnalysisShortcutAsset): Promise<string | null> => {
     if (!value.title.trim() || !value.query.trim()) {
-      setNotice("请填写快捷键名称和分析问题。");
-      return;
+      return "请填写快捷键名称和分析问题。";
     }
     try {
+      const availableSkillIds = new Set(skills.map((skill) => skill.id));
       await saveDataAssetItem({
         tenantId,
         userId,
         itemType: "analysis_shortcut",
-        item: { ...value, ownerUserId: value.ownerUserId || userId },
+        item: {
+          ...value,
+          ownerUserId: value.ownerUserId || userId,
+          skillIds: value.skillIds.filter((skillId) => availableSkillIds.has(skillId)),
+        },
       });
       setDraft(null);
       setNotice("分析快捷键已保存。");
       await load();
+      return null;
     } catch (error) {
-      setNotice(apiErrorMessage(error, "分析配置保存失败"));
+      const message = apiErrorMessage(error, "分析配置保存失败");
+      setNotice(message);
+      return message;
     }
   };
 
@@ -106,7 +133,8 @@ export function AnalysisConfigManager() {
           <button
             type="button"
             onClick={() => setDraft({ ...emptyShortcut, ownerUserId: userId })}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-4 text-[12px] text-white"
+            disabled={loading}
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-4 text-[12px] text-white disabled:cursor-wait disabled:opacity-50"
           >
             <Plus className="h-3.5 w-3.5" />新增分析配置
           </button>
@@ -116,12 +144,16 @@ export function AnalysisConfigManager() {
           <div className="grid grid-cols-[minmax(200px,1fr)_minmax(320px,1.8fr)_minmax(220px,1fr)_100px_120px] border-b border-[#f0f0f2] bg-[#fafbfc] px-5 py-3 text-[11px] text-[#8a8a8e]">
             <span>快捷键名称</span><span>分析问题</span><span>绑定Skill</span><span>展示</span><span className="text-right">操作</span>
           </div>
-          {shortcuts.map((item) => (
+          {loading ? <AnalysisConfigSkeleton /> : null}
+          {!loading && shortcuts.map((item) => (
             <div key={item.id} className="grid grid-cols-[minmax(200px,1fr)_minmax(320px,1.8fr)_minmax(220px,1fr)_100px_120px] items-center gap-4 border-b border-[#f5f5f7] px-5 py-4 last:border-b-0">
               <div className="text-[13px] text-[#1d1d1f]">{item.title}</div>
               <div className="line-clamp-2 text-[12px] leading-5 text-[#636366]">{item.query}</div>
               <div className="flex flex-wrap gap-1">
-                {item.skillIds.map((id) => <span key={id} className="rounded-md bg-[#f2f2f7] px-2 py-1 text-[10px] text-[#636366]">{skills.find((skill) => skill.id === id)?.name || id}</span>)}
+                {item.skillIds
+                  .map((id) => skills.find((skill) => skill.id === id))
+                  .filter((skill): skill is AnalysisSkillAsset => Boolean(skill))
+                  .map((skill) => <span key={skill.id} className="rounded-md bg-[#f2f2f7] px-2 py-1 text-[10px] text-[#636366]">{skill.name}</span>)}
               </div>
               <button
                 type="button"
@@ -136,7 +168,7 @@ export function AnalysisConfigManager() {
               </div>
             </div>
           ))}
-          {!shortcuts.length ? <div className="px-5 py-14 text-center text-[12px] text-[#aeaeb2]">暂无分析快捷键。</div> : null}
+          {!loading && !shortcuts.length ? <div className="px-5 py-14 text-center text-[12px] text-[#aeaeb2]">暂无分析快捷键。</div> : null}
         </div>
       </div>
       {draft ? (
@@ -146,11 +178,25 @@ export function AnalysisConfigManager() {
           topicTables={topicTables}
           memories={memories}
           onClose={() => setDraft(null)}
-          onSave={(value) => void save(value)}
+          onSave={save}
         />
       ) : null}
     </div>
   );
+}
+
+function AnalysisConfigSkeleton() {
+  return <div aria-label="正在读取分析配置" className="animate-pulse">
+    {Array.from({ length: 4 }, (_, index) => (
+      <div key={index} className="grid grid-cols-[minmax(200px,1fr)_minmax(320px,1.8fr)_minmax(220px,1fr)_100px_120px] items-center gap-4 border-b border-[#f5f5f7] px-5 py-4 last:border-b-0">
+        <span className="h-3 w-28 rounded bg-[#ececf0]" />
+        <span className="h-3 w-4/5 rounded bg-[#f0f0f2]" />
+        <span className="h-6 w-24 rounded-md bg-[#f0f0f2]" />
+        <span className="h-6 w-14 rounded-full bg-[#f0f0f2]" />
+        <span className="ml-auto h-7 w-16 rounded-md bg-[#f0f0f2]" />
+      </div>
+    ))}
+  </div>;
 }
 
 function ShortcutEditor({
@@ -166,9 +212,11 @@ function ShortcutEditor({
   topicTables: TopicTableAsset[];
   memories: AnalysisMemoryOption[];
   onClose: () => void;
-  onSave: (value: AnalysisShortcutAsset) => void;
+  onSave: (value: AnalysisShortcutAsset) => Promise<string | null>;
 }) {
   const [draft, setDraft] = useState(initial);
+  const [saveError, setSaveError] = useState("");
+  const [saving, setSaving] = useState(false);
   const selectedTopicTables = draft.tableIds
     .map((id) => topicTables.find((table) => table.id === id))
     .filter((table): table is TopicTableAsset => Boolean(table));
@@ -189,10 +237,24 @@ function ShortcutEditor({
       ? (draft.memoryIds || []).filter((item) => item !== id)
       : [...(draft.memoryIds || []), id],
   });
+  const save = async () => {
+    if (saving) return;
+    setSaveError("");
+    setSaving(true);
+    const error = await onSave(draft);
+    if (error) setSaveError(error);
+    setSaving(false);
+  };
 
   return (
-    <div className="fixed inset-0 z-[90] flex justify-end bg-black/20" onMouseDown={onClose}>
-      <div className="h-full w-full max-w-[560px] overflow-y-auto bg-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/20 px-4" onMouseDown={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${draft.id ? "编辑" : "新增"}分析配置`}
+        className="flex max-h-[86vh] w-full max-w-[760px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <div className="flex items-center justify-between border-b border-[#f0f0f2] px-6 py-4">
           <div>
             <h3 className="text-[16px] text-[#1d1d1f]">{draft.id ? "编辑" : "新增"}分析配置</h3>
@@ -200,7 +262,7 @@ function ShortcutEditor({
           </div>
           <button type="button" onClick={onClose} className="rounded-md p-2 text-[#8a8a8e]" aria-label="关闭编辑分析配置"><X className="h-4 w-4" /></button>
         </div>
-        <div className="grid gap-4 px-6 py-5">
+        <div className="grid min-h-0 gap-4 overflow-y-auto px-6 py-5">
           <label>
             <span className="mb-1.5 block text-[11px] text-[#636366]">快捷键名称</span>
             <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} className="h-9 w-full rounded-lg border border-[#e5e5ea] px-3 text-[12px] outline-none focus:border-[#aeaeb2]" />
@@ -277,14 +339,18 @@ function ShortcutEditor({
                 </label>
               ))}
             </div>
+            {!skills.length ? <p className="text-[11px] text-[#aeaeb2]">Skill 插件中暂无可用解决方案。</p> : null}
           </div>
           <label className="flex items-center gap-2 text-[12px] text-[#3a3a3c]">
             <input type="checkbox" checked={draft.visible} onChange={(event) => setDraft({ ...draft, visible: event.target.checked })} />展示在智能分析输入框下方
           </label>
         </div>
-        <div className="flex justify-end gap-2 border-t border-[#f0f0f2] px-6 py-4">
-          <button type="button" onClick={onClose} className="h-9 rounded-lg border border-[#e5e5ea] px-4 text-[12px] text-[#636366]">取消</button>
-          <button type="button" onClick={() => onSave(draft)} className="h-9 rounded-lg bg-[#1d1d1f] px-5 text-[12px] text-white">保存</button>
+        <div className="flex items-center justify-between gap-4 border-t border-[#f0f0f2] px-6 py-4">
+          <p role="alert" className="min-w-0 text-[11px] text-[#d93025]">{saveError}</p>
+          <div className="flex shrink-0 gap-2">
+            <button type="button" onClick={onClose} disabled={saving} className="h-9 rounded-lg border border-[#e5e5ea] px-4 text-[12px] text-[#636366] disabled:cursor-not-allowed disabled:opacity-50">取消</button>
+            <button type="button" onClick={() => void save()} disabled={saving} className="h-9 rounded-lg bg-[#1d1d1f] px-5 text-[12px] text-white disabled:cursor-not-allowed disabled:opacity-50">{saving ? "保存中…" : "保存"}</button>
+          </div>
         </div>
       </div>
     </div>

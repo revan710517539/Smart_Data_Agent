@@ -55,6 +55,8 @@ class AuthEnforcerTest(unittest.TestCase):
 
     def test_super_admin_cross_tenant(self) -> None:
         self.assertTrue(self.enforcer.enforce("u_super", "tenant_b", "metric:any", "delete"))
+        self.assertTrue(self.enforcer.has_super_admin_role("u_super", "tenant_b"))
+        self.assertFalse(self.enforcer.has_super_admin_role("u_admin", "tenant_a"))
 
     def test_super_admin_overrides_lower_role_deny(self) -> None:
         repository = InMemoryPolicyRepository(
@@ -158,13 +160,11 @@ class AuthEnforcerTest(unittest.TestCase):
     def test_child_menu_selection_keeps_only_parent_and_child(self) -> None:
         expanded = expand_menu_selection(["business-analysis.weekly-report"])
 
-        self.assertEqual(
-            expanded,
-            {
-                "business-analysis",
-                "business-analysis.weekly-report",
-            },
-        )
+        self.assertEqual(expanded - {"settings", "settings.audit", "settings.config"}, {
+            "business-analysis",
+            "business-analysis.weekly-report",
+        })
+        self.assertTrue({"settings", "settings.audit", "settings.config"}.issubset(expanded))
 
     def test_sqlite_policy_repository_matches_enforcer_contract(self) -> None:
         seed = build_default_rbac_seed(["华兴银行"])

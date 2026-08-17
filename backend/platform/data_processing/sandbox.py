@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import ast
 import json
+import os
+import signal
+import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -20,13 +26,7 @@ class PythonDataProcessingResult:
 
 
 class PythonSandbox:
-    """Controlled local boundary for generated visualization scripts.
-
-    Production deployments should replace this with a containerized worker.
-    The local runner intentionally supports only a small declaration-style
-    function so the architecture can carry SQL -> rows -> Python chart artifact
-    without exposing arbitrary Python execution.
-    """
+    """Validated generated-code boundary backed by an isolated worker process."""
 
     blocked_terms = (
         "import ",
@@ -63,6 +63,7 @@ class PythonSandbox:
     max_code_chars = 8_000
     max_rows = 2_000
     max_artifact_bytes = 200_000
+    timeout_seconds = 3.0
 
     def validate_code(self, code: str) -> None:
         if len(code) > self.max_code_chars:
@@ -103,12 +104,7 @@ class PythonSandbox:
         if len(data) > self.max_rows:
             raise ValueError(f"Data-processing input exceeds {self.max_rows} rows.")
         self.validate_processing_code(code)
-        namespace: dict[str, Any] = {"__builtins__": self.safe_builtins}
-        exec(compile(code, "<generated_data_processing>", "exec"), namespace, namespace)
-        process_data = namespace.get("process_data")
-        if not callable(process_data):
-            raise ValueError("Data-processing script did not expose process_data.")
-        result = process_data([dict(row) for row in data], dict(context))
+        result = self._run_worker("process_data", code, data, context)
         if not isinstance(result, dict) or not isinstance(result.get("rows"), list):
             raise ValueError("Data-processing script must return an object containing rows.")
         rows = result["rows"]
@@ -131,12 +127,7 @@ class PythonSandbox:
         if len(data) > self.max_rows:
             raise ValueError(f"Visualization input exceeds {self.max_rows} rows.")
         self.validate_code(code)
-        namespace: dict[str, Any] = {"__builtins__": self.safe_builtins}
-        exec(compile(code, "<generated_visualization>", "exec"), namespace, namespace)
-        build_chart = namespace.get("build_chart")
-        if not callable(build_chart):
-            raise ValueError("Visualization script did not expose build_chart.")
-        artifact = build_chart([dict(row) for row in data], dict(context))
+        artifact = self._run_worker("build_chart", code, data, context)
         if not isinstance(artifact, dict):
             raise ValueError("Visualization script must return a chart artifact object.")
         safe_artifact = _json_safe_artifact(artifact)
@@ -147,6 +138,35 @@ class PythonSandbox:
             script=code,
             artifact=safe_artifact,
         )
+
+    def _run_worker(self, function_name: str, code: str, data: list[dict[str, Any]], context: dict[str, Any]) -> Any:
+        request = json.dumps({"function": function_name, "code": code, "data": data, "context": context, "max_output_bytes": self.max_artifact_bytes}, ensure_ascii=False).encode("utf-8")
+        worker = Path(__file__).with_name("sandbox_worker.py")
+        with tempfile.TemporaryDirectory(prefix="sda-python-worker-") as directory:
+            process = subprocess.Popen(
+                [sys.executable, "-I", "-S", str(worker)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=directory,
+                env={"PATH": os.defpath, "PYTHONIOENCODING": "utf-8"},
+                start_new_session=True,
+            )
+            try:
+                stdout, stderr = process.communicate(request, timeout=self.timeout_seconds)
+            except subprocess.TimeoutExpired as exc:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.communicate()
+                raise TimeoutError("python_sandbox_timeout") from exc
+        if process.returncode != 0:
+            error = stderr.decode("utf-8", errors="replace").strip()[:500]
+            raise ValueError(f"python_sandbox_worker_failed:{error or process.returncode}")
+        if len(stdout) > self.max_artifact_bytes:
+            raise ValueError("python_sandbox_output_too_large")
+        response = json.loads(stdout.decode("utf-8"))
+        if not response.get("ok"):
+            raise ValueError(f"python_sandbox_execution_failed:{response.get('error') or 'unknown'}")
+        return response.get("result")
 
 
 class _ChartScriptValidator(ast.NodeVisitor):

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import replace
+import os
+from dataclasses import asdict, replace
 from http import HTTPStatus
 from datetime import datetime, timezone
 from time import perf_counter
@@ -10,6 +11,8 @@ from typing import Any
 from uuid import uuid4
 
 from backend.platform.bootstrap import PlatformServices
+from backend.platform.analysis_workspace.service import build_trusted_manifest, safe_cache_key
+from backend.platform.analysis_workspace.visualization import VisualizationPlanner
 from backend.platform.api.support import send_route_exception
 from backend.platform.intelligent_analysis import IntelligentAnalysisEngine
 from backend.platform.intelligent_analysis.engine import IntelligentAnalysisRequest
@@ -81,10 +84,16 @@ def handle_analysis_run_async(handler: Any) -> None:
                 },
                 context.user_id,
             )
+        elif str(automation_task.get("status") or "").strip() == "disabled":
+            # This per-user task is owned by the analysis control plane. A
+            # manual user request may resume a paused task, but an explicitly
+            # disabled task remains a governance boundary and must fail closed.
+            raise ValueError("analysis_automation_disabled")
         elif (
             int(automation_task.get("timeout_seconds") or 0) != analysis_deadline
             or int(automation_task.get("max_concurrency") or 0) != analysis_concurrency
             or dict(automation_task.get("retry_policy") or {}) != ANALYSIS_AUTOMATION_RETRY_POLICY
+            or str(automation_task.get("status") or "").strip() == "paused"
         ):
             automation_task = handler.services.automation_runtime.update_task(
                 context.tenant_id,
@@ -289,14 +298,42 @@ def run_analysis(
 
     trace_id = services.trace_recorder.start_trace()
     started_at = perf_counter()
+    try:
+        asset_context = _build_asset_context(
+            services,
+            tenant_id,
+            question,
+            requested_context,
+            user_id=user_id,
+        )
+    except PermissionError as exc:
+        if str(exc) == "selected_data_asset_not_published_or_not_authorized":
+            progress(
+                "context_understanding",
+                10,
+                "failed",
+                "理解问题与装载上下文",
+                "所选数据表已更新、下线或不属于当前机构，请重新选择数据表后重试。",
+            )
+        raise
+    if _selected_table_requires_semantic_registration(asset_context):
+        raise ValueError("analysis_selected_table_semantics_not_registered")
+    if _requires_selected_production_source(services, requested_context, asset_context):
+        raise ValueError("analysis_production_data_table_required")
     context = ExecutionContext(
         user_id=user_id,
         tenant_id=tenant_id,
         page_context={
             "trace_id": trace_id,
             **requested_context,
-            "asset_context": _build_asset_context(services, tenant_id, question, requested_context),
+            "asset_context": asset_context,
         },
+    )
+    workspace_binding = _validate_workspace_binding(
+        services,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        requested_context=requested_context,
     )
     services.trace_recorder.add_span(
         "api.analysis.start",
@@ -308,6 +345,45 @@ def run_analysis(
         _prepare_manual_revision(services, context.page_context, parent, task)
         selected_model = _resolve_selected_model(services, tenant_id, requested_context, user_id=user_id)
         asset_context = context.page_context.get("asset_context", {})
+        cache_context = _analysis_cache_context(
+            services,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            question=question,
+            requested_context=requested_context,
+            asset_context=asset_context if isinstance(asset_context, dict) else {},
+            selected_model=selected_model,
+        )
+        if cache_context is not None and not request_id and parent is None:
+            services.permission_broker.require_skill(context, "supersonic.query")
+            cached = services.analysis_governance_store.get_cache(
+                tenant_id,
+                user_id,
+                cache_context["cache_key"],
+                cache_context["authorization_hash"],
+            )
+            if cached:
+                cached_task = services.task_repository.get_task(str(cached.get("result_ref") or ""))
+                if cached_task and cached_task.get("tenant_id") == tenant_id and cached_task.get("user_id") == user_id:
+                    progress("context_understanding", 10, "succeeded", "理解问题与装载上下文", "已完成权限、数据快照与语义版本复核。")
+                    progress("result_finalize", 60, "succeeded", "复用可信分析结果", "已命中同权限、同数据与同语义版本的可信结果。")
+                    cached_payload = {
+                        **_decorate_analysis_payload(cached_task),
+                        "cache_hit": True,
+                        "cache_key": cache_context["cache_key"],
+                        "cache_generated_at": str(cached.get("updated_at") or cached.get("created_at") or ""),
+                    }
+                    workspace_turn = _append_workspace_analysis_turn(
+                        services,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        question=question,
+                        binding=workspace_binding,
+                        payload=cached_payload,
+                    )
+                    if workspace_turn is not None:
+                        cached_payload["workspace_turn"] = workspace_turn
+                    return cached_payload
         progress(
             "context_understanding",
             10,
@@ -346,6 +422,7 @@ def run_analysis(
                     analysis_trigger=str(requested_context.get("analysis_trigger") or "manual"),
                     voice_silence_ms=int(_dict_or_empty(requested_context.get("realtime_voice_auto_analysis")).get("silenceMs") or 5000),
                     context_policy=_dict_or_empty(requested_context.get("analysis_policy")),
+                    surface_context=requested_context,
                 )
             )
             progress(
@@ -379,6 +456,17 @@ def run_analysis(
         query_result = dict(task.skill_results[0]) if task.skill_results else {}
         if query_result:
             query_result["evidence"] = _build_execution_evidence(query_result)
+            analysis_plan = task.analysis_plan if isinstance(task.analysis_plan, dict) else {}
+            chart_spec = query_result.get("chart_spec") if isinstance(query_result.get("chart_spec"), dict) else {}
+            query_result["visualization_spec"] = VisualizationPlanner().plan(
+                question=question,
+                rows=_list_of_dicts(query_result.get("data")),
+                dimensions=_string_list(analysis_plan.get("dimensions")),
+                metrics=_string_list(analysis_plan.get("metrics")),
+                intent=analysis_plan,
+                proposed_chart_types=_string_list([chart_spec.get("type")]),
+                requested_chart_types=_string_list(_dict_or_empty(requested_context.get("visualization_preferences")).get("chart_types")),
+            ).payload()
             task.skill_results[0] = query_result
             services.workflow.enrich_with_data_product_skills(context, task, question)
             query_result = dict(task.skill_results[0])
@@ -390,7 +478,11 @@ def run_analysis(
             30,
             "succeeded",
             "查询业务数据",
-            f"已返回 {row_count} 行结果，可先查看数据与可视化；模型将继续生成结论。",
+            (
+                "已返回 0 行结果，当前没有可分析数据；将跳过模型结论，避免无效等待。"
+                if row_count == 0
+                else f"已返回 {row_count} 行结果，可先查看数据与可视化；模型将继续生成结论。"
+            ),
             {"row_count": row_count, "partial_task_id": task.task_id},
         )
         progress("evidence_review", 40, "running", "校验口径与证据", "正在核对指标口径、权限证据、SQL 与返回字段。")
@@ -416,6 +508,7 @@ def run_analysis(
                 analysis_trigger=str(requested_context.get("analysis_trigger") or "manual"),
                 voice_silence_ms=int(_dict_or_empty(requested_context.get("realtime_voice_auto_analysis")).get("silenceMs") or 5000),
                 context_policy=_dict_or_empty(requested_context.get("analysis_policy")),
+                surface_context=requested_context,
                 query_result=query_result,
             )
         if not planning_result:
@@ -433,19 +526,23 @@ def run_analysis(
                     ),
                     "prompt_template_id": "data_first.server_plan.v1" if data_first_mode else "skill_solution.server_plan.v1",
                 }
-        progress("model_conclusion", 50, "running", "生成分析结论", "正在基于已执行的数据证据归纳发现、原因边界与建议。")
+        if row_count == 0:
+            progress("model_conclusion", 50, "skipped", "生成分析结论", "实际查询返回 0 行，跳过无数据情况下的模型结论调用。")
+        else:
+            progress("model_conclusion", 50, "running", "生成分析结论", "正在基于已执行的数据证据归纳发现、原因边界与建议。")
         intelligent_analysis = intelligent_engine.analyze(
             final_request,
             planning_result,
         )
-        progress(
-            "model_conclusion",
-            50,
-            "succeeded",
-            "生成分析结论",
-            "已生成基于实际查询证据的分析摘要与关键发现。",
-            {"finding_count": len(intelligent_analysis.get("metric_findings") or [])},
-        )
+        if row_count != 0:
+            progress(
+                "model_conclusion",
+                50,
+                "succeeded",
+                "生成分析结论",
+                "已生成基于实际查询证据的分析摘要与关键发现。",
+                {"finding_count": len(intelligent_analysis.get("metric_findings") or [])},
+            )
         _raise_if_cancelled(cancellation_check)
         if task.skill_results:
             task.skill_results[0] = {
@@ -455,6 +552,36 @@ def run_analysis(
         task.conclusions = intelligent_analysis["possible_conclusions"] + task.conclusions
         progress("result_finalize", 60, "running", "整理可视化结果", "正在完成图表配置、结论复核和结果发布检查。")
         services.workflow.finalize(context, task, intelligent_analysis)
+        if task.skill_results:
+            first_result = dict(task.skill_results[0])
+            evidence = _dict_or_empty(first_result.get("evidence"))
+            semantic = _dict_or_empty(first_result.get("semantic_info"))
+            visualization = _dict_or_empty(first_result.get("visualization_spec"))
+            selected_model_id = str(_dict_or_empty(selected_model).get("id") or _dict_or_empty(selected_model).get("model") or "")
+            skill_versions = [
+                {"skill_id": str(item.get("id") or ""), "version": str(item.get("version") or item.get("assetVersion") or "pinned")}
+                for item in _list_of_dicts(requested_context.get("analysis_context_skills"))
+                if str(item.get("id") or "")
+            ]
+            first_result["trusted_manifest"] = build_trusted_manifest(
+                tenant_id=tenant_id,
+                artifact_id=str(task.execution_id or task.task_id),
+                dataset_snapshot=_dict_or_empty(semantic.get("source_snapshot")) or _dict_or_empty(evidence.get("source_snapshot")),
+                metric_versions=_list_of_dicts(semantic.get("metric_versions")),
+                sql=str(evidence.get("executed_sql") or first_result.get("sql") or ""),
+                result=first_result.get("data") or [],
+                visualization=visualization,
+                skill_versions=skill_versions,
+                model_version=selected_model_id,
+                authorization_snapshot=_analysis_authorization_snapshot(
+                    services,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                ) or _dict_or_empty(semantic.get("metric_access")),
+                evidence_refs=[evidence] if evidence else [],
+                evaluation=task.review if isinstance(task.review, dict) else {},
+            )
+            task.skill_results[0] = first_result
         payload = serialize_task(task)
         payload["asset_context"] = context.page_context.get("asset_context", {})
         payload["intelligent_analysis"] = intelligent_analysis
@@ -470,6 +597,16 @@ def run_analysis(
             },
         )
         services.task_repository.save_task(task)
+        if cache_context is not None and _cache_snapshot_matches(cache_context, task):
+            services.analysis_governance_store.put_cache(
+                tenant_id,
+                user_id,
+                {
+                    **cache_context,
+                    "result_ref": task.task_id,
+                },
+                ttl_seconds=int(requested_context.get("cache_ttl_seconds") or 900),
+            )
         services.lineage_store.record_analysis(payload)
         topic_data_references = services.topic_data_store.record_analysis_execution(
             tenant_id=tenant_id,
@@ -478,6 +615,16 @@ def run_analysis(
             source_reference=_dict_or_none(requested_context.get("topic_data_source")),
         )
         payload["topic_data"] = topic_data_references
+        workspace_turn = _append_workspace_analysis_turn(
+            services,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            question=question,
+            binding=workspace_binding,
+            payload=payload,
+        )
+        if workspace_turn is not None:
+            payload["workspace_turn"] = workspace_turn
         services.task_repository.save_runtime_event(
             RuntimeEvent(
                 event_type="analysis.run",
@@ -605,20 +752,40 @@ def _resolve_analysis_extensions(
         "credit-risk": "topic-credit-risk", "suspicious-transaction": "topic-suspicious-transaction",
         "liquidity-risk": "topic-liquidity-risk", "overdue-risk": "topic-overdue-risk",
     }
+    page_skills = {
+        "page-funnel": ("业务漏斗页面追问", "基于当前漏斗筛选和重新执行的数据证据识别阶段断点。"),
+        "page-sandbox": ("经营沙盘页面追问", "基于当前经营筛选与受治理基线分析趋势；未执行的模拟参数不得视为事实。"),
+        "page-supervision": ("机构督导页面追问", "基于当前机构、产品筛选和重新执行的数据证据形成督导分析。"),
+        "page-customers": ("客群分析页面追问", "基于当前机构、产品和客群筛选分析规模与转化。"),
+        "page-competition": ("竞品分析页面追问", "基于当前产品视图与已授权市场观测进行对标分析。"),
+        "page-email-daily": ("邮件日报页面追问", "复核当前日报来源版本、发布门禁和投递状态。"),
+        "page-my-reports": ("我的报告页面追问", "基于当前报告快照和重新执行的证据继续分析。"),
+        "page-metric-management": ("指标管理页面追问", "基于当前指标语义版本检查口径和影响范围。"),
+        "page-data-management": ("数据管理页面追问", "基于当前数据资产版本检查 Schema、语义关系和影响范围。"),
+    }
     for reference in requested[:12]:
         skill_id = str(reference.get("id") or "").strip()
         if not skill_id or skill_id in seen:
             continue
         configured = skill_by_id.get(skill_id) or skill_by_id.get(legacy_skill_ids.get(skill_id, ""))
         if configured is None:
-            if str(reference.get("category") or "") != "模式":
+            if skill_id in page_skills:
+                name, description = page_skills[skill_id]
+                configured = {
+                    "id": skill_id,
+                    "name": name,
+                    "category": "场景",
+                    "description": description,
+                }
+            elif str(reference.get("category") or "") != "模式":
                 continue
-            configured = {
-                "id": skill_id,
-                "name": str(reference.get("name") or "")[:120],
-                "category": "模式",
-                "description": str(reference.get("description") or "")[:500],
-            }
+            else:
+                configured = {
+                    "id": skill_id,
+                    "name": str(reference.get("name") or "")[:120],
+                    "category": "模式",
+                    "description": str(reference.get("description") or "")[:500],
+                }
         seen.add(skill_id)
         memory_refs = _string_list(configured.get("memoryRefs"))
         tool_refs = _string_list(configured.get("toolRefs"))
@@ -807,6 +974,8 @@ def _build_asset_context(
     tenant_id: str,
     question: str,
     page_context: dict[str, Any],
+    *,
+    user_id: str = "",
 ) -> dict[str, Any]:
     store = getattr(services, "data_asset_store", None)
     if store is None:
@@ -819,10 +988,34 @@ def _build_asset_context(
     selected_topic = page_context.get("selected_topic") if isinstance(page_context, dict) else None
     requested_data_tables = _list_of_dicts(page_context.get("selected_data_tables")) if isinstance(page_context, dict) else []
     requested_memory_ids = _string_list(page_context.get("analysis_memory_ids")) if isinstance(page_context, dict) else []
-    published_tables = [
-        *bundle.get("raw_tables", []),
-        *bundle.get("topic_tables", []),
+    # The picker and Data Management render raw tables directly from the
+    # selected institution's delivered CSV folder. Resolve them from that same
+    # catalog here as well: stored raw-table rows may describe an old delivery
+    # and must never make a currently visible CSV look unauthorized.
+    csv_source = getattr(getattr(services, "data_acquisition_service", None), "csv_source", None)
+    if csv_source is not None:
+        raw_tables = csv_source.for_tenant(tenant_id).table_assets()
+    else:
+        # Isolated callers without the acquisition service retain the store
+        # contract; all running application services have a CSV source.
+        raw_tables = bundle.get("raw_tables", [])
+    multi_page_tables = [
+        _multi_page_data_analysis_table(item)
+        for item in bundle.get("page_data", [])
+        if isinstance(item, dict)
+        and str(item.get("institutionScope") or "") == "multi_institution"
     ]
+    published_tables = [
+        *raw_tables,
+        *bundle.get("topic_tables", []),
+        *multi_page_tables,
+    ]
+    metric_preset = _resolve_metric_preset_source(
+        getattr(services, "metric_dictionary_store", None),
+        tenant_id,
+        question,
+        published_tables,
+    )
     selected_data_tables = []
     for requested in requested_data_tables[:8]:
         requested_ids = {
@@ -843,7 +1036,34 @@ def _build_asset_context(
         )
         if matched is None:
             raise PermissionError("selected_data_asset_not_published_or_not_authorized")
+        if str(matched.get("kind") or "") == "page_data":
+            if not user_id:
+                raise PermissionError("selected_multi_page_data_requires_user_context")
+            from backend.platform.api.routes.assets import read_page_data_rows_payload
+
+            resolved = read_page_data_rows_payload(
+                services,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                page_data_id=str(matched.get("id") or ""),
+                consumer="self_analysis",
+            )
+            matched = {
+                **matched,
+                "previewRows": resolved.get("rows", []),
+                "fieldLabels": resolved.get("field_labels", {}),
+                "sourceSnapshot": {
+                    "page_data_id": str(matched.get("id") or ""),
+                    "relationship_group_id": str(resolved.get("relationship_group_id") or ""),
+                    "schema_fingerprint": str(resolved.get("schema_fingerprint") or ""),
+                    "institution_scope": str(resolved.get("institution_scope") or ""),
+                },
+            }
         selected_data_tables.append(matched)
+    if not selected_data_tables and isinstance(metric_preset.get("selected_table"), dict):
+        # Only a published dictionary metric with an explicit table mapping may
+        # supply this preset. Never choose the first available tenant table.
+        selected_data_tables.append(metric_preset["selected_table"])
     published_memories = [
         *bundle.get("intents", []),
         *bundle.get("analysis_experiences", []),
@@ -905,16 +1125,203 @@ def _build_asset_context(
         question,
         selected_data_tables,
     )
+    related_detail_tables = _related_detail_tables(
+        services,
+        tenant_id,
+        selected_data_tables,
+        published_tables,
+    )
     return {
         "matched_intents": matched_intents[:3],
         "topics": topics[:3],
         "selected_data_tables": selected_data_tables[:8],
+        "related_detail_tables": related_detail_tables[:4],
+        "detail_table_status": "available" if related_detail_tables else "unavailable",
+        "detail_table_message": "" if related_detail_tables else "没有更细粒度数据，请关联明细数据",
         "analysis_memories": selected_memories,
         "experiences": experiences[:3],
         "metric_dictionary_definitions": metric_dictionary_definitions,
-        "raw_table_count": len(bundle.get("raw_tables", [])),
+        "metric_preset": {key: value for key, value in metric_preset.items() if key != "selected_table"},
+        "raw_table_count": len(raw_tables),
+        "multi_institution_page_data_count": len(multi_page_tables),
         "knowledge_file_count": len(bundle.get("knowledge_files", [])),
     }
+
+
+def _multi_page_data_analysis_table(item: dict[str, Any]) -> dict[str, Any]:
+    """Expose bounded page-data metadata without exposing cross-tenant raw tables."""
+
+    page_data_id = str(item.get("id") or "")
+    code = f"page_data_{page_data_id}"
+    return {
+        "id": page_data_id,
+        "kind": "page_data",
+        "name": str(item.get("name") or item.get("sourceTableName") or "多机构页面数据"),
+        "tableNameCn": str(item.get("name") or item.get("sourceTableName") or "多机构页面数据"),
+        "tableNameEn": code,
+        "code": code,
+        "description": "由跨机构表关系生成并经过权限、关系和版本校验的多机构页面数据。",
+        "relativePath": f"page-data://{page_data_id}",
+        "sourceKey": str(item.get("sourceKey") or ""),
+        "relationshipGroupId": str(item.get("relationshipGroupId") or ""),
+        "schemaFingerprint": str(item.get("schemaFingerprint") or ""),
+        "institutionScope": "multi_institution",
+        "fields": [dict(field) for field in item.get("sourceFields", []) if isinstance(field, dict)],
+        "metricCodes": [str(field) for field in item.get("metricFields", []) if str(field)],
+        "defaultMetrics": [str(field) for field in item.get("metricFields", []) if str(field)],
+        "dimensionCodes": [str(field) for field in item.get("dimensionFields", []) if str(field)],
+        "defaultDimensions": [str(field) for field in item.get("dimensionFields", []) if str(field)],
+        "chartTypes": ["table", "column", "line", "bar", "pie"],
+    }
+
+
+def _related_detail_tables(
+    services: PlatformServices,
+    tenant_id: str,
+    selected_tables: list[dict[str, Any]],
+    published_tables: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Resolve only explicitly linked, currently published finer-grain tables."""
+
+    if not selected_tables:
+        return []
+    lineage_store = getattr(services, "lineage_store", None)
+    if lineage_store is None:
+        return []
+    table_by_alias: dict[str, dict[str, Any]] = {}
+    for table in published_tables:
+        for alias in _table_aliases(table):
+            table_by_alias.setdefault(alias, table)
+    selected_aliases = {alias for table in selected_tables for alias in _table_aliases(table)}
+    related: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for edge in lineage_store.list_edges(tenant_id):
+        source_id = str(edge.get("source_id") or "").strip()
+        target_id = str(edge.get("target_id") or "").strip()
+        other_id = target_id if source_id in selected_aliases else source_id if target_id in selected_aliases else ""
+        candidate = table_by_alias.get(other_id)
+        candidate_id = str((candidate or {}).get("id") or "")
+        if not candidate or not candidate_id or candidate_id in seen or _table_aliases(candidate) & selected_aliases:
+            continue
+        seen.add(candidate_id)
+        related.append(candidate)
+    return sorted(
+        related,
+        key=lambda item: (0 if item.get("tableNameEn") or item.get("relativePath") else 1, str(item.get("name") or item.get("tableNameCn") or "")),
+    )
+
+
+def _table_aliases(table: dict[str, Any]) -> set[str]:
+    return {
+        str(table.get(key) or "").strip()
+        for key in ("id", "code", "datasetId", "tableNameEn", "sourceKey")
+        if str(table.get(key) or "").strip()
+    }
+
+
+def _requires_selected_production_source(
+    services: PlatformServices,
+    page_context: dict[str, Any],
+    asset_context: dict[str, Any],
+) -> bool:
+    """Never revive mock metric defaults while production semantic data is absent."""
+
+    has_selected_source = bool(
+        _list_of_dicts(asset_context.get("selected_data_tables"))
+        or _list_of_dicts(asset_context.get("topics"))
+    )
+    return (
+        not has_selected_source
+        and str(page_context.get("route") or "").strip() == "self-analysis/query"
+        and str(getattr(services, "data_source_mode", "")).strip() == "production_data_source_not_configured"
+    )
+
+
+def _selected_table_requires_semantic_registration(asset_context: dict[str, Any]) -> bool:
+    """Block only tables that have neither governed nor bounded raw semantics."""
+    selected_tables = _list_of_dicts(asset_context.get("selected_data_tables"))
+    return any(
+        not str(table.get("datasetId") or "").strip()
+        and not (
+            str(table.get("id") or "").strip()
+            and str(table.get("relativePath") or "").strip()
+            and isinstance(table.get("fields"), list)
+            and bool(table.get("fields"))
+        )
+        for table in selected_tables
+    )
+
+
+def _resolve_metric_preset_source(
+    store: Any,
+    tenant_id: str,
+    question: str,
+    published_tables: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Resolve a dictionary metric only when it names an authorized table."""
+    if store is None:
+        return {"status": "unavailable", "metrics": []}
+    try:
+        metrics = store.list(tenant_id)
+    except Exception:
+        return {"status": "unavailable", "metrics": []}
+
+    candidates = [
+        metric
+        for metric in metrics
+        if isinstance(metric, dict) and _metric_dictionary_item_matches_question(metric, question)
+    ][:8]
+    summary = [
+        {
+            "metric_id": str(metric.get("metricId") or ""),
+            "metric_name": str(metric.get("metricName") or ""),
+            "dataset_id": str(metric.get("datasetId") or ""),
+        }
+        for metric in candidates
+    ]
+    for metric in candidates:
+        metric_code = str(metric.get("metricCode") or "").strip()
+        dataset_id = str(metric.get("datasetId") or "").strip()
+        if (
+            str(metric.get("semanticStatus") or "").strip().lower() != "published"
+            or not metric_code
+            or not dataset_id
+        ):
+            continue
+        selected = next(
+            (
+                table
+                for table in published_tables
+                if _table_supports_dictionary_metric(table, dataset_id, metric_code)
+            ),
+            None,
+        )
+        if selected is not None:
+            return {
+                "status": "resolved",
+                "metrics": [summary_item for summary_item in summary if summary_item["metric_id"] == str(metric.get("metricId") or "")],
+                "selected_table": selected,
+            }
+    return {"status": "no_executable_mapping" if candidates else "no_match", "metrics": summary}
+
+
+def _metric_dictionary_item_matches_question(metric: dict[str, Any], question: str) -> bool:
+    normalized_question = str(question or "").casefold()
+    name = str(metric.get("metricName") or "").strip().casefold()
+    code = str(metric.get("metricCode") or "").strip().casefold()
+    short_name = name.split("（", 1)[0].split("(", 1)[0].strip()
+    aliases = ("放款",) if code == "loan_amount" else ()
+    return any(token and len(token) >= 2 and token in normalized_question for token in (name, short_name, code, *aliases))
+
+
+def _table_supports_dictionary_metric(table: dict[str, Any], dataset_id: str, metric_code: str) -> bool:
+    table_identifiers = {
+        str(table.get("datasetId") or "").strip(),
+        str(table.get("code") or table.get("tableNameEn") or "").strip(),
+        str(table.get("id") or "").strip(),
+    } - {""}
+    metric_codes = set(_string_list(table.get("metricCodes")))
+    return dataset_id in table_identifiers or metric_code in metric_codes
 
 
 def _metric_dictionary_context(
@@ -1136,3 +1543,295 @@ def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _analysis_cache_context(
+    services: PlatformServices,
+    *,
+    user_id: str,
+    tenant_id: str,
+    question: str,
+    requested_context: dict[str, Any],
+    asset_context: dict[str, Any],
+    selected_model: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Build a complete cache identity or disable caching when any input is ambiguous."""
+    code_version = str(
+        os.getenv("SMART_DATA_AGENT_CODE_VERSION")
+        or os.getenv("GIT_COMMIT_SHA")
+        or ""
+    ).strip()
+    selected_tables = _list_of_dicts(asset_context.get("selected_data_tables"))
+    if not code_version or not selected_tables:
+        return None
+
+    csv_tables: list[dict[str, Any]] = []
+    for table in selected_tables:
+        content_hash = str(table.get("contentHash") or "").strip().lower()
+        schema_fingerprint = str(table.get("schemaFingerprint") or "").strip().lower()
+        relative_path = str(table.get("relativePath") or "").strip()
+        if len(content_hash) != 64 or not schema_fingerprint or not relative_path:
+            return None
+        csv_tables.append({
+            "table_id": str(table.get("id") or table.get("code") or "").strip(),
+            "source_key": str(table.get("sourceKey") or "").strip(),
+            "relative_path": relative_path,
+            "content_hash": content_hash,
+            "schema_fingerprint": schema_fingerprint,
+            "schema_version": str(table.get("schemaVersion") or schema_fingerprint).strip(),
+            "asset_version": str(table.get("assetVersion") or table.get("version") or "").strip(),
+        })
+    csv_tables.sort(key=lambda item: (item["table_id"], item["relative_path"]))
+    csv_snapshot = {"tables": csv_tables}
+
+    authorization_snapshot = _analysis_authorization_snapshot(
+        services,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+    if authorization_snapshot is None:
+        return None
+
+    semantic_versions = _analysis_semantic_versions(asset_context, csv_tables)
+    skill_versions = sorted(
+        [
+            {
+                "skill_id": str(item.get("id") or "").strip(),
+                "version": str(item.get("version") or item.get("assetVersion") or "pinned").strip(),
+            }
+            for item in _list_of_dicts(requested_context.get("analysis_context_skills"))
+            if str(item.get("id") or "").strip()
+        ],
+        key=lambda item: (item["skill_id"], item["version"]),
+    )
+    model = _dict_or_empty(selected_model)
+    model_version = "::".join(
+        part
+        for part in (
+            str(model.get("id") or model.get("integrationId") or "server-default").strip(),
+            str(model.get("selectedModelName") or model.get("model") or "").strip(),
+            str(model.get("version") or model.get("updatedAt") or "").strip(),
+        )
+        if part
+    )
+    institutions = sorted({tenant_id, *_analysis_institution_ids(requested_context)})
+    filters = {
+        "filters": _dict_or_empty(requested_context.get("filters")),
+        "selected_data_point": _dict_or_empty(requested_context.get("selected_data_point")),
+        "analysis_trigger": str(requested_context.get("analysis_trigger") or "manual"),
+    }
+    analysis_policy = _dict_or_empty(requested_context.get("analysis_policy"))
+    time_grain = str(
+        requested_context.get("time_grain")
+        or requested_context.get("timeGrain")
+        or analysis_policy.get("timeGrain")
+        or analysis_policy.get("time_grain")
+        or ""
+    ).strip()
+    cache_key = safe_cache_key(
+        tenant_id=tenant_id,
+        question=question,
+        authorization_snapshot=authorization_snapshot,
+        institution_ids=institutions,
+        csv_snapshot=csv_snapshot,
+        semantic_versions=semantic_versions,
+        filters=filters,
+        time_grain=time_grain,
+        skill_versions=skill_versions,
+        model_version=model_version,
+        code_version=code_version,
+    )
+    return {
+        "cache_key": cache_key,
+        "authorization_hash": _stable_json_hash(authorization_snapshot),
+        "csv_snapshot_hash": _stable_json_hash(csv_snapshot),
+        "semantic_version_hash": _stable_json_hash(semantic_versions),
+        "execution_version_hash": _stable_json_hash({
+            "skills": skill_versions,
+            "model": model_version,
+            "code": code_version,
+        }),
+        "expected_csv_tables": csv_tables,
+    }
+
+
+def _analysis_authorization_snapshot(
+    services: PlatformServices,
+    *,
+    tenant_id: str,
+    user_id: str,
+) -> dict[str, Any] | None:
+    repository = getattr(getattr(services.permission_broker, "enforcer", None), "repository", None)
+    if repository is None:
+        return None
+    try:
+        assignments = repository.get_user_roles(user_id, tenant_id)
+        roles = []
+        for assignment in sorted(assignments, key=lambda item: item.role_id):
+            policies = sorted(
+                (asdict(policy) for policy in repository.get_role_policies(assignment.role_id)),
+                key=lambda item: (
+                    int(item.get("priority") or 0),
+                    str(item.get("tenant_id") or ""),
+                    str(item.get("obj") or ""),
+                    str(item.get("act") or ""),
+                    str(item.get("effect") or ""),
+                ),
+            )
+            roles.append({
+                "role_id": assignment.role_id,
+                "assignment_tenant_id": assignment.tenant_id,
+                "policies": policies,
+            })
+    except Exception:
+        return None
+    if not roles:
+        return None
+    return {"tenant_id": tenant_id, "user_id": user_id, "roles": roles}
+
+
+def _analysis_semantic_versions(
+    asset_context: dict[str, Any],
+    csv_tables: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    result = [
+        {
+            "metric_id": str(item.get("metricId") or item.get("metricCode") or "").strip(),
+            "dataset_id": str(item.get("datasetId") or "").strip(),
+            "version": str(
+                item.get("semanticVersion")
+                or item.get("definitionSource")
+                or "published-unversioned"
+            ).strip(),
+            "status": str(item.get("semanticStatus") or "published").strip(),
+        }
+        for item in _list_of_dicts(asset_context.get("metric_dictionary_definitions"))
+        if str(item.get("metricId") or item.get("metricCode") or "").strip()
+    ]
+    if not result:
+        result = [
+            {
+                "metric_id": "",
+                "dataset_id": item["table_id"],
+                "version": item["schema_version"],
+                "status": "temporary-schema-bound",
+            }
+            for item in csv_tables
+        ]
+    return sorted(result, key=lambda item: (item["dataset_id"], item["metric_id"], item["version"]))
+
+
+def _analysis_institution_ids(requested_context: dict[str, Any]) -> set[str]:
+    values: set[str] = set()
+    for key in ("institution_id", "institutionId", "selected_institution", "selectedInstitution"):
+        value = requested_context.get(key)
+        if isinstance(value, dict):
+            value = value.get("id") or value.get("institutionId") or value.get("code")
+        if str(value or "").strip():
+            values.add(str(value).strip())
+    for key in ("institution_ids", "institutionIds", "selected_institutions", "selectedInstitutions"):
+        for value in requested_context.get(key) if isinstance(requested_context.get(key), list) else []:
+            if isinstance(value, dict):
+                value = value.get("id") or value.get("institutionId") or value.get("code")
+            if str(value or "").strip():
+                values.add(str(value).strip())
+    return values
+
+
+def _cache_snapshot_matches(cache_context: dict[str, Any], task: Any) -> bool:
+    if str(getattr(task, "status", "")) != "completed":
+        return False
+    results = getattr(task, "skill_results", None)
+    if not isinstance(results, list) or not results or not isinstance(results[0], dict):
+        return False
+    first_result = results[0]
+    semantic = _dict_or_empty(first_result.get("semantic_info"))
+    evidence = _dict_or_empty(first_result.get("evidence"))
+    snapshot = _dict_or_empty(semantic.get("source_snapshot")) or _dict_or_empty(evidence.get("source_snapshot"))
+    content_hash = str(snapshot.get("content_hash") or "").strip().lower()
+    schema_fingerprint = str(snapshot.get("schema_fingerprint") or "").strip().lower()
+    expected = _list_of_dicts(cache_context.get("expected_csv_tables"))
+    return bool(content_hash and schema_fingerprint) and any(
+        content_hash == str(item.get("content_hash") or "").lower()
+        and schema_fingerprint == str(item.get("schema_fingerprint") or "").lower()
+        for item in expected
+    )
+
+
+def _stable_json_hash(value: Any) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _validate_workspace_binding(
+    services: PlatformServices,
+    *,
+    tenant_id: str,
+    user_id: str,
+    requested_context: dict[str, Any],
+) -> dict[str, str] | None:
+    workspace_id = str(requested_context.get("workspace_id") or requested_context.get("workspaceId") or "").strip()
+    thread_id = str(requested_context.get("thread_id") or requested_context.get("threadId") or "").strip()
+    if not workspace_id and not thread_id:
+        return None
+    if not workspace_id or not thread_id:
+        raise ValueError("analysis_workspace_binding_incomplete")
+    services.analysis_workspace_service.workspace(tenant_id, user_id, workspace_id)
+    threads = services.analysis_workspace_service.threads(tenant_id, user_id, workspace_id)
+    thread = next((item for item in threads if str(item.get("thread_id") or "") == thread_id), None)
+    if thread is None:
+        raise PermissionError("analysis_thread_not_owned")
+    if str(thread.get("status") or "") != "active":
+        raise ValueError("analysis_thread_not_active")
+    return {"workspace_id": workspace_id, "thread_id": thread_id}
+
+
+def _append_workspace_analysis_turn(
+    services: PlatformServices,
+    *,
+    tenant_id: str,
+    user_id: str,
+    question: str,
+    binding: dict[str, str] | None,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    if binding is None:
+        return None
+    intelligent = _dict_or_empty(payload.get("intelligent_analysis"))
+    summary = _dict_or_empty(intelligent.get("analysis_summary"))
+    answer = str(summary.get("text") or intelligent.get("analysis_summary") or "").strip()
+    if not answer:
+        answer = "\n".join(str(item).strip() for item in payload.get("conclusions") or [] if str(item).strip())
+    results = _list_of_dicts(payload.get("skill_results"))
+    artifact_refs = [
+        {
+            "type": "visualization" if isinstance(result.get("visualization_artifact"), dict) else "analysis_result",
+            "task_id": str(payload.get("task_id") or ""),
+            "execution_id": str(payload.get("execution_id") or payload.get("task_id") or ""),
+        }
+        for result in results
+    ]
+    evidence_refs = [
+        dict(result["evidence"])
+        for result in results
+        if isinstance(result.get("evidence"), dict)
+    ]
+    return services.analysis_workspace_service.append_turn(
+        tenant_id,
+        user_id,
+        binding["thread_id"],
+        {
+            "question": question,
+            "answer": answer or "本轮已生成数据产物，暂无文字结论。",
+            "status": "completed" if str(payload.get("status") or "") == "completed" else "partial",
+            "intent": _dict_or_empty(payload.get("analysis_plan")),
+            "execution_plan": {
+                "task_id": str(payload.get("task_id") or ""),
+                "execution_id": str(payload.get("execution_id") or payload.get("task_id") or ""),
+                "plan": payload.get("plan") if isinstance(payload.get("plan"), list) else [],
+                "cache_hit": bool(payload.get("cache_hit")),
+            },
+            "artifact_refs": artifact_refs,
+            "evidence_refs": evidence_refs,
+        },
+    )

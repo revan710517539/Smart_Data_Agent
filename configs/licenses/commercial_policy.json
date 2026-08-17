@@ -1,0 +1,56 @@
+{
+  "allowed_spdx": [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BlueOak-1.0.0",
+    "CC-BY-4.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0"
+  ],
+  "allowed_expressions": [
+    "(MIT OR Apache-2.0)",
+    "(MPL-2.0 OR Apache-2.0)",
+    "MIT AND ISC",
+    "MIT OR SEE LICENSE IN FEEL-FREE.md"
+  ],
+  "forbidden_license_markers": [
+    "AGPL",
+    "BUSL",
+    "Commons Clause",
+    "Elastic License",
+    "GPL",
+    "PolyForm",
+    "SSPL"
+  ],
+  "forbidden_source_paths": [
+    "vendor/lightdash/ee",
+    "third_party/lightdash/ee",
+    "vendor/lightdash-enterprise",
+    "vendor/jimureport",
+    "third_party/jimureport",
+    "vendor/supersonic",
+    "third_party/supersonic",
+    "vendor/sqlcoder-weights",
+    "third_party/sqlcoder-weights"
+  ],
+  "python_dependencies_reviewed": [
+    "boto3",
+    "certifi",
+    "croniter",
+    "openpyxl",
+    "polars",
+    "psycopg",
+    "pyhive",
+    "pyjwt",
+    "pymysql",
+    "pypdf",
+    "python-docx",
+    "redis",
+    "sqlglot",
+    "uvicorn",
+    "websocket-client"
+  ]
+}

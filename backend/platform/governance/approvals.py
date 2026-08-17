@@ -287,7 +287,11 @@ def _validate_consumption(
         or item.get("input_hash") != input_hash.lower()
     ):
         raise PermissionError("capability_approval_scope_mismatch")
-    expires_at = datetime.fromisoformat(str(item.get("expires_at") or ""))
+    expires_at = datetime.fromisoformat(str(item.get("expires_at") or "").replace("Z", "+00:00"))
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    else:
+        expires_at = expires_at.astimezone(timezone.utc)
     if expires_at <= datetime.now(timezone.utc):
         raise PermissionError("capability_approval_expired")
 

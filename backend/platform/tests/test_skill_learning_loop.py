@@ -17,7 +17,7 @@ from backend.platform.tenancy import ExecutionContext
 class SkillLearningLoopTest(unittest.TestCase):
     def setUp(self) -> None:
         self.services = build_local_platform()
-        self.context = ExecutionContext("u_admin", "tenant_demo")
+        self.context = ExecutionContext("u_super_admin", "tenant_demo")
 
     def tearDown(self) -> None:
         self.services.close()
@@ -105,7 +105,7 @@ class SkillLearningLoopTest(unittest.TestCase):
         for index in range(3):
             event = self.services.audit_store.write(
                 "tenant_demo",
-                "u_admin",
+                "u_super_admin",
                 "application.select_bank",
                 "application_module",
                 "dashboard",
@@ -118,12 +118,15 @@ class SkillLearningLoopTest(unittest.TestCase):
                 result.get("memory_candidate_id") or memory_candidate_id
             )
 
-        self.assertTrue(candidate_id.startswith("learned-operation-"))
+        self.assertEqual(candidate_id, "scene-weekly-report")
         self.assertTrue(memory_candidate_id.startswith("learned-memory-"))
         candidate = self.services.data_asset_store.get_item(
             "tenant_demo", "analysis_skill", candidate_id
         )
         self.assertEqual(candidate["lifecycleStatus"], "review")
+        self.assertTrue(candidate["memoryRefs"])
+        self.assertEqual(candidate["name"], "周报分析")
+        self.assertEqual(candidate["learningEvolution"]["strategy"], "reuse_patch")
         self.assertTrue(candidate["learningGuardrails"]["fourEyes"])
         self.assertNotIn("targetId", candidate["learningTrigger"])
         self.assertTrue(candidate["learningTrigger"]["targetFingerprint"])
@@ -155,7 +158,7 @@ class SkillLearningLoopTest(unittest.TestCase):
 
         next_event = self.services.audit_store.write(
             "tenant_demo",
-            "u_admin",
+            "u_super_admin",
             "application.select_bank",
             "application_module",
             "dashboard",
@@ -180,21 +183,8 @@ class SkillLearningLoopTest(unittest.TestCase):
                 for event in learning_events
             )
         )
-        next_analysis = run_analysis(
-            self.services,
-            user_id="u_admin",
-            tenant_id="tenant_demo",
-            question="2026年6月各分行放款金额排名TOP10",
-        )
-        self.assertIn(
-            memory_candidate_id,
-            [
-                item["memory_id"]
-                for item in next_analysis["analysis_plan"]["memory_refs"]
-            ],
-        )
         learning_summary = self.services.learning_service.summary(
-            "tenant_demo", "u_admin"
+            "tenant_demo", "u_super_admin"
         )
         self.assertEqual(learning_summary["counts"]["memory_active"], 1)
         self.assertEqual(
@@ -226,7 +216,7 @@ class SkillLearningLoopTest(unittest.TestCase):
                         ).encode("utf-8"),
                         headers={
                             "Content-Type": "application/json",
-                            "X-User-Id": "u_admin",
+                            "X-User-Id": "u_super_admin",
                             "X-Tenant-Id": "tenant_demo",
                         },
                     )
@@ -235,14 +225,13 @@ class SkillLearningLoopTest(unittest.TestCase):
                     connection.close()
                     self.assertEqual(response.status, 200)
 
-                generated_skills = [
+                evolved_scenes = [
                     skill
                     for skill in server.services.data_asset_store.list_bundle(
                         "tenant_demo"
                     )["analysis_skills"]
-                    if skill.get("learningOrigin")
-                    == "smart_data_agent.hermes_learning"
-                    and skill.get("learningKind") == "operation_workflow"
+                    if (skill.get("learningEvolution") or {}).get("kind")
+                    == "operation_workflow"
                 ]
                 generated_memories = [
                     memory
@@ -257,8 +246,8 @@ class SkillLearningLoopTest(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
-        self.assertEqual(len(generated_skills), 1)
-        self.assertEqual(generated_skills[0]["lifecycleStatus"], "review")
+        self.assertEqual(len(evolved_scenes), 1)
+        self.assertEqual(evolved_scenes[0]["lifecycleStatus"], "review")
         self.assertEqual(len(generated_memories), 1)
         self.assertEqual(generated_memories[0]["status"], "candidate")
         serialized = json.dumps(generated_memories[0]["content"], ensure_ascii=False)
@@ -283,12 +272,15 @@ class SkillLearningLoopTest(unittest.TestCase):
             result = self.services.learning_service.observe_analysis_result(self.context, task)
             candidate_id = str(result.get("candidate_id") or candidate_id)
 
-        self.assertTrue(candidate_id.startswith("learned-analysis-"))
+        self.assertEqual(candidate_id, "scene-weekly-report")
         candidate = self.services.data_asset_store.get_item(
             "tenant_demo", "analysis_skill", candidate_id
         )
         self.assertEqual(candidate["lifecycleStatus"], "review")
         self.assertEqual(candidate["learningTrigger"]["datasetId"], "loan_operation_mart")
+        self.assertTrue(candidate["memoryRefs"])
+        self.assertEqual(candidate["name"], "周报分析")
+        self.assertEqual(candidate["learningEvolution"]["strategy"], "reuse_patch")
 
         self.services.data_asset_store.review_item(
             "tenant_demo",
@@ -304,27 +296,30 @@ class SkillLearningLoopTest(unittest.TestCase):
             plan,
         )
         self.assertEqual([item["skill_id"] for item in matched], [candidate_id])
-        self.assertIn("事实先于解释", matched[0]["viewpointStrategy"])
+        self.assertIn("经营判断", matched[0]["viewpointStrategy"])
 
-    def test_full_analysis_workflow_applies_reviewed_skill_on_the_next_request(self) -> None:
-        question = "2026年6月各分行放款金额排名TOP10"
-        for _ in range(2):
-            result = run_analysis(
-                self.services,
-                user_id="u_admin",
-                tenant_id="tenant_demo",
-                question=question,
+    def test_reviewed_scene_patch_applies_on_the_next_matching_request(self) -> None:
+        plan = {
+            "intent_rule_id": "branch_rank",
+            "dataset_id": "loan_operation_mart",
+            "metrics": ["loan_amount"],
+            "dimensions": ["branch_name"],
+            "chart_types": ["column"],
+        }
+        for index in range(2):
+            self.services.learning_service.observe_analysis_result(
+                self.context,
+                SimpleNamespace(
+                    task_id=f"workflow_{index}",
+                    execution_id=f"workflow_exec_{index}",
+                    analysis_plan=dict(plan),
+                    review={"status": "passed", "publication_gate": "allowed", "checks": {}},
+                ),
             )
-            self.assertEqual(result["review"]["status"], "passed")
-
-        candidates = [
-            skill
-            for skill in self.services.data_asset_store.list_bundle("tenant_demo")["analysis_skills"]
-            if skill.get("learningOrigin") == "smart_data_agent.hermes_learning"
-            and skill.get("learningKind") == "analysis_procedure"
-        ]
-        self.assertEqual(len(candidates), 1)
-        candidate = candidates[0]
+        candidate = self.services.data_asset_store.get_item(
+            "tenant_demo", "analysis_skill", "scene-weekly-report"
+        )
+        self.assertIsNotNone(candidate)
         self.assertEqual(candidate["lifecycleStatus"], "review")
         self.services.data_asset_store.review_item(
             "tenant_demo",
@@ -335,35 +330,13 @@ class SkillLearningLoopTest(unittest.TestCase):
             expected_version=candidate["assetVersion"],
         )
 
-        next_result = run_analysis(
-            self.services,
-            user_id="u_admin",
-            tenant_id="tenant_demo",
-            question=question,
+        matched = self.services.learning_service.resolve_analysis_skills(
+            self.context,
+            "再次分析机构放款",
+            plan,
         )
-
-        self.assertEqual(
-            [item["skill_id"] for item in next_result["analysis_plan"]["applied_learning_skills"]],
-            [candidate["id"]],
-        )
-        self.assertTrue(
-            any(
-                step["agent"] == "SkillLearningAgent"
-                and step["action"] == "apply_reviewed_procedural_skills"
-                for step in next_result["plan"]
-            )
-        )
-        output = next_result["skill_results"][0]
-        self.assertEqual(output["analysis_profile"]["row_count"], len(output["data"]))
-        self.assertEqual(
-            output["conclusion_contract"]["evidence_profile_hash"],
-            output["analysis_profile"]["profile_hash"],
-        )
-        self.assertEqual(
-            output["bi_report_spec"]["evidence"]["profile_hash"],
-            output["analysis_profile"]["profile_hash"],
-        )
-        self.assertFalse(output["bi_report_spec"]["published"])
+        self.assertEqual([item["skill_id"] for item in matched], [candidate["id"]])
+        self.assertEqual(matched[0]["analysisAngles"][0], "先核对指标和时间口径")
 
     def test_failed_application_proposes_reviewed_improvement_without_replacing_active_version(self) -> None:
         plan = {

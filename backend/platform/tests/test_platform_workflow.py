@@ -39,6 +39,7 @@ from backend.platform.semantic import (
     SupersonicHTTPClient,
 )
 from backend.platform.tenancy import ExecutionContext
+from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse, build_governed_test_warehouse
 
 
 def _stateful_test_token(server, user_id: str, tenant_id: str, tenant_ids: tuple[str, ...] | None = None) -> str:
@@ -96,11 +97,12 @@ class BrokenSupersonicClient:
 class PlatformWorkflowTest(unittest.TestCase):
     def setUp(self) -> None:
         self.services = build_local_platform()
+        attach_governed_test_warehouse(self.services)
 
     def tearDown(self) -> None:
         self.services.close()
 
-    def approved_mcp_call(self, subject_id: str, arguments: dict, user_id: str = "u_admin") -> str:
+    def approved_mcp_call(self, subject_id: str, arguments: dict, user_id: str = "u_super_admin") -> str:
         approval = self.services.approval_store.request(
             "tenant_demo",
             "mcp",
@@ -117,7 +119,7 @@ class PlatformWorkflowTest(unittest.TestCase):
     def test_analysis_uses_governed_skill_and_semantic_layer(self) -> None:
         response = run_analysis(
             self.services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="2026年6月各分行放款金额是多少",
         )
@@ -134,7 +136,7 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertIn("python_script", response["skill_results"][0])
         self.assertEqual(response["skill_results"][0]["visualization_artifact"]["runtime"], "local_python_sandbox")
         self.assertTrue(response["skill_results"][0]["visualization_artifact"]["series"])
-        self.assertEqual(response["skill_results"][0]["semantic_info"]["data_source"], "json_mock_warehouse")
+        self.assertEqual(response["skill_results"][0]["semantic_info"]["data_source"], "governed_test_warehouse")
         self.assertIn("metric_access", response["skill_results"][0]["semantic_info"])
         self.assertIn("analysis_plan", response)
         self.assertEqual(response["analysis_plan"]["metrics"][0], "loan_amount")
@@ -170,13 +172,13 @@ class PlatformWorkflowTest(unittest.TestCase):
                 "value": "demo-key",
                 "status": "available",
             },
-            updated_by="u_admin",
+            updated_by="u_super_admin",
         )
         response = run_analysis(
             self.services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
-            question="本月各分行放款金额排名TOP10",
+            question="2026年7月各分行放款金额排名TOP10",
             page_context={
                 "selected_model": {
                     "id": "model_test",
@@ -219,7 +221,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                 "enabledModels": ["gpt-5.4", "gpt-5.5"],
                 "status": "available",
             },
-            updated_by="u_admin",
+            updated_by="u_super_admin",
         )
         resolved = _resolve_selected_model(
             self.services,
@@ -261,26 +263,26 @@ class PlatformWorkflowTest(unittest.TestCase):
             "applicationModule": "intelligent_analysis_reasoning",
             "testStatus": "connected", "status": "available",
         }
-        self.services.system_config_store.upsert_model("tenant_demo", first, updated_by="u_admin")
-        self.services.system_config_store.upsert_model("tenant_demo", routed, updated_by="u_admin")
+        self.services.system_config_store.upsert_model("account:u_super_admin", first, updated_by="u_super_admin")
+        self.services.system_config_store.upsert_model("account:u_super_admin", routed, updated_by="u_super_admin")
         resolved = _resolve_selected_model(
             self.services,
-            "tenant_demo",
+            "account:u_super_admin",
             {
                 "model_application_module": "intelligent_analysis_reasoning",
                 "selected_model": {"id": "model_direct_client_choice"},
             },
-            user_id="u_admin",
+            user_id="u_super_admin",
         )
         self.assertEqual(resolved["id"], "model_application_route")
         self.assertEqual(resolved["value"], "routed-secret")
 
         self.services.system_config_store.upsert_model(
-            "tenant_demo",
+            "account:u_super_admin",
             {**first, "applicationModule": "intelligent_analysis_reasoning"},
-            updated_by="u_admin",
+            updated_by="u_super_admin",
         )
-        listed = {item["id"]: item for item in self.services.system_config_store.list_models("tenant_demo")}
+        listed = {item["id"]: item for item in self.services.system_config_store.list_models("account:u_super_admin")}
         self.assertEqual(listed["model_direct_client_choice"]["applicationModule"], "intelligent_analysis_reasoning")
         self.assertEqual(listed["model_application_route"]["applicationModule"], "intelligent_analysis_reasoning")
 
@@ -294,7 +296,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                     "selectedModelName": "first-model",
                 },
             },
-            user_id="u_admin",
+            user_id="u_super_admin",
         )
         self.assertEqual(selected["id"], "model_direct_client_choice")
         self.assertEqual(selected["selectedModelName"], "first-model")
@@ -311,7 +313,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                         "selectedModelName": "first-model",
                     },
                 },
-                user_id="u_admin",
+                user_id="u_super_admin",
             )
         with self.assertRaises(PermissionError):
             _resolve_selected_model(
@@ -324,13 +326,13 @@ class PlatformWorkflowTest(unittest.TestCase):
                         "selectedModelName": "disabled-model",
                     },
                 },
-                user_id="u_admin",
+                user_id="u_super_admin",
             )
 
     def test_analysis_history_delete_is_owner_scoped_and_removes_trace(self) -> None:
         response = run_analysis(
             self.services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="本月各分行放款金额排名TOP10",
         )
@@ -339,29 +341,21 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertTrue(self.services.task_repository.trace_spans(trace_id))
         self.assertFalse(self.services.task_repository.delete_task("tenant_demo", "u_other", task_id))
         self.assertIsNotNone(self.services.task_repository.get_task(task_id))
-        self.assertTrue(self.services.task_repository.delete_task("tenant_demo", "u_admin", task_id))
+        self.assertTrue(self.services.task_repository.delete_task("tenant_demo", "u_super_admin", task_id))
         self.assertIsNone(self.services.task_repository.get_task(task_id))
         self.assertEqual(self.services.task_repository.trace_spans(trace_id), [])
 
-    def test_default_analysis_shortcuts_cover_all_seven_mock_datasets(self) -> None:
+    def test_default_asset_catalog_excludes_retired_demo_shortcuts(self) -> None:
         bundle = self.services.data_asset_store.list_bundle("tenant_demo")
         shortcuts = [item for item in bundle["analysis_shortcuts"] if item.get("visible")]
-        self.assertEqual(len(shortcuts), 7)
-        table_ids = {table_id for item in shortcuts for table_id in item.get("tableIds", [])}
-        topic_by_id = {item["id"]: item for item in bundle["topic_tables"]}
-        self.assertEqual(
-            {topic_by_id[table_id]["datasetId"] for table_id in table_ids},
-            {
-                "loan_operation_mart", "risk_operation_mart", "channel_operation_mart",
-                "customer_operation_mart", "institution_operation_mock_mart",
-                "customer_profile_mock_mart", "loan_funnel_mock_mart",
-            },
-        )
+        self.assertEqual(shortcuts, [])
+        self.assertFalse(any("mock" in str(item.get("id") or "") for item in bundle["topic_tables"]))
 
     def test_model_call_audit_is_durable_and_contains_no_prompt_or_secret(self) -> None:
         with TemporaryDirectory() as tmpdir:
             db_path = f"{tmpdir}/platform.sqlite"
             services = build_local_platform(db_path=db_path)
+            attach_governed_test_warehouse(services)
             services.system_config_store.upsert_model(
                 "tenant_demo",
                 {
@@ -374,11 +368,11 @@ class PlatformWorkflowTest(unittest.TestCase):
                     "enabledModels": ["finance-audit-model"],
                     "status": "available",
                 },
-                updated_by="u_admin",
+                updated_by="u_super_admin",
             )
             response = run_analysis(
                 services,
-                user_id="u_admin",
+                user_id="u_super_admin",
                 tenant_id="tenant_demo",
                 question="这是不可写入审计明文的敏感经营问题",
                 page_context={"selected_model": {"id": "model_audit"}},
@@ -403,7 +397,7 @@ class PlatformWorkflowTest(unittest.TestCase):
     def test_analysis_preserves_context_skills_and_conversation(self) -> None:
         response = run_analysis(
             self.services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="请按周报分析做归因分析",
             page_context={
@@ -456,13 +450,13 @@ class PlatformWorkflowTest(unittest.TestCase):
                 "enabledModels": ["deepseek-v4-flash"],
                 "status": "available",
             },
-            updated_by="u_admin",
+            updated_by="u_super_admin",
         )
         response = run_analysis(
             self.services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
-            question="郑州银行本周放款波动用周报分析解释一下",
+            question="郑州银行2026年7月放款波动用周报分析解释一下",
             page_context={
                 "analysis_trigger": "realtime_voice_silence",
                 "analysis_policy": {
@@ -528,8 +522,8 @@ class PlatformWorkflowTest(unittest.TestCase):
         )
         self.assertIn("实时语音 5 秒静默自动触发", "；".join(intelligent["analysis_approach"]))
 
-    def test_json_mock_warehouse_executes_tenant_scoped_aggregation(self) -> None:
-        warehouse = JSONDataWarehouse()
+    def test_governed_test_warehouse_executes_tenant_scoped_aggregation(self) -> None:
+        warehouse = build_governed_test_warehouse()
         result = warehouse.query(
             dataset_id="loan_operation_mart",
             tenant_id="tenant_demo",
@@ -688,7 +682,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                 try:
                     response = run_analysis(
                         services,
-                        user_id="u_admin",
+                        user_id="u_super_admin",
                         tenant_id="tenant_demo",
                         question="2026年7月各分行放款金额排名TOP10",
                     )
@@ -735,10 +729,13 @@ class PlatformWorkflowTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             sandbox.render_chart("def build_chart(data, context):\n    return {}", [{}] * (sandbox.max_rows + 1), {})
 
+        with self.assertRaises(ValueError):
+            sandbox.render_chart("def build_chart(data, context):\n    return {'pid': __import__('os').getpid()}", [], {})
+
     def test_diagnostic_question_builds_risk_analysis_plan(self) -> None:
         response = run_analysis(
             self.services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="消费贷和经营贷的逾期率为什么波动",
         )
@@ -768,7 +765,7 @@ class PlatformWorkflowTest(unittest.TestCase):
         with self.assertRaises(PermissionError):
             run_analysis(
                 self.services,
-                user_id="u_admin",
+                user_id="u_no_access",
                 tenant_id="tenant_other",
                 question="本周放款金额是多少",
             )
@@ -779,10 +776,11 @@ class PlatformWorkflowTest(unittest.TestCase):
     def test_sqlite_backed_platform_persists_tasks(self) -> None:
         with TemporaryDirectory() as tmpdir:
             services = build_local_platform(db_path=f"{tmpdir}/platform.sqlite")
+            attach_governed_test_warehouse(services)
             try:
                 response = run_analysis(
                     services,
-                    user_id="u_admin",
+                    user_id="u_super_admin",
                     tenant_id="tenant_demo",
                     question="2026年6月各分行放款金额是多少",
                 )
@@ -807,8 +805,8 @@ class PlatformWorkflowTest(unittest.TestCase):
             custom_role_id = "role:tenant_demo:custom_keep"
             try:
                 repository.seed(
-                    roles=[Role(custom_role_id, "tenant_demo", "自定义保留角色", RoleLevel.OPERATOR, False, created_by="u_admin")],
-                    assignments=[RoleAssignment("u_custom_keep", "tenant_demo", custom_role_id, granted_by="u_admin")],
+                    roles=[Role(custom_role_id, "tenant_demo", "自定义保留角色", RoleLevel.OPERATOR, False, created_by="u_super_admin")],
+                    assignments=[RoleAssignment("u_custom_keep", "tenant_demo", custom_role_id, granted_by="u_super_admin")],
                     policies=[PermissionPolicy(custom_role_id, "tenant_demo", "metric:*", "read", attrs={"tenant_id": "tenant_demo"})],
                 )
                 policy_count_before = repository._conn.execute("SELECT COUNT(*) FROM auth_permission_policies").fetchone()[0]
@@ -867,11 +865,12 @@ class PlatformWorkflowTest(unittest.TestCase):
     def test_local_development_admin_can_execute_analysis_for_operating_tenant(self) -> None:
         with TemporaryDirectory() as tmpdir:
             services = build_local_platform(db_path=f"{tmpdir}/platform.sqlite")
+            attach_governed_test_warehouse(services)
             try:
                 tenant_id = normalize_tenant_id("华兴银行")
                 self.assertTrue(
                     services.permission_broker.enforcer.enforce(
-                        "u_admin",
+                        "u_super_admin",
                         tenant_id,
                         "skill:supersonic.query",
                         "execute",
@@ -879,7 +878,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                 )
                 response = run_analysis(
                     services,
-                    user_id="u_admin",
+                    user_id="u_super_admin",
                     tenant_id=tenant_id,
                 question="2026年7月各分行放款金额排名TOP10",
                     page_context={"analysis_policy": {"resultDelivery": "data_first"}},
@@ -894,18 +893,18 @@ class PlatformWorkflowTest(unittest.TestCase):
             services = build_local_platform(db_path=db_path)
             repository = services.permission_broker.enforcer.repository
             try:
-                self.assertTrue(repository.list_user_assignments("u_admin"))
-                repository.delete_user_assignments("u_admin")
-                self.assertEqual(repository.list_user_assignments("u_admin"), [])
+                self.assertTrue(repository.list_user_assignments("u_super_admin"))
+                repository.delete_user_assignments("u_super_admin")
+                self.assertEqual(repository.list_user_assignments("u_super_admin"), [])
             finally:
                 services.close()
 
             rebuilt = build_local_platform(db_path=db_path)
             rebuilt_repository = rebuilt.permission_broker.enforcer.repository
             try:
-                assignments_after_restart = rebuilt_repository.list_user_assignments("u_admin")
+                assignments_after_restart = rebuilt_repository.list_user_assignments("u_super_admin")
                 can_read_metric = rebuilt.permission_broker.enforcer.enforce(
-                    "u_admin",
+                    "u_super_admin",
                     "tenant_demo",
                     "metric:any",
                     "read",
@@ -920,6 +919,7 @@ class PlatformWorkflowTest(unittest.TestCase):
     def test_http_api_runs_analysis(self) -> None:
         with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            attach_governed_test_warehouse(server.services)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
@@ -937,7 +937,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                     body=body,
                     headers={
                         "Content-Type": "application/json",
-                        "X-User-Id": "u_admin",
+                        "X-User-Id": "u_super_admin",
                         "X-Tenant-Id": "tenant_demo",
                     },
                 )
@@ -967,7 +967,7 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertEqual(health_response.status, 200)
             self.assertEqual(health_payload["runtime"]["ok_count"], 1)
             self.assertEqual(health_payload["semantic_client_mode"], "local")
-            self.assertEqual(health_payload["data_source_mode"], "json_mock_warehouse")
+            self.assertEqual(health_payload["data_source_mode"], "governed_test_warehouse")
             self.assertEqual(routes_response.status, 200)
             self.assertTrue(API_ROUTE_REGISTRY.has_route("POST", "/api/analysis/run"))
             self.assertIn("/api/analysis/run", {route["path"] for route in routes_payload["routes"]})
@@ -1021,21 +1021,21 @@ class PlatformWorkflowTest(unittest.TestCase):
                         "business_sandbox",
                         "run_simulation",
                         payload={"params": {"rateAdjust": 1, "creditLimit": 2, "approvalRate": 3, "pushRate": 4}},
-                        actor_user_id="u_admin",
+                        actor_user_id="u_super_admin",
                     )
                 store.run_action(
                     "tenant_demo",
                     "dashboard",
                     "select_bank",
                     payload={"selectedBank": "杭州分行", "selectedProduct": "consumer"},
-                    actor_user_id="u_admin",
+                    actor_user_id="u_super_admin",
                 )
                 store.run_action(
                     "tenant_demo",
                     "self_analysis",
                     "upload_knowledge_file",
                     payload={"id": "file_quality", "name": "quality.json", "type": "application/json", "size": 321, "lastModified": 123},
-                    actor_user_id="u_admin",
+                    actor_user_id="u_super_admin",
                 )
             finally:
                 store.close()
@@ -1059,7 +1059,7 @@ class PlatformWorkflowTest(unittest.TestCase):
             store = SQLiteApplicationStore(f"{tmpdir}/application.sqlite")
             try:
                 with self.assertRaises(UnsupportedApplicationAction):
-                    store.run_action("tenant_demo", "dashboard", "unknown_success", actor_user_id="u_admin")
+                    store.run_action("tenant_demo", "dashboard", "unknown_success", actor_user_id="u_super_admin")
             finally:
                 store.close()
 
@@ -1197,7 +1197,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                     ).encode("utf-8"),
                     headers={
                         "Content-Type": "application/json",
-                        "X-User-Id": "u_admin",
+                        "X-User-Id": "u_super_admin",
                         "X-Tenant-Id": "tenant_demo",
                     },
                 )
@@ -1208,7 +1208,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                 module_conn.request(
                     "GET",
                     "/api/application/module?module_key=platform_shell",
-                    headers={"X-User-Id": "u_admin", "X-Tenant-Id": "tenant_demo"},
+                    headers={"X-User-Id": "u_super_admin", "X-Tenant-Id": "tenant_demo"},
                 )
                 module_response = module_conn.getresponse()
                 module_payload = json.loads(module_response.read().decode("utf-8"))
@@ -1294,7 +1294,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                     ).encode("utf-8"),
                     headers={
                         "Content-Type": "application/json",
-                        "X-User-Id": "u_admin",
+                        "X-User-Id": "u_reviewer",
                         "X-Tenant-Id": "tenant_demo",
                     },
                 )
@@ -1342,7 +1342,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                     body=json.dumps({"item_type": "topic_table", "item": candidate}).encode("utf-8"),
                     headers={
                         "Content-Type": "application/json",
-                        "X-User-Id": "u_admin",
+                        "X-User-Id": "u_reviewer",
                         "X-Tenant-Id": "tenant_demo",
                     },
                 )
@@ -1364,7 +1364,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                     ).encode("utf-8"),
                     headers={
                         "Content-Type": "application/json",
-                        "X-User-Id": "u_admin",
+                        "X-User-Id": "u_reviewer",
                         "X-Tenant-Id": "tenant_demo",
                     },
                 )
@@ -1419,7 +1419,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                     ).encode("utf-8"),
                     headers={
                         "Content-Type": "application/json",
-                        "X-User-Id": "u_admin",
+                        "X-User-Id": "u_super_admin",
                         "X-Tenant-Id": "tenant_demo",
                     },
                 )
@@ -1433,7 +1433,7 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertEqual(create_response.status, 200)
         self.assertNotEqual(saved["id"], "client_spoofed_id")
         self.assertEqual(saved["lifecycleStatus"], "review")
-        self.assertEqual(saved["submittedBy"], "u_admin")
+        self.assertEqual(saved["submittedBy"], "u_reviewer")
         self.assertEqual(saved["assetVersion"], 1)
         self.assertEqual(saved["reviewedBy"], "")
         self.assertEqual(same_reviewer_response.status, 403)
@@ -1443,6 +1443,49 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertEqual(review_payload["item"]["reviewedBy"], "u_super_admin")
         self.assertEqual(skill_response.status, 200)
         self.assertEqual(skill_payload["item"]["lifecycleStatus"], "active")
+
+    def test_runtime_asset_catalog_keeps_last_published_skill_visible_during_review(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"SMART_DATA_AGENT_AUTH_MODE": "strict", "SMART_DATA_AGENT_AUTH_SECRET": "test-secret"},
+        ):
+            with TemporaryDirectory() as tmpdir:
+                server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+                weekly_skill = server.services.data_asset_store.get_item(
+                    "tenant_demo", "analysis_skill", "scene-weekly-report"
+                )
+                self.assertIsNotNone(weekly_skill)
+                server.services.data_asset_store.upsert_item(
+                    "tenant_demo",
+                    "analysis_skill",
+                    {**weekly_skill, "description": "待审核的新周报分析方案。"},
+                    updated_by="u_super_admin",
+                    lifecycle_status="review",
+                )
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    token = _stateful_test_token(server, "u_super_admin", "tenant_demo")
+                    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+                    connection.request(
+                        "GET",
+                        "/api/data-assets?scope=runtime",
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+                    response = connection.getresponse()
+                    payload = json.loads(response.read().decode("utf-8"))
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
+
+        runtime_weekly = next(
+            item for item in payload["analysis_skills"] if item["id"] == "scene-weekly-report"
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["source_mode"], "runtime_published")
+        self.assertEqual(runtime_weekly["lifecycleStatus"], "active")
+        self.assertNotEqual(runtime_weekly["description"], "待审核的新周报分析方案。")
 
     def test_http_navigation_is_filtered_by_menu_permissions(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -1484,7 +1527,7 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertNotIn("self-analysis.my-reports", payload["menu_keys"])
             self.assertNotIn("settings.users", payload["menu_keys"])
 
-    def test_tenant_admin_navigation_excludes_audit_and_system_config(self) -> None:
+    def test_tenant_admin_navigation_keeps_all_system_management_pages_visible(self) -> None:
         with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1507,8 +1550,8 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertIn("settings.users", payload["menu_keys"])
         self.assertIn("settings.roles", payload["menu_keys"])
-        self.assertNotIn("settings.audit", payload["menu_keys"])
-        self.assertNotIn("settings.config", payload["menu_keys"])
+        self.assertIn("settings.audit", payload["menu_keys"])
+        self.assertIn("settings.config", payload["menu_keys"])
 
     def test_http_access_user_upsert_persists_profile_and_role_assignment(self) -> None:
         tenant_id = normalize_tenant_id("华兴银行")
@@ -1862,18 +1905,19 @@ class PlatformWorkflowTest(unittest.TestCase):
         ):
             with TemporaryDirectory() as tmpdir:
                 server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+                attach_governed_test_warehouse(server.services)
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
                 try:
                     port = server.server_address[1]
-                    token = _stateful_test_token(server, "u_admin", "tenant_demo")
+                    token = _stateful_test_token(server, "u_super_admin", "tenant_demo")
                     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
                     conn.request(
                         "POST",
                         "/api/analysis/run",
                         body=json.dumps(
                             {
-                                "question": "本周放款金额是多少",
+                                "question": "2026年7月放款金额是多少",
                                 "user_id": "attacker",
                                 "tenant_id": normalize_tenant_id("广州银行"),
                             },
@@ -1890,7 +1934,7 @@ class PlatformWorkflowTest(unittest.TestCase):
 
             self.assertEqual(response.status, 200)
             self.assertEqual(payload["tenant_id"], "tenant_demo")
-            self.assertEqual(payload["user_id"], "u_admin")
+            self.assertEqual(payload["user_id"], "u_super_admin")
             self.assertEqual(payload["skill_results"][0]["parameters"]["tenant_id"], "tenant_demo")
 
     def test_http_api_strict_auth_allows_signed_tenant_selection_only(self) -> None:
@@ -2448,7 +2492,7 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertEqual(speech_response.status, 200)
             self.assertEqual(speech_payload["speech_integration"]["id"], "speech_test")
             self.assertEqual(speech_payload["speech_integration"]["apiKey"], "******")
-            self.assertEqual(speech_payload["speech_integration"]["applicationModule"], "realtime_voice_input")
+            self.assertEqual(speech_payload["speech_integration"]["applicationModule"], "global_voice_model")
             self.assertNotIn("workspaceId", speech_payload["speech_integration"])
             self.assertNotIn("region", speech_payload["speech_integration"])
             self.assertNotIn("modelName", speech_payload["speech_integration"])
@@ -2457,7 +2501,7 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertEqual(speech_test_payload["result"]["status"], "mock")
             self.assertIn("api-ws/v1/inference", speech_test_payload["result"]["endpoint"])
             self.assertEqual(get_response.status, 200)
-            self.assertEqual(get_payload["config_scope"], tenant_id)
+            self.assertEqual(get_payload["config_scope"], "account:u_super_admin")
             get_model = next(model for model in get_payload["models"] if model["id"] == "model_test")
             get_speech = next(integration for integration in get_payload["speech_integrations"] if integration["id"] == "speech_test")
             self.assertEqual(get_model["key"], "test_llm_updated")
@@ -2470,7 +2514,7 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertEqual(get_speech["apiKey"], "******")
             self.assertEqual(get_speech["testStatus"], "mock")
             self.assertEqual(get_speech["status"], "available")
-            self.assertEqual(get_speech["applicationModule"], "realtime_voice_input")
+            self.assertEqual(get_speech["applicationModule"], "global_voice_model")
             self.assertNotIn("workspaceId", get_speech)
             self.assertNotIn("region", get_speech)
             self.assertNotIn("modelName", get_speech)
@@ -2482,11 +2526,11 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertIn("system.model.upsert", {log["action"] for log in audit_payload["logs"]})
             self.assertIn("system.speech.upsert", {log["action"] for log in audit_payload["logs"]})
             self.assertEqual(other_response.status, 200)
-            self.assertEqual(other_payload["config_scope"], other_tenant_id)
+            self.assertEqual(other_payload["config_scope"], "account:u_super_admin")
             self.assertIn("model_test", {model["id"] for model in other_payload["models"]})
             other_model = next(model for model in other_payload["models"] if model["id"] == "model_test")
             self.assertEqual(other_model["value"], "******")
-            self.assertNotIn("speech_test", {integration["id"] for integration in other_payload["speech_integrations"]})
+            self.assertIn("speech_test", {integration["id"] for integration in other_payload["speech_integrations"]})
             self.assertEqual(delete_model_response.status, 200)
             self.assertTrue(delete_model_payload["deleted"])
             self.assertEqual(delete_speech_response.status, 200)
@@ -2540,7 +2584,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                 thread.join(timeout=5)
 
         self.assertEqual(response.status, 200)
-        self.assertEqual(payload["config_scope"], other_tenant_id)
+        self.assertEqual(payload["config_scope"], "account:u_super_admin")
         self.assertNotIn("legacy_model_owned_by_account", {model["id"] for model in payload["models"]})
         self.assertNotIn("legacy_speech_owned_by_account", {integration["id"] for integration in payload["speech_integrations"]})
         self.assertNotIn("legacy-secret", json.dumps(payload, ensure_ascii=False))
@@ -2823,9 +2867,10 @@ class PlatformWorkflowTest(unittest.TestCase):
     def test_http_report_analysis_results_are_tenant_scoped(self) -> None:
         with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            attach_governed_test_warehouse(server.services)
             analysis = run_analysis(
                 server.services,
-                user_id="u_admin",
+                user_id="u_super_admin",
                 tenant_id="tenant_demo",
                 question="2026年6月各分行放款金额排名TOP10",
             )
@@ -2842,6 +2887,20 @@ class PlatformWorkflowTest(unittest.TestCase):
                     "visualTypes": {"primary": "bar", "secondary": "table"},
                     "savedAt": "2026-07-05 10:00:00",
                     "analysisTaskId": analysis["task_id"],
+                    "visualizations": [{
+                        "id": "primary",
+                        "key": "primary",
+                        "title": "主分析视图 · 条形图",
+                        "type": "bar",
+                        "config": {
+                            "metricFields": ["amount"],
+                            "dimensionFields": ["branch"],
+                            "filters": {},
+                            "filterGroups": [],
+                            "sumFilteredRows": False,
+                            "comboLineFields": [],
+                        },
+                    }],
                     "rows": [{"branch": "上海分行", "amount": 1200, "completion": "90%", "conversion": "18%"}],
                 }
                 save_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
@@ -2851,7 +2910,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                     body=json.dumps({"result": result}, ensure_ascii=False).encode("utf-8"),
                     headers={
                         "Content-Type": "application/json",
-                        "X-User-Id": "u_admin",
+                        "X-User-Id": "u_super_admin",
                         "X-Tenant-Id": "tenant_demo",
                     },
                 )
@@ -2862,7 +2921,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                 list_conn.request(
                     "GET",
                     "/api/reports/analysis-results",
-                    headers={"X-User-Id": "u_admin", "X-Tenant-Id": "tenant_demo"},
+                    headers={"X-User-Id": "u_super_admin", "X-Tenant-Id": "tenant_demo"},
                 )
                 list_response = list_conn.getresponse()
                 list_payload = json.loads(list_response.read().decode("utf-8"))
@@ -2884,6 +2943,7 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertEqual(list_response.status, 200)
             self.assertEqual(list_payload["count"], 1)
             self.assertEqual(list_payload["results"][0]["summary"], "上海分行贡献较高。")
+            self.assertEqual(list_payload["results"][0]["visualizations"][0]["config"]["metricFields"], ["amount"])
             self.assertEqual(other_response.status, 200)
             self.assertEqual(other_payload["results"], [])
 
@@ -2905,7 +2965,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                         "text": "请补充机构拆解。",
                         "status": "resolved",
                         "resolvedAt": "2026/07/07 19:40",
-                        "resolvedBy": "u_admin",
+                        "resolvedBy": "u_super_admin",
                         "resolvedReason": "manual",
                         "targetKind": "paragraph",
                         "replies": [
@@ -2923,7 +2983,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                     ).encode("utf-8"),
                     headers={
                         "Content-Type": "application/json",
-                        "X-User-Id": "u_admin",
+                        "X-User-Id": "u_super_admin",
                         "X-Tenant-Id": "tenant_demo",
                     },
                 )
@@ -2934,7 +2994,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                 get_conn.request(
                     "GET",
                     "/api/reports/comments?report_id=report_weekly_demo",
-                    headers={"X-User-Id": "u_admin", "X-Tenant-Id": "tenant_demo"},
+                    headers={"X-User-Id": "u_super_admin", "X-Tenant-Id": "tenant_demo"},
                 )
                 get_response = get_conn.getresponse()
                 get_payload = json.loads(get_response.read().decode("utf-8"))
@@ -2943,7 +3003,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                 empty_conn.request(
                     "GET",
                     "/api/reports/comments?report_id=another_report",
-                    headers={"X-User-Id": "u_admin", "X-Tenant-Id": "tenant_demo"},
+                    headers={"X-User-Id": "u_super_admin", "X-Tenant-Id": "tenant_demo"},
                 )
                 empty_response = empty_conn.getresponse()
                 empty_payload = json.loads(empty_response.read().decode("utf-8"))
@@ -2958,7 +3018,7 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertEqual(get_payload["comments"][0]["text"], "请补充机构拆解。")
             self.assertEqual(get_payload["comments"][0]["status"], "resolved")
             self.assertEqual(get_payload["comments"][0]["resolvedAt"], "2026/07/07 19:40")
-            self.assertEqual(get_payload["comments"][0]["resolvedBy"], "u_admin")
+            self.assertEqual(get_payload["comments"][0]["resolvedBy"], "u_super_admin")
             self.assertEqual(get_payload["comments"][0]["resolvedReason"], "manual")
             self.assertEqual(get_payload["comments"][0]["targetKind"], "paragraph")
             self.assertEqual(get_payload["comments"][0]["replies"][0]["text"], "已补充。")
@@ -3063,7 +3123,7 @@ else:
                     SemanticQueryRequest(
                         question="远程语义查询",
                         tenant_id="tenant_demo",
-                        user_id="u_admin",
+                        user_id="u_super_admin",
                         dataset_id="loan_operation_mart",
                         metrics=("loan_amount",),
                         dimensions=("branch_name",),
@@ -3080,12 +3140,15 @@ else:
         self.assertEqual(result.semantic_info["supersonic_client"], "http")
 
     def test_supersonic_client_falls_back_to_local_when_remote_fails(self) -> None:
-        client = FallbackSupersonicClient(BrokenSupersonicClient(), InMemorySupersonicClient())
+        client = FallbackSupersonicClient(
+            BrokenSupersonicClient(),
+            InMemorySupersonicClient(build_governed_test_warehouse()),
+        )
         result = client.query(
             SemanticQueryRequest(
                 question="本周放款金额是多少",
                 tenant_id="tenant_demo",
-                user_id="u_admin",
+                user_id="u_super_admin",
                 dataset_id="loan_operation_mart",
                 metrics=("loan_amount",),
                 dimensions=("branch_name",),
@@ -3100,11 +3163,11 @@ else:
     def test_analysis_runtime_summary_counts_fallback(self) -> None:
         self.services.semantic_service.client = FallbackSupersonicClient(
             BrokenSupersonicClient(),
-            InMemorySupersonicClient(),
+            InMemorySupersonicClient(build_governed_test_warehouse()),
         )
         response = run_analysis(
             self.services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="本周放款金额是多少",
         )
@@ -3115,12 +3178,14 @@ else:
         self.assertEqual(runtime_summary["ok_count"], 1)
 
     def test_remote_semantic_defaults_to_fail_closed_without_local_fallback(self) -> None:
-        with patch.dict(
+        with patch(
+            "backend.platform.bootstrap.build_data_warehouse_from_env",
+            return_value=(build_governed_test_warehouse(), "governed_test_warehouse"),
+        ), patch.dict(
             "os.environ",
             {
                 "SMART_DATA_AGENT_SUPERSONIC_URL": "http://127.0.0.1:9/semantic/query",
                 "SMART_DATA_AGENT_SUPERSONIC_FALLBACK_MODE": "",
-                "SMART_DATA_AGENT_DATA_WAREHOUSE": "json",
             },
         ):
             client, client_mode, fallback_mode, data_source_mode = build_supersonic_client_from_env()
@@ -3131,12 +3196,14 @@ else:
         self.assertEqual(data_source_mode, "remote_semantic")
 
     def test_remote_semantic_uses_local_fallback_only_when_explicit(self) -> None:
-        with patch.dict(
+        with patch(
+            "backend.platform.bootstrap.build_data_warehouse_from_env",
+            return_value=(build_governed_test_warehouse(), "governed_test_warehouse"),
+        ), patch.dict(
             "os.environ",
             {
                 "SMART_DATA_AGENT_SUPERSONIC_URL": "http://127.0.0.1:9/semantic/query",
                 "SMART_DATA_AGENT_SUPERSONIC_FALLBACK_MODE": "local",
-                "SMART_DATA_AGENT_DATA_WAREHOUSE": "json",
             },
         ):
             client, client_mode, fallback_mode, data_source_mode = build_supersonic_client_from_env()
@@ -3144,7 +3211,7 @@ else:
         self.assertIsInstance(client, FallbackSupersonicClient)
         self.assertEqual(client_mode, "http")
         self.assertEqual(fallback_mode, "explicit_local")
-        self.assertIn("explicit_json_mock_warehouse_fallback", data_source_mode)
+        self.assertIn("explicit_governed_test_warehouse_fallback", data_source_mode)
 
     def test_mcp_gateway_sanitizes_results_and_checks_permission(self) -> None:
         gateway = MCPGateway(
@@ -3176,7 +3243,7 @@ else:
             MCPToolCall(
                 server_id="database",
                 tool_name="query",
-                context=ExecutionContext(user_id="u_admin", tenant_id="tenant_demo"),
+                context=ExecutionContext(user_id="u_super_admin", tenant_id="tenant_demo"),
                 arguments=arguments,
                 agent_id="data_query",
                 approval_id=approval_id,
@@ -3195,7 +3262,7 @@ else:
             MCPToolCall(
                 server_id="database",
                 tool_name="schema",
-                context=ExecutionContext(user_id="u_admin", tenant_id="tenant_demo"),
+                context=ExecutionContext(user_id="u_super_admin", tenant_id="tenant_demo"),
                 agent_id="data_query",
                 approval_id=schema_approval_id,
             )
@@ -3204,7 +3271,7 @@ else:
             MCPToolCall(
                 server_id="knowledge",
                 tool_name="ingest",
-                context=ExecutionContext(user_id="u_admin", tenant_id="tenant_demo"),
+                context=ExecutionContext(user_id="u_super_admin", tenant_id="tenant_demo"),
                 agent_id="planner",
                 arguments={
                     "doc_id": "kd_mcp_case",
@@ -3218,7 +3285,7 @@ else:
             MCPToolCall(
                 server_id="knowledge",
                 tool_name="search",
-                context=ExecutionContext(user_id="u_admin", tenant_id="tenant_demo"),
+                context=ExecutionContext(user_id="u_super_admin", tenant_id="tenant_demo"),
                 arguments={"query": "MCP知识"},
                 agent_id="planner",
             )
@@ -3237,7 +3304,7 @@ else:
             MCPToolCall(
                 server_id="knowledge",
                 tool_name="search",
-                context=ExecutionContext(user_id="u_admin", tenant_id="tenant_demo"),
+                context=ExecutionContext(user_id="u_super_admin", tenant_id="tenant_demo"),
                 arguments={"query": "MCP知识"},
                 agent_id="planner",
             )
@@ -3248,6 +3315,7 @@ else:
     def test_http_mcp_api_lists_and_calls_governed_tools(self) -> None:
         with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            attach_governed_test_warehouse(server.services)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
@@ -3263,18 +3331,18 @@ else:
                     "database.query",
                     "execute",
                     approval_input_hash(mcp_arguments),
-                    "u_admin",
+                    "u_super_admin",
                 )
                 server.services.approval_store.review(
                     "tenant_demo", approval["approval_id"], "u_reviewer", "approved"
                 )
                 servers_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                servers_conn.request("GET", "/api/mcp/servers", headers={"X-User-Id": "u_admin", "X-Tenant-Id": "tenant_demo"})
+                servers_conn.request("GET", "/api/mcp/servers", headers={"X-User-Id": "u_super_admin", "X-Tenant-Id": "tenant_demo"})
                 servers_response = servers_conn.getresponse()
                 servers_payload = json.loads(servers_response.read().decode("utf-8"))
 
                 tools_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                tools_conn.request("GET", "/api/mcp/tools", headers={"X-User-Id": "u_admin", "X-Tenant-Id": "tenant_demo"})
+                tools_conn.request("GET", "/api/mcp/tools", headers={"X-User-Id": "u_super_admin", "X-Tenant-Id": "tenant_demo"})
                 tools_response = tools_conn.getresponse()
                 tools_payload = json.loads(tools_response.read().decode("utf-8"))
 
@@ -3294,7 +3362,7 @@ else:
                     ).encode("utf-8"),
                     headers={
                         "Content-Type": "application/json",
-                        "X-User-Id": "u_admin",
+                        "X-User-Id": "u_super_admin",
                         "X-Tenant-Id": "tenant_demo",
                     },
                 )
@@ -3323,7 +3391,7 @@ else:
                 base_headers = {
                     "Content-Type": "application/json",
                     "Accept": "application/json, text/event-stream",
-                    "X-User-Id": "u_admin",
+                    "X-User-Id": "u_super_admin",
                     "X-Tenant-Id": "tenant_demo",
                 }
 

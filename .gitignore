@@ -5,9 +5,12 @@
 
 node_modules/
 dist/
+build/
 tmp/
 test-results/
 .playwright-cli/
+.codex-artifacts/
+.codex-handoff-*/
 .crawler-sessions/
 .crawler-checkpoints/
 ..smart_data_agent_artifacts/
@@ -22,6 +25,7 @@ Origin_Data/智能运营/
 Origin_Data/智能运营源站下载/
 Topic_Data/*
 !Topic_Data/.gitkeep
+runtime/
 
 *.log
 *.sqlite

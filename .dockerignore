@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+.git
 .smart_data_agent.sqlite*
 node_modules
 dist
@@ -13,6 +14,14 @@ test-results
 tmp
 artifacts
 output
+runtime
+Topic_Data
+# Institution business CSVs are delivered through the server host mount and
+# must never be copied into the application image or remote build cache.
+src/app/data/*/
+Origin_Data/*
+!Origin_Data/__init__.py
+!Origin_Data/metric_dictionary_seed.json
 data/acquisition
 data/智能运营
 data/智能运营源站下载

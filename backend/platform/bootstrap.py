@@ -20,12 +20,19 @@ from backend.authz.models import PermissionPolicy, Role, RoleAssignment, RoleLev
 from backend.authz.sqlite_repository import SQLitePolicyRepository
 from backend.platform.access import AccessControlService, InMemoryUserDirectoryStore, PostgreSQLUserDirectoryStore, SQLiteUserDirectoryStore, default_user_profiles
 from backend.platform.agents import AgentCatalog, AgentRuntime
+from backend.platform.analysis_workspace import (
+    AnalysisWorkspaceService,
+    InMemoryAnalysisGovernanceStore,
+    InMemoryAnalysisWorkspaceStore,
+    MySQLAnalysisGovernanceStore,
+    MySQLAnalysisWorkspaceStore,
+)
 from backend.platform.application import InMemoryApplicationStore, PostgreSQLApplicationStore, SQLiteApplicationStore
 from backend.platform.assets import InMemoryDataAssetStore, PostgreSQLDataAssetStore, SQLiteDataAssetStore
 from backend.platform.audit import InMemoryAuditEventStore, PostgreSQLAuditEventStore, SQLiteAuditEventStore
 from backend.platform.automation import AutomationRuntime, InMemoryAutomationStore, PostgreSQLAutomationStore, SQLiteAutomationStore
 from backend.platform.data_access import build_data_warehouse_from_env
-from backend.platform.database import apply_migrations
+from backend.platform.database import MySQLConnectionPool, MySQLStoreConnectionPool, apply_migrations, apply_mysql_schema
 from backend.platform.database.postgresql import PostgreSQLConnectionPool, apply_postgresql_schema
 from backend.platform.governance import (
     InMemoryCapabilityApprovalStore,
@@ -45,12 +52,25 @@ from backend.platform.ingestion import (
     TopicDataBatchService,
 )
 from backend.platform.ingestion.topic_metadata import CSVTopicMetadataService
+from backend.platform.interaction_events import InMemoryInteractionEventStore, MySQLInteractionEventStore
+from backend.platform.integrations.bridge_auth import InMemoryBridgeAuthStore, SQLiteBridgeAuthStore
+from backend.platform.integrations.bridge_auth_postgresql import PostgreSQLBridgeAuthStore
 from backend.platform.knowledge import InMemoryKnowledgeStore, KnowledgeDocument, KnowledgeService, PostgreSQLKnowledgeStore, SQLiteKnowledgeStore
 from backend.platform.learning import SkillLearningService
 from backend.platform.lineage import InMemoryLineageStore, PostgreSQLLineageStore, SQLiteLineageStore
 from backend.platform.market import InMemoryMarketStore, MarketMonitoringService, PostgreSQLMarketStore, SQLiteMarketStore
+from backend.platform.message_board import InMemoryMessageBoardStore, MessageBoardService, MySQLMessageBoardStore, SQLiteMessageBoardStore
 from backend.platform.memory import InMemoryMemoryStore, MemoryService, PostgreSQLMemoryStore, SQLiteMemoryStore
-from backend.platform.metrics import InMemoryMetricDictionaryStore, MetricSemanticCatalog, PostgreSQLMetricDictionaryStore, SQLiteMetricDictionaryStore
+from backend.platform.non_structured import ShardedJSONStore
+from backend.platform.metrics import (
+    InMemoryMetricDictionaryStore,
+    InMemoryMetricVersionStore,
+    MetricSemanticCatalog,
+    MetricVersionService,
+    MySQLMetricVersionStore,
+    PostgreSQLMetricDictionaryStore,
+    SQLiteMetricDictionaryStore,
+)
 from backend.platform.metrics.defaults import load_default_metric_dictionary
 from backend.platform.mcp import MCPGateway, register_local_mcp_handlers
 from backend.platform.observability import TraceRecorder
@@ -87,13 +107,18 @@ from backend.platform.skills import SkillConfigCatalog, SkillExecutor, SkillRegi
 from backend.platform.skills.builtin import build_data_product_skills, build_supersonic_query_skill
 
 
-LOCAL_ANALYSIS_USER_ID = "u_admin"
+# The local development fallback must use the same human account as the
+# product's sole global super administrator.  A synthetic admin identity made
+# model selection and authorization diverge after a page refresh.
+LOCAL_ANALYSIS_USER_ID = SUPER_ADMIN_USER_ID
 LEGACY_TENANT_ID = "tenant_demo"
 LEGACY_TENANT_ADMIN_ROLE_ID = "tenant_admin"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_RBAC_EXTENSION_MENU_OBJECTS = frozenset({
     "menu:self-analysis.analysis-config",
     "menu:data-assets.tools",
+    "menu:settings.audit",
+    "menu:settings.config",
     "skill:data.analysis.profile",
     "skill:data.governance.assess",
     "skill:conclusion.generate",
@@ -120,12 +145,15 @@ class PlatformServices:
     trace_recorder: TraceRecorder
     permission_broker: PermissionBroker
     approval_store: InMemoryCapabilityApprovalStore | SQLiteCapabilityApprovalStore
+    bridge_auth_store: InMemoryBridgeAuthStore | SQLiteBridgeAuthStore | PostgreSQLBridgeAuthStore
     mcp_gateway: MCPGateway
     skill_registry: SkillRegistry
     skill_executor: SkillExecutor
     agent_runtime: AgentRuntime
     knowledge_store: InMemoryKnowledgeStore | SQLiteKnowledgeStore
     knowledge_service: KnowledgeService
+    message_board_store: InMemoryMessageBoardStore | SQLiteMessageBoardStore | MySQLMessageBoardStore
+    message_board_service: MessageBoardService
     data_asset_store: InMemoryDataAssetStore | SQLiteDataAssetStore
     data_acquisition_store: InMemoryAcquisitionStore | SQLiteAcquisitionStore
     data_acquisition_service: DataAcquisitionService
@@ -142,6 +170,7 @@ class PlatformServices:
     memory_service: MemoryService
     learning_service: SkillLearningService
     metric_dictionary_store: InMemoryMetricDictionaryStore | SQLiteMetricDictionaryStore
+    metric_version_service: MetricVersionService
     lineage_store: InMemoryLineageStore | SQLiteLineageStore
     system_config_store: InMemorySystemConfigStore | SQLiteSystemConfigStore
     report_store: InMemoryReportStore | SQLiteReportStore
@@ -149,6 +178,7 @@ class PlatformServices:
     daily_email_service: DailyEmailReportService
     operating_snapshot_service: OperatingSnapshotService
     audit_store: InMemoryAuditEventStore | SQLiteAuditEventStore
+    interaction_event_store: InMemoryInteractionEventStore | MySQLInteractionEventStore
     access_service: AccessControlService
     session_store: InMemorySessionStore | SQLiteSessionStore
     oidc_client: OIDCClient
@@ -160,15 +190,20 @@ class PlatformServices:
     semantic_routing_mode: str
     semantic_fallback_mode: str
     data_source_mode: str
-    primary_database_pool: PostgreSQLConnectionPool | None = None
+    analysis_workspace_service: AnalysisWorkspaceService
+    analysis_governance_store: InMemoryAnalysisGovernanceStore | MySQLAnalysisGovernanceStore
+    non_structured_store: ShardedJSONStore
+    primary_database_pool: PostgreSQLConnectionPool | MySQLConnectionPool | MySQLStoreConnectionPool | None = None
 
     def close(self) -> None:
         policy_repository = self.permission_broker.enforcer.repository
         for resource in (
             policy_repository,
             self.approval_store,
+            self.bridge_auth_store,
             self.task_repository,
             self.knowledge_store,
+            self.message_board_store,
             self.data_asset_store,
             self.data_acquisition_store,
             self.data_acquisition_service,
@@ -201,9 +236,17 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
     if runtime_config.is_production:
         raise RuntimeConfigurationError(
             "The embedded SQLite/local platform adapter is forbidden in production. "
-            "Start the PostgreSQL production runtime instead of build_local_platform()."
+            "Start the MySQL production runtime instead of build_local_platform()."
         )
     rate_limiter = build_rate_limiter(runtime_config.environment)
+    mysql_pool: MySQLConnectionPool | None = None
+    if runtime_config.database_url:
+        min_size = max(1, min(int(os.getenv("SMART_DATA_AGENT_DB_POOL_MIN", "2")), 20))
+        max_size = max(min_size, min(int(os.getenv("SMART_DATA_AGENT_DB_POOL_MAX", "20")), 100))
+        mysql_pool = MySQLConnectionPool(runtime_config.database_url, min_size=min_size, max_size=max_size)
+        if os.getenv("SMART_DATA_AGENT_AUTO_MIGRATE", "true").strip().lower() not in {"0", "false", "no"}:
+            with mysql_pool.connection() as connection:
+                apply_mysql_schema(runtime_config.database_url, connection=connection)
     roles, assignments, policies, manageable_roles = build_local_authz_seed()
     knowledge_documents = [
         KnowledgeDocument(
@@ -239,6 +282,8 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         session_store = InMemorySessionStore()
         oidc_transaction_store = InMemoryOIDCTransactionStore()
         approval_store = InMemoryCapabilityApprovalStore()
+        bridge_auth_store = InMemoryBridgeAuthStore()
+        message_board_store = InMemoryMessageBoardStore()
     else:
         apply_migrations(db_path)
         policy_repository = SQLitePolicyRepository(db_path, initialize=False)
@@ -272,6 +317,8 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         session_store = SQLiteSessionStore(db_path)
         oidc_transaction_store = SQLiteOIDCTransactionStore(db_path)
         approval_store = SQLiteCapabilityApprovalStore(db_path)
+        bridge_auth_store = SQLiteBridgeAuthStore(db_path)
+        message_board_store = SQLiteMessageBoardStore(db_path, initialize=False)
     enforcer = AuthEnforcer(policy_repository)
     trace_recorder = TraceRecorder()
     permission_broker = PermissionBroker(enforcer)
@@ -308,6 +355,7 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         artifact_object_store,
         runtime_config.environment,
     )
+    message_board_service = MessageBoardService(message_board_store, knowledge_store, user_directory_store)
     memory_service = MemoryService(memory_store)
     market_service = MarketMonitoringService(market_store)
     automation_runtime = AutomationRuntime(
@@ -335,6 +383,7 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         _seed_system_integrations_if_empty(system_config_store)
     if runtime_config.environment in {"development", "test"}:
         _seed_system_integrations_if_empty(system_config_store)
+    _seed_account_default_models(system_config_store, user_directory_store)
     if runtime_config.environment in {"development", "test"} and db_path is not None:
         for tenant_id in [normalize_tenant_id(tenant) for tenant in OPERATING_TENANTS] + [LEGACY_TENANT_ID]:
             bundle = data_asset_store.list_bundle(tenant_id)
@@ -342,6 +391,9 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
                 data_asset_store.seed_defaults(tenant_id)
             else:
                 data_asset_store.seed_missing_defaults(tenant_id)
+            purge_retired_samples = getattr(data_asset_store, "purge_retired_sample_assets", None)
+            if callable(purge_retired_samples):
+                purge_retired_samples(tenant_id)
             _ensure_topic_data_batch_task(automation_runtime, tenant_id, SUPER_ADMIN_USER_ID)
     base_supersonic_client, semantic_client_mode, semantic_fallback_mode, data_source_mode = build_supersonic_client_from_env()
     # Smart Data Agent is a CSV-only consumer.  Semantic execution is backed
@@ -362,7 +414,10 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
     skill_registry = SkillRegistry()
     for configured_skill in skill_config_catalog.list():
         skill_registry.declare(configured_skill)
-    supersonic_spec, supersonic_handler = build_supersonic_query_skill(semantic_service)
+    supersonic_spec, supersonic_handler = build_supersonic_query_skill(
+        semantic_service,
+        data_acquisition_service.csv_source,
+    )
     skill_registry.register(supersonic_spec, supersonic_handler)
     for data_product_spec, data_product_handler in build_data_product_skills():
         skill_registry.register(data_product_spec, data_product_handler)
@@ -394,6 +449,25 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         ),
     )
 
+    analysis_workspace_service = AnalysisWorkspaceService(
+        MySQLAnalysisWorkspaceStore(mysql_pool) if mysql_pool is not None else InMemoryAnalysisWorkspaceStore()
+    )
+    analysis_governance_store = (
+        MySQLAnalysisGovernanceStore(mysql_pool) if mysql_pool is not None else InMemoryAnalysisGovernanceStore()
+    )
+    metric_version_service = MetricVersionService(
+        MySQLMetricVersionStore(mysql_pool) if mysql_pool is not None else InMemoryMetricVersionStore()
+    )
+    non_structured_store = ShardedJSONStore(
+        os.getenv(
+            "SMART_DATA_AGENT_NON_STRUCTURED_ROOT",
+            str(PROJECT_ROOT / "runtime" / "non_structured"),
+        ),
+        max_shard_bytes=int(os.getenv("SMART_DATA_AGENT_JSON_SHARD_MAX_BYTES", str(8 * 1024 * 1024))),
+        max_documents=int(os.getenv("SMART_DATA_AGENT_JSON_SHARD_MAX_DOCUMENTS", "1000")),
+    )
+    interaction_event_store = MySQLInteractionEventStore(mysql_pool) if mysql_pool is not None else InMemoryInteractionEventStore()
+
     services = PlatformServices(
         runtime_config=runtime_config,
         agent_catalog=agent_catalog,
@@ -401,12 +475,15 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         trace_recorder=trace_recorder,
         permission_broker=permission_broker,
         approval_store=approval_store,
+        bridge_auth_store=bridge_auth_store,
         mcp_gateway=mcp_gateway,
         skill_registry=skill_registry,
         skill_executor=skill_executor,
         agent_runtime=agent_runtime,
         knowledge_store=knowledge_store,
         knowledge_service=knowledge_service,
+        message_board_store=message_board_store,
+        message_board_service=message_board_service,
         data_asset_store=data_asset_store,
         data_acquisition_store=data_acquisition_store,
         data_acquisition_service=data_acquisition_service,
@@ -423,6 +500,7 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         memory_service=memory_service,
         learning_service=learning_service,
         metric_dictionary_store=metric_dictionary_store,
+        metric_version_service=metric_version_service,
         lineage_store=lineage_store,
         system_config_store=system_config_store,
         report_store=report_store,
@@ -430,6 +508,7 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         daily_email_service=daily_email_service,
         operating_snapshot_service=operating_snapshot_service,
         audit_store=audit_store,
+        interaction_event_store=interaction_event_store,
         access_service=access_service,
         session_store=session_store,
         oidc_client=oidc_client,
@@ -441,6 +520,10 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         semantic_routing_mode=semantic_routing_mode,
         semantic_fallback_mode=semantic_fallback_mode,
         data_source_mode=data_source_mode,
+        analysis_workspace_service=analysis_workspace_service,
+        analysis_governance_store=analysis_governance_store,
+        non_structured_store=non_structured_store,
+        primary_database_pool=mysql_pool,
     )
     automation_runtime.platform_services = services
     if runtime_config.environment in {"development", "test"} and db_path is not None:
@@ -450,20 +533,29 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
 
 
 def build_production_platform(runtime_config: RuntimeConfig | None = None) -> PlatformServices:
-    """Build the PostgreSQL-primary runtime without implicit tenants, users or demo data."""
+    """Build a persistent runtime on the sole supported MySQL primary."""
 
     runtime_config = runtime_config or load_runtime_config()
-    if runtime_config.environment not in {"staging", "production"}:
-        raise RuntimeConfigurationError("PostgreSQL production runtime requires staging or production environment")
+    if runtime_config.environment == "test":
+        raise RuntimeConfigurationError("Test runtimes must opt into an isolated adapter explicitly")
     if not runtime_config.database_url:
         raise RuntimeConfigurationError("SMART_DATA_AGENT_DATABASE_URL is required")
+    if not runtime_config.database_url.lower().startswith(("mysql://", "mysql+pymysql://")):
+        raise RuntimeConfigurationError("SMART_DATA_AGENT_DATABASE_URL must point to MySQL")
+    return _build_mysql_production_platform(runtime_config)
+
+
+def _build_mysql_production_platform(runtime_config: RuntimeConfig) -> PlatformServices:
+    """Compose existing domain Stores over the verified MySQL DB-API adapter."""
+
     min_size = max(1, min(int(os.getenv("SMART_DATA_AGENT_DB_POOL_MIN", "2")), 20))
     max_size = max(min_size, min(int(os.getenv("SMART_DATA_AGENT_DB_POOL_MAX", "20")), 100))
-    pool = PostgreSQLConnectionPool(runtime_config.database_url, min_size=min_size, max_size=max_size)
+    raw_pool = MySQLConnectionPool(runtime_config.database_url, min_size=min_size, max_size=max_size)
+    pool = MySQLStoreConnectionPool(raw_pool)
     try:
         if os.getenv("SMART_DATA_AGENT_AUTO_MIGRATE", "true").strip().lower() not in {"0", "false", "no"}:
-            with pool.connection() as connection:
-                apply_postgresql_schema(runtime_config.database_url, connection=connection)
+            with raw_pool.connection() as connection:
+                apply_mysql_schema(runtime_config.database_url, connection=connection)
 
         policy_repository = PostgreSQLPolicyRepository(pool)
         task_repository: AnalysisTaskRepository = PostgreSQLAnalysisTaskRepository(pool)
@@ -483,6 +575,9 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
         session_store = PostgreSQLSessionStore(pool)
         oidc_transaction_store = PostgreSQLOIDCTransactionStore(pool)
         approval_store = PostgreSQLCapabilityApprovalStore(pool)
+        bridge_auth_store = PostgreSQLBridgeAuthStore(pool)
+        message_board_store = MySQLMessageBoardStore(raw_pool)
+        _seed_account_default_models(system_config_store, user_directory_store)
 
         rate_limiter = build_rate_limiter(runtime_config.environment)
         enforcer = AuthEnforcer(policy_repository)
@@ -497,7 +592,8 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
         )
         access_service = AccessControlService(user_directory_store, policy_repository, permission_broker)
         oidc_client = OIDCClient(oidc_transaction_store)
-        oidc_client.validate_config()
+        if runtime_config.auth_mode == "strict":
+            oidc_client.validate_config()
         artifact_object_store = _build_artifact_object_store(runtime_config, None)
         data_acquisition_service = DataAcquisitionService(
             data_acquisition_store,
@@ -520,6 +616,7 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
             artifact_object_store,
             runtime_config.environment,
         )
+        message_board_service = MessageBoardService(message_board_store, knowledge_store, user_directory_store)
         memory_service = MemoryService(memory_store)
         market_service = MarketMonitoringService(market_store)
         automation_runtime = AutomationRuntime(
@@ -561,7 +658,10 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
         skill_registry = SkillRegistry()
         for configured_skill in skill_config_catalog.list():
             skill_registry.declare(configured_skill)
-        supersonic_spec, supersonic_handler = build_supersonic_query_skill(semantic_service)
+        supersonic_spec, supersonic_handler = build_supersonic_query_skill(
+            semantic_service,
+            data_acquisition_service.csv_source,
+        )
         skill_registry.register(supersonic_spec, supersonic_handler)
         for data_product_spec, data_product_handler in build_data_product_skills():
             skill_registry.register(data_product_spec, data_product_handler)
@@ -591,6 +691,18 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
                 metric_dictionary_store,
             ),
         )
+        analysis_workspace_service = AnalysisWorkspaceService(MySQLAnalysisWorkspaceStore(raw_pool))
+        analysis_governance_store = MySQLAnalysisGovernanceStore(raw_pool)
+        metric_version_service = MetricVersionService(MySQLMetricVersionStore(raw_pool))
+        interaction_event_store = MySQLInteractionEventStore(raw_pool)
+        non_structured_store = ShardedJSONStore(
+            os.getenv(
+                "SMART_DATA_AGENT_NON_STRUCTURED_ROOT",
+                str(PROJECT_ROOT / "runtime" / "non_structured"),
+            ),
+            max_shard_bytes=int(os.getenv("SMART_DATA_AGENT_JSON_SHARD_MAX_BYTES", str(8 * 1024 * 1024))),
+            max_documents=int(os.getenv("SMART_DATA_AGENT_JSON_SHARD_MAX_DOCUMENTS", "1000")),
+        )
         services = PlatformServices(
             runtime_config=runtime_config,
             agent_catalog=agent_catalog,
@@ -598,12 +710,15 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
             trace_recorder=trace_recorder,
             permission_broker=permission_broker,
             approval_store=approval_store,
+            bridge_auth_store=bridge_auth_store,
             mcp_gateway=mcp_gateway,
             skill_registry=skill_registry,
             skill_executor=skill_executor,
             agent_runtime=agent_runtime,
             knowledge_store=knowledge_store,
             knowledge_service=knowledge_service,
+            message_board_store=message_board_store,
+            message_board_service=message_board_service,
             data_asset_store=data_asset_store,
             data_acquisition_store=data_acquisition_store,
             data_acquisition_service=data_acquisition_service,
@@ -620,6 +735,7 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
             memory_service=memory_service,
             learning_service=learning_service,
             metric_dictionary_store=metric_dictionary_store,
+            metric_version_service=metric_version_service,
             lineage_store=lineage_store,
             system_config_store=system_config_store,
             report_store=report_store,
@@ -627,6 +743,7 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
             daily_email_service=daily_email_service,
             operating_snapshot_service=operating_snapshot_service,
             audit_store=audit_store,
+            interaction_event_store=interaction_event_store,
             access_service=access_service,
             session_store=session_store,
             oidc_client=oidc_client,
@@ -638,6 +755,9 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
             semantic_routing_mode=semantic_routing_mode,
             semantic_fallback_mode=semantic_fallback_mode,
             data_source_mode=data_source_mode,
+            analysis_workspace_service=analysis_workspace_service,
+            analysis_governance_store=analysis_governance_store,
+            non_structured_store=non_structured_store,
             primary_database_pool=pool,
         )
         automation_runtime.platform_services = services
@@ -667,7 +787,10 @@ def _build_artifact_object_store(runtime_config: RuntimeConfig, db_path: str | P
     if db_path is not None:
         database_path = Path(db_path).resolve()
         return LocalArtifactObjectStore(database_path.parent / f".{database_path.stem}_artifacts")
-    return LocalArtifactObjectStore()
+    # A MySQL-backed development runtime must keep attachment bytes across API
+    # restarts just like its structured metadata. Production still requires the
+    # configured S3/OSS adapter above.
+    return LocalArtifactObjectStore(PROJECT_ROOT / "runtime" / "artifacts")
 
 
 def _register_automation_handlers(

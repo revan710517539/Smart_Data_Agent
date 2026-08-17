@@ -2,7 +2,7 @@
 
 - 领域：Agent与模型
 - 用途：版本化 Prompt 模板及发布状态。
-- 生产数据库：PostgreSQL
+- 结构化运行主库：MySQL 8.x
 
 ## 字段结构
 

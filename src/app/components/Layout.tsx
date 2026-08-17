@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import {
   BarChart3,
+  FileChartColumn,
   Gauge,
   Search,
   BrainCircuit,
@@ -21,8 +22,11 @@ import {
 import { usePlatformContext } from "../platform/PlatformContext";
 import { runApplicationAction } from "../services/applicationApi";
 import { fetchNavigation } from "../services/navigationApi";
-import { preloadRoutePath } from "../routePreload";
+import { preloadRoutePath, warmVisibleRoutePaths } from "../routePreload";
+import { preloadRouteDataPath } from "../routeDataPreload";
 import { AgentSupervisor } from "./agent-supervisor/AgentSupervisor";
+import { contextRailWideEvent } from "./context-rail/ContextSideRail";
+import { GlobalContextRail } from "./context-rail/GlobalContextRail";
 import { fetchSystemConfig } from "../services/systemConfigApi";
 import {
   configuredTextModelOptions,
@@ -30,6 +34,7 @@ import {
   readPersistedTextModelSelection,
   type TextModelOption,
 } from "../services/modelSelectionStore";
+import { trackInteraction } from "../services/interactionTelemetry";
 
 type MenuItem = {
   key: string;
@@ -40,7 +45,7 @@ type MenuItem = {
 };
 
 const menuItems: MenuItem[] = [
-  { key: "dashboard", path: "/", label: "多机构分析", icon: Gauge },
+  { key: "dashboard", path: "/dashboard", label: "多机构分析", icon: Gauge },
   {
     key: "business-analysis",
     label: "经营分析",
@@ -50,14 +55,16 @@ const menuItems: MenuItem[] = [
       { key: "business-analysis.supervision", path: "/supervision", label: "机构督导" },
     ],
   },
+  { key: "self-analysis.my-reports", path: "/self-analysis/reports", label: "我的报表", icon: FileChartColumn },
   {
     key: "self-analysis",
     label: "自助分析",
     icon: Search,
     children: [
+      { key: "self-analysis.visual-reports", path: "/self-analysis/visual-reports", label: "可视化报表" },
       { key: "self-analysis.smart-analysis", path: "/self-analysis/query", label: "智能分析" },
-      { key: "self-analysis.my-reports", path: "/self-analysis/reports", label: "我的报告" },
       { key: "self-analysis.analysis-config", path: "/self-analysis/config", label: "分析配置" },
+      { key: "task-workbench.skills", path: "/agent/skills", label: "Skill插件" },
     ],
   },
   {
@@ -67,7 +74,7 @@ const menuItems: MenuItem[] = [
     children: [
       { key: "task-workbench.todos", path: "/agent/todos", label: "待办任务" },
       { key: "task-workbench.tasks", path: "/agent/tasks", label: "自动化任务" },
-      { key: "task-workbench.skills", path: "/agent/skills", label: "Skill插件" },
+      { key: "task-workbench.message-board", path: "/agent/message-board", label: "留言板管理" },
     ],
   },
   {
@@ -121,6 +128,9 @@ export function Layout() {
   } = usePlatformContext();
   const [expandedMenus, setExpandedMenus] = useState<string[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const sidebarCollapsedRef = useRef(false);
+  const sidebarCollapsedBeforeWideRef = useRef(false);
+  const contextRailWideRef = useRef(false);
   const [sidebarEdgeVisible, setSidebarEdgeVisible] = useState(false);
   const [allowedMenuKeys, setAllowedMenuKeys] = useState<Set<string> | null>(new Set());
   const [navigationStatus, setNavigationStatus] = useState<"loading" | "ready" | "failed">("loading");
@@ -130,6 +140,11 @@ export function Layout() {
   const [selectedTextModelId, setSelectedTextModelId] = useState("");
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      setAllowedMenuKeys(new Set());
+      setNavigationStatus("loading");
+      return;
+    }
     let cancelled = false;
     const loadNavigation = async () => {
       setNavigationStatus("loading");
@@ -151,7 +166,26 @@ export function Layout() {
     return () => {
       cancelled = true;
     };
-  }, [tenantId, userId]);
+  }, [isAuthenticated, tenantId, userId]);
+
+  useEffect(() => {
+    sidebarCollapsedRef.current = sidebarCollapsed;
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    const handleWideRail = (event: Event) => {
+      const wide = Boolean((event as CustomEvent<{ wide?: boolean }>).detail?.wide);
+      if (wide && !contextRailWideRef.current) {
+        sidebarCollapsedBeforeWideRef.current = sidebarCollapsedRef.current;
+        setSidebarCollapsed(true);
+      } else if (!wide && contextRailWideRef.current) {
+        setSidebarCollapsed(sidebarCollapsedBeforeWideRef.current);
+      }
+      contextRailWideRef.current = wide;
+    };
+    window.addEventListener(contextRailWideEvent, handleWideRail);
+    return () => window.removeEventListener(contextRailWideEvent, handleWideRail);
+  }, []);
 
   const visibleMenuItems = useMemo(
     () => filterMenuItems(menuItems, allowedMenuKeys),
@@ -163,7 +197,26 @@ export function Layout() {
   const isSmartAnalysisPage = location.pathname === "/self-analysis/query";
 
   useEffect(() => {
-    if (isSmartAnalysisPage) return;
+    if (!isAuthenticated || navigationStatus !== "ready") return;
+    const visiblePaths = visibleMenuItems.flatMap((item) => [
+      ...(item.path ? [item.path] : []),
+      ...(item.children?.flatMap((child) => child.path ? [child.path] : []) || []),
+    ]);
+    return warmVisibleRoutePaths(visiblePaths, location.pathname);
+  }, [isAuthenticated, location.pathname, navigationStatus, visibleMenuItems]);
+
+  useEffect(() => {
+    const parent = menuItems.find((item) => item.children?.some((child) => child.path === location.pathname));
+    if (!parent) return;
+    setExpandedMenus((current) => current.includes(parent.label) ? current : [...current, parent.label]);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!isAuthenticated || isSmartAnalysisPage) {
+      setTextModelOptions([]);
+      setSelectedTextModelId("");
+      return;
+    }
     let cancelled = false;
     const syncTextModels = async () => {
       try {
@@ -189,13 +242,18 @@ export function Layout() {
     return () => {
       cancelled = true;
     };
-  }, [isSmartAnalysisPage, tenantId, userId]);
+  }, [isAuthenticated, isSmartAnalysisPage, tenantId, userId]);
 
   useEffect(() => {
     if (!isTodoPage) {
       setTodoReturnPath(`${location.pathname}${location.search}${location.hash}` || "/");
     }
   }, [isTodoPage, location.hash, location.pathname, location.search]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    trackInteraction({ eventName: "page_view", eventType: "view", pagePath: location.pathname, pageName: currentMenuKey || location.pathname });
+  }, [currentMenuKey, isAuthenticated, location.pathname]);
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
@@ -219,6 +277,7 @@ export function Layout() {
     runApplicationAction({ tenantId, userId, moduleKey: "platform_shell", action, payload });
 
   const handleTodoShortcut = () => {
+    trackInteraction({ eventName: "sidebar_todo_click", resourceType: "sidebar", resourceId: "todo" });
     navigate(isTodoPage ? todoReturnPath || "/" : "/agent/todos");
   };
 
@@ -235,7 +294,7 @@ export function Layout() {
         >
           <button
             type="button"
-            onClick={() => setSidebarCollapsed(false)}
+            onClick={() => { trackInteraction({ eventName: "sidebar_expand_click", resourceType: "sidebar" }); setSidebarCollapsed(false); }}
             aria-label="展开左侧菜单"
             title="展开菜单"
             data-agent-sidebar-expand="true"
@@ -278,13 +337,13 @@ export function Layout() {
               >
                 <ListChecks className="h-3.5 w-3.5" />
               </button>
-              <button type="button" onClick={() => setSidebarCollapsed(true)} aria-label="收起左侧菜单" title="收起菜单" data-agent-sidebar-collapse="true" className="flex h-[26px] w-[26px] items-center justify-center rounded-md border border-[#e5e5ea] bg-[#fafbfc] text-[#8a8a8e] transition-colors hover:bg-[#f2f2f7] hover:text-[#1d1d1f]"><PanelLeftClose className="h-3.5 w-3.5" /></button>
+              <button type="button" onClick={() => { trackInteraction({ eventName: "sidebar_collapse_click", resourceType: "sidebar" }); setSidebarCollapsed(true); }} aria-label="收起左侧菜单" title="收起菜单" data-agent-sidebar-collapse="true" className="flex h-[26px] w-[26px] items-center justify-center rounded-md border border-[#e5e5ea] bg-[#fafbfc] text-[#8a8a8e] transition-colors hover:bg-[#f2f2f7] hover:text-[#1d1d1f]"><PanelLeftClose className="h-3.5 w-3.5" /></button>
             </div>
           </div>
           <div className="relative mt-3">
             <button
               type="button"
-              onClick={() => setInstitutionOpen((open) => !open)}
+              onClick={() => { trackInteraction({ eventName: "institution_selector_click", resourceType: "institution", resourceId: selectedInstitution }); setInstitutionOpen((open) => !open); }}
               className="flex h-8 w-full items-center gap-2 rounded-lg border border-[#e5e5ea] bg-white px-2.5 text-[12px] text-[#3a3a3c] transition-colors hover:bg-[#f2f2f7]"
               aria-expanded={institutionOpen}
             >
@@ -300,6 +359,7 @@ export function Layout() {
                     type="button"
                     onClick={() => {
                       setSelectedInstitution(institution);
+                      trackInteraction({ eventName: "institution_select", resourceType: "institution", resourceId: institution, extension: { institution } });
                       setInstitutionOpen(false);
                       void runShellAction("select_institution", { selectedInstitution: institution });
                     }}
@@ -326,7 +386,7 @@ export function Layout() {
               return (
                 <div key={item.label} className="mb-px">
                   <button
-                    onClick={() => toggleMenu(item.label)}
+                    onClick={() => { trackInteraction({ eventName: "primary_menu_click", resourceType: "menu", resourceId: item.key, extension: { label: item.label } }); toggleMenu(item.label); }}
                     className="w-full flex items-center gap-2 px-2.5 py-[7px] text-[#8a8a8e] hover:text-[#3a3a3c] rounded-md hover:bg-black/[0.03] transition-colors text-[13px]"
                   >
                     <item.icon className="w-[15px] h-[15px] opacity-60" />
@@ -341,8 +401,19 @@ export function Layout() {
                         <NavLink
                           key={child.path}
                           to={child.path}
-                          onMouseEnter={() => preloadRoutePath(child.path || "")}
-                          onFocus={() => preloadRoutePath(child.path || "")}
+                          onMouseEnter={() => {
+                            preloadRoutePath(child.path || "");
+                            preloadRouteDataPath(child.path || "", { tenantId, userId });
+                          }}
+                          onFocus={() => {
+                            preloadRoutePath(child.path || "");
+                            preloadRouteDataPath(child.path || "", { tenantId, userId });
+                          }}
+                          onPointerDown={() => {
+                            preloadRoutePath(child.path || "");
+                            preloadRouteDataPath(child.path || "", { tenantId, userId });
+                          }}
+                          onClick={() => trackInteraction({ eventName: "secondary_menu_click", resourceType: "menu", resourceId: child.key, extension: { label: child.label } })}
                           className={({ isActive }) =>
                             `flex items-center px-2.5 py-[6px] text-[13px] rounded-md transition-colors ${
                               isActive
@@ -363,6 +434,19 @@ export function Layout() {
               <NavLink
                 key={item.path}
                 to={item.path!}
+                onMouseEnter={() => {
+                  preloadRoutePath(item.path || "");
+                  preloadRouteDataPath(item.path || "", { tenantId, userId });
+                }}
+                onFocus={() => {
+                  preloadRoutePath(item.path || "");
+                  preloadRouteDataPath(item.path || "", { tenantId, userId });
+                }}
+                onPointerDown={() => {
+                  preloadRoutePath(item.path || "");
+                  preloadRouteDataPath(item.path || "", { tenantId, userId });
+                }}
+                onClick={() => trackInteraction({ eventName: "primary_menu_click", resourceType: "menu", resourceId: item.key, extension: { label: item.label } })}
                 className={({ isActive }) =>
                   `flex items-center gap-2 px-2.5 py-[7px] text-[13px] rounded-md transition-colors mb-px ${
                     isActive
@@ -392,6 +476,7 @@ export function Layout() {
                   if (!next) return;
                   setSelectedTextModelId(next.id);
                   persistTextModelSelection(tenantId, userId, next);
+                  trackInteraction({ eventName: "model_select", resourceType: "model", resourceId: next.id, extension: { label: next.label } });
                 }}
                 className="h-8 w-full appearance-none rounded-lg border border-[#e5e5ea] bg-white px-2.5 pr-7 text-[11px] text-[#3a3a3c] outline-none transition-colors hover:bg-[#f8f8fa] focus:border-[#8a8a8e] disabled:cursor-not-allowed disabled:bg-[#fafbfc] disabled:text-[#aeaeb2]"
               >
@@ -441,6 +526,8 @@ export function Layout() {
           <Outlet />
         )}
       </main>
+
+      <GlobalContextRail />
 
       <AgentSupervisor />
     </div>

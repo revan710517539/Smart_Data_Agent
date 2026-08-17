@@ -15,5 +15,6 @@ export async function fetchTenants() {
   return apiRequest<TenantsResponse>("/api/tenants", {
     method: "GET",
     timeoutMs: 8000,
+    readCache: { ttlMs: 60_000, tags: ["tenants"] },
   });
 }

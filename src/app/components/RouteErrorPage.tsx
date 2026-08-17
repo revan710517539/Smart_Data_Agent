@@ -30,11 +30,11 @@ export function RouteErrorPage() {
           </button>
           <button
             type="button"
-            onClick={() => window.location.assign("/")}
+            onClick={() => window.location.assign("/self-analysis/query")}
             className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#d1d1d6] bg-white px-3.5 text-[12px] text-[#3a3a3c] transition-colors hover:bg-[#f5f5f7]"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            返回多机构分析
+            返回智能分析
           </button>
         </div>
       </section>

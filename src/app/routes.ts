@@ -14,6 +14,7 @@ const EmailDailyReport = lazyNamed(() => import("./components/EmailDailyReport")
 const CustomerInsight = lazyNamed(() => import("./components/CustomerInsight"), "CustomerInsight");
 const CompetitionAnalysis = lazyNamed(() => import("./components/CompetitionAnalysis"), "CompetitionAnalysis");
 const SelfAnalysis = lazyNamed(() => import("./components/SelfAnalysis"), "SelfAnalysis");
+const VisualReportBuilder = lazyNamed(() => import("./components/VisualReportBuilder"), "VisualReportBuilder");
 const DataAgentWorkspace = lazyNamed(() => import("./components/DataAgentWorkspace"), "DataAgentWorkspace");
 const DataAssets = lazyNamed(() => import("./components/DataAssets"), "DataAssets");
 const Notifications = lazyNamed(() => import("./components/Notifications"), "Notifications");
@@ -22,6 +23,8 @@ const LoginPage = lazyNamed(() => import("./components/LoginPage"), "LoginPage")
 const SkillPluginManager = lazyNamed(() => import("./components/SkillPluginManager"), "SkillPluginManager");
 const ExternalToolManager = lazyNamed(() => import("./components/ExternalToolManager"), "ExternalToolManager");
 const AnalysisConfigManager = lazyNamed(() => import("./components/AnalysisConfigManager"), "AnalysisConfigManager");
+const BridgeAuthorization = lazyNamed(() => import("./components/BridgeAuthorization"), "BridgeAuthorization");
+const MessageBoardManagement = lazyNamed(() => import("./components/MessageBoardManagement"), "MessageBoardManagement");
 
 function lazyNamed(loader: () => Promise<Record<string, unknown>>, exportName: string) {
   return lazy(async () => {
@@ -93,7 +96,8 @@ export const router = createBrowserRouter([
     Component: Layout,
     errorElement: createElement(RouteErrorPage),
     children: [
-      { index: true, Component: withPageSuspense(Dashboard) },
+      { index: true, Component: () => createElement(Navigate, { to: "/self-analysis/query", replace: true }) },
+      { path: "dashboard", Component: withPageSuspense(Dashboard) },
       { path: "funnel", Component: withPageSuspense(BusinessFunnel) },
       { path: "sandbox", Component: withPageSuspense(BusinessSandbox) },
       { path: "supervision", Component: withPageSuspense(InstitutionSupervision) },
@@ -103,12 +107,14 @@ export const router = createBrowserRouter([
       { path: "single-customer", Component: () => createElement(Navigate, { to: "/customers", replace: true }) },
       { path: "competition", Component: withPageSuspense(CompetitionAnalysis) },
       { path: "self-analysis", Component: () => createElement(Navigate, { to: "/self-analysis/query", replace: true }) },
+      { path: "self-analysis/visual-reports", Component: withPageSuspense(VisualReportBuilder) },
       { path: "self-analysis/query", Component: withPageSuspense(SelfAnalysis) },
       { path: "self-analysis/reports", Component: withPageSuspense(SelfAnalysis) },
       { path: "self-analysis/config", Component: withPageSuspense(AnalysisConfigManager) },
       { path: "agent", Component: () => createElement(Navigate, { to: "/agent/tasks", replace: true }) },
       { path: "agent/todos", Component: withPageSuspense(DataAgentWorkspace) },
       { path: "agent/tasks", Component: withPageSuspense(DataAgentWorkspace) },
+      { path: "agent/message-board", Component: withPageSuspense(MessageBoardManagement) },
       { path: "agent/insights", Component: () => createElement(Navigate, { to: "/agent/tasks", replace: true }) },
       { path: "agent/abilities", Component: () => createElement(Navigate, { to: "/agent/tasks", replace: true }) },
       { path: "agent/skills", Component: withPageSuspense(SkillPluginManager) },
@@ -128,6 +134,7 @@ export const router = createBrowserRouter([
       { path: "settings/roles", Component: withPageSuspense(SystemSettings) },
       { path: "settings/audit", Component: withPageSuspense(SystemSettings) },
       { path: "settings/config", Component: withPageSuspense(SystemSettings) },
+      { path: "bridge-authorize", Component: withPageSuspense(BridgeAuthorization) },
       {
         path: "*",
         Component: () => PlaceholderPage({ title: "页面不存在" }),

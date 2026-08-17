@@ -54,6 +54,11 @@ class AuthEnforcer:
     def _has_super_admin_role(self, user_id: str, tenant_id: str) -> bool:
         return any(role.level == RoleLevel.SUPER_ADMIN for role in self._load_roles(user_id, tenant_id))
 
+    def has_super_admin_role(self, user_id: str, tenant_id: str) -> bool:
+        """Return whether the authenticated subject has a global super-admin role."""
+
+        return self._has_super_admin_role(user_id, tenant_id)
+
     def can_manage_role(self, user_id: str, tenant_id: str, target_role_id: str) -> bool:
         target = self.repository.get_role(target_role_id)
         if not target:

@@ -117,6 +117,15 @@
       "grain": "客群、产品线、月份"
     },
     {
+      "metric_code": "stage_count",
+      "metric_name": "漏斗阶段数量",
+      "dataset_id": "funnel_operation_mart",
+      "aggregation": "sum",
+      "version": "v1",
+      "unit": "笔",
+      "grain": "机构、产品线、漏斗阶段、日期"
+    },
+    {
       "metric_code": "institution_count", "metric_name": "机构数", "dataset_id": "institution_operation_mock_mart",
       "aggregation": "count", "version": "mock-v1", "unit": "家", "grain": "分行、机构层级"
     },

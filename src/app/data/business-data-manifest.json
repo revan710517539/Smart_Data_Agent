@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "mount_contract": "/opt/smart-data-agent/src/app/data:/app/data:ro",
+  "datasets": [
+    {
+      "institution": "兰州银行",
+      "path": "src/app/data/兰州银行/双周会每月新增余额放款_2026-08-14.csv",
+      "sha256": "6b547fbbecbb4895586f37c7a1df2bb38613729962e62172573218bd729888e1",
+      "rows": 9,
+      "columns": 4,
+      "relationship_group": "双周会新增余额"
+    },
+    {
+      "institution": "华兴银行",
+      "path": "src/app/data/华兴银行/自营双周会每周新增余额放款_2026-08-11.csv",
+      "sha256": "adeb4dc1af88f13f6c44c5c8ef163a59a7152b98d4337edcbb1c31c4ed616125",
+      "rows": 13,
+      "columns": 3,
+      "relationship_group": "双周会新增余额"
+    },
+    {
+      "institution": "华兴银行",
+      "path": "src/app/data/华兴银行/标品双周会周度sql_2026-05-06.csv",
+      "sha256": "4775b6db25f61a7c2fc755b350f1d1d272dc8cebf2d55b91fc0991c475f3d1e9",
+      "rows": 4,
+      "columns": 14,
+      "relationship_group": ""
+    }
+  ]
+}

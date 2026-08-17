@@ -1,7 +1,14 @@
 from __future__ import annotations
 
-import sqlite3
 from typing import Any
+
+import sqlglot
+from sqlglot import exp
+
+try:
+    import polars as pl
+except ImportError:  # Keep control-plane startup independent from optional batch execution.
+    pl = None  # type: ignore[assignment]
 
 from backend.platform.security.sql_validation import validate_read_only_sql_candidate
 
@@ -15,51 +22,46 @@ class TopicDataBatchService:
         self.asset_store = asset_store
 
     def run(self, tenant_id: str, actor_user_id: str) -> dict[str, Any]:
+        if pl is None:
+            raise RuntimeError("polars_runtime_required")
         topics = [
             item for item in self.asset_store.list_bundle(tenant_id).get("topic_tables", [])
             if str(item.get("lifecycleStatus") or "") == "active"
         ]
-        connection = sqlite3.connect(":memory:")
-        connection.row_factory = sqlite3.Row
-        try:
-            # The daily batch is the authoritative freshness boundary.  It
-            # deliberately bypasses the interactive catalog cache so newly
-            # delivered Origin_Data files are always selected before SQL runs.
-            tenant_source = self.csv_source.for_tenant(tenant_id)
-            catalog = tenant_source.table_assets(force=True)
-            if not catalog:
-                # The automation runtime turns this into the task's bounded
-                # retry policy. No cross-tenant fallback is allowed.
-                raise RuntimeError("tenant_raw_source_files_missing")
-            imported = self._load_csv_catalog(connection, catalog, tenant_id, tenant_source)
-            outcomes: list[dict[str, Any]] = []
-            for topic in topics:
-                topic_id = str(topic.get("id") or "")
-                try:
-                    sql = validate_read_only_sql_candidate(str(topic.get("sql") or ""))
-                    rows = self._execute(connection, sql, tenant_id)
-                    reference = self.topic_data_store.record_topic_table_result(
-                        tenant_id=tenant_id,
-                        user_id=actor_user_id,
-                        topic_table_id=topic_id,
-                        sql=sql,
-                        rows=rows,
-                    )
-                    outcomes.append({"topic_table_id": topic_id, "status": "succeeded", "row_count": len(rows), "topic_data": reference})
-                except Exception as exc:
-                    outcomes.append({"topic_table_id": topic_id, "status": "failed", "error_code": _error_code(exc)})
-            return {
-                "source": "Origin_Data",
-                "imported_tables": imported,
-                "topic_tables": outcomes,
-                "succeeded": sum(item["status"] == "succeeded" for item in outcomes),
-                "failed": sum(item["status"] == "failed" for item in outcomes),
-            }
-        finally:
-            connection.close()
+        # The daily batch deliberately bypasses the interactive catalog cache,
+        # so newly delivered files become one immutable calculation boundary.
+        tenant_source = self.csv_source.for_tenant(tenant_id)
+        catalog = tenant_source.table_assets(force=True)
+        if not catalog:
+            raise RuntimeError("tenant_raw_source_files_missing")
+        frames = self._load_csv_catalog(catalog, tenant_id, tenant_source)
+        outcomes: list[dict[str, Any]] = []
+        for topic in topics:
+            topic_id = str(topic.get("id") or "")
+            try:
+                sql = validate_read_only_sql_candidate(str(topic.get("sql") or ""))
+                rows = self._execute(frames, sql, tenant_id)
+                reference = self.topic_data_store.record_topic_table_result(
+                    tenant_id=tenant_id,
+                    user_id=actor_user_id,
+                    topic_table_id=topic_id,
+                    sql=sql,
+                    rows=rows,
+                )
+                outcomes.append({"topic_table_id": topic_id, "status": "succeeded", "row_count": len(rows), "topic_data": reference})
+            except Exception as exc:
+                outcomes.append({"topic_table_id": topic_id, "status": "failed", "error_code": _error_code(exc)})
+        return {
+            "source": "Origin_Data",
+            "execution_engine": "polars_lazy_csv",
+            "imported_tables": len(frames),
+            "topic_tables": outcomes,
+            "succeeded": sum(item["status"] == "succeeded" for item in outcomes),
+            "failed": sum(item["status"] == "failed" for item in outcomes),
+        }
 
-    def _load_csv_catalog(self, connection: sqlite3.Connection, catalog: list[dict[str, Any]], tenant_id: str, tenant_source: Any) -> int:
-        """Load current Origin_Data files and expose audited compatibility views.
+    def _load_csv_catalog(self, catalog: list[dict[str, Any]], tenant_id: str, tenant_source: Any) -> dict[str, pl.LazyFrame]:
+        """Register lazy CSV scans and audited compatibility projections.
 
         Earlier seeded topic SQL names two semantic fact tables.  Origin_Data
         deliberately contains files, not a second warehouse, so the aliases
@@ -69,7 +71,7 @@ class TopicDataBatchService:
         a visible ``origin_data_*`` failure instead of silently using unrelated
         data.
         """
-        imported = 0
+        frames: dict[str, pl.LazyFrame] = {}
         imported_tables: dict[str, set[str]] = {}
         for table in catalog:
             table_name = str(table.get("tableNameEn") or "").strip()
@@ -80,30 +82,28 @@ class TopicDataBatchService:
             columns = [str(field.get("fieldNameEn") or "").strip() for field in fields]
             if not all(columns):
                 continue
-            quoted = ", ".join(f'"{column}" TEXT' for column in columns)
-            connection.execute(f'DROP TABLE IF EXISTS "{table_name}"')
-            connection.execute(f'CREATE TABLE "{table_name}" ({quoted})')
-            # Read the protected source once for transformation; list APIs remain
-            # preview-only and never return this complete dataset to the browser.
             source_headers = [str(field.get("fieldNameCn") or "") for field in fields]
-            _, source_rows = tenant_source.read_rows(path, max_rows=50_000)
-            values = [
-                tuple(str(row.get(header) or "") for header in source_headers)
-                for row in source_rows
-            ]
-            if values:
-                placeholders = ", ".join("?" for _ in columns)
-                column_sql = ", ".join(f'"{column}"' for column in columns)
-                connection.executemany(f'INSERT INTO "{table_name}" ({column_sql}) VALUES ({placeholders})', values)
+            if not all(source_headers):
+                continue
+            source_path = tenant_source.resolve_path(path)
+            frames[table_name] = pl.scan_csv(
+                source_path,
+                schema_overrides={header: pl.String for header in source_headers},
+                infer_schema_length=0,
+            ).rename(dict(zip(source_headers, columns, strict=True))).with_columns(
+                *[
+                    pl.col(str(field["fieldNameEn"])).cast(_polars_type(field.get("type")), strict=False)
+                    for field in fields
+                    if _polars_type(field.get("type")) is not pl.String
+                ]
+            )
             imported_tables[table_name] = set(columns)
-            imported += 1
-        self._create_legacy_topic_views(connection, imported_tables, tenant_id)
-        connection.commit()
-        return imported
+        self._create_legacy_topic_views(frames, imported_tables, tenant_id)
+        return frames
 
     @staticmethod
     def _create_legacy_topic_views(
-        connection: sqlite3.Connection,
+        frames: dict[str, pl.LazyFrame],
         imported_tables: dict[str, set[str]],
         tenant_id: str,
     ) -> None:
@@ -117,41 +117,20 @@ class TopicDataBatchService:
             ),
             "",
         )
-        safe_tenant = tenant_id.replace("'", "''")
-        # The external daily feed uses a wildcard tenant marker for reusable
-        # local fixtures. Materialize it to the task tenant before each SQL run
-        # so the existing tenant predicate remains effective.
-        normalized_tenant = f"CASE WHEN tenant_id = '*' THEN '{safe_tenant}' ELSE tenant_id END"
-        connection.execute("DROP VIEW IF EXISTS loan_operation_fact")
-        connection.execute("DROP VIEW IF EXISTS weekly_core_metrics_fact")
+        normalized_tenant = pl.when(pl.col("tenant_id") == "*").then(pl.lit(tenant_id)).otherwise(pl.col("tenant_id")).alias("tenant_id")
         if loan_source:
-            source_sql = f'"{loan_source.replace(chr(34), chr(34) * 2)}"'
-            connection.execute(
-                f"""
-                CREATE VIEW loan_operation_fact AS
-                SELECT
-                  {normalized_tenant} AS tenant_id,
-                  branch_name,
-                  product_line,
-                  customer_segment,
-                  month AS stat_week,
-                  drawdown_amount AS loan_amount,
-                  loan_balance,
-                  drawdown_amount AS new_balance,
-                  CASE
-                    WHEN CAST(loan_balance AS REAL) = 0 THEN NULL
-                    ELSE CAST(m1_overdue_balance AS REAL) / CAST(loan_balance AS REAL)
-                  END AS m1_overdue_rate
-                FROM {source_sql}
-                """
+            source = frames[loan_source]
+            loan = source.select(
+                normalized_tenant,
+                "branch_name", "product_line", "customer_segment",
+                pl.col("month").alias("stat_week"),
+                pl.col("drawdown_amount").alias("loan_amount"),
+                "loan_balance",
+                pl.col("drawdown_amount").alias("new_balance"),
+                pl.when(pl.col("loan_balance").cast(pl.Float64, strict=False) == 0).then(None).otherwise(pl.col("m1_overdue_balance").cast(pl.Float64, strict=False) / pl.col("loan_balance").cast(pl.Float64, strict=False)).alias("m1_overdue_rate"),
             )
-            connection.execute(
-                """
-                CREATE VIEW weekly_core_metrics_fact AS
-                SELECT tenant_id, stat_week, loan_balance, loan_amount, new_balance
-                FROM loan_operation_fact
-                """
-            )
+            frames["loan_operation_fact"] = loan
+            frames["weekly_core_metrics_fact"] = loan.select("tenant_id", "stat_week", "loan_balance", "loan_amount", "new_balance")
 
         voice_source = next(
             (
@@ -161,49 +140,51 @@ class TopicDataBatchService:
             ),
             "",
         )
-        connection.execute("DROP VIEW IF EXISTS customer_operation_mart")
-        connection.execute("DROP VIEW IF EXISTS channel_operation_mart")
         if voice_source:
-            source_sql = f'"{voice_source.replace(chr(34), chr(34) * 2)}"'
-            connection.execute(
-                f"""
-                CREATE VIEW customer_operation_mart AS
-                SELECT
-                  {normalized_tenant} AS tenant_id,
-                  customer_segment, product_line, branch_name, month,
-                  drawdown_rate AS conversion_rate,
-                  CASE WHEN CAST(eligible_amount AS REAL) = 0 THEN 0
-                       ELSE CAST(drawdown_amount AS REAL) / CAST(eligible_amount AS REAL) END AS active_customer_count
-                FROM {source_sql}
-                """
-            )
-            connection.execute(
-                f"""
-                CREATE VIEW channel_operation_mart AS
-                SELECT
-                  {normalized_tenant} AS tenant_id,
-                  channel, month, product_line, branch_name,
-                  CASE WHEN CAST(drawdown_amount AS REAL) = 0 THEN 0
-                       ELSE CAST(eligible_amount AS REAL) / CAST(drawdown_amount AS REAL) END AS customer_acquisition_cost,
-                  CASE WHEN CAST(eligible_amount AS REAL) = 0 THEN 0
-                       ELSE CAST(loan_amount AS REAL) / CAST(eligible_amount AS REAL) END AS roi
-                FROM {source_sql}
-                """
-            )
+            source = frames[voice_source]
+            eligible = pl.col("eligible_amount").cast(pl.Float64, strict=False)
+            drawdown = pl.col("drawdown_amount").cast(pl.Float64, strict=False)
+            frames["customer_operation_mart"] = source.select(normalized_tenant, "customer_segment", "product_line", "branch_name", "month", pl.col("drawdown_rate").alias("conversion_rate"), pl.when(eligible == 0).then(0).otherwise(drawdown / eligible).alias("active_customer_count"))
+            frames["channel_operation_mart"] = source.select(normalized_tenant, "channel", "month", "product_line", "branch_name", pl.when(drawdown == 0).then(0).otherwise(eligible / drawdown).alias("customer_acquisition_cost"), pl.when(eligible == 0).then(0).otherwise(pl.col("loan_amount").cast(pl.Float64, strict=False) / eligible).alias("roi"))
 
     @staticmethod
-    def _execute(connection: sqlite3.Connection, sql: str, tenant_id: str) -> list[dict[str, Any]]:
-        normalized = sql.replace(":tenant_id", ":tenant_id")
-        cursor = connection.execute(normalized, {"tenant_id": tenant_id})
-        return [dict(row) for row in cursor.fetchall()]
+    def _execute(frames: dict[str, pl.LazyFrame], sql: str, tenant_id: str) -> list[dict[str, Any]]:
+        tree = sqlglot.parse_one(sql, read="sqlite")
+        placeholders = list(tree.find_all(exp.Placeholder))
+        if any(str(item.this or "") != "tenant_id" for item in placeholders):
+            raise ValueError("topic_sql_unknown_parameter")
+        if not placeholders:
+            raise ValueError("topic_sql_tenant_binding_required")
+        tree = tree.transform(lambda node: exp.Literal.string(tenant_id) if isinstance(node, exp.Placeholder) else node)
+        referenced = {table.name for table in tree.find_all(exp.Table)}
+        if not referenced.issubset(frames):
+            raise KeyError("origin_data_table_not_found")
+        context = pl.SQLContext(eager=False)
+        for table_name in sorted(referenced):
+            context.register(table_name, frames[table_name])
+        result = context.execute(tree.sql(dialect="sqlite")).limit(50_000).collect(engine="streaming")
+        return result.to_dicts()
 
 
 def _error_code(exc: Exception) -> str:
     value = str(exc).strip().lower()
-    if "no such table" in value:
+    if "table_not_found" in value or "relation" in value and "not found" in value:
         return "origin_data_table_not_found"
     if "no such column" in value:
         return "origin_data_column_not_found"
     if "tenant" in value and "binding" in value:
         return "topic_sql_tenant_binding_required"
     return "topic_data_batch_failed"
+
+
+def _polars_type(value: Any) -> pl.DataType:
+    if pl is None:
+        raise RuntimeError("polars_runtime_required")
+    normalized = str(value or "").strip().lower()
+    if normalized in {"integer", "int", "bigint"}:
+        return pl.Int64
+    if normalized in {"decimal", "number", "float", "double", "numeric"}:
+        return pl.Float64
+    if normalized in {"boolean", "bool"}:
+        return pl.Boolean
+    return pl.String

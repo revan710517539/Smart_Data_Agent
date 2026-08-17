@@ -5,6 +5,7 @@ export type AuditLog = {
   event_id: string;
   tenant_id: string;
   actor_user_id: string;
+  actor_name: string;
   action: string;
   target_type: string;
   target_id: string;
@@ -17,20 +18,26 @@ type AuditLogsResponse = {
   tenant_id: string;
   logs: AuditLog[];
   count: number;
+  total: number;
+  limit: number;
+  offset: number;
 };
 
 export async function fetchAuditLogs({
   tenantId,
   userId = getDefaultUserId(),
-  limit = 50,
+  limit = 20,
+  offset = 0,
 }: {
   tenantId: string;
   userId?: string;
   limit?: number;
+  offset?: number;
 }): Promise<AuditLogsResponse> {
-  const params = new URLSearchParams({ limit: String(limit) });
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   return apiRequest<AuditLogsResponse>(`/api/audit-logs?${params.toString()}`, {
     method: "GET",
     context: { tenantId, userId },
+    readCache: { ttlMs: 5_000, tags: ["audit-logs"] },
   });
 }

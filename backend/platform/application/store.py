@@ -37,13 +37,13 @@ class ApplicationActionUnavailable(RuntimeError):
 
 
 REGISTERED_ACTIONS: dict[str, set[str]] = {
-    "dashboard": {"select_bank", "select_product", "open_insight_action"},
+    "dashboard": {"select_bank", "select_product", "open_insight_action", "set_page_data_layout"},
     "business_funnel": {"select_bank", "select_product_view", "export"},
     "business_sandbox": {"select_product_view", "run_simulation", "reset_simulation", "export"},
     "customer_insight": {"select_bank", "select_product_view", "select_segment"},
     "single_customer_insight": set(),
     "competition_analysis": {"select_product_view"},
-    "institution_supervision": {"select_product_filter", "select_branch", "export"},
+    "institution_supervision": {"select_product_filter", "select_branch", "export", "set_page_data_layout"},
     "email_daily": {"generate_daily", "send_daily"},
     "agent_workspace": {
         "open_task", "configure_task", "open_task_composer", "open_todo_composer",
@@ -54,13 +54,13 @@ REGISTERED_ACTIONS: dict[str, set[str]] = {
     "notifications": {"create_rule", "edit_rule", "toggle_rule", "manage_subscription", "mark_read", "acknowledge"},
     "weekly_report": {
         "save_version", "open_history", "open_export_dialog",
-        "start_realtime_voice", "analyze_selected_context",
+        "start_realtime_voice", "analyze_selected_context", "set_page_data_layout",
     },
     "self_analysis": {
         "upload_knowledge_file", "remove_knowledge_file", "select_analysis_skill",
         "clear_analysis_skill", "select_analysis_model", "cancel_auto_reference",
         "download_csv", "start_voice_input_fun_asr", "start_realtime_voice",
-        "save_script", "run_script",
+        "save_script", "run_script", "upsert_visual_report", "delete_visual_report",
     },
     "platform_shell": {"select_institution", "select_quick_prompt", "ask_agent"},
 }
@@ -97,6 +97,7 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
     "dashboard": {
         "exports": [],
         "actions": [],
+        "pageDataLayout": [],
         "selectedProduct": "all",
         "selectedBank": "全部分行",
     },
@@ -125,6 +126,7 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
     },
     "institution_supervision": {
         "exports": [],
+        "pageDataLayout": [],
         "selectedBranch": None,
         "productFilter": "all",
     },
@@ -150,12 +152,14 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
     "weekly_report": {
         "drafts": [],
         "exports": [],
+        "pageDataLayout": [],
         "historyOpenedAt": "",
     },
     "self_analysis": {
         "uploadedFiles": [],
         "downloads": [],
         "savedScripts": [],
+        "visualReports": [],
     },
     "platform_shell": {
         "selectedInstitution": "上海分行",
@@ -473,7 +477,7 @@ def _execute_action(
         todo["ownerUserId"] = str(actor_user_id or "")
         todo["createdBy"] = str(actor_user_id or "")
         todo["assigneeUserId"] = str(actor_user_id or "")
-        todo["assignee"] = str(actor_user_id or "当前用户")
+        todo["assignee"] = str(payload.get("actorDisplayName") or "当前用户").strip()[:80]
         todo["source"] = _todo_source(todo.get("source")) if trusted_provenance else "manual"
         todo["createdAt"] = now
         todo["updatedAt"] = now
@@ -557,6 +561,16 @@ def _execute_action(
         next_state["historyOpenedAt"] = now
         return {"message": "历史版本已打开。", "drafts": next_state.get("drafts", [])}, next_state
 
+    if action == "set_page_data_layout" and module_key in {"dashboard", "weekly_report", "institution_supervision"}:
+        asset_ids = payload.get("assetIds")
+        if not isinstance(asset_ids, list):
+            raise ValueError("page_data_layout_invalid")
+        normalized = [str(asset_id or "").strip() for asset_id in asset_ids]
+        if len(normalized) > 40 or any(not asset_id or len(asset_id) > 160 for asset_id in normalized) or len(normalized) != len(set(normalized)):
+            raise ValueError("page_data_layout_invalid")
+        next_state["pageDataLayout"] = normalized
+        return {"message": "页面数据布局已保存。", "assetIds": normalized}, next_state
+
     if module_key == "self_analysis" and action == "upload_knowledge_file":
         file_id = str(payload.get("id") or "").strip()[:160]
         name = str(payload.get("name") or "").strip()[:240]
@@ -583,6 +597,40 @@ def _execute_action(
             item for item in next_state.get("uploadedFiles", []) if isinstance(item, dict) and item.get("id") != file_id
         ]
         return {"message": "分析文件登记已移除。", "fileId": file_id}, next_state
+
+    if module_key == "self_analysis" and action == "upsert_visual_report":
+        report = _normalize_visual_report(payload.get("report"), now, actor_user_id)
+        reports = [
+            item for item in next_state.get("visualReports", [])
+            if isinstance(item, dict) and str(item.get("id") or "") != report["id"]
+        ]
+        existing = next(
+            (
+                item for item in next_state.get("visualReports", [])
+                if isinstance(item, dict) and str(item.get("id") or "") == report["id"]
+            ),
+            None,
+        )
+        if existing and str(existing.get("ownerUserId") or "") not in {"", str(actor_user_id or "")}:
+            raise PermissionError("visual_report_owner_required")
+        if existing:
+            report["createdAt"] = str(existing.get("createdAt") or report["createdAt"])
+        reports.insert(0, report)
+        next_state["visualReports"] = reports[:100]
+        return {"message": "可视化报表已保存。", "report": report}, next_state
+
+    if module_key == "self_analysis" and action == "delete_visual_report":
+        report_id = str(payload.get("reportId") or payload.get("id") or "").strip()
+        if not report_id:
+            raise ValueError("visual_report_id_required")
+        reports = [item for item in next_state.get("visualReports", []) if isinstance(item, dict)]
+        target = next((item for item in reports if str(item.get("id") or "") == report_id), None)
+        if target is None:
+            raise KeyError("visual_report_not_found")
+        if str(target.get("ownerUserId") or "") not in {"", str(actor_user_id or "")}:
+            raise PermissionError("visual_report_owner_required")
+        next_state["visualReports"] = [item for item in reports if str(item.get("id") or "") != report_id]
+        return {"message": "可视化报表已删除。", "reportId": report_id}, next_state
 
     if module_key == "platform_shell" and action == "select_quick_prompt":
         prompt = str(payload.get("prompt") or "").strip()
@@ -833,8 +881,149 @@ def _module_payload(
     }
 
 
+_VISUAL_REPORT_DESTINATIONS = frozenset({"mine", "topic", "experience", "weekly"})
+_VISUAL_REPORT_TYPES = frozenset({
+    "kpi", "line", "area", "column", "bar", "stacked_bar", "combo", "donut",
+    "scatter", "funnel", "treemap", "radar", "table", "pivot",
+})
+_VISUAL_REPORT_FILTER_OPERATORS = frozenset({"in", "not_in", "contains", "not_contains"})
+
+
+def _normalize_visual_report(value: Any, now: str, actor_user_id: str | None) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("visual_report_invalid")
+    report_id = str(value.get("id") or "").strip()[:160]
+    title = str(value.get("title") or "").strip()[:500]
+    if not report_id or not title:
+        raise ValueError("visual_report_identity_required")
+    raw_cards = value.get("cards")
+    if not isinstance(raw_cards, list) or len(raw_cards) > 40:
+        raise ValueError("visual_report_cards_invalid")
+    cards = [_normalize_visual_report_card(card, index) for index, card in enumerate(raw_cards)]
+    card_ids = [card["id"] for card in cards]
+    if len(card_ids) != len(set(card_ids)):
+        raise ValueError("visual_report_cards_invalid")
+    destinations = []
+    for raw_destination in value.get("destinations", []) if isinstance(value.get("destinations"), list) else []:
+        destination = str(raw_destination or "").strip()
+        if destination in _VISUAL_REPORT_DESTINATIONS and destination not in destinations:
+            destinations.append(destination)
+    return {
+        "id": report_id,
+        "title": title,
+        "cards": cards,
+        "destinations": destinations,
+        "ownerUserId": str(actor_user_id or ""),
+        "createdAt": str(value.get("createdAt") or now).strip()[:80] or now,
+        "updatedAt": now,
+    }
+
+
+def _normalize_visual_report_card(value: Any, index: int) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("visual_report_cards_invalid")
+    card_id = str(value.get("id") or f"visual-{index + 1}").strip()[:160]
+    card_type = str(value.get("type") or "table").strip()
+    dataset = value.get("dataset")
+    if not card_id or card_type not in _VISUAL_REPORT_TYPES or not isinstance(dataset, dict):
+        raise ValueError("visual_report_cards_invalid")
+    dataset_id = str(dataset.get("id") or "").strip()[:160]
+    dataset_kind = str(dataset.get("kind") or "").strip()
+    if not dataset_id or dataset_kind not in {"raw", "topic"}:
+        raise ValueError("visual_report_dataset_invalid")
+    fields = []
+    for raw_field in dataset.get("fields", [])[:300] if isinstance(dataset.get("fields"), list) else []:
+        if not isinstance(raw_field, dict):
+            continue
+        field_code = str(raw_field.get("fieldNameEn") or "").strip()[:300]
+        if not field_code:
+            continue
+        fields.append({
+            "fieldNameEn": field_code,
+            "fieldNameCn": str(raw_field.get("fieldNameCn") or field_code).strip()[:300],
+            "type": str(raw_field.get("type") or "string").strip()[:80],
+            "semanticRole": str(raw_field.get("semanticRole") or "").strip()[:40],
+            "isMetric": bool(raw_field.get("isMetric")),
+            "isTime": bool(raw_field.get("isTime")),
+            "isPrimaryKey": bool(raw_field.get("isPrimaryKey")),
+        })
+    normalized_dataset = {
+        "id": dataset_id,
+        "kind": dataset_kind,
+        "name": str(dataset.get("name") or dataset_id).strip()[:500],
+        "code": str(dataset.get("code") or dataset_id).strip()[:300],
+        "sourceKey": str(dataset.get("sourceKey") or "").strip()[:300],
+        "schemaFingerprint": str(dataset.get("schemaFingerprint") or "").strip()[:160],
+        "fields": fields,
+    }
+    return {
+        "id": card_id,
+        "title": str(value.get("title") or "未命名可视化").strip()[:500] or "未命名可视化",
+        "type": card_type,
+        "dataset": normalized_dataset,
+        "config": _normalize_visual_report_config(value.get("config")),
+    }
+
+
+def _normalize_visual_report_config(value: Any) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+
+    def string_list(candidate: Any, limit: int = 100, width: int = 300) -> list[str]:
+        result: list[str] = []
+        for item in candidate[:limit] if isinstance(candidate, list) else []:
+            text = str(item or "").strip()[:width]
+            if text and text not in result:
+                result.append(text)
+        return result
+
+    filters: dict[str, list[str]] = {}
+    for raw_field, raw_values in list(raw.get("filters", {}).items())[:100] if isinstance(raw.get("filters"), dict) else []:
+        field = str(raw_field or "").strip()[:300]
+        values = string_list(raw_values, 200, 500)
+        if field and values:
+            filters[field] = values
+    filter_groups = []
+    for group_index, raw_group in enumerate(raw.get("filterGroups", [])[:20] if isinstance(raw.get("filterGroups"), list) else []):
+        if not isinstance(raw_group, dict):
+            continue
+        rules = []
+        for rule_index, raw_rule in enumerate(raw_group.get("rules", [])[:50] if isinstance(raw_group.get("rules"), list) else []):
+            if not isinstance(raw_rule, dict):
+                continue
+            field = str(raw_rule.get("field") or "").strip()[:300]
+            values = string_list(raw_rule.get("values"), 200, 500)
+            if not field or not values:
+                continue
+            operator = str(raw_rule.get("operator") or "in").strip()
+            rules.append({
+                "id": str(raw_rule.get("id") or f"filter-rule-{group_index}-{rule_index}").strip()[:160],
+                "field": field,
+                "operator": operator if operator in _VISUAL_REPORT_FILTER_OPERATORS else "in",
+                "values": values,
+            })
+        if rules:
+            filter_groups.append({
+                "id": str(raw_group.get("id") or f"filter-group-{group_index}").strip()[:160],
+                "rules": rules,
+            })
+    return {
+        "metricFields": string_list(raw.get("metricFields")),
+        "dimensionFields": string_list(raw.get("dimensionFields")),
+        "filters": filters,
+        "filterGroups": filter_groups,
+        "sumFilteredRows": bool(raw.get("sumFilteredRows")),
+        "comboLineFields": string_list(raw.get("comboLineFields")),
+    }
+
+
 def _state_for_actor(module_key: str, state: dict[str, Any], actor_user_id: str | None) -> dict[str, Any]:
     resolved = deepcopy(state)
+    if module_key == "self_analysis" and actor_user_id:
+        resolved["visualReports"] = [
+            report for report in resolved.get("visualReports", [])
+            if isinstance(report, dict) and str(report.get("ownerUserId") or "") in {"", actor_user_id}
+        ]
+        return resolved
     if module_key != "agent_workspace" or not actor_user_id:
         return resolved
     now = _now()

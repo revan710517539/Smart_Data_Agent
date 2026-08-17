@@ -28,7 +28,7 @@ from backend.platform.reports import PostgreSQLReportStore
 from backend.platform.settings import PostgreSQLSystemConfigStore
 from backend.platform.security import PostgreSQLOIDCTransactionStore, PostgreSQLSessionStore
 from backend.platform.security.rate_limit import InMemoryRateLimiter
-from backend.platform.runtime_config import RuntimeConfig
+from backend.platform.runtime_config import RuntimeConfig, RuntimeConfigurationError
 
 
 DATABASE_URL = os.getenv("SMART_DATA_AGENT_TEST_POSTGRES_URL", "").strip()
@@ -135,8 +135,11 @@ class PostgreSQLStoresIntegrationTest(unittest.TestCase):
         },updated_by="u_admin")
         self.assertEqual(version["publicationStatus"],"ready")
         comment=reports.create_report_comment(self.tenant,"weekly_main",{"targetId":"amount_data","targetLabel":"金额","targetKind":"table","text":"请复核"},"u_admin",0,"comment-request-1")
+        self.assertEqual(comment["comment"]["author"],"管理员")
         replied=reports.mutate_report_comment(self.tenant,"weekly_main",comment["comment"]["id"],"reply",{"text":"已复核"},"u_reviewer",1,"reply-request-1")
         self.assertEqual(replied["revision"],2)
+        self.assertEqual(replied["comment"]["author"],"管理员")
+        self.assertEqual(replied["comment"]["replies"][0]["author"],"复核员")
         learning=reports.create_learning_candidate(self.tenant,version["id"],"analysis_method",{"title":"周报分析法"},{"block_id":"amount"},0.9,"u_admin")
         reports.review_learning_candidate(self.tenant,learning["learning_candidate_id"],"approve","u_reviewer")
         self.assertEqual(reports.mark_learning_candidate_applied(self.tenant,learning["learning_candidate_id"])["status"],"applied")
@@ -241,10 +244,15 @@ class PostgreSQLStoresIntegrationTest(unittest.TestCase):
 
         with self.pool.connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema='public'")
-                self.assertEqual(int(_value(cursor.fetchone(),"count",0)),99)
+                if getattr(self.pool, "dialect", "postgresql") == "mysql":
+                    cursor.execute("SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema=DATABASE()")
+                    expected_table_count = 106
+                else:
+                    cursor.execute("SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema='public'")
+                    expected_table_count = 99
+                self.assertEqual(int(_value(cursor.fetchone(),"count",0)), expected_table_count)
 
-    def test_postgresql_platform_composition_has_no_embedded_primary_store(self) -> None:
+    def test_postgresql_url_is_rejected_by_production_composition(self) -> None:
         from backend.platform.bootstrap import build_production_platform
 
         config=RuntimeConfig(
@@ -254,18 +262,8 @@ class PostgreSQLStoresIntegrationTest(unittest.TestCase):
             oidc_token_endpoint="https://idp.example.test/token",oidc_jwks_uri="https://idp.example.test/jwks",
             oidc_redirect_uri="https://app.example.test/api/auth/oidc/callback",
         )
-        with patch("backend.platform.bootstrap.build_rate_limiter",return_value=InMemoryRateLimiter()),patch("backend.platform.bootstrap.OIDCClient.validate_config",return_value=None):
-            services=build_production_platform(config)
-        try:
-            primary_stores=(services.task_repository,services.knowledge_store,services.data_asset_store,
-                services.data_acquisition_store,services.automation_store,services.market_store,
-                services.application_store,services.memory_store,services.metric_dictionary_store,
-                services.lineage_store,services.system_config_store,services.report_store,
-                services.audit_store,services.session_store,services.approval_store)
-            self.assertTrue(all(type(store).__name__.startswith("PostgreSQL") for store in primary_stores))
-            self.assertIsNotNone(services.primary_database_pool)
-        finally:
-            services.close()
+        with self.assertRaisesRegex(RuntimeConfigurationError, "must point to MySQL"):
+            build_production_platform(config)
 
 
 def _value(row, key: str, index: int):

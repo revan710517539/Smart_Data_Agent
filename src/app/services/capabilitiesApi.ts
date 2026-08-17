@@ -20,5 +20,6 @@ export async function fetchPlatformCapabilities({ tenantId, userId = getDefaultU
   return apiRequest<PlatformCapabilityResponse>("/api/platform/capabilities", {
     method: "GET",
     context: { tenantId, userId },
+    readCache: { ttlMs: 8_000, tags: ["platform-capabilities"] },
   });
 }

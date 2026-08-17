@@ -172,6 +172,7 @@
   #root {
     min-height: 100%;
     background: #f6f7f9;
+    overscroll-behavior: none;
   }
 
   html {
@@ -184,6 +185,21 @@
     @apply bg-background text-foreground;
     overflow-x: hidden;
     text-rendering: optimizeLegibility;
+  }
+
+  /*
+   * The workspace uses independent scroll owners for the page, sidebar and
+   * nested panels. Stop wheel/touch inertia at each boundary so reaching the
+   * first or last row does not stretch the shell or chain into its parent.
+   * This intentionally leaves ordinary scrolling and state animations intact.
+   */
+  [data-agent-main-shell="true"],
+  [data-agent-sidebar="true"],
+  [data-agent-sidebar="true"] nav,
+  [class~="overflow-y-auto"],
+  [class~="overflow-auto"] {
+    overscroll-behavior: none;
+    scroll-behavior: auto;
   }
 
   /*
@@ -202,32 +218,76 @@
   }
 
   button:focus-visible,
-  [role="button"]:focus-visible,
+  [role="button"]:focus-visible {
+    outline: 1px solid rgba(22, 168, 107, 0.58) !important;
+    outline-offset: 1px;
+    box-shadow: none !important;
+  }
+
+  button:focus:not(:focus-visible),
+  [role="button"]:focus:not(:focus-visible) {
+    outline: none !important;
+    box-shadow: none !important;
+  }
+
   select:focus-visible,
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):focus-visible,
   textarea:focus-visible {
-    outline: 2px solid rgba(10, 102, 194, 0.48) !important;
-    outline-offset: 2px;
-    box-shadow: 0 0 0 4px rgba(10, 102, 194, 0.10) !important;
+    border-color: #c7c7cc !important;
+    box-shadow: none !important;
+    outline: none !important;
   }
 
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):focus,
   select:focus,
   textarea:focus {
-    border-color: #8caed3 !important;
+    border-color: #c7c7cc !important;
     background-color: #ffffff;
-    box-shadow: 0 0 0 3px rgba(10, 102, 194, 0.08) !important;
+    box-shadow: none !important;
+    outline: none !important;
   }
 
   @media (hover: hover) and (pointer: fine) {
     button:not(:disabled):hover,
-    [role="button"]:not([aria-disabled="true"]):hover,
-    select:not(:disabled):hover,
-    input:not(:disabled):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):hover,
-    textarea:not(:disabled):hover {
+    [role="button"]:not([aria-disabled="true"]):hover {
       border-color: rgba(10, 102, 194, 0.40) !important;
       box-shadow: 0 5px 16px rgba(24, 39, 75, 0.07), 0 0 0 2px rgba(10, 102, 194, 0.07) !important;
     }
+
+    select:not(:disabled):hover,
+    input:not(:disabled):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):hover,
+    textarea:not(:disabled):hover {
+      border-color: #d1d1d6 !important;
+      box-shadow: none !important;
+    }
+  }
+
+  /*
+   * Intelligent Analysis already renders focus on the surrounding composer.
+   * Do not draw a second full-width outline/shadow around its borderless
+   * textarea when the user clicks or types inside it.
+   */
+  textarea[data-plain-query-input="true"]:focus,
+  textarea[data-plain-query-input="true"]:focus-visible,
+  textarea[data-plain-query-input="true"]:hover {
+    border-color: transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
+  }
+
+  /*
+   * The data-table picker search is a compact inline control, not a form
+   * field. Keep its focus state neutral so it remains visually subordinate to
+   * the table selection action.
+   */
+  input[data-table-picker-search="true"]:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):focus,
+  input[data-table-picker-search="true"]:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):focus-visible,
+  input[data-table-picker-search="true"]:not(:disabled):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):hover {
+    border-color: #d1d1d6 !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
   }
 
   button:disabled,

@@ -48,9 +48,11 @@ MENU_TREE = (
         "self-analysis",
         "自助分析",
         (
+            MenuResource("self-analysis.visual-reports", "可视化报表"),
             MenuResource("self-analysis.smart-analysis", "智能分析"),
-            MenuResource("self-analysis.my-reports", "我的报告"),
+            MenuResource("self-analysis.my-reports", "我的报表"),
             MenuResource("self-analysis.analysis-config", "分析配置"),
+            MenuResource("task-workbench.skills", "Skill插件"),
         ),
     ),
     MenuResource(
@@ -59,7 +61,7 @@ MENU_TREE = (
         (
             MenuResource("task-workbench.todos", "待办任务"),
             MenuResource("task-workbench.tasks", "自动化任务"),
-            MenuResource("task-workbench.skills", "Skill插件"),
+            MenuResource("task-workbench.message-board", "留言板管理"),
         ),
     ),
     MenuResource(
@@ -94,7 +96,9 @@ MENU_TREE = (
     ),
 )
 
-MANDATORY_MENU_KEYS = frozenset()
+# System Management is a stable four-page workbench.  Do not let a saved role
+# menu selection make audit or configuration disappear from its left navigation.
+MANDATORY_MENU_KEYS = frozenset({"settings.audit", "settings.config"})
 DEFAULT_ROLE_NAMES = ("管理员", "操作员")
 CUSTOM_ROLE_CANDIDATES = ("客户经理分析岗", "周报分析岗", "指标维护岗")
 

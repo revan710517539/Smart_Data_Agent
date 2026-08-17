@@ -41,6 +41,7 @@ class ObjectAuthorizationTest(unittest.TestCase):
             "create_todo",
             payload={
                 "ownerUserId": "u_victim",
+                "actorDisplayName": "真实负责人",
                 "todo": {
                     "id": "todo_private",
                     "title": "个人待办",
@@ -57,6 +58,7 @@ class ObjectAuthorizationTest(unittest.TestCase):
         self.assertEqual(todo["ownerUserId"], "u_owner")
         self.assertEqual(todo["createdBy"], "u_owner")
         self.assertEqual(todo["assigneeUserId"], "u_owner")
+        self.assertEqual(todo["assignee"], "真实负责人")
         self.assertNotEqual(todo["id"], "todo_private")
         self.assertEqual(todo["source"], "manual")
         self.assertNotEqual(todo["createdAt"], "2000-01-01T00:00:00Z")
@@ -85,6 +87,20 @@ class ObjectAuthorizationTest(unittest.TestCase):
             actor_user_id="u_owner",
         )
         self.assertEqual(updated["result"]["status"], "done")
+
+    def test_todo_without_display_name_uses_neutral_label_not_internal_id(self) -> None:
+        store = InMemoryApplicationStore()
+        created = store.run_action(
+            "tenant_demo",
+            "agent_workspace",
+            "create_todo",
+            payload={"todo": {"title": "缺少展示姓名"}},
+            actor_user_id="u_internal_subject",
+        )
+        todo = created["result"]["todo"]
+        self.assertEqual(todo["assigneeUserId"], "u_internal_subject")
+        self.assertEqual(todo["assignee"], "当前用户")
+        self.assertNotEqual(todo["assignee"], todo["assigneeUserId"])
 
     def test_automation_task_update_requires_object_owner(self) -> None:
         store = InMemoryApplicationStore()

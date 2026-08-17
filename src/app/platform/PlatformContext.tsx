@@ -10,6 +10,7 @@ import type { AccessTenantRole, AccessUser } from "../services/accessControlApi"
 import type { AuthSession } from "../services/authApi";
 import { fetchCurrentSession, logoutSession } from "../services/authApi";
 import { sessionRevalidationEvent } from "../services/apiClient";
+import { resetTransientUiStateForNewAuthSession } from "./sessionUiState";
 
 export const authSessionStorageKey = "smart_data_agent_auth_session_v1";
 export const selectedInstitutionStorageKey = "smart_data_agent_selected_institution_v1";
@@ -81,7 +82,14 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
   const syncCurrentSession = useCallback(() => {
     if (sessionSyncPromise.current) return sessionSyncPromise.current;
     const mutationVersion = sessionMutationVersion.current;
-    const hadCachedSession = Boolean(loadStoredSession());
+    const cachedSession = loadStoredSession();
+    // A signed cookie alone is not enough evidence that this browser started a
+    // session in this app. Avoid probing protected endpoints on the login page.
+    if (!cachedSession) {
+      setIsSessionResolved(true);
+      return Promise.resolve();
+    }
+    const hadCachedSession = true;
     const pending = fetchCurrentSession()
       .then((current) => {
         if (mutationVersion !== sessionMutationVersion.current) return;
@@ -163,6 +171,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
 
   const login = (session: AuthSession) => {
     sessionMutationVersion.current += 1;
+    resetTransientUiStateForNewAuthSession();
     const normalizedInputSession = normalizeAuthSession(session);
     const selected = resolveSessionInstitution(normalizedInputSession);
     const nextSession = {
@@ -179,6 +188,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     sessionMutationVersion.current += 1;
+    resetTransientUiStateForNewAuthSession();
     void logoutSession().catch(() => undefined);
     setAuthSession(null);
     setSelectedInstitutionState(operatingTenantNames[0]);

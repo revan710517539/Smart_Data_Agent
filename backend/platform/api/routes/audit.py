@@ -18,20 +18,40 @@ def handle_audit_logs_get(handler: Any, query: str) -> None:
             "menu:settings.audit",
             "read",
         )
-        limit = int(first_query_value(params, "limit") or "50")
+        limit = _bounded_page_limit(first_query_value(params, "limit"))
+        offset = _bounded_offset(first_query_value(params, "offset"))
         tenant_ids = _authorized_audit_tenant_ids(handler, context)
         list_for_tenants = getattr(handler.services.audit_store, "list_for_tenants", None)
+        count_for_tenants = getattr(handler.services.audit_store, "count_for_tenants", None)
         if callable(list_for_tenants):
-            logs = list_for_tenants(list(tenant_ids), limit=limit)
+            logs = list_for_tenants(list(tenant_ids), limit=limit, offset=offset)
         else:
-            logs = [
+            all_logs = [
                 item
                 for tenant_id in tenant_ids
-                for item in handler.services.audit_store.list(tenant_id, limit=limit)
-            ][:limit]
-        handler._send_json({"tenant_id": context.tenant_id, "tenant_ids": list(tenant_ids), "logs": logs, "count": len(logs)})
+                for item in handler.services.audit_store.list(tenant_id, limit=limit + offset)
+            ]
+            logs = all_logs[offset: offset + limit]
+        logs = [_with_actor_name(handler, item) for item in logs]
+        total = count_for_tenants(list(tenant_ids)) if callable(count_for_tenants) else offset + len(logs)
+        handler._send_json({
+            "tenant_id": context.tenant_id,
+            "tenant_ids": list(tenant_ids),
+            "logs": logs,
+            "count": len(logs),
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        })
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
         send_route_exception(handler, exc)
+
+
+def _with_actor_name(handler: Any, item: dict[str, Any]) -> dict[str, Any]:
+    actor_user_id = str(item.get("actor_user_id") or "").strip()
+    profile = handler.services.access_service.user_store.get_profile(actor_user_id) if actor_user_id else None
+    actor_name = str(getattr(profile, "name", "") or "").strip()
+    return {**item, "actor_name": actor_name or "未知用户"}
 
 
 def _authorized_audit_tenant_ids(handler: Any, context: Any) -> tuple[str, ...]:
@@ -55,3 +75,11 @@ def _authorized_audit_tenant_ids(handler: Any, context: Any) -> tuple[str, ...]:
             continue
         allowed.append(tenant_id)
     return tuple(allowed)
+
+
+def _bounded_page_limit(value: str | None) -> int:
+    return max(1, min(int(value or "20"), 100))
+
+
+def _bounded_offset(value: str | None) -> int:
+    return max(0, min(int(value or "0"), 100_000))

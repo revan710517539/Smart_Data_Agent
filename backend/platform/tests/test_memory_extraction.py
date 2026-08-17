@@ -6,7 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from backend.platform.assets import InMemoryDataAssetStore
-from backend.platform.api.routes.analysis import _build_asset_context, _resolve_analysis_extensions
+from backend.platform.api.routes.analysis import _build_asset_context, _related_detail_tables, _resolve_analysis_extensions
+from backend.platform.lineage import InMemoryLineageStore
 from backend.platform.memory.extraction import run_memory_extraction
 from backend.platform.settings.model_modules import application_module_label, normalize_application_module
 
@@ -22,6 +23,26 @@ class _KnowledgeService:
 class MemoryExtractionTest(unittest.TestCase):
     def setUp(self) -> None:
         self.store = InMemoryDataAssetStore()
+        self.store.upsert_item(
+            "tenant_demo", "knowledge_file",
+            {"id": "kf_weekly_report_memory", "title": "周报分析口径记忆", "tags": "周报,口径"},
+            updated_by="u_super_admin", lifecycle_status="active",
+        )
+        self.store.upsert_item(
+            "tenant_demo", "analysis_experience",
+            {"id": "exp_weekly_growth_quality", "title": "周报增长质量分析经验", "steps": "先核对口径，再比较趋势。"},
+            updated_by="u_super_admin", lifecycle_status="active",
+        )
+        self.store.upsert_item(
+            "tenant_demo", "topic_table",
+            {
+                "id": "topic_weekly_branch_rank", "name": "周报机构排名", "code": "weekly_branch_rank",
+                "description": "受治理周报主题表。",
+                "sql": "SELECT branch_name, loan_amount FROM weekly_branch_rank WHERE tenant_id = :tenant_id",
+                "fields": [{"fieldNameEn": "branch_name", "fieldNameCn": "机构", "type": "string"}],
+            },
+            updated_by="u_super_admin", lifecycle_status="active",
+        )
         self.services = SimpleNamespace(
             data_asset_store=self.store,
             knowledge_service=_KnowledgeService(),
@@ -44,7 +65,7 @@ class MemoryExtractionTest(unittest.TestCase):
             "enabled": True,
             "sortOrder": 999,
         }
-        saved = self.store.upsert_item("tenant_demo", "analysis_skill", item, updated_by="u_admin")
+        saved = self.store.upsert_item("tenant_demo", "analysis_skill", item, updated_by="u_super_admin")
         self.assertEqual(saved["outputFormat"], "")
 
     def test_llm_mode_collects_sources_and_calls_model_once(self) -> None:
@@ -67,7 +88,7 @@ class MemoryExtractionTest(unittest.TestCase):
             result = run_memory_extraction(
                 self.services,
                 "tenant_demo",
-                "u_admin",
+                "u_super_admin",
                 {
                     "execution_mode": "llm",
                     "source_ids": ["kf_weekly_report_memory"],
@@ -86,7 +107,7 @@ class MemoryExtractionTest(unittest.TestCase):
             result = run_memory_extraction(
                 self.services,
                 "tenant_demo",
-                "u_admin",
+                "u_super_admin",
                 {
                     "execution_mode": "script",
                     "script_ref": "memory.rule_based_extraction.v1",
@@ -120,7 +141,7 @@ class MemoryExtractionTest(unittest.TestCase):
             result = run_memory_extraction(
                 self.services,
                 "tenant_demo",
-                "u_admin",
+                "u_super_admin",
                 {
                     "execution_mode": "llm",
                     "source_kind": "knowledge_file",
@@ -144,8 +165,8 @@ class MemoryExtractionTest(unittest.TestCase):
             "output_types": ["analysis_experience"],
             "unextracted_only": True,
         }
-        first = run_memory_extraction(self.services, "tenant_demo", "u_admin", config)
-        second = run_memory_extraction(self.services, "tenant_demo", "u_admin", config)
+        first = run_memory_extraction(self.services, "tenant_demo", "u_super_admin", config)
+        second = run_memory_extraction(self.services, "tenant_demo", "u_super_admin", config)
         self.assertEqual(first["created_count"], 1)
         self.assertEqual(second["status"], "no_new_sources")
         self.assertEqual(second["created_count"], 0)
@@ -155,10 +176,10 @@ class MemoryExtractionTest(unittest.TestCase):
             "tenant_demo",
             "knowledge_file",
             {**current, "title": f"{current['title']}（更新）", "tags": f"{current.get('tags', '')},更新版本"},
-            updated_by="u_admin",
+            updated_by="u_super_admin",
             lifecycle_status="active",
         )
-        updated = run_memory_extraction(self.services, "tenant_demo", "u_admin", config)
+        updated = run_memory_extraction(self.services, "tenant_demo", "u_super_admin", config)
         self.assertEqual(updated["created_count"], 1)
 
     def test_llm_mode_accepts_knowledge_files_and_data_assets_in_one_call(self) -> None:
@@ -181,7 +202,7 @@ class MemoryExtractionTest(unittest.TestCase):
             result = run_memory_extraction(
                 self.services,
                 "tenant_demo",
-                "u_admin",
+                "u_super_admin",
                 {
                     "execution_mode": "llm",
                     "source_ids": ["kf_weekly_report_memory", "topic_weekly_branch_rank"],
@@ -223,7 +244,7 @@ class MemoryExtractionTest(unittest.TestCase):
                 "enabled": True,
                 "sortOrder": 999,
             },
-            updated_by="u_admin",
+            updated_by="u_super_admin",
             lifecycle_status="active",
         )
         resolved = _resolve_analysis_extensions(
@@ -250,6 +271,56 @@ class MemoryExtractionTest(unittest.TestCase):
                 "分析周报",
                 {"analysis_memory_ids": ["kf_weekly_report_memory"]},
             )
+
+    def test_analysis_selected_csv_table_uses_same_catalog_as_picker(self) -> None:
+        csv_table = {
+            "id": "csv_current_delivery",
+            "name": "当前交付 CSV",
+            "code": "csv_current_delivery",
+            "description": "Current tenant delivery.",
+            "fields": [],
+        }
+        csv_source = SimpleNamespace(
+            for_tenant=lambda tenant_id: SimpleNamespace(table_assets=lambda: [csv_table]),
+        )
+        services = SimpleNamespace(
+            data_asset_store=self.store,
+            metric_dictionary_store=None,
+            data_acquisition_service=SimpleNamespace(csv_source=csv_source),
+        )
+
+        context = _build_asset_context(
+            services,
+            "tenant_demo",
+            "分析当前交付",
+            {"selected_data_tables": [{"id": "csv_current_delivery", "code": "csv_current_delivery"}]},
+        )
+
+        self.assertEqual([table["id"] for table in context["selected_data_tables"]], ["csv_current_delivery"])
+        self.assertEqual(context["raw_table_count"], 1)
+
+    def test_visual_follow_up_resolves_only_explicit_published_detail_table(self) -> None:
+        lineage = InMemoryLineageStore()
+        lineage.record_edge("tenant_demo", {
+            "source_type": "dataset",
+            "source_id": "detail_dataset",
+            "target_type": "topic_table",
+            "target_id": "topic_summary",
+            "edge_type": "derives",
+        })
+        topic = {"id": "topic_summary", "name": "汇总主题表", "code": "summary"}
+        detail = {"id": "raw_detail", "tableNameCn": "业务明细表", "tableNameEn": "detail", "datasetId": "detail_dataset", "relativePath": "tenant/detail.csv"}
+        unrelated = {"id": "raw_other", "tableNameCn": "无关表", "tableNameEn": "other"}
+
+        related = _related_detail_tables(
+            SimpleNamespace(lineage_store=lineage),
+            "tenant_demo",
+            [topic],
+            [topic, detail, unrelated],
+        )
+
+        self.assertEqual([item["id"] for item in related], ["raw_detail"])
+        self.assertEqual(_related_detail_tables(SimpleNamespace(lineage_store=lineage), "tenant_demo", [unrelated], [topic, detail, unrelated]), [])
 
 
 if __name__ == "__main__":

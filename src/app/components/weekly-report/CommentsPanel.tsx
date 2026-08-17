@@ -78,6 +78,7 @@ export function formatCommentTimestamp(value?: string) {
 
 export function CommentsPanel({
   showHeader = true,
+  stableFlow = true,
   selectedTarget,
   draftTargets,
   commentDrafts,
@@ -99,6 +100,7 @@ export function CommentsPanel({
   onCommentRepliesToggle,
 }: {
   showHeader?: boolean;
+  stableFlow?: boolean;
   selectedTarget: CommentTarget | null;
   draftTargets: CommentTarget[];
   commentDrafts: Record<string, string>;
@@ -145,7 +147,7 @@ export function CommentsPanel({
       const entryRect = entry.getBoundingClientRect();
       const scrollerRect = scroller.getBoundingClientRect();
       const targetTop = scroller.scrollTop + entryRect.top - scrollerRect.top - 12;
-      scroller.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+      scroller.scrollTo({ top: Math.max(0, targetTop), behavior: "auto" });
     }, 80);
     return () => window.clearTimeout(timeoutId);
   }, [activeCommentId, activeDraftId]);
@@ -167,7 +169,7 @@ export function CommentsPanel({
   const positionedEntries = positionCommentEntries(entries, expandedReplyInputs, expandedCommentReplies, showHeader ? 96 : 12);
 
   return (
-    <div className="relative" data-weekly-comments-panel="true" style={{ minHeight: railHeight }}>
+    <div className="relative" data-weekly-comments-panel="true" data-comment-layout={stableFlow ? "stable-flow" : "anchored"} style={{ minHeight: stableFlow ? undefined : railHeight }}>
       {showHeader && (
         <div className="sticky top-4 z-30 flex items-start gap-2 bg-white rounded-xl border border-[#f0f0f2] p-4 shadow-sm shadow-black/[0.03]">
           <MessageSquareText className="w-4 h-4 text-[#8a8a8e] mt-0.5" />
@@ -186,7 +188,7 @@ export function CommentsPanel({
         </div>
       )}
 
-      <div className="mt-3 space-y-3 xl:mt-0 xl:block">
+      <div className={`mt-3 space-y-3 ${stableFlow ? "" : "xl:mt-0 xl:block"}`}>
         {positionedEntries.map((entry) => {
           const top = entry.displayTop;
           if (entry.kind === "draft") {
@@ -197,10 +199,10 @@ export function CommentsPanel({
               <div
                 key={entry.id}
                 data-draft-id={target.id}
-                className="xl:absolute xl:left-0 xl:right-0 transition-[top,transform] duration-300 ease-out will-change-[top]"
-                style={{ top, zIndex: active ? 70 : 20 }}
+                className={stableFlow ? "relative" : "xl:absolute xl:left-0 xl:right-0"}
+                style={{ ...(stableFlow ? {} : { top }), zIndex: active ? 70 : 20 }}
               >
-                <div className={`rounded-xl border border-[#e5e5ea] border-t-[4px] border-t-[#fbbc04] bg-white p-3 shadow-sm shadow-black/[0.03] ${active ? "ring-2 ring-[#fbbc04]" : ""}`}>
+                <div className={`rounded-xl border bg-white p-3 transition-colors ${active ? "border-[#3370ff]" : "border-[#e5e5ea]"}`}>
                   <div className="flex items-start gap-3 mb-3">
                     <div className="w-8 h-8 rounded-full bg-[#34a853] text-white flex items-center justify-center text-[12px] shrink-0">
                       我
@@ -219,7 +221,7 @@ export function CommentsPanel({
                       </div>
                     </div>
                   </div>
-                  <div className="rounded-lg border border-[#2f6df6] bg-white overflow-hidden">
+                  <div className="overflow-hidden rounded-lg border border-[#e5e5ea] bg-white">
                     <textarea
                       value={commentDrafts[target.id] ?? ""}
                       onChange={(event) => onDraftChange(target.id, event.target.value)}
@@ -255,14 +257,14 @@ export function CommentsPanel({
           return (
             <div
               key={entry.id}
-              className="xl:absolute xl:left-0 xl:right-0 transition-[top,transform] duration-300 ease-out will-change-[top]"
-              style={{ top, zIndex: active || highlighted ? 60 : 10 }}
+              className={stableFlow ? "relative" : "xl:absolute xl:left-0 xl:right-0"}
+              style={{ ...(stableFlow ? {} : { top }), zIndex: active || highlighted ? 60 : 10 }}
             >
               <article
                 data-comment-id={comment.id}
                 onMouseDown={() => onCommentActivate(comment.id)}
-                className={`relative rounded-xl border border-[#e5e5ea] border-t-[4px] border-t-[#fbbc04] p-3 pb-9 pr-10 bg-white transition-all ${
-                  highlighted || active ? "ring-2 ring-[#fbbc04] shadow-lg shadow-[#fbbc04]/20" : ""
+                className={`relative rounded-xl border p-3 pb-9 pr-10 bg-white transition-colors ${
+                  highlighted || active ? "border-[#3370ff]" : "border-[#e5e5ea]"
                 }`}
               >
                 <div

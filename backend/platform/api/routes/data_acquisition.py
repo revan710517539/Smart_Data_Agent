@@ -17,7 +17,11 @@ def handle_data_acquisition_get(handler: Any, query: str) -> None:
             {
                 "tenant_id": context.tenant_id,
                 **bundle,
-                "count": {key: len(value) for key, value in bundle.items()},
+                "count": {
+                    key: len(value)
+                    for key, value in bundle.items()
+                    if isinstance(value, list)
+                },
             }
         )
     except Exception as exc:  # pragma: no cover - HTTP boundary.

@@ -4,7 +4,7 @@ type ApiContextParams = {
 };
 
 const authSessionStorageKey = "smart_data_agent_auth_session_v1";
-const defaultUserId = (import.meta.env.VITE_SMART_DATA_AGENT_USER_ID || "u_admin").trim();
+const defaultUserId = (import.meta.env.VITE_SMART_DATA_AGENT_USER_ID || "u_super_admin").trim();
 const defaultTenantId = (import.meta.env.VITE_SMART_DATA_AGENT_TENANT_ID || "tenant_demo").trim();
 const accessManagerUserId = (import.meta.env.VITE_SMART_DATA_AGENT_ACCESS_USER_ID || defaultUserId).trim();
 
@@ -20,6 +20,11 @@ export function getDefaultTenantId() {
 
 export function getAccessManagerUserId() {
   return getStoredSessionContext().userId || accessManagerUserId;
+}
+
+export function hasStoredAuthSession() {
+  const session = getStoredSessionContext();
+  return Boolean(session.userId && session.tenantId);
 }
 
 export function isDemoFallbackEnabled() {

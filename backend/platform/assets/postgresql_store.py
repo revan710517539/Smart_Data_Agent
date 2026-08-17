@@ -20,6 +20,7 @@ from .store import (
     _require_deletable_asset,
     _require_valid_type,
     _sort_key,
+    _raw_table_external_reference_record,
     _validate_asset_schema,
 )
 
@@ -40,6 +41,55 @@ class PostgreSQLDataAssetStore:
 
     def list_published_bundle(self, tenant_id: str) -> dict[str, list[dict[str, Any]]]:
         return self._bundle(tenant_id, published=True)
+
+    def list_raw_table_external_references(self, tenant_id: str) -> dict[str, dict[str, Any]]:
+        with self.pool.connection() as connection:
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT ref.source_key, ref.mode, ref.schema_fingerprint,
+                           actor.external_subject AS updated_by, ref.updated_at
+                    FROM platform_raw_table_external_references ref
+                    LEFT JOIN platform_user_profiles actor ON actor.user_id = ref.updated_by
+                    WHERE ref.tenant_id = %s
+                    """,
+                    (tenant_key,),
+                )
+                rows = list(cursor.fetchall())
+        return {
+            str(_value(row, "source_key", 0)): {
+                "sourceKey": str(_value(row, "source_key", 0)),
+                "mode": str(_value(row, "mode", 1)),
+                "schemaFingerprint": str(_value(row, "schema_fingerprint", 2)),
+                "updatedBy": str(_value(row, "updated_by", 3) or ""),
+                "updatedAt": _iso(_value(row, "updated_at", 4)),
+            }
+            for row in rows
+        }
+
+    def set_raw_table_external_reference(
+        self, tenant_id: str, source_key: str, mode: str, schema_fingerprint: str, updated_by: str,
+    ) -> dict[str, Any]:
+        record = _raw_table_external_reference_record(source_key, mode, schema_fingerprint, updated_by)
+        with self._transaction() as connection:
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
+            actor_key = PostgreSQLIdentityResolver.user_id(connection, updated_by)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO platform_raw_table_external_references(
+                        tenant_id, source_key, mode, schema_fingerprint, updated_by
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (tenant_id, source_key) DO UPDATE SET
+                        mode = EXCLUDED.mode, schema_fingerprint = EXCLUDED.schema_fingerprint,
+                        updated_by = EXCLUDED.updated_by, updated_at = now()
+                    RETURNING updated_at
+                    """,
+                    (tenant_key, record["sourceKey"], record["mode"], record["schemaFingerprint"], actor_key),
+                )
+                record["updatedAt"] = _iso(_value(cursor.fetchone(), "updated_at", 0))
+        return record
 
     def seed_defaults(self, tenant_id: str, updated_by: str = "development_seed") -> None:
         raise RuntimeError("production_data_assets_must_be_explicitly_imported_and_reviewed")
@@ -262,7 +312,7 @@ class PostgreSQLDataAssetStore:
                     UPDATE platform_data_asset_items
                     SET status = 'archived', updated_at = now(), lock_version = lock_version + 1
                     WHERE tenant_id = %s AND item_type = %s AND item_code = %s AND status <> 'archived'
-                    RETURNING asset_item_id
+                    RETURNING asset_item_id, payload
                     """,
                     (tenant_key, item_type, item_id),
                 )
@@ -382,7 +432,18 @@ class PostgreSQLDataAssetStore:
         version_join = (
             "JOIN platform_data_asset_versions v ON v.asset_item_id = i.asset_item_id"
             if published
-            else "JOIN LATERAL (SELECT * FROM platform_data_asset_versions x WHERE x.asset_item_id = i.asset_item_id ORDER BY x.version_number DESC LIMIT 1) v ON true"
+            else """
+                JOIN (
+                    SELECT ranked.*
+                    FROM (
+                        SELECT x.*, ROW_NUMBER() OVER (
+                            PARTITION BY x.asset_item_id ORDER BY x.version_number DESC
+                        ) AS latest_rank
+                        FROM platform_data_asset_versions x
+                    ) ranked
+                    WHERE ranked.latest_rank = 1
+                ) v ON v.asset_item_id = i.asset_item_id
+            """
         )
         with connection.cursor() as cursor:
             cursor.execute(

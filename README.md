@@ -10,8 +10,15 @@
   Start the local API server:
 
   ```bash
+  export SMART_DATA_AGENT_DATABASE_URL="mysql+pymysql://sda_dev:<password>@127.0.0.1:3306/smart_data_agent"
   npm run dev:api
   ```
+
+  MySQL 8.x is required for every persistent runtime, including development.
+  The API fails closed when `SMART_DATA_AGENT_DATABASE_URL` is absent or is not
+  a MySQL URL. Delivered institution CSV files stay in the external Data Crawler
+  directory and generated results stay in `Topic_Data/`; MySQL stores structured
+  application state and governed file references.
 
   Keep that process running. To make a local restart survive terminal closure on macOS, use:
 
@@ -56,28 +63,48 @@
   ## Forgejo / Dokploy internal deployment
 
   The Dokploy application builds the root `Dockerfile` from the private Forgejo
-  `main` branch. For the internal single-instance environment it must have a
-  named volume mounted at `/app/runtime`, and use the following non-secret
-  environment values:
+  `main` branch. The checked server contract is `docker-compose.server.yml` and
+  the full operator runbook is `docs/server_mysql_deployment.md`. It keeps the
+  existing host-native MySQL and host directory unchanged:
+
+  - `/opt/smart-data-agent/src/app/data` is mounted read-only at `/app/data`.
+    An empty mounted directory is valid and produces an empty institution
+    catalog until the independent delivery service creates institution folders.
+  - `/app/Topic_Data` and `/app/runtime` use persistent writable volumes.
+  - `/var/lib/mysql80/ca.pem` is mounted read-only; the MySQL server key is never
+    mounted into the application container.
+  - Local `Origin_Data/`, `Topic_Data/`, `runtime/`, `.git/` and test fixtures are
+    excluded from the Docker build context. Only the two governed schema seed
+    files below `Origin_Data/` may enter the image.
+
+  Dokploy must inject the real values as protected environment variables. Do
+  not store a database password, login password or signing secret in Git,
+  Compose, the image or chat:
 
   ```bash
   SMART_DATA_AGENT_ENV=development
   SMART_DATA_AGENT_AUTH_MODE=development
-  SMART_DATA_AGENT_DATA_WAREHOUSE=json
+  SMART_DATA_AGENT_AUTH_SECRET=<long-random-secret>
+  SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD=<protected-login-secret>
+  SMART_DATA_AGENT_CORS_ORIGINS=https://your-sda-host.example
+  SMART_DATA_AGENT_DATABASE_URL=mysql+pymysql://sda_app:<url-encoded-password>@172.17.0.1:3306/smart_data_agent?ssl_mode=verify_ca&ssl_ca=/run/secrets/mysql_ca.pem
+  SMART_DATA_AGENT_DATA_WAREHOUSE=csv
   SMART_DATA_AGENT_OBJECT_STORE=local
   SMART_DATA_AGENT_OBJECT_ROOT=/app/runtime/artifacts
-  SMART_DATA_AGENT_CSV_SOURCE_ROOT=/app/Origin_Data
+  SMART_DATA_AGENT_DATA_CRAWLER_ROOT=/app/data
   SMART_DATA_AGENT_CSV_MAX_FILE_BYTES=134217728
-  SMART_DATA_AGENT_EMBEDDED_WORKER=false
+  SMART_DATA_AGENT_EMBEDDED_WORKER=true
   SMART_DATA_AGENT_STATIC_ROOT=/app/dist
   ```
 
-  Smart_Data_Agent reads only the read-only project `Origin_Data/` CSV directory.
-  Each CSV is automatically listed as a raw table with a ten-row preview and
-  field interpretation; no external connection or collection runtime is included.
-  The CSV source directory is intentionally excluded from Git and the Docker
-  build context. This internal profile is not a
-  production-compliance profile: a production deployment requires the OIDC,
-  PostgreSQL, Redis, KMS, object storage, ClamAV, and egress configuration in
-  `docs/production_upgrade/operations_runbook.md`.
+  A genuinely empty database must be explicitly initialized before login; the
+  application never invents a default production tenant or silently inserts
+  demo data. Reuse `scripts/provision_production.py` for each approved formal
+  institution, preserving `u_super_admin` as the single global super-admin
+  subject. If the approved local MySQL database has already been migrated in
+  full, skip provisioning and verify its migration ledger and row counts.
+
+  This single-instance profile is deployable but is not the full production
+  compliance profile. Strict production additionally requires enterprise OIDC,
+  Redis TLS, KMS, object storage, ClamAV and an egress allowlist.
   

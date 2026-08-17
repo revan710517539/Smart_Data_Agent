@@ -100,27 +100,24 @@ def handle_metric_dictionary_import(handler: Any) -> None:
         rows = parse_metric_workbook(str(payload.get("file_content_base64") or ""))
         existing = handler.services.metric_dictionary_store.list(context.tenant_id)
         existing_names = {str(metric.get("metricName") or "").strip() for metric in existing}
+        duplicate_names = _duplicate_metric_names(rows, existing_names)
+        if duplicate_names:
+            raise ValueError(f"metric_dictionary_duplicate_names:{'、'.join(duplicate_names[:20])}")
         used_ids = {str(metric.get("metricId") or "").strip() for metric in existing}
         next_number = _next_metric_number(used_ids)
-        seen_names: set[str] = set()
-        skipped: list[str] = []
         created: list[dict[str, Any]] = []
         for metric in rows:
             name = metric["metricName"].strip()
-            if name in existing_names or name in seen_names:
-                skipped.append(name)
-                continue
             while f"M{next_number:05d}" in used_ids:
                 next_number += 1
             normalized = _normalize_metric_visibility(handler, context, {**metric, "metricId": f"M{next_number:05d}"})
             created.append(normalized)
-            seen_names.add(name)
             used_ids.add(normalized["metricId"])
             next_number += 1
         for metric in created:
             handler.services.metric_dictionary_store.upsert(context.tenant_id, metric, updated_by=context.user_id)
-        handler._write_audit(context, "metric.dictionary.import", "metric_dictionary", "xlsx", {"file_name": file_name, "created": len(created), "skipped": len(skipped)})
-        handler._send_json({"tenant_id": context.tenant_id, "created": created, "created_count": len(created), "skipped_count": len(skipped), "skipped_names": skipped[:20]})
+        handler._write_audit(context, "metric.dictionary.import", "metric_dictionary", "xlsx", {"file_name": file_name, "created": len(created), "skipped": 0})
+        handler._send_json({"tenant_id": context.tenant_id, "created": created, "created_count": len(created), "skipped_count": 0, "skipped_names": []})
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
         send_route_exception(handler, exc)
 
@@ -142,6 +139,101 @@ def handle_metric_dictionary_delete(handler: Any, query: str) -> None:
         handler._write_audit(context, "metric.dictionary.delete", "metric", metric_id, {"deleted": deleted})
         handler._send_json({"tenant_id": context.tenant_id, "metric_id": metric_id, "deleted": deleted})
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def handle_metric_versions_get(handler: Any, query: str) -> None:
+    try:
+        params = parse_qs(query)
+        context = handler._request_context(params=params)
+        handler._require_metric_permission(context, "read")
+        metric_key = first_query_value(params, "metric_key")
+        versions = handler.services.metric_version_service.list(context.tenant_id, metric_key)
+        handler._send_json({"metric_key": metric_key, "versions": versions, "count": len(versions)})
+    except Exception as exc:
+        send_route_exception(handler, exc)
+
+
+def handle_metric_version_diff_get(handler: Any, query: str) -> None:
+    try:
+        params = parse_qs(query)
+        context = handler._request_context(params=params)
+        handler._require_metric_permission(context, "read")
+        result = handler.services.metric_version_service.diff(
+            context.tenant_id,
+            first_query_value(params, "metric_key"),
+            first_query_value(params, "left_version_id"),
+            first_query_value(params, "right_version_id"),
+        )
+        handler._send_json(result)
+    except Exception as exc:
+        send_route_exception(handler, exc)
+
+
+def handle_metric_version_impact_get(handler: Any, query: str) -> None:
+    try:
+        params = parse_qs(query)
+        context = handler._request_context(params=params)
+        handler._require_metric_permission(context, "read")
+        handler._send_json(handler.services.metric_version_service.impact(context.tenant_id, first_query_value(params, "metric_key")))
+    except Exception as exc:
+        send_route_exception(handler, exc)
+
+
+def handle_metric_version_create(handler: Any) -> None:
+    try:
+        payload = handler._read_json()
+        context = handler._request_context(payload=payload)
+        handler._require_metric_permission(context, "update")
+        definition = payload.get("definition")
+        if not isinstance(definition, dict):
+            raise ValueError("metric_version_definition_required")
+        version = handler.services.metric_version_service.create(
+            context.tenant_id,
+            str(payload.get("metric_key") or ""),
+            context.user_id,
+            definition,
+            str(payload.get("parent_version_id") or "") or None,
+        )
+        handler._write_audit(context, "metric.version.create", "metric_version", version["version_id"], {"metric_key": version["metric_key"], "version_no": version["version_no"]})
+        handler._send_json({"version": version})
+    except Exception as exc:
+        send_route_exception(handler, exc)
+
+
+def handle_metric_version_transition(handler: Any) -> None:
+    try:
+        payload = handler._read_json()
+        context = handler._request_context(payload=payload)
+        action = str(payload.get("action") or "")
+        handler._require_metric_permission(context, "publish" if action == "publish" else "update")
+        version = handler.services.metric_version_service.review(
+            context.tenant_id,
+            str(payload.get("version_id") or ""),
+            context.user_id,
+            action,
+            str(payload.get("comment") or ""),
+        )
+        handler._write_audit(context, f"metric.version.{action}", "metric_version", version["version_id"], {"status": version["status"]})
+        handler._send_json({"version": version})
+    except Exception as exc:
+        send_route_exception(handler, exc)
+
+
+def handle_metric_version_rollback(handler: Any) -> None:
+    try:
+        payload = handler._read_json()
+        context = handler._request_context(payload=payload)
+        handler._require_metric_permission(context, "update")
+        version = handler.services.metric_version_service.rollback(
+            context.tenant_id,
+            str(payload.get("metric_key") or ""),
+            str(payload.get("version_id") or ""),
+            context.user_id,
+        )
+        handler._write_audit(context, "metric.version.rollback", "metric_version", version["version_id"], {"rollback_of": version["rollback_of"]})
+        handler._send_json({"version": version})
+    except Exception as exc:
         send_route_exception(handler, exc)
 
 
@@ -211,3 +303,16 @@ def _string_list(value: Any) -> list[str]:
 def _next_metric_number(metric_ids: set[str]) -> int:
     values = [int(metric_id[1:]) for metric_id in metric_ids if metric_id.startswith("M") and metric_id[1:].isdigit()]
     return max(values, default=-1) + 1
+
+
+def _duplicate_metric_names(rows: list[dict[str, Any]], existing_names: set[str]) -> list[str]:
+    workbook_name_counts: dict[str, int] = {}
+    for metric in rows:
+        name = str(metric.get("metricName") or "").strip()
+        workbook_name_counts[name] = workbook_name_counts.get(name, 0) + 1
+    return list(dict.fromkeys(
+        str(metric.get("metricName") or "").strip()
+        for metric in rows
+        if str(metric.get("metricName") or "").strip() in existing_names
+        or workbook_name_counts.get(str(metric.get("metricName") or "").strip(), 0) > 1
+    ))

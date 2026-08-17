@@ -20,6 +20,7 @@ export async function fetchMetricDictionary({
   return apiRequest<MetricDictionaryResponse>("/api/metric-dictionary", {
     method: "GET",
     context: { tenantId, userId },
+    readCache: { ttlMs: 30_000, tags: ["metric-dictionary"] },
   });
 }
 
@@ -94,4 +95,52 @@ export async function deleteMetricDictionaryItem({
       context: { tenantId, userId },
     },
   );
+}
+
+export type MetricSemanticVersion = {
+  version_id: string;
+  metric_key: string;
+  version_no: number;
+  status: "draft" | "review" | "published" | "superseded" | "rejected" | "archived";
+  definition: Record<string, unknown>;
+  checksum: string;
+  parent_version_id?: string | null;
+  submitted_by?: string | null;
+  reviewed_by?: string | null;
+  review_comment?: string;
+  created_at: string;
+};
+
+export async function fetchMetricVersions({ tenantId, userId = getDefaultUserId(), metricId }: MetricDictionaryParams & { metricId: string }) {
+  const query = new URLSearchParams({ metric_key: metricId });
+  return apiRequest<{ metric_key: string; versions: MetricSemanticVersion[]; count: number }>(`/api/semantic/metric-versions?${query}`, { context: { tenantId, userId } });
+}
+
+export async function fetchMetricVersionImpact({ tenantId, userId = getDefaultUserId(), metricId }: MetricDictionaryParams & { metricId: string }) {
+  const query = new URLSearchParams({ metric_key: metricId });
+  return apiRequest<{ metric_key: string; reports: string[]; skills: string[]; analysis_tasks: string[]; cache_entries: string[]; impact_count: number }>(`/api/semantic/metric-versions/impact?${query}`, { context: { tenantId, userId } });
+}
+
+export type MetricVersionDiff = {
+  left_version_id: string;
+  right_version_id: string;
+  changed_fields: Array<{ field: string; before: unknown; after: unknown }>;
+  changed_count: number;
+};
+
+export async function fetchMetricVersionDiff({ tenantId, userId = getDefaultUserId(), metricId, leftVersionId, rightVersionId }: MetricDictionaryParams & { metricId: string; leftVersionId: string; rightVersionId: string }) {
+  const query = new URLSearchParams({ metric_key: metricId, left_version_id: leftVersionId, right_version_id: rightVersionId });
+  return apiRequest<MetricVersionDiff>(`/api/semantic/metric-versions/diff?${query}`, { context: { tenantId, userId } });
+}
+
+export async function createMetricVersion({ tenantId, userId = getDefaultUserId(), metricId, definition, parentVersionId }: MetricDictionaryParams & { metricId: string; definition: Record<string, unknown>; parentVersionId?: string }) {
+  return apiRequest<{ version: MetricSemanticVersion }>("/api/semantic/metric-versions", { method: "POST", context: { tenantId, userId }, body: { metric_key: metricId, definition, parent_version_id: parentVersionId } });
+}
+
+export async function transitionMetricVersion({ tenantId, userId = getDefaultUserId(), versionId, action, comment = "" }: MetricDictionaryParams & { versionId: string; action: "submit" | "publish" | "reject" | "archive"; comment?: string }) {
+  return apiRequest<{ version: MetricSemanticVersion }>("/api/semantic/metric-versions/transition", { method: "POST", context: { tenantId, userId }, body: { version_id: versionId, action, comment } });
+}
+
+export async function rollbackMetricVersion({ tenantId, userId = getDefaultUserId(), metricId, versionId }: MetricDictionaryParams & { metricId: string; versionId: string }) {
+  return apiRequest<{ version: MetricSemanticVersion }>("/api/semantic/metric-versions/rollback", { method: "POST", context: { tenantId, userId }, body: { metric_key: metricId, version_id: versionId } });
 }

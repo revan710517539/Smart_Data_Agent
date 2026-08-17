@@ -186,6 +186,10 @@ class PostgreSQLMarketStore:
                 if latest:
                     last=_value(latest,"detected_at",0)
                     if isinstance(last,str): last=datetime.fromisoformat(last.replace("Z","+00:00"))
+                    if isinstance(last,datetime) and last.tzinfo is None:
+                        last=last.replace(tzinfo=timezone.utc)
+                    elif isinstance(last,datetime):
+                        last=last.astimezone(timezone.utc)
                     if (now-last).total_seconds()<int(rule["cooldown_seconds"]): return None
                 summary=f"{observation['entity_name']} 的 {rule['metric_code']} 触发规则“{rule['rule_name']}”，当前值 {observation.get('value_numeric') if observation.get('value_numeric') is not None else observation.get('value_text')}。"
                 actor_key=_value(_fetch(cursor,"SELECT created_by FROM platform_market_monitoring_rules WHERE market_rule_id=%s",(rule_key,)),"created_by",0)

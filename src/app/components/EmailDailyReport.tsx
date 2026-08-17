@@ -8,6 +8,7 @@ import {
   sendDailyEmail,
   type DailyEmailState,
 } from "../services/dailyEmailApi";
+import { updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
 
 const EMPTY_STATE: DailyEmailState = {
   tenant_id: "",
@@ -62,6 +63,24 @@ export function EmailDailyReport() {
       status: state.email_subscription_count > 0 ? `${state.email_subscription_count} 个有效订阅` : "尚未配置",
     },
   ], [state]);
+
+  useEffect(() => {
+    updateAnalysisWorkspacePageContext("email-daily", {
+      route: "email-daily",
+      artifact_id: state.latest?.body_artifact_id || "email-daily",
+      dataset_snapshot: state.latest ? {
+        id: state.latest.source_report_version_id,
+        version: state.latest.content_hash,
+        sha256: state.latest.content_hash,
+        generatedAt: state.latest.updated_at,
+      } : {},
+      filters: { report_date: state.latest?.report_date || "" },
+      evidence_refs: state.latest ? [{ id: state.latest.source_report_version_id, type: "weekly_report_version", label: state.latest.subject }] : [],
+      visualization: { latest_run: state.latest, subscription_count: state.email_subscription_count, delivery_summary: state.delivery_summary },
+      analysis_skill: { id: "daily-email-review", name: "邮件日报复核", category: "场景", description: "复核当前邮件日报来源版本、证据门禁和投递状态。" },
+      analysis_policy: { engine: "IntelligentAnalysisEngine", resultDelivery: "data_first", conflictStrategy: "executed_query_evidence_overrides_page_context" },
+    });
+  }, [state]);
 
   const runDailyAction = async (action: "generate" | "send") => {
     setBusyAction(action);

@@ -49,6 +49,9 @@ def _visible_item(
     permission_broker: PermissionBroker,
     context: ExecutionContext,
 ) -> NavigationItem | None:
+    if item.key == "task-workbench.message-board":
+        if not permission_broker.enforcer.has_super_admin_role(context.user_id, context.tenant_id):
+            return None
     children = tuple(
         child
         for child in (_visible_item(child, permission_broker, context) for child in item.children)

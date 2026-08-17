@@ -340,7 +340,7 @@ class PostgreSQLKnowledgeStore:
         classification: str,
         resource_type: str = "knowledge_document",
     ) -> dict[str, Any]:
-        if resource_type not in {"knowledge_document", "weekly_report_image"}:
+        if resource_type not in {"knowledge_document", "weekly_report_image", "message_board_image"}:
             raise ValueError("unsupported_attachment_resource_type")
         attachment_key = f"fa_{uuid4().hex}"
         with self._transaction() as connection:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import unittest
 from time import perf_counter
@@ -35,6 +36,8 @@ class CSVFolderSourceTest(unittest.TestCase):
             self.assertEqual(table["tableNameCn"], "sample")
             self.assertEqual(table["relativePath"], "智能运营/sample.csv")
             self.assertEqual(table["rowCount"], 1)
+            self.assertEqual(len(table["sourceKey"]), 32)
+            self.assertEqual(len(table["schemaFingerprint"]), 32)
             self.assertEqual(table["previewRows"], [{"机构": "华兴银行", "说明": "第一行\n第二行"}])
             self.assertEqual(table["fields"][0]["fieldNameCn"], "机构")
             with self.assertRaises(PermissionError):
@@ -74,6 +77,16 @@ class CSVFolderSourceTest(unittest.TestCase):
             self.assertEqual(source.root, app_data.resolve())
             self.assertEqual([item["file_name"] for item in tenant_source.snapshot()["files"]], ["loan.csv"])
 
+    def test_environment_uses_local_checkout_when_app_data_mount_is_empty(self) -> None:
+        local_root = CSVFolderSource.local_data_crawler_root
+        self.assertTrue(local_root.is_dir(), "local Data Crawler checkout must exist for this development test")
+        with TemporaryDirectory() as tmpdir, patch.dict(os.environ, {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": ""}, clear=False), patch.object(
+            CSVFolderSource, "container_data_crawler_root", Path(tmpdir) / "empty-app-data"
+        ):
+            CSVFolderSource.container_data_crawler_root.mkdir()
+            source = CSVFolderSource.from_environment()
+        self.assertEqual(source.root, local_root.resolve())
+
     def test_daily_delivery_versions_expose_only_the_latest_source_file(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -93,7 +106,85 @@ class CSVFolderSourceTest(unittest.TestCase):
                 [item["relative_path"] for item in snapshot["files"]],
                 ["daily/经营日报2026-07-19.csv", "daily/经营明细_本月.csv", "daily/经营明细_近7天.csv"],
             )
-            self.assertEqual([item["rowCount"] for item in source.table_assets()], [1, 1, 1])
+            tables = source.table_assets()
+            self.assertEqual([item["rowCount"] for item in tables], [1, 1, 1])
+            self.assertEqual(
+                [item["tableNameCn"] for item in tables],
+                ["经营日报_2026-07-19", "经营明细_本月", "经营明细_近7天"],
+            )
+
+    def test_timestamped_deliveries_use_title_date_and_one_stable_source(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            delivery_dir = root / "csv" / "source_huaxing" / "2026-08-14"
+            delivery_dir.mkdir(parents=True)
+            first_path = delivery_dir / "20260814_105556_自营双周会每周新增余额放款.csv"
+            latest_path = delivery_dir / "20260814_110040_自营双周会每周新增余额放款.csv"
+            first_path.write_text("机构,金额\nA,1\n", encoding="utf-8")
+            latest_path.write_text("机构,金额\nA,2\n", encoding="utf-8")
+            os.utime(first_path, (1, 1))
+            os.utime(latest_path, (2, 2))
+
+            source = CSVFolderSource(root)
+            snapshot = source.snapshot()
+            table = source.table_assets()[0]
+
+            self.assertEqual(snapshot["physical_file_count"], 2)
+            self.assertEqual(snapshot["superseded_file_count"], 1)
+            self.assertEqual(snapshot["file_count"], 1)
+            self.assertEqual(table["tableNameCn"], "自营双周会每周新增余额放款_2026-08-14")
+            self.assertEqual(table["fileName"], latest_path.name)
+            self.assertEqual(table["relativePath"], "csv/source_huaxing/2026-08-14/20260814_110040_自营双周会每周新增余额放款.csv")
+            self.assertEqual(table["previewRows"][0]["金额"], "2")
+
+    def test_display_name_normalizes_leading_and_trailing_delivery_dates(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "20260814_双周报业务进度查询.csv").write_text("机构,金额\nA,1\n", encoding="utf-8")
+            (root / "标品双周会周度sql_2026-05-06.csv").write_text("机构,金额\nA,2\n", encoding="utf-8")
+
+            tables = CSVFolderSource(root).table_assets()
+
+            self.assertEqual(
+                [item["tableNameCn"] for item in tables],
+                ["双周报业务进度查询_2026-08-14", "标品双周会周度sql_2026-05-06"],
+            )
+
+    def test_source_key_stays_stable_across_timestamped_delivery_dates(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            first_dir = root / "csv" / "source_huaxing" / "2026-08-13"
+            first_dir.mkdir(parents=True)
+            first_path = first_dir / "20260813_090000_经营日报.csv"
+            first_path.write_text("机构,金额\nA,1\n", encoding="utf-8")
+            source = CSVFolderSource(root)
+            first_table = source.table_assets()[0]
+
+            latest_dir = root / "csv" / "source_huaxing" / "2026-08-14"
+            latest_dir.mkdir(parents=True)
+            latest_path = latest_dir / "20260814_090000_经营日报.csv"
+            latest_path.write_text("机构,金额\nA,2\n", encoding="utf-8")
+            latest_table = source.table_assets(force=True)[0]
+
+            self.assertEqual(first_table["sourceKey"], latest_table["sourceKey"])
+            self.assertEqual(latest_table["tableNameCn"], "经营日报_2026-08-14")
+            self.assertEqual(latest_table["fileName"], latest_path.name)
+
+    def test_catalog_excludes_data_crawler_operational_artifacts(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "业务数据.csv").write_text("机构,金额\nA,1\n", encoding="utf-8")
+            (root / "metadata").mkdir()
+            (root / "metadata" / "毓数_我的查询目录.csv").write_text("目录,SQL\ndefault,select 1\n", encoding="utf-8")
+            (root / "系统验证").mkdir()
+            (root / "系统验证" / "SQL 连通性验证.csv").write_text("crawler_health_check\n1\n", encoding="utf-8")
+            (root / "采集链路健康检查_2026-08-11.csv").write_text("crawler_health_check\n1\n", encoding="utf-8")
+            (root / "SQL 编辑器运行_2026-08-10.csv").write_text("机构,金额\nA,1\n", encoding="utf-8")
+
+            source = CSVFolderSource(root)
+
+            self.assertEqual([item["relative_path"] for item in source.snapshot()["files"]], ["业务数据.csv"])
+            self.assertEqual([item["tableNameCn"] for item in source.table_assets()], ["业务数据"])
 
     def test_catalog_reuses_cached_snapshot_and_table_assets_until_forced_refresh(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -122,3 +213,31 @@ class CSVFolderSourceTest(unittest.TestCase):
             missing_source = source.for_tenant("tenant_missing")
             missing_source.prime_catalog()
             self.assertEqual(missing_source.snapshot()["files"], [])
+
+    def test_tenant_catalog_reads_only_source_id_folders_bound_by_crawler_metadata(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "metadata").mkdir()
+            (root / "metadata" / "sources.json").write_text(json.dumps({
+                "items": [
+                    {"id": "source_huaxing", "institutionId": "huaxing"},
+                    {"id": "source_zhengzhou", "institutionId": "zhengzhou"},
+                ],
+            }), encoding="utf-8")
+            huaxing_path = root / "csv" / "source_huaxing" / "2026-08-14" / "20260814_100000_经营日报.csv"
+            zhengzhou_path = root / "csv" / "source_zhengzhou" / "2026-08-14" / "20260814_100000_郑州日报.csv"
+            huaxing_path.parent.mkdir(parents=True)
+            zhengzhou_path.parent.mkdir(parents=True)
+            huaxing_path.write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            zhengzhou_path.write_text("机构,金额\n郑州银行,2\n", encoding="utf-8")
+
+            tenant_source = CSVFolderSource(root).for_tenant("tenant:华兴银行")
+            tenant_source.prime_catalog()
+
+            self.assertEqual(
+                [item["relative_path"] for item in tenant_source.snapshot()["files"]],
+                ["csv/source_huaxing/2026-08-14/20260814_100000_经营日报.csv"],
+            )
+            self.assertEqual(tenant_source.table_assets()[0]["previewRows"][0]["机构"], "华兴银行")
+            with self.assertRaises(FileNotFoundError):
+                tenant_source.read("csv/source_zhengzhou/2026-08-14/20260814_100000_郑州日报.csv")

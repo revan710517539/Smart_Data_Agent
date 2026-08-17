@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
+import { createPortal } from "react-dom";
 import {
   CalendarDays,
   Check,
@@ -9,17 +10,16 @@ import {
   ChevronRight,
   Circle,
   Columns3,
-  Filter,
   ListChecks,
   PencilLine,
   Plus,
-  Search,
   Tag,
   Trash2,
   Users,
   X,
 } from "lucide-react";
 import { fetchApplicationModule, runApplicationAction } from "../services/applicationApi";
+import { DataPageSelector, useClientPagination } from "./ui/DataPageSelector";
 
 type TodoStatus = "todo" | "in_progress" | "done" | "closed";
 type TodoPriority = "low" | "medium" | "high" | "urgent";
@@ -64,7 +64,10 @@ type TodoFormState = {
 type TodoWorkspaceProps = {
   tenantId: string;
   userId: string;
+  userName: string;
   composerRequest: number;
+  toolbarLeftHost: HTMLDivElement | null;
+  toolbarRightHost: HTMLDivElement | null;
 };
 
 type CalendarLaneReveal = {
@@ -106,16 +109,22 @@ const kanbanColumns: { status: TodoStatus; title: string }[] = [
   { status: "closed", title: "已关闭" },
 ];
 
-export function TodoWorkspace({ tenantId, userId, composerRequest }: TodoWorkspaceProps) {
+export function TodoWorkspace({
+  tenantId,
+  userId,
+  userName,
+  composerRequest,
+  toolbarLeftHost,
+  toolbarRightHost,
+}: TodoWorkspaceProps) {
   const [todos, setTodos] = useState<AgentTodo[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncError, setSyncError] = useState("");
-  const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<TodoStatus | "all">("all");
   const [activeView, setActiveView] = useState<TodoView>("list");
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<TodoFormState>(() => emptyTodoForm(userId));
+  const [form, setForm] = useState<TodoFormState>(() => emptyTodoForm(userName));
   const [collapsedTodoIds, setCollapsedTodoIds] = useState<Set<string>>(() => new Set());
   const [kanbanExpanded, setKanbanExpanded] = useState(true);
   const [calendarExpanded, setCalendarExpanded] = useState(false);
@@ -147,7 +156,7 @@ export function TodoWorkspace({ tenantId, userId, composerRequest }: TodoWorkspa
           moduleKey: "agent_workspace",
         });
         if (cancelled) return;
-        const parsed = normalizeTodos(response.state.todos);
+        const parsed = normalizeTodos(response.state.todos, userId, userName);
         setTodos(parsed);
       } catch (error) {
         if (!cancelled) {
@@ -162,49 +171,24 @@ export function TodoWorkspace({ tenantId, userId, composerRequest }: TodoWorkspa
     return () => {
       cancelled = true;
     };
-  }, [tenantId, userId]);
+  }, [tenantId, userId, userName]);
 
   useEffect(() => {
     if (composerRequest <= 0) return;
     setEditingId(null);
-    setForm(emptyTodoForm(userId));
+    setForm(emptyTodoForm(userName));
     setComposerOpen(true);
-  }, [composerRequest, userId]);
+  }, [composerRequest, userName]);
 
   const filteredTodos = useMemo(() => {
-    const keyword = query.trim().toLowerCase();
     return [...todos]
-      .filter((todo) => {
-        if (statusFilter !== "all" && todo.status !== statusFilter) return false;
-        if (!keyword) return true;
-        const searchable = [
-          todo.title,
-          todo.description,
-          todo.assignee,
-          todo.listName,
-          todo.labels.join(" "),
-          sourceConfig[todo.source].label,
-        ]
-          .join(" ")
-          .toLowerCase();
-        return searchable.includes(keyword);
-      })
+      .filter((todo) => statusFilter === "all" || todo.status === statusFilter)
       .sort(sortTodos);
-  }, [query, statusFilter, todos]);
-
-  const summary = useMemo(() => {
-    const today = todayIso();
-    return {
-      total: todos.length,
-      todayDue: todos.filter((todo) => todo.dueDate === today && !["done", "closed"].includes(todo.status)).length,
-      urgent: todos.filter((todo) => ["urgent", "high"].includes(todo.priority) && !["done", "closed"].includes(todo.status)).length,
-      done: todos.filter((todo) => todo.status === "done").length,
-    };
-  }, [todos]);
+  }, [statusFilter, todos]);
 
   const openCreate = (defaults: Partial<TodoFormState> = {}) => {
     setEditingId(null);
-    setForm({ ...emptyTodoForm(userId), ...defaults });
+    setForm({ ...emptyTodoForm(userName), ...defaults });
     setComposerOpen(true);
   };
 
@@ -226,7 +210,7 @@ export function TodoWorkspace({ tenantId, userId, composerRequest }: TodoWorkspa
   const closeComposer = () => {
     setComposerOpen(false);
     setEditingId(null);
-    setForm(emptyTodoForm(userId));
+    setForm(emptyTodoForm(userName));
   };
 
   const saveTodo = async () => {
@@ -241,7 +225,7 @@ export function TodoWorkspace({ tenantId, userId, composerRequest }: TodoWorkspa
       status: form.status,
       priority: form.priority,
       dueDate: form.dueDate || todayIso(),
-      assignee: form.assignee.trim() || "当前用户",
+      assignee: form.assignee.trim() || userName,
       listName: form.listName.trim() || "个人待办",
       labels: splitLabels(form.labels),
       source: existing?.source || "manual",
@@ -265,7 +249,7 @@ export function TodoWorkspace({ tenantId, userId, composerRequest }: TodoWorkspa
     setTodos(optimisticTodos);
     setSyncError("");
     closeComposer();
-    const synced = await persistTodoAction(tenantId, userId, action, { todo: nextTodo, ownerUserId: userId });
+    const synced = await persistTodoAction(tenantId, userId, userName, action, { todo: nextTodo, ownerUserId: userId });
     if (synced) {
       setTodos(synced);
     } else {
@@ -278,7 +262,7 @@ export function TodoWorkspace({ tenantId, userId, composerRequest }: TodoWorkspa
     const previous = todos;
     setTodos((items) => items.filter((todo) => todo.id !== todoId));
     setSyncError("");
-    const synced = await persistTodoAction(tenantId, userId, "delete_todo", { todoId });
+    const synced = await persistTodoAction(tenantId, userId, userName, "delete_todo", { todoId });
     if (synced) {
       setTodos(synced);
     } else {
@@ -292,7 +276,7 @@ export function TodoWorkspace({ tenantId, userId, composerRequest }: TodoWorkspa
     const previous = todos;
     const nextTodo = { ...todo, status, updatedAt: new Date().toISOString() };
     setTodos((items) => items.map((item) => (item.id === todo.id ? nextTodo : item)));
-    const synced = await persistTodoAction(tenantId, userId, "change_todo_status", {
+    const synced = await persistTodoAction(tenantId, userId, userName, "change_todo_status", {
       todoId: todo.id,
       status,
     });
@@ -307,7 +291,7 @@ export function TodoWorkspace({ tenantId, userId, composerRequest }: TodoWorkspa
     const previous = todos;
     const nextTodo = { ...todo, updatedAt: new Date().toISOString() };
     setTodos((items) => items.map((item) => (item.id === nextTodo.id ? nextTodo : item)));
-    const synced = await persistTodoAction(tenantId, userId, "update_todo", { todo: nextTodo, ownerUserId: userId });
+    const synced = await persistTodoAction(tenantId, userId, userName, "update_todo", { todo: nextTodo, ownerUserId: userId });
     if (synced) setTodos(synced);
     else {
       setTodos(previous);
@@ -349,7 +333,7 @@ export function TodoWorkspace({ tenantId, userId, composerRequest }: TodoWorkspa
       }),
     );
     affected.forEach((todo) => {
-      void persistTodoAction(tenantId, userId, "update_todo", { todo, ownerUserId: userId }).then((synced) => {
+      void persistTodoAction(tenantId, userId, userName, "update_todo", { todo, ownerUserId: userId }).then((synced) => {
         if (synced) setTodos(synced);
       });
     });
@@ -458,7 +442,7 @@ export function TodoWorkspace({ tenantId, userId, composerRequest }: TodoWorkspa
         items.map((item) => updatedTodos.find((todo) => todo.id === item.id) || item),
       );
       updatedTodos.forEach((todo) => {
-        void persistTodoAction(tenantId, userId, "update_todo", { todo, ownerUserId: userId }).then((synced) => {
+        void persistTodoAction(tenantId, userId, userName, "update_todo", { todo, ownerUserId: userId }).then((synced) => {
           if (synced) setTodos(synced);
         });
       });
@@ -473,82 +457,63 @@ export function TodoWorkspace({ tenantId, userId, composerRequest }: TodoWorkspa
 
   return (
     <div className="space-y-5">
+      {toolbarLeftHost &&
+        createPortal(
+          <div className="flex items-center gap-3" data-todo-toolbar="filters-and-views">
+            <select
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value as TodoStatus | "all")}
+              aria-label="筛选待办状态"
+              className="h-10 min-w-[116px] rounded-lg border border-[#d1d1d6] bg-white px-3 text-[13px] text-[#1d1d1f] outline-none transition-colors focus:border-[#8ab4ea]"
+            >
+              <option value="all">全部状态</option>
+              <option value="todo">待处理</option>
+              <option value="in_progress">进行中</option>
+              <option value="done">已完成</option>
+              <option value="closed">已关闭</option>
+            </select>
+            <div className="flex rounded-lg bg-[#f2f2f7] p-1" aria-label="待办展示方式">
+              {[
+                { key: "list", label: "列表", icon: ListChecks },
+                { key: "kanban", label: "看板", icon: Columns3 },
+                { key: "calendar", label: "日历", icon: CalendarDays },
+              ].map((view) => (
+                <button
+                  key={view.key}
+                  type="button"
+                  onClick={() => setActiveView(view.key as TodoView)}
+                  aria-pressed={activeView === view.key}
+                  className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-[12px] transition-colors ${
+                    activeView === view.key ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:text-[#1d1d1f]"
+                  }`}
+                >
+                  <view.icon className="h-3.5 w-3.5" />
+                  {view.label}
+                </button>
+              ))}
+            </div>
+          </div>,
+          toolbarLeftHost,
+        )}
+      {toolbarRightHost && activeView !== "list" &&
+        createPortal(
+          <button
+            type="button"
+            onClick={() => setAllCardsExpanded(!activeCardsExpanded)}
+            data-todo-global-toggle
+            className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#e5e5ea] bg-white text-[#636366] transition-colors hover:bg-[#f2f2f7]"
+            title={activeCardsExpanded ? "全部折叠" : "全部展开"}
+            aria-label={activeCardsExpanded ? "全部折叠" : "全部展开"}
+          >
+            <QuadChevron expanded={activeCardsExpanded} />
+          </button>,
+          toolbarRightHost,
+        )}
       {syncError && (
         <div className="rounded-lg border border-[#ffe3aa] bg-[#fff7e6] px-3 py-2 text-[12px] text-[#8a5a00]">
           {syncError}；系统不会用内置待办补位。
         </div>
       )}
-      <div className="grid grid-cols-4 gap-4">
-        {[
-          { label: "待办总数", value: String(summary.total), icon: ListChecks },
-          { label: "今日到期", value: String(summary.todayDue), icon: CalendarDays },
-          { label: "高优先级", value: String(summary.urgent), icon: Filter },
-          { label: "已完成", value: String(summary.done), icon: Check },
-        ].map((item) => (
-          <div key={item.label} className="rounded-xl border border-[#f0f0f2] bg-white p-4">
-            <div className="mb-2 flex items-center justify-between">
-              <item.icon className="h-4 w-4 text-[#636366]" />
-            </div>
-            <div className="text-[22px] tracking-tight text-gray-900">{item.value}</div>
-            <div className="mt-0.5 text-[12px] text-gray-400">{item.label}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="rounded-xl border border-[#f0f0f2] bg-white p-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative min-w-[240px] flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#aeaeb2]" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索标题、标签、负责人或来源"
-              className="h-10 w-full rounded-lg border border-[#e5e5ea] bg-[#fafbfc] pl-9 pr-3 text-[13px] text-[#1d1d1f] outline-none transition-colors focus:border-[#c7c7cc] focus:bg-white"
-            />
-          </div>
-          <select
-            value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value as TodoStatus | "all")}
-            className="h-10 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[13px] text-[#1d1d1f] outline-none"
-          >
-            <option value="all">全部状态</option>
-            <option value="todo">待处理</option>
-            <option value="in_progress">进行中</option>
-            <option value="done">已完成</option>
-            <option value="closed">已关闭</option>
-          </select>
-          <div className="flex rounded-lg bg-[#f2f2f7] p-1">
-            {[
-              { key: "list", label: "列表", icon: ListChecks },
-              { key: "kanban", label: "看板", icon: Columns3 },
-              { key: "calendar", label: "日历", icon: CalendarDays },
-            ].map((view) => (
-              <button
-                key={view.key}
-                onClick={() => setActiveView(view.key as TodoView)}
-                className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-[12px] transition-colors ${
-                  activeView === view.key ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:text-[#1d1d1f]"
-                }`}
-              >
-                <view.icon className="h-3.5 w-3.5" />
-                {view.label}
-              </button>
-            ))}
-          </div>
-          {activeView !== "list" && (
-            <button
-              type="button"
-              onClick={() => setAllCardsExpanded(!activeCardsExpanded)}
-              data-todo-global-toggle
-              className="ml-auto flex h-10 w-10 items-center justify-center rounded-lg border border-[#e5e5ea] bg-white text-[#636366] transition-colors hover:bg-[#f2f2f7]"
-              title={activeCardsExpanded ? "全部折叠" : "全部展开"}
-            >
-              <QuadChevron expanded={activeCardsExpanded} />
-            </button>
-          )}
-        </div>
-      </div>
-
       {composerOpen && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/20 px-4 py-8">
           <div className="w-full max-w-4xl rounded-xl border border-[#d1d1d6] bg-white p-5 shadow-2xl shadow-black/10">
@@ -695,10 +660,12 @@ function TodoListView({
   onDelete: (todoId: string) => void;
   onChangeStatus: (todo: AgentTodo, status: TodoStatus) => void;
 }) {
+  const pagination = useClientPagination(todos);
   if (todos.length === 0) return <EmptyTodoState />;
   return (
     <div className="overflow-hidden rounded-xl border border-[#f0f0f2] bg-white">
-      {todos.map((todo) => (
+      {pagination.paginated && <div className="flex justify-end border-b border-[#f0f0f2] bg-[#fafbfc] px-4 py-2"><DataPageSelector page={pagination.page} totalPages={pagination.totalPages} shownCount={pagination.items.length} totalCount={pagination.total} onChange={pagination.setPage} ariaLabel="待办列表分页" /></div>}
+      {pagination.items.map((todo) => (
         <div key={todo.id} className="grid grid-cols-[36px_1fr_120px_120px_112px_86px] items-center gap-3 border-b border-[#f5f5f7] px-4 py-3 last:border-b-0">
           <button
             onClick={() => onChangeStatus(todo, todo.status === "done" ? "todo" : "done")}
@@ -1351,20 +1318,20 @@ function DueDate({ todo }: { todo: AgentTodo }) {
   );
 }
 
-function emptyTodoForm(userId: string): TodoFormState {
+function emptyTodoForm(userName: string): TodoFormState {
   return {
     title: "",
     description: "",
     status: "todo",
     priority: "medium",
     dueDate: todayIso(),
-    assignee: userId || "当前用户",
+    assignee: userName || "当前用户",
     listName: "个人待办",
     labels: "",
   };
 }
 
-async function persistTodoAction(tenantId: string, userId: string, action: string, payload: Record<string, unknown>) {
+async function persistTodoAction(tenantId: string, userId: string, userName: string, action: string, payload: Record<string, unknown>) {
   try {
     const response = await runApplicationAction<{ todos?: unknown[] }>({
       tenantId,
@@ -1373,23 +1340,30 @@ async function persistTodoAction(tenantId: string, userId: string, action: strin
       action,
       payload,
     });
-    return normalizeTodos(response.module.state.todos);
+    return normalizeTodos(response.module.state.todos, userId, userName);
   } catch {
     return null;
   }
 }
 
-function normalizeTodos(value: unknown): AgentTodo[] {
+function normalizeTodos(value: unknown, currentUserId: string, currentUserName = "当前用户"): AgentTodo[] {
   if (!Array.isArray(value)) return [];
-  return value.map(normalizeTodo).filter((todo): todo is AgentTodo => Boolean(todo));
+  return value.map((item) => normalizeTodo(item, currentUserId, currentUserName)).filter((todo): todo is AgentTodo => Boolean(todo));
 }
 
-function normalizeTodo(value: unknown): AgentTodo | null {
+function normalizeTodo(value: unknown, currentUserId: string, currentUserName: string): AgentTodo | null {
   if (!value || typeof value !== "object") return null;
   const item = value as Record<string, unknown>;
   const title = String(item.title || "").trim();
   if (!title) return null;
   const now = new Date().toISOString();
+  const assigneeUserId = String(item.assigneeUserId || item.ownerUserId || item.createdBy || "").trim();
+  const storedAssignee = String(item.assignee || "").trim();
+  const assignee = assigneeUserId === currentUserId || storedAssignee === currentUserId
+    ? currentUserName || "当前用户"
+    : storedAssignee && storedAssignee !== assigneeUserId
+      ? storedAssignee
+      : "未知用户";
   return {
     id: String(item.id || makeTodoId()),
     title,
@@ -1397,7 +1371,7 @@ function normalizeTodo(value: unknown): AgentTodo | null {
     status: normalizeStatus(item.status),
     priority: normalizePriority(item.priority),
     dueDate: normalizeDate(item.dueDate),
-    assignee: String(item.assignee || "当前用户"),
+    assignee,
     listName: String(item.listName || "个人待办"),
     labels: Array.isArray(item.labels) ? item.labels.map((label) => String(label).trim()).filter(Boolean) : [],
     source: normalizeSource(item.source),

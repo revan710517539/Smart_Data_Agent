@@ -9,11 +9,13 @@ from pathlib import Path
 
 from backend.platform.api.asgi import SmartDataAgentASGI
 from backend.platform.bootstrap import build_local_platform
+from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
 
 
 class ASGIRuntimeTest(unittest.TestCase):
     def setUp(self) -> None:
         self.services = build_local_platform()
+        attach_governed_test_warehouse(self.services)
         self.app = SmartDataAgentASGI(self.services, owns_services=False)
 
     def tearDown(self) -> None:
@@ -61,7 +63,7 @@ class ASGIRuntimeTest(unittest.TestCase):
                 body=body,
                 headers=[
                     (b"content-type", b"application/json"),
-                    (b"x-user-id", b"u_admin"),
+                    (b"x-user-id", b"u_super_admin"),
                     (b"x-tenant-id", b"tenant_demo"),
                 ],
             )
@@ -131,7 +133,7 @@ class ASGIRuntimeTest(unittest.TestCase):
                 "path": "/api/asr/fun-asr/realtime",
                 "query_string": b"",
                 "headers": [
-                    (b"x-user-id", b"u_admin"),
+                    (b"x-user-id", b"u_super_admin"),
                     (b"x-tenant-id", b"tenant_demo"),
                     (b"origin", b"http://localhost:5173"),
                 ],

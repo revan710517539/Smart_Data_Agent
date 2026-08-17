@@ -11,4 +11,4 @@ while [ -h "$SOURCE" ]; do
   esac
 done
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SOURCE")" && pwd)
-exec python3 "$SCRIPT_DIR/sda_report.py" "$@"
+exec python3 "$SCRIPT_DIR/../integrations/workbuddy-smart-data-report/bin/sda_report.py" "$@"

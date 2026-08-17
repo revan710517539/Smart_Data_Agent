@@ -9,6 +9,7 @@ from backend.platform.api.routes.analysis import run_analysis
 from backend.platform.bootstrap import build_local_platform
 from backend.platform.api.support import format_prometheus_metrics
 from backend.platform.observability import RuntimeEvent
+from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
 
 
 class LocalConcurrencyTest(unittest.TestCase):
@@ -22,7 +23,7 @@ class LocalConcurrencyTest(unittest.TestCase):
                             event_type="analysis.run",
                             trace_id=f"trace_{index}",
                             tenant_id="tenant_demo",
-                            user_id="u_admin",
+                            user_id="u_super_admin",
                             status="error" if index % 10 == 0 else "ok",
                             latency_ms=index,
                             fallback_used=index % 20 == 0,
@@ -42,13 +43,14 @@ class LocalConcurrencyTest(unittest.TestCase):
     def test_threaded_sqlite_adapter_serializes_transactions_without_cross_thread_misuse(self) -> None:
         with TemporaryDirectory() as tmpdir:
             services = build_local_platform(Path(tmpdir) / "platform.sqlite")
+            attach_governed_test_warehouse(services)
             try:
                 with ThreadPoolExecutor(max_workers=8) as executor:
                     futures = [
                         executor.submit(
                             run_analysis,
                             services,
-                            "u_admin",
+                            "u_super_admin",
                             "tenant_demo",
                             f"各分行放款金额并发样本 {index}",
                             {"request_id": f"concurrency_{index}"},

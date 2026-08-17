@@ -1,7 +1,7 @@
 {
   "name": "smart-data-agent-report",
-  "version": "0.1.0",
-  "description": "Publish structured WorkBuddy analysis results to Smart Data Agent My Reports.",
+  "version": "1.1.0",
+  "description": "Install Universal Bridge once, then discover and use server-registered systems without client reinstall.",
   "skills": ["./skills/smart-data-agent-report/SKILL.md"],
   "commands": ["./commands/publish-analysis.md"],
   "hooks": "./hooks/hooks.json"

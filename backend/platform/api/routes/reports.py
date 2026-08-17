@@ -15,6 +15,13 @@ from backend.platform.reports.weekly_learning import WeeklyReportLearningEngine
 from backend.platform.tenancy import ExecutionContext
 
 
+SAVED_REPORT_VISUAL_TYPES = frozenset({
+    "kpi", "line", "area", "column", "bar", "stacked_bar", "combo", "donut",
+    "scatter", "funnel", "treemap", "radar", "table", "pivot",
+})
+SAVED_REPORT_VISUAL_TYPE_ALIASES = {"stackedBar": "stacked_bar", "pie": "donut"}
+
+
 def _institution_label(tenant_id: str) -> str:
     return str(tenant_id or "").split(":", 1)[-1].strip()
 
@@ -60,8 +67,9 @@ def handle_report_analysis_result_upsert(handler: Any) -> None:
         ) if result_id else None
         # A report title is report metadata, not a new analysis execution.
         # Historical saved reports predate analysisTaskId/Topic_Data and must
-        # remain renameable by their owner.  In that path preserve every field
-        # except title so a title update cannot rewrite report evidence/data.
+        # remain editable by their owner. In that path preserve every field
+        # except title and presentation preference, so metadata changes cannot
+        # rewrite report evidence or source data.
         is_owned_existing_report = bool(existing)
         is_title_update = bool(existing and task_id and str(existing.get("analysisTaskId") or "") == task_id)
         if is_owned_existing_report and not task:
@@ -80,6 +88,12 @@ def handle_report_analysis_result_upsert(handler: Any) -> None:
             result = {
                 **existing,
                 "title": requested_title,
+                "visualTypes": _saved_report_visual_types(result.get("visualTypes"), existing.get("visualTypes")),
+                "visualizations": (
+                    result.get("visualizations")
+                    if isinstance(result.get("visualizations"), list)
+                    else existing.get("visualizations")
+                ),
                 **({"topicData": candidate_reference} if is_own_report_reference else {}),
             }
         elif not is_title_update and (not task or task.get("tenant_id") != context.tenant_id or task.get("user_id") != context.user_id):
@@ -129,6 +143,20 @@ def handle_report_analysis_result_upsert(handler: Any) -> None:
         send_route_exception(handler, exc)
 
 
+def _saved_report_visual_types(value: Any, fallback: Any) -> dict[str, str]:
+    """Permit owner-only presentation changes without accepting report data edits."""
+    existing = fallback if isinstance(fallback, dict) else {}
+    requested = value if isinstance(value, dict) else {}
+    visual_types: dict[str, str] = {}
+    for key in ("primary", "secondary"):
+        candidate = str(requested.get(key) or existing.get(key) or "table").strip().lower()
+        candidate = SAVED_REPORT_VISUAL_TYPE_ALIASES.get(candidate, candidate)
+        if candidate not in SAVED_REPORT_VISUAL_TYPES:
+            raise ValueError("saved_analysis_visual_type_invalid")
+        visual_types[key] = candidate
+    return visual_types
+
+
 def handle_report_analysis_result_delete(handler: Any, query: str) -> None:
     try:
         params = parse_qs(query)
@@ -166,12 +194,18 @@ def handle_report_analysis_result_save_weekly(handler: Any) -> None:
             },
             updated_by=context.user_id,
         )
+        saved_source = saved.get("source")
+        source_channel = (
+            str(saved_source.get("channel") or "self_analysis")
+            if isinstance(saved_source, dict)
+            else str(saved_source or "self_analysis")
+        )
         handler._write_audit(
             context,
             "report.analysis.save_weekly",
             "saved_analysis_result",
             str(saved.get("id") or ""),
-            {"source": (saved.get("source") or {}).get("channel", "self_analysis")},
+            {"source": source_channel},
         )
         handler._send_json({"tenant_id": context.tenant_id, "result": _hydrate_saved_analysis(handler, context.user_id, context.tenant_id, saved)})
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
@@ -822,6 +856,8 @@ def _apply_learning_candidate(handler: Any, context: Any, candidate: dict[str, A
     if candidate_type == "todo":
         todo_payload = content if isinstance(content.get("todo"), dict) else {"todo": content}
         todo_payload = dict(todo_payload)
+        profile = handler.services.access_service.user_store.get_profile(context.user_id)
+        todo_payload["actorDisplayName"] = str(getattr(profile, "name", "") or "当前用户").strip()
         governed_todo = dict(todo_payload.get("todo") or {})
         governed_todo.update(
             source="weekly_report",

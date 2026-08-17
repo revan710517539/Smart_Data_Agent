@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlparse
 
+from backend.platform.database.mysql import mysql_tls_configured
+
 
 class RuntimeConfigurationError(RuntimeError):
     """Raised when the process would start with an unsafe runtime profile."""
@@ -69,6 +71,8 @@ def validate_runtime_config(config: RuntimeConfig) -> None:
         parsed = urlparse(origin)
         if origin == "*" or parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise RuntimeConfigurationError(f"Invalid CORS origin: {origin}")
+    if config.database_url and not config.database_url.lower().startswith(("mysql://", "mysql+pymysql://")):
+        raise RuntimeConfigurationError("SMART_DATA_AGENT_DATABASE_URL must point to MySQL")
     if not config.is_production:
         return
     errors: list[str] = []
@@ -88,12 +92,10 @@ def validate_runtime_config(config: RuntimeConfig) -> None:
         errors.append("SMART_DATA_AGENT_OBJECT_STORE must be s3/oss compatible")
     if not config.object_bucket or not config.object_region:
         errors.append("SMART_DATA_AGENT_OBJECT_BUCKET and SMART_DATA_AGENT_OBJECT_REGION are required")
-    if not config.database_url.lower().startswith(("postgresql://", "postgresql+psycopg://")):
-        errors.append("SMART_DATA_AGENT_DATABASE_URL must point to PostgreSQL")
-    else:
-        ssl_mode = (parse_qs(urlparse(config.database_url).query).get("sslmode") or [""])[0].lower()
-        if ssl_mode not in {"require", "verify-ca", "verify-full"}:
-            errors.append("SMART_DATA_AGENT_DATABASE_URL must enforce sslmode=require or stronger")
+    if not config.database_url.lower().startswith(("mysql://", "mysql+pymysql://")):
+        errors.append("SMART_DATA_AGENT_DATABASE_URL must point to MySQL")
+    elif not mysql_tls_configured(config.database_url):
+        errors.append("SMART_DATA_AGENT_DATABASE_URL must enforce MySQL TLS")
     auth_secret = os.getenv("SMART_DATA_AGENT_AUTH_SECRET", "").strip()
     if len(auth_secret) < 32:
         errors.append("SMART_DATA_AGENT_AUTH_SECRET must contain at least 32 characters")

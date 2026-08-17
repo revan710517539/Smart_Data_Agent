@@ -1,0 +1,41 @@
+{
+  "schema_version": "bridge_connector_registry_v1",
+  "connectors": [
+    {
+      "id": "canvas-platform",
+      "label": "业务画布平台",
+      "description": "读取画布、同步分析、创建或更新画布，并接收待复核学习材料。",
+      "aliases": ["画布", "业务画布"],
+      "adapter": "http_json",
+      "enabled": true,
+      "allowed_channels": ["workbuddy", "codex", "qwork"],
+      "base_url": "https://canvas-platform.example.com",
+      "timeout_seconds": 20,
+      "auth": {
+        "type": "bearer_env",
+        "environment": "CANVAS_PLATFORM_BRIDGE_TOKEN"
+      },
+      "modules": {
+        "analysis_sync": {
+          "path": "/api/bridge/v1/analysis"
+        },
+        "configuration": {
+          "actions": {
+            "canvas.create": {
+              "path": "/api/bridge/v1/actions/canvas-create"
+            },
+            "canvas.update": {
+              "path": "/api/bridge/v1/actions/canvas-update"
+            }
+          }
+        },
+        "read": {
+          "path": "/api/bridge/v1/read"
+        },
+        "learning": {
+          "path": "/api/bridge/v1/evidence"
+        }
+      }
+    }
+  ]
+}

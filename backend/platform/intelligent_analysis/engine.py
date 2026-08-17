@@ -29,6 +29,7 @@ class IntelligentAnalysisRequest:
     analysis_trigger: str = "manual"
     voice_silence_ms: int = 5000
     context_policy: dict[str, Any] = field(default_factory=dict)
+    surface_context: dict[str, Any] = field(default_factory=dict)
     query_result: dict[str, Any] = field(default_factory=dict)
 
 
@@ -117,14 +118,27 @@ class IntelligentAnalysisEngine:
         fallback_conclusions = self._build_conclusions(request, skill_name)
         fallback_summary = "\n".join(fallback_conclusions)
         visualization_suggestions = list(planning.get("visualization_suggestions") or self._build_visualization_suggestions(request))
+        query_rows = request.query_result.get("data") if isinstance(request.query_result.get("data"), list) else []
+        empty_query_result = not query_rows
         final_payload = {
             "analysis_summary": fallback_summary,
             "conclusions": fallback_conclusions,
             "metric_findings": [],
-            "visualization_suggestions": visualization_suggestions,
+            "visualization_suggestions": [] if empty_query_result else visualization_suggestions,
             "conclusion_coverage": self._build_conclusion_coverage(request),
         }
-        if not isinstance(request.model, dict) or not request.model.get("id"):
+        if empty_query_result:
+            # A model cannot produce a factual conclusion without returned
+            # rows. Finishing deterministically avoids the 30–60 second model
+            # wait that previously followed an already completed empty query.
+            model_invocation = {
+                "status": "skipped",
+                "callable": False,
+                "message": "实际查询返回 0 行，跳过无数据情况下的模型结论调用。",
+                "prompt_template_id": ANALYSIS_PROMPT_TEMPLATE_ID,
+                "reason": "empty_query_result",
+            }
+        elif not isinstance(request.model, dict) or not request.model.get("id"):
             model_invocation = {
                 "status": "skipped",
                 "callable": False,
@@ -271,13 +285,7 @@ LIMIT 50;"""
 
     def _build_data_processing_python(self, request: IntelligentAnalysisRequest) -> str:
         return '''def process_data(data, context):
-    processed = []
-    metrics = context.get("metrics", [])
-    for row in data:
-        item = dict(row)
-        for metric in metrics:
-            item[metric] = round(float(row.get(metric, 0) or 0), 6)
-        processed.append(item)
+    processed = [dict(row) for row in data]
     return {
         "rows": processed,
         "quality": {
@@ -807,6 +815,7 @@ def _build_model_context_brief(request: IntelligentAnalysisRequest) -> str:
         if isinstance(file, dict) and str(file.get("name") or file.get("id") or "").strip()
     ]
     selected_tables = request.asset_context.get("selected_data_tables") if isinstance(request.asset_context, dict) else []
+    related_tables = request.asset_context.get("related_detail_tables") if isinstance(request.asset_context, dict) else []
     table_names = [
         str(table.get("name") or table.get("code") or "").strip()
         for table in selected_tables
@@ -817,6 +826,11 @@ def _build_model_context_brief(request: IntelligentAnalysisRequest) -> str:
         str(topic.get("name") or topic.get("code") or "").strip()
         for topic in topics
         if isinstance(topic, dict) and str(topic.get("name") or topic.get("code") or "").strip()
+    ]
+    related_names = [
+        str(table.get("name") or table.get("tableNameCn") or table.get("code") or table.get("tableNameEn") or "").strip()
+        for table in related_tables
+        if isinstance(table, dict)
     ]
     analysis_memories = request.asset_context.get("analysis_memories") if isinstance(request.asset_context, dict) else []
     memory_names = [
@@ -832,6 +846,7 @@ def _build_model_context_brief(request: IntelligentAnalysisRequest) -> str:
             f"Skill={skill_names}",
             f"上传文件={','.join(files) if files else '无'}",
             f"用户选择数据表={','.join(table_names) if table_names else '未手动选择'}",
+            f"关联明细表={','.join(related_names) if related_names else '没有更细粒度数据，请关联明细数据'}",
             f"语义匹配主题表={','.join(topic_names) if topic_names else '未匹配'}",
             f"指定分析记忆={','.join(memory_names) if memory_names else '未指定'}",
             f"会话轮次={turn_count or 0}",
@@ -844,6 +859,7 @@ def _model_input_context_for_prompt(request: IntelligentAnalysisRequest) -> dict
     """Bounded, credential-free projection of everything added to the input box."""
 
     selected_tables = request.asset_context.get("selected_data_tables") if isinstance(request.asset_context, dict) else []
+    related_tables = request.asset_context.get("related_detail_tables") if isinstance(request.asset_context, dict) else []
     table_context = [
         {
             "id": str(table.get("id") or "")[:160],
@@ -929,6 +945,21 @@ def _model_input_context_for_prompt(request: IntelligentAnalysisRequest) -> dict
         ],
         "uploaded_documents": file_context,
         "selected_data_sources": table_context,
+        "related_detail_sources": [
+            {
+                "id": str(table.get("id") or "")[:160],
+                "name": str(table.get("name") or table.get("tableNameCn") or "")[:240],
+                "code": str(table.get("code") or table.get("tableNameEn") or "")[:240],
+                "fields": table.get("fields") if isinstance(table.get("fields"), list) else str(table.get("fields") or "")[:4000],
+            }
+            for table in (related_tables or [])[:4]
+            if isinstance(table, dict)
+        ],
+        "detail_analysis_instruction": (
+            "先分析当前可视化数据表的全量维度与指标组合，再分析关联明细表。"
+            if related_tables
+            else "没有更细粒度数据，请关联明细数据"
+        ),
         "analysis_memories": [
             {
                 key: memory.get(key)
@@ -955,6 +986,45 @@ def _model_input_context_for_prompt(request: IntelligentAnalysisRequest) -> dict
             )[:20]
             if isinstance(metric, dict)
         ],
+        "reviewed_workflow_memories": [
+            {
+                key: memory.get(key)
+                for key in ("memory_id", "memory_type", "title", "content", "confidence")
+                if memory.get(key) not in (None, "")
+            }
+            for memory in (request.analysis_plan.get("memory_refs") or [])[:10]
+            if isinstance(memory, dict)
+        ],
+        "matched_intents": [
+            {
+                key: intent.get(key)
+                for key in ("id", "name", "purpose", "description", "keywords", "relatedTopic", "relatedExperience")
+                if intent.get(key) not in (None, "")
+            }
+            for intent in (
+                request.asset_context.get("matched_intents", [])
+                if isinstance(request.asset_context, dict)
+                else []
+            )[:6]
+            if isinstance(intent, dict)
+        ],
+        "reviewed_analysis_experiences": [
+            {
+                key: experience.get(key)
+                for key in ("id", "name", "title", "purpose", "description", "steps", "rules", "commonConclusions", "riskTips")
+                if experience.get(key) not in (None, "")
+            }
+            for experience in (
+                request.asset_context.get("experiences", [])
+                if isinstance(request.asset_context, dict)
+                else []
+            )[:6]
+            if isinstance(experience, dict)
+        ],
+        # Page state helps the model understand what the user is looking at,
+        # but it is never authoritative evidence.  The prompts below require
+        # every factual claim to come from the executed query evidence.
+        "current_page_context_untrusted": _bounded_surface_context(request.surface_context),
         "governed_metric_definitions": [
             dict(metric)
             for metric in (request.analysis_plan.get("metric_definitions") or [])[:20]
@@ -971,6 +1041,25 @@ def _model_input_context_for_prompt(request: IntelligentAnalysisRequest) -> dict
         "conversation": conversation,
         "policy": request.context_policy,
     }
+
+
+def _bounded_surface_context(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    allowed = {
+        "route", "page_key", "page_title", "selected_institution", "filters",
+        "selected_data_point", "visualization", "dataset_snapshot", "evidence_refs",
+        "artifact_id", "analysis_plan_hint",
+    }
+    bounded: dict[str, Any] = {}
+    for key in allowed:
+        item = value.get(key)
+        if item in (None, "", [], {}):
+            continue
+        serialized = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+        if len(serialized) <= 12_000:
+            bounded[key] = item
+    return bounded
 
 
 def _metric_expression(metric: str, index: int = 0) -> str:

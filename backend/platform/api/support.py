@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from backend.platform.security import AuthenticationError, RateLimitExceeded
 from backend.platform.reports.store import CommentRevisionConflict
+from backend.platform.message_board.store import MessageBoardRevisionConflict
 from backend.platform.tenancy import ExecutionContext
 
 
@@ -80,6 +81,13 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             headers={"X-Request-Id": request_id},
         )
         return
+    if isinstance(exc, MessageBoardRevisionConflict):
+        handler._send_json(
+            {"error": "message_board_revision_conflict", "message": "留言已在其他页面更新，请刷新后重试。", "request_id": request_id},
+            HTTPStatus.CONFLICT,
+            headers={"X-Request-Id": request_id},
+        )
+        return
     if isinstance(exc, JSONDecodeError):
         handler._send_json(
             {"error": "invalid_json", "message": "The request body is not valid JSON.", "request_id": request_id},
@@ -99,14 +107,35 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             "duplicate_model_name": "模型名称已存在，请使用不同的模型名称。",
             "invalid_model_application_module": "应用模块不在系统登记的可选范围内。",
             "invalid_login_credentials": "邮箱或密码不正确，请确认后重试。",
+            "analysis_selected_table_semantics_not_registered": "所选数据表尚未登记可执行的字段与指标映射，系统不会改用其他数据源。请在数据管理完成映射后重试，或选择已登记的数据表。",
+            "analysis_production_data_table_required": "当前分析没有绑定可执行的数据表。请先在页面选择当前机构的数据表，再发起分析。",
+            "analysis_automation_disabled": "智能分析任务已被管理员停用，请联系机构管理员启用后重试。",
+            "automation_task_is_not_active": "智能分析任务当前不可运行，请刷新页面后重试；若仍失败，请联系机构管理员。",
         }
         error_text = str(exc)
         message = validation_messages.get(error_text, "The request failed validation.")
+        error_code = (
+            error_text
+            if error_text in {
+                "analysis_selected_table_semantics_not_registered",
+                "analysis_production_data_table_required",
+                "analysis_automation_disabled",
+                "automation_task_is_not_active",
+            }
+            else "invalid_request"
+        )
+        if error_text.startswith("Unsupported metric:"):
+            error_code = "analysis_metric_not_bound_to_selected_data"
+            message = "当前问题中的指标没有绑定到已选数据表。请先选择包含该指标的当前机构数据表，再发起分析。"
         if error_text.startswith("model_application_module_not_ready:"):
             module_label = error_text.split(":", 1)[1] or "目标应用模块"
             message = f"{module_label}尚未配置已鉴权成功的大模型，请在模型接入管理中完成配置和连接测试。"
+        if error_text.startswith("metric_dictionary_duplicate_names:"):
+            error_code = "metric_dictionary_duplicate_names"
+            duplicate_names = error_text.split(":", 1)[1] or "所选"
+            message = f"{duplicate_names}指标有重名，请检查指标"
         handler._send_json(
-            {"error": "invalid_request", "message": message, "request_id": request_id},
+            {"error": error_code, "message": message, "request_id": request_id},
             HTTPStatus.BAD_REQUEST,
             headers={"X-Request-Id": request_id},
         )

@@ -16,6 +16,10 @@ export type RawField = {
   fieldNameEn: string;
   fieldNameCn: string;
   type: string;
+  /** Business role used by every data picker and visualization consumer. */
+  semanticRole?: "metric" | "dimension" | "date";
+  /** Display contract for date fields; source values remain unchanged. */
+  dateFormat?: "yyyy-MM-dd";
   explanation: string;
   enumValues?: string;
   isPrimaryKey?: boolean;
@@ -35,6 +39,7 @@ export type RawTableAsset = DataAssetGovernanceFields & {
   source: string;
   tableType: string;
   primaryKey: string;
+  primaryKeys?: string[];
   dateField: string;
   orgField: string;
   customerField: string;
@@ -61,10 +66,22 @@ export type RawTableAsset = DataAssetGovernanceFields & {
   /** Bounded source preview. The catalog returns at most the first 10 rows. */
   previewRows?: Array<Record<string, string>>;
   contentHash?: string;
+  /** Stable logical source identity; persists across daily CSV deliveries. */
+  sourceKey?: string;
+  /** Hash of current field names/types; a changed schema fails closed. */
+  schemaFingerprint?: string;
+  /** SDA-side policy only; it never changes the CSV file. */
+  externalReferenceMode?: "private" | "shared";
+  externalReferenceUpdatedAt?: string;
+  externalReferenceSchemaChanged?: boolean;
   /** The platform that owns credentials and execution for this table. */
-  sourcePlatform?: "毓数" | "智能运营" | "本地CSV";
+  sourcePlatform?: "毓数" | "智能运营" | "本地CSV" | "静态工作簿";
   /** Stable external-tool registry id used by future data calls. */
   linkedToolId?: string;
+  /** Stable id/version of the SDA-side metadata overlay; CSV rows stay read-only. */
+  metadataConfigId?: string;
+  metadataConfigLockVersion?: number;
+  metadataConfigSchemaChanged?: boolean;
 };
 
 export type TopicTableAsset = DataAssetGovernanceFields & {
@@ -188,6 +205,7 @@ export type BehaviorHabitAsset = DataAssetGovernanceFields & {
 export type KnowledgeFileAsset = DataAssetGovernanceFields & {
   id: string;
   title: string;
+  content?: string;
   coverage: string;
   items: number;
   updated: string;
@@ -209,6 +227,9 @@ export type AnalysisSkillAsset = DataAssetGovernanceFields & {
   recommendedSkillIds: string[];
   enabled: boolean;
   sortOrder: number;
+  learningOrigin?: string;
+  learningKind?: string;
+  learningEvolution?: Record<string, unknown>;
 };
 
 export type ExternalToolAsset = DataAssetGovernanceFields & {
@@ -235,11 +256,107 @@ export type AnalysisShortcutAsset = DataAssetGovernanceFields & {
   ownerUserId: string;
 };
 
+export type PageDataPageCode = "dashboard" | "weekly_report" | "institution_supervision";
+export type PageDataConsumerCode = PageDataPageCode | "self_analysis" | "visual_report" | "my_reports";
+export type PageDataInstitutionScope = "single_institution" | "multi_institution";
+
+export type MultiInstitutionPageDataSource = {
+  nodeId?: string;
+  tenantId: string;
+  institutionName: string;
+  sourceKey: string;
+  sourceTableId: string;
+  sourceTableName: string;
+  schemaFingerprint: string;
+};
+
+export type MultiInstitutionPageDataCandidate = {
+  id: string;
+  name: string;
+  schemaFingerprint: string;
+  fields: RawField[];
+  sources: MultiInstitutionPageDataSource[];
+  relationshipEdges?: TableRelationshipEdge[];
+  institutionCount?: number;
+  tableCount?: number;
+};
+
+export type TableRelationshipNode = {
+  id: string;
+  tenantId: string;
+  institutionName: string;
+  sourceKey: string;
+  sourceTableId: string;
+  sourceTableName: string;
+  schemaFingerprint: string;
+  position: { x: number; y: number };
+  fields: RawField[];
+};
+
+export type TableRelationshipEdge = {
+  id: string;
+  sourceNodeId: string;
+  sourceField: string;
+  targetNodeId: string;
+  targetField: string;
+  joinType: "inner";
+};
+
+export type TableRelationshipAsset = DataAssetGovernanceFields & {
+  id: string;
+  name: string;
+  relationshipScope: "single_institution" | "multi_institution";
+  nodes: TableRelationshipNode[];
+  edges: TableRelationshipEdge[];
+  institutionCount: number;
+  tableCount: number;
+  updatedAt: string;
+};
+
+export type TableRelationshipCatalogTable = {
+  tenantId: string;
+  institutionName: string;
+  id: string;
+  sourceKey: string;
+  tableNameEn: string;
+  tableNameCn: string;
+  schemaFingerprint: string;
+  rowCount: number;
+  fields: RawField[];
+};
+
+export type TableRelationshipCatalog = {
+  tenant_id: string;
+  institutions: Array<{ tenantId: string; institutionName: string; tables: TableRelationshipCatalogTable[] }>;
+  count: { institutions: number; tables: number };
+  source_read_only: true;
+};
+
+export type PageDataAsset = DataAssetGovernanceFields & {
+  id: string;
+  name: string;
+  sourceKey: string;
+  sourceTableId: string;
+  sourceTableName: string;
+  sourceRelativePath?: string;
+  schemaFingerprint: string;
+  contentHash?: string;
+  sourceFields: RawField[];
+  targetPages: PageDataPageCode[];
+  metricFields: string[];
+  dimensionFields: string[];
+  visualizationType: string;
+  updatedAt: string;
+  institutionScope?: PageDataInstitutionScope;
+  relationshipGroupId?: string;
+  institutionSources?: MultiInstitutionPageDataSource[];
+};
+
 export type DataAssetBundle = {
   tenant_id: string;
   status?: "loading" | "ready";
   message?: string;
-  source_mode?: "csv_folder" | "knowledge_only";
+  source_mode?: "csv_folder" | "knowledge_only" | "runtime_published";
   csv_source?: {
     mode: "csv_folder";
     root: string;
@@ -265,7 +382,36 @@ export type DataAssetBundle = {
   analysis_skills: AnalysisSkillAsset[];
   external_tools: ExternalToolAsset[];
   analysis_shortcuts: AnalysisShortcutAsset[];
+  page_data: PageDataAsset[];
+  table_relationships: TableRelationshipAsset[];
+  relationships: DataAssetRelationship[];
   count: Record<string, number>;
+};
+
+type DataAssetBundleWire = Omit<DataAssetBundle, "table_relationships"> & {
+  table_relationships?: unknown;
+};
+
+/** Keep additive frontend fields compatible with an API process that has not
+ * restarted onto the latest bundle schema yet. Existing payload data is kept;
+ * only the absent new collection receives its neutral empty value. */
+export function normalizeDataAssetBundle(bundle: DataAssetBundleWire): DataAssetBundle {
+  return {
+    ...bundle,
+    table_relationships: Array.isArray(bundle.table_relationships) ? bundle.table_relationships : [],
+  };
+}
+
+export type DataAssetRelationship = {
+  lineage_edge_id: string;
+  source_type: string;
+  source_id: string;
+  target_type: string;
+  target_id: string;
+  edge_type: "reads" | "derives" | "aggregates" | "references" | "publishes" | "generates";
+  confidence: number;
+  expression_hash?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type DataAssetItemType =
@@ -277,12 +423,14 @@ export type DataAssetItemType =
   | "knowledge_file"
   | "analysis_skill"
   | "external_tool"
-  | "analysis_shortcut";
+  | "analysis_shortcut"
+  | "page_data"
+  | "table_relationship";
 
 type DataAssetParams = {
   tenantId: string;
   userId?: string;
-  scope?: "knowledge";
+  scope?: "knowledge" | "runtime" | "visualization";
 };
 
 export type RawFileUpload = {
@@ -292,6 +440,10 @@ export type RawFileUpload = {
   content_hash: string;
   content_type: string;
   size_bytes: number;
+  tables?: RawTableAsset[];
+  table_count?: number;
+  duplicate?: boolean;
+  immutable?: boolean;
 };
 
 export async function fetchDataAssets({
@@ -300,10 +452,12 @@ export async function fetchDataAssets({
   scope,
 }: DataAssetParams): Promise<DataAssetBundle> {
   const query = scope ? `?${new URLSearchParams({ scope }).toString()}` : "";
-  return apiRequest<DataAssetBundle>(`/api/data-assets${query}`, {
+  const bundle = await apiRequest<DataAssetBundleWire>(`/api/data-assets${query}`, {
     method: "GET",
     context: { tenantId, userId },
+    readCache: { ttlMs: scope === "visualization" ? 60_000 : 20_000, tags: ["data-assets", scope ? `data-assets:${scope}` : "data-assets:catalog"] },
   });
+  return normalizeDataAssetBundle(bundle);
 }
 
 export async function fetchTopicData({
@@ -325,6 +479,62 @@ export async function fetchTopicData({
   return apiRequest<TopicDataSnapshot>(`/api/topic-data?${params.toString()}`, {
     method: "GET",
     context: { tenantId, userId },
+    readCache: { ttlMs: 10_000, tags: ["topic-data"] },
+  });
+}
+
+export type PageDataRows = {
+  tenant_id: string;
+  page_code: PageDataConsumerCode;
+  page_data_id: string;
+  source_key: string;
+  schema_fingerprint: string;
+  fields: string[];
+  field_labels: Record<string, string>;
+  row_count: number;
+  rows: Array<Record<string, string>>;
+  bounded: true;
+};
+
+export async function fetchPageDataRows({
+  tenantId,
+  userId = getDefaultUserId(),
+  pageDataId,
+  pageCode,
+}: DataAssetParams & { pageDataId: string; pageCode: PageDataConsumerCode }) {
+  const params = new URLSearchParams({ page_data_id: pageDataId, page_code: pageCode });
+  return apiRequest<PageDataRows>(`/api/data-assets/page-data/rows?${params.toString()}`, {
+    method: "GET",
+    context: { tenantId, userId },
+    readCache: { ttlMs: 10_000, tags: ["page-data"] },
+  });
+}
+
+export async function fetchMultiInstitutionPageDataCandidates({
+  tenantId,
+  userId = getDefaultUserId(),
+}: DataAssetParams) {
+  return apiRequest<{
+    tenant_id: string;
+    candidates: MultiInstitutionPageDataCandidate[];
+    count: number;
+    relationship_required: true;
+    source_read_only: true;
+  }>("/api/data-assets/page-data/multi-institution-candidates", {
+    method: "GET",
+    context: { tenantId, userId },
+    readCache: { ttlMs: 10_000, tags: ["data-assets", "page-data", "page-data:multi-institution-candidates"] },
+  });
+}
+
+export async function fetchTableRelationshipCatalog({
+  tenantId,
+  userId = getDefaultUserId(),
+}: DataAssetParams) {
+  return apiRequest<TableRelationshipCatalog>("/api/data-assets/table-relationships/catalog", {
+    method: "GET",
+    context: { tenantId, userId },
+    readCache: { ttlMs: 15_000, tags: ["data-assets", "table-relationships"] },
   });
 }
 
@@ -357,6 +567,24 @@ export async function uploadRawDataFile({
       file_name: file.name,
       content_base64: contentBase64,
     },
+  });
+}
+
+export async function updateRawTableExternalReference({
+  tenantId,
+  userId = getDefaultUserId(),
+  sourceKey,
+  mode,
+  schemaFingerprint,
+}: DataAssetParams & {
+  sourceKey: string;
+  mode: "private" | "shared";
+  schemaFingerprint: string;
+}): Promise<{ tenant_id: string; external_reference: { sourceKey: string; mode: "private" | "shared"; schemaFingerprint: string; updatedAt: string } }> {
+  return apiRequest("/api/data-assets/raw-table/external-reference", {
+    method: "POST",
+    context: { tenantId, userId },
+    body: { source_key: sourceKey, mode, schema_fingerprint: schemaFingerprint },
   });
 }
 

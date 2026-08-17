@@ -13,6 +13,7 @@ DEFAULT_OPERATOR_MENU_KEYS = (
     "data-assets",
     "data-assets.metrics",
     "self-analysis",
+    "self-analysis.visual-reports",
     "self-analysis.smart-analysis",
     "self-analysis.analysis-config",
     "data-assets.data-management",
@@ -29,6 +30,7 @@ DEFAULT_TENANT_ADMIN_MENU_KEYS = (
     "market-customer.segment",
     "market-customer.competition",
     "self-analysis",
+    "self-analysis.visual-reports",
     "self-analysis.smart-analysis",
     "self-analysis.my-reports",
     "self-analysis.analysis-config",
@@ -148,6 +150,9 @@ def build_default_rbac_seed(
                 PermissionPolicy(admin_role_id, tenant_id, "report:*", "read", attrs={"tenant_id": tenant_id}),
                 PermissionPolicy(admin_role_id, tenant_id, "report:*", "create", attrs={"tenant_id": tenant_id}),
                 PermissionPolicy(admin_role_id, tenant_id, "report:*", "manage", attrs={"tenant_id": tenant_id}),
+                PermissionPolicy(admin_role_id, tenant_id, "message_board:*", "read", attrs={"tenant_id": tenant_id}),
+                PermissionPolicy(admin_role_id, tenant_id, "message_board:*", "create", attrs={"tenant_id": tenant_id}),
+                PermissionPolicy(admin_role_id, tenant_id, "message_board:*", "manage", attrs={"tenant_id": tenant_id}),
                 PermissionPolicy(admin_role_id, tenant_id, "skill:supersonic.query", "execute"),
                 PermissionPolicy(admin_role_id, tenant_id, "skill:data.analysis.profile", "execute"),
                 PermissionPolicy(admin_role_id, tenant_id, "skill:data.governance.assess", "execute"),
@@ -174,6 +179,9 @@ def build_default_rbac_seed(
                 PermissionPolicy(operator_role_id, tenant_id, "application:*", "read", attrs={"tenant_id": tenant_id}),
                 PermissionPolicy(operator_role_id, tenant_id, "application:*", "execute", attrs={"tenant_id": tenant_id}),
                 PermissionPolicy(operator_role_id, tenant_id, "report:*", "read", attrs={"tenant_id": tenant_id}),
+                PermissionPolicy(operator_role_id, tenant_id, "message_board:*", "read", attrs={"tenant_id": tenant_id}),
+                PermissionPolicy(operator_role_id, tenant_id, "message_board:*", "create", attrs={"tenant_id": tenant_id}),
+                PermissionPolicy(operator_role_id, tenant_id, "message_board:*", "manage", attrs={"tenant_id": tenant_id}),
                 PermissionPolicy(operator_role_id, tenant_id, "skill:supersonic.query", "execute"),
                 PermissionPolicy(operator_role_id, tenant_id, "skill:data.analysis.profile", "execute"),
                 PermissionPolicy(operator_role_id, tenant_id, "skill:data.governance.assess", "execute"),
@@ -187,6 +195,8 @@ def build_default_rbac_seed(
         )
         for menu_key in DEFAULT_TENANT_ADMIN_MENU_KEYS:
             policies.append(PermissionPolicy(admin_role_id, tenant_id, f"menu:{menu_key}", "read"))
+        for mandatory_key in MANDATORY_MENU_KEYS:
+            policies.append(PermissionPolicy(admin_role_id, tenant_id, f"menu:{mandatory_key}", "read", priority=5))
         for menu_key in DEFAULT_OPERATOR_MENU_KEYS:
             policies.append(PermissionPolicy(operator_role_id, tenant_id, f"menu:{menu_key}", "read"))
         for mandatory_key in MANDATORY_MENU_KEYS:
@@ -208,6 +218,9 @@ def build_default_rbac_seed(
                     PermissionPolicy(custom_role_id, tenant_id, "application:*", "read", attrs={"tenant_id": tenant_id}),
                     PermissionPolicy(custom_role_id, tenant_id, "application:*", "execute", attrs={"tenant_id": tenant_id}),
                     PermissionPolicy(custom_role_id, tenant_id, "report:*", "read", attrs={"tenant_id": tenant_id}),
+                    PermissionPolicy(custom_role_id, tenant_id, "message_board:*", "read", attrs={"tenant_id": tenant_id}),
+                    PermissionPolicy(custom_role_id, tenant_id, "message_board:*", "create", attrs={"tenant_id": tenant_id}),
+                    PermissionPolicy(custom_role_id, tenant_id, "message_board:*", "manage", attrs={"tenant_id": tenant_id}),
                     PermissionPolicy(custom_role_id, tenant_id, "skill:supersonic.query", "execute"),
                     PermissionPolicy(custom_role_id, tenant_id, "skill:data.analysis.profile", "execute"),
                     PermissionPolicy(custom_role_id, tenant_id, "skill:data.governance.assess", "execute"),

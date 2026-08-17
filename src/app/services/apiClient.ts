@@ -1,13 +1,30 @@
-import { apiContextHeaders, type ApiContextParams } from "./apiContext";
+import { apiContextHeaders, hasStoredAuthSession, type ApiContextParams } from "./apiContext";
 
 type ApiRequestOptions = Omit<RequestInit, "body" | "headers" | "signal"> & {
   body?: unknown;
   context?: ApiContextParams;
   headers?: Record<string, string>;
   timeoutMs?: number;
+  readCache?: ApiReadCachePolicy | false;
+};
+
+export type ApiReadCachePolicy = {
+  /** A deliberately short browser-memory TTL. Tenant APIs remain HTTP no-store. */
+  ttlMs: number;
+  tags?: string[];
+  forceRefresh?: boolean;
+};
+
+type ApiReadCacheEntry = {
+  expiresAt: number;
+  payload: unknown;
+  tags: string[];
 };
 
 const apiBase = (import.meta.env.VITE_ANALYSIS_API_URL || "").replace(/\/$/, "");
+const apiReadCache = new Map<string, ApiReadCacheEntry>();
+const apiReadInflight = new Map<string, Promise<unknown>>();
+let apiReadCacheGeneration = 0;
 
 export const sessionRevalidationEvent = "smart-data-agent:session-revalidation-required";
 
@@ -30,11 +47,65 @@ export class ApiRequestError extends Error {
 }
 
 export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  const method = String(options.method || "GET").toUpperCase();
+  const policy = options.readCache;
+  if (!policy || method !== "GET" || options.body !== undefined || path.startsWith("/api/auth/")) {
+    const payload = await executeApiRequest<T>(path, options);
+    // A successful mutation may change multiple page projections. Clearing the
+    // small in-memory read cache is safer than trying to infer every consumer.
+    if (method !== "GET" && method !== "HEAD") clearApiReadCache();
+    return payload;
+  }
+
+  const cacheKey = apiReadCacheKey(path, options);
+  const cached = apiReadCache.get(cacheKey);
+  if (!policy.forceRefresh && cached && cached.expiresAt > Date.now()) {
+    return cloneApiPayload(cached.payload) as T;
+  }
+  const existing = apiReadInflight.get(cacheKey);
+  if (!policy.forceRefresh && existing) {
+    return cloneApiPayload(await existing) as T;
+  }
+  const generation = apiReadCacheGeneration;
+  let pending: Promise<T>;
+  pending = executeApiRequest<T>(path, { ...options, readCache: false })
+    .then((payload) => {
+      if (generation === apiReadCacheGeneration) {
+        apiReadCache.set(cacheKey, {
+          expiresAt: Date.now() + Math.max(0, policy.ttlMs),
+          payload: cloneApiPayload(payload),
+          tags: [...(policy.tags || [])],
+        });
+      }
+      return payload;
+    })
+    .finally(() => {
+      if (apiReadInflight.get(cacheKey) === pending) apiReadInflight.delete(cacheKey);
+    });
+  apiReadInflight.set(cacheKey, pending);
+  return cloneApiPayload(await pending) as T;
+}
+
+export function clearApiReadCache(tags?: string[]) {
+  apiReadCacheGeneration += 1;
+  apiReadInflight.clear();
+  if (!tags?.length) {
+    apiReadCache.clear();
+    return;
+  }
+  const requested = new Set(tags);
+  for (const [key, entry] of apiReadCache.entries()) {
+    if (entry.tags.some((tag) => requested.has(tag))) apiReadCache.delete(key);
+  }
+}
+
+async function executeApiRequest<T>(path: string, options: ApiRequestOptions): Promise<T> {
   const {
     body,
     context,
     headers = {},
     timeoutMs = 12000,
+    readCache: _readCache,
     ...requestInit
   } = options;
   const controller = new AbortController();
@@ -66,8 +137,15 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
       body: requestBody,
       signal: controller.signal,
     });
+    const payload = await parseJsonPayload(response);
+    const responseCode = payload && typeof payload === "object" && "error" in payload
+      ? String(payload.error)
+      : "api_request_error";
+    const shouldRefreshSession =
+      response.status === 401 ||
+      (response.status === 403 && responseCode !== "permission_denied" && hasStoredAuthSession());
     if (
-      response.status === 401 &&
+      shouldRefreshSession &&
       path !== "/api/auth/refresh" &&
       headers["X-Session-Retry"] !== "1" &&
       !(body instanceof FormData) &&
@@ -81,13 +159,13 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
       if (refreshResponse.ok) {
         return apiRequest<T>(path, {
           ...options,
+          readCache: false,
           headers: { ...headers, "X-Session-Retry": "1" },
         });
       }
     }
-    const payload = await parseJsonPayload(response);
     if (!response.ok) {
-      const code = payload && typeof payload === "object" && "error" in payload ? String(payload.error) : "api_request_error";
+      const code = responseCode;
       const message = payload && typeof payload === "object" && "message" in payload ? String(payload.message) : code;
       if (
         !path.startsWith("/api/auth/") &&
@@ -117,6 +195,24 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
   } finally {
     window.clearTimeout(timeoutId);
   }
+}
+
+function apiReadCacheKey(path: string, options: ApiRequestOptions) {
+  const requestHeaders = {
+    ...(path.startsWith("/api/auth/") ? {} : apiContextHeaders(options.context)),
+    ...(options.headers || {}),
+  };
+  const headerKey = Object.entries(requestHeaders)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key.toLowerCase()}:${value}`)
+    .join("|");
+  const contextKey = `${options.context?.tenantId || ""}:${options.context?.userId || ""}`;
+  return `${apiBase}${path}|${contextKey}|${headerKey}`;
+}
+
+function cloneApiPayload<T>(payload: T): T {
+  if (typeof structuredClone === "function") return structuredClone(payload);
+  return JSON.parse(JSON.stringify(payload)) as T;
 }
 
 export function apiErrorMessage(error: unknown, fallback: string) {

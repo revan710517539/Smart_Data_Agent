@@ -1,46 +1,40 @@
 ---
 name: smart-data-agent-report
-description: Publish a completed WorkBuddy analysis as a visual Smart Data Agent report.
+description: Use the once-installed Universal Bridge to discover systems, read authorized context, synchronize analyses, execute allowlisted configuration actions, and return review-only learning evidence.
 ---
 
-# Smart Data Agent report publisher
+# Universal Bridge for WorkBuddy
 
-When the user asks to synchronize an analysis to Smart Data Agent, publish a
-structured report. Do not upload the conversation transcript. Keep only the
-analysis result needed for the report: title, question, method, conclusion,
-and rows used by its charts.
-
-1. Build a JSON package at a temporary path. Use the current WorkBuddy session
-   ID as `source.run_id` when available; otherwise generate a stable task ID.
-2. The package must match this shape:
-
-```json
-{
-  "source": {
-    "channel": "workbuddy",
-    "run_id": "workbuddy-session-or-task-id",
-    "report_id": "optional-stable-analysis-id"
-  },
-  "report": {
-    "title": "分析报告标题",
-    "query": "分析问题",
-    "plan": "分析方法与范围",
-    "summary": "可直接给业务人员阅读的核心结论",
-    "visual_types": {"primary": "bar", "secondary": "table"},
-    "rows": [{"维度": "示例", "指标": 1}]
-  }
-}
-```
-
-3. Validate and publish it:
+Bridge is installed once. Before every task involving a backend system, run:
 
 ```sh
-SDA publish --channel workbuddy --input /tmp/workbuddy-report.json
+SDA bridge --channel workbuddy systems --json
 ```
 
-4. Tell the user only the returned report title and report ID. Do not print the
-   token, full payload, transcript path, or source rows in the confirmation.
+Match the user's words to an exact system `id`, `label`, or `aliases`. Never
+choose the first/default system or infer a tenant, URL, path, token or action.
+Ask the user when the match is absent or ambiguous.
 
-Allowed chart types are `bar`, `line`, `pie`, and `table`. If the analysis has
-no reliable quantitative rows, use `table` and an empty list; the Smart Data
-Agent report will still show the text conclusion.
+Every registered system exposes four stable modules:
+
+1. Synchronize analysis with `sync --system <id> --operation-id <run-id>
+   --input <file>`.
+2. Perform backend configuration such as canvas creation only through an exact
+   allowlisted action using `action --system <id> --action <name>
+   --operation-id <stable-id> --input <file>`.
+3. Read authorized data/content/policy by calling `context --system <id>` and
+   then `read --system <id> --resource <name> --input <file>`. SDA raw-table
+   reads use exact source keys, required columns and at most 500 rows.
+4. After every successful analysis, sync or configuration operation,
+   automatically call `evidence --system <id> --operation-id <same-id>
+   --input <file>`. Evidence is review-only memory/Skill material and is never
+   activated automatically.
+
+Packages may contain exact references, used fields, question, method, logic
+steps, findings, assumptions and limitations. Never include transcripts,
+original files, raw/unused rows, credentials, local paths or client-selected
+identity. Remove temporary files after success and report only the target
+system, result ID and candidate acceptance state.
+
+When an administrator registers another system in the server-side Bridge, this
+installed plugin discovers it on the next task. Do not reinstall the plugin.

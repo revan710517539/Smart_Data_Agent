@@ -11,6 +11,7 @@ import { usePlatformContext } from "../platform/PlatformContext";
 import { runApplicationAction } from "../services/applicationApi";
 import { apiErrorMessage } from "../services/apiClient";
 import { fetchOperatingSnapshot, type OperatingSnapshot } from "../services/operatingSnapshotApi";
+import { updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
 
 type ProductView = "consumer" | "business" | "compare";
 
@@ -48,6 +49,28 @@ export function BusinessFunnel() {
 
   const funnelModel = useMemo(() => buildFunnelModel(snapshot, selectedBank), [selectedBank, snapshot]);
   const { consumerFunnel, businessFunnel, bankRows, dailyTrend, trendKeys, stageComparison, insights, banks, stageNames } = funnelModel;
+
+  useEffect(() => {
+    if (!snapshot) return;
+    const productLine = productView === "consumer" ? "消费贷" : productView === "business" ? "经营贷" : "";
+    updateAnalysisWorkspacePageContext("funnel", {
+      route: "funnel",
+      filters: {
+        branch_name: selectedBank === "全部分行" ? "" : selectedBank,
+        product_line: productLine,
+      },
+      dataset_snapshot: snapshotDatasetSnapshot(snapshot),
+      evidence_refs: snapshotEvidenceRefs(snapshot),
+      visualization: { product_view: productView, stage_names: stageNames, row_count: snapshot.datasets.funnel_operation?.rows.length || 0 },
+      analysis_plan_hint: {
+        dataset_id: "funnel_operation_mart",
+        metrics: ["stage_count"],
+        dimensions: ["product_line", "branch_name", "stage_name", "stage_order", "stat_date"],
+        chart_types: ["column", "table"],
+        analysis_angles: ["识别当前筛选下的漏斗断点", "比较相邻阶段转化和机构差异"],
+      },
+    });
+  }, [productView, selectedBank, snapshot, stageNames]);
 
   const exportFunnel = () => setNotice("漏斗真实导出产物尚未生成；系统不会下载基于页面数组拼出的伪 CSV。 ");
 
@@ -357,6 +380,14 @@ function buildFunnelModel(snapshot: OperatingSnapshot | null, selectedBank: stri
       business: stagesByProduct.business.map((stage) => stage.name),
     },
   };
+}
+
+function snapshotEvidenceRefs(snapshot: OperatingSnapshot) {
+  return Object.entries(snapshot.datasets).flatMap(([key, dataset]) => dataset.evidence.evidence_id ? [{ id: dataset.evidence.evidence_id, type: "operating_snapshot", label: key }] : []);
+}
+
+function snapshotDatasetSnapshot(snapshot: OperatingSnapshot) {
+  return { id: snapshot.view, version: snapshot.generated_at, generatedAt: snapshot.generated_at };
 }
 
 function FunnelState({ message }: { message: string }) {

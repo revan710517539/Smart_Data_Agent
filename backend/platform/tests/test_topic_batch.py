@@ -51,6 +51,7 @@ class TopicDataBatchServiceTest(unittest.TestCase):
             batch = TopicDataBatchService(CSVFolderSource(root), store, assets)
             outcome = batch.run("tenant_a", "user_a")
             self.assertEqual(outcome["succeeded"], 1)
+            self.assertEqual(outcome["execution_engine"], "polars_lazy_csv")
             snapshot = store.read_reference(
                 tenant_id="tenant_a", user_id="user_a", reference_type="topic", reference_id="topic_a"
             )

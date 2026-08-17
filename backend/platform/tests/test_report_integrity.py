@@ -60,28 +60,28 @@ class ReportIntegrityTest(unittest.TestCase):
 
     def test_weekly_versions_are_immutable_deduplicated_and_evidence_gated(self) -> None:
         unverified = self.services.report_store.save_weekly_report_version(
-            "tenant_demo", _version(), updated_by="u_admin"
+            "tenant_demo", _version(), updated_by="u_super_admin"
         )
         self.assertEqual(unverified["publicationStatus"], "review_required")
         self.assertEqual(unverified["evidenceSummary"]["unverified_block_ids"], ["balance"])
         idempotent = self.services.report_store.save_weekly_report_version(
-            "tenant_demo", _version(), updated_by="u_admin"
+            "tenant_demo", _version(), updated_by="u_super_admin"
         )
         self.assertEqual(idempotent["id"], unverified["id"])
         with self.assertRaises(ValueError):
             changed = _version()
             changed["report"]["sections"][0]["blocks"][0]["rows"][0]["余额"] = 999
             self.services.report_store.save_weekly_report_version(
-                "tenant_demo", changed, updated_by="u_admin"
+                "tenant_demo", changed, updated_by="u_super_admin"
             )
         duplicate = self.services.report_store.save_weekly_report_version(
-            "tenant_demo", _version("weekly_duplicate"), updated_by="u_admin"
+            "tenant_demo", _version("weekly_duplicate"), updated_by="u_super_admin"
         )
         self.assertTrue(duplicate["deduplicated"])
         self.assertEqual(duplicate["id"], "weekly_v1")
 
         verified = self.services.report_store.save_weekly_report_version(
-            "tenant_demo", _version("weekly_verified", verified=True), updated_by="u_admin"
+            "tenant_demo", _version("weekly_verified", verified=True), updated_by="u_super_admin"
         )
         self.assertEqual(verified["publicationStatus"], "ready")
         self.assertEqual(verified["revisionNo"], 2)
@@ -89,7 +89,7 @@ class ReportIntegrityTest(unittest.TestCase):
     def test_comment_revisions_use_optimistic_concurrency_and_keep_history(self) -> None:
         first = [{"id": "c1", "targetId": "p1", "text": "第一次评论", "status": "open"}]
         self.services.report_store.replace_report_comments(
-            "tenant_demo", "shanghai", first, updated_by="u_admin", expected_revision=0
+            "tenant_demo", "shanghai", first, updated_by="u_super_admin", expected_revision=0
         )
         self.assertEqual(self.services.report_store.get_comment_revision("tenant_demo", "shanghai"), 1)
         with self.assertRaises(CommentRevisionConflict) as raised:
@@ -111,14 +111,14 @@ class ReportIntegrityTest(unittest.TestCase):
                 "visualTypes": {"primary": "bar", "secondary": "table"},
                 "savedAt": "2026-08-01 09:00:00",
                 "analysisTaskId": "historic_task_missing",
-                "topicData": {"reference_type": "history", "reference_id": "historic_task_missing", "folder": "analysis/tenant_demo/u_admin/history/historic_task_missing", "updated_at": "2026-08-01T01:00:00+00:00", "row_count": 1, "has_data": True, "version_count": 1},
+                "topicData": {"reference_type": "history", "reference_id": "historic_task_missing", "folder": "analysis/tenant_demo/u_super_admin/history/historic_task_missing", "updated_at": "2026-08-01T01:00:00+00:00", "row_count": 1, "has_data": True, "version_count": 1},
             },
-            updated_by="u_admin",
+            updated_by="u_super_admin",
         )
         updated = self.services.report_store.upsert_analysis_result(
             "tenant_demo",
             {**original, "title": "新报告名"},
-            updated_by="u_admin",
+            updated_by="u_super_admin",
         )
         self.assertEqual(updated["title"], "新报告名")
         self.assertEqual(updated["topicData"]["reference_id"], "historic_task_missing")
@@ -143,7 +143,7 @@ class ReportIntegrityTest(unittest.TestCase):
                         "rows": [{"机构": "上海分行", "金额": 100}],
                         "analysisTaskId": "legacy_task",
                     },
-                    updated_by="u_admin",
+                    updated_by="u_super_admin",
                 )
                 self.assertEqual(original["title"], "旧名称")
                 # Simulate a database row created before Topic_Data migration:
@@ -155,7 +155,7 @@ class ReportIntegrityTest(unittest.TestCase):
                         (json.dumps(legacy_payload, ensure_ascii=False), tenant_id, "legacy_report"),
                     )
                 port = server.server_address[1]
-                listed = _request(port, "GET", "/api/reports/analysis-results", None, "u_admin")
+                listed = _request(port, "GET", "/api/reports/analysis-results", None, "u_super_admin")
                 self.assertEqual(listed[0], 200)
                 hydrated = listed[1]["results"][0]
                 self.assertEqual(hydrated["topicData"]["reference_type"], "report")
@@ -163,14 +163,21 @@ class ReportIntegrityTest(unittest.TestCase):
                     port,
                     "POST",
                     "/api/reports/analysis-result",
-                    {"result": {**hydrated, "title": "新名称"}},
-                    "u_admin",
+                    {
+                        "result": {
+                            **hydrated,
+                            "title": "新名称",
+                            "visualTypes": {"primary": "line", "secondary": "column"},
+                        },
+                    },
+                    "u_super_admin",
                 )
                 self.assertEqual(renamed[0], 200)
                 self.assertEqual(renamed[1]["result"]["title"], "新名称")
+                self.assertEqual(renamed[1]["result"]["visualTypes"], {"primary": "line", "secondary": "column"})
                 self.assertEqual(renamed[1]["result"]["topicData"]["reference_type"], "report")
                 snapshot = server.services.topic_data_store.read_reference(
-                    tenant_id=tenant_id, user_id="u_admin", reference_type="report", reference_id="legacy_report"
+                    tenant_id=tenant_id, user_id="u_super_admin", reference_type="report", reference_id="legacy_report"
                 )
                 self.assertEqual(snapshot["rows"], [{"机构": "上海分行", "金额": "100"}])
             finally:
@@ -195,20 +202,20 @@ class ReportIntegrityTest(unittest.TestCase):
                         "time": "1999-01-01",
                         "status": "resolved",
                     },
-                    "u_admin",
+                    "u_super_admin",
                     0,
                     "create-request-1",
                 )
                 comment = created["comment"]
                 self.assertNotEqual(comment["id"], "client-forged-id")
-                self.assertEqual(comment["author"], "平台管理员")
+                self.assertEqual(comment["author"], "胥京波")
                 self.assertEqual(comment["status"], "open")
                 self.assertNotEqual(comment["time"], "1999-01-01")
                 replay = services.report_store.create_report_comment(
                     "tenant_demo",
                     "shanghai",
                     {"targetId": "ignored", "targetLabel": "ignored", "text": "ignored"},
-                    "u_admin",
+                    "u_super_admin",
                     1,
                     "create-request-1",
                 )
@@ -238,7 +245,7 @@ class ReportIntegrityTest(unittest.TestCase):
                 self.assertEqual(resolved["revision"], 3)
                 with self.assertRaises(CommentRevisionConflict):
                     services.report_store.mutate_report_comment(
-                        "tenant_demo", "shanghai", comment["id"], "reopen", {}, "u_admin", 2
+                        "tenant_demo", "shanghai", comment["id"], "reopen", {}, "u_super_admin", 2
                     )
                 with self.assertRaises(PermissionError):
                     services.report_store.mutate_report_comment(
@@ -249,13 +256,13 @@ class ReportIntegrityTest(unittest.TestCase):
 
     def test_weekly_learning_only_creates_review_candidates(self) -> None:
         version = self.services.report_store.save_weekly_report_version(
-            "tenant_demo", _version(), updated_by="u_admin"
+            "tenant_demo", _version(), updated_by="u_super_admin"
         )
         task = WeeklyReportLearningEngine(
             self.services.report_store,
             self.services.data_asset_store,
             self.services.application_store,
-        ).analyze_version("tenant_demo", version["id"], "u_admin", force=True)
+        ).analyze_version("tenant_demo", version["id"], "u_super_admin", force=True)
         self.assertEqual(task["status"], "已完成")
         candidates = self.services.report_store.list_learning_candidates("tenant_demo")
         self.assertTrue(candidates)
@@ -279,7 +286,7 @@ class ReportIntegrityTest(unittest.TestCase):
                     "POST",
                     "/api/reports/weekly-version",
                     {"version": _version("weekly_http"), "analyze": True},
-                    "u_admin",
+                    "u_super_admin",
                 )
                 self.assertEqual(saved[0], 200)
                 learning = _request(
@@ -287,7 +294,7 @@ class ReportIntegrityTest(unittest.TestCase):
                     "GET",
                     "/api/reports/weekly-learning",
                     None,
-                    "u_admin",
+                    "u_super_admin",
                 )
                 candidates = learning[1]["learning_candidates"]
                 method = next(item for item in candidates if item["candidate_type"] == "analysis_method")
@@ -296,7 +303,7 @@ class ReportIntegrityTest(unittest.TestCase):
                     "POST",
                     "/api/reports/weekly-learning/review",
                     {"learning_candidate_id": method["learning_candidate_id"], "decision": "approve"},
-                    "u_admin",
+                    "u_super_admin",
                 )
                 self.assertEqual(denied[0], 403)
                 approved = _request(

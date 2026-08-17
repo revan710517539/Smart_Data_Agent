@@ -5,7 +5,7 @@ import {
 } from "recharts";
 import {
   TrendingUp, TrendingDown, Sparkles, ShieldAlert, ArrowUpRight,
-  Building2, ChevronDown, Users, Banknote, CreditCard, Landmark,
+  Building2, Users, Banknote, CreditCard, Landmark,
 } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
 import { runApplicationAction } from "../services/applicationApi";
@@ -16,17 +16,17 @@ import { WeeklyReportSideRail } from "./weekly-report/WeeklyReportSideRail";
 import { useInstitutionCommentThread } from "./context-rail/useInstitutionCommentThread";
 import { revealContextRail } from "./context-rail/ContextSideRail";
 import { makeAnalysisSelectionTarget, makeTextBlock, summarizeContextValue, type CommentTarget, type WeeklyInstitutionReport } from "./weekly-report/domain";
+import { PAGE_DATA_PAGE_GUTTER_CLASS, PageDataModeToggle, PageDataVisualizationModules, usePageDataComposer, type PageDataComposerController } from "./page-data/PageDataComposer";
 
 type Product = "all" | "consumer" | "business";
 
 export function Dashboard() {
-  const { tenantId, userId, userName, selectedInstitution } = usePlatformContext();
+  const { tenantId, userId, userName, selectedInstitution, isSuperAdmin } = usePlatformContext();
   const [selectedProduct, setSelectedProduct] = useState<Product>("all");
-  const [selectedBank, setSelectedBank] = useState("全部分行");
   const [snapshot, setSnapshot] = useState<OperatingSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
-  const [rightRailTab, setRightRailTab] = useState<"comments" | "analysis">("analysis");
+  const [rightRailTab, setRightRailTab] = useState<"comments" | "analysis" | "message-board">("analysis");
   const [selectedContextTarget, setSelectedContextTarget] = useState<CommentTarget | null>(null);
   const [analysisTarget, setAnalysisTarget] = useState<CommentTarget | null>(null);
   const [analysisSelectionTargets, setAnalysisSelectionTargets] = useState<CommentTarget[]>([]);
@@ -37,6 +37,11 @@ export function Dashboard() {
   const [expandedCommentReplies, setExpandedCommentReplies] = useState<Record<string, boolean>>({});
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
+  const pageData = usePageDataComposer({ pageCode: "dashboard", moduleKey: "dashboard", railPageKey: "multi-institution-analysis" });
+
+  useEffect(() => {
+    if (!isSuperAdmin) pageData.setMode("browse");
+  }, [isSuperAdmin, pageData.setMode]);
   const dashboardReportId = `multi_institution_${tenantId}`;
   const { comments, createComment, replyToComment, resolveComment } = useInstitutionCommentThread({
     tenantId,
@@ -80,10 +85,10 @@ export function Dashboard() {
     setExpandedCommentReplies({});
     setActiveCommentId(null);
     setActiveDraftId(null);
-  }, [selectedBank, tenantId, userId]);
+  }, [tenantId, userId]);
 
-  const dashboardModel = useMemo(() => buildDashboardModel(snapshot, selectedBank), [selectedBank, snapshot]);
-  const { banks, productKpis, consumerRisk, businessRisk, bankProductData, dualTrend, radarData, insights } = dashboardModel;
+  const dashboardModel = useMemo(() => buildDashboardModel(snapshot), [snapshot]);
+  const { productKpis, consumerRisk, businessRisk, bankProductData, dualTrend, radarData, insights } = dashboardModel;
 
   const runDashboardAction = (action: string, payload: Record<string, unknown> = {}) =>
     runApplicationAction({ tenantId, userId, moduleKey: "dashboard", action, payload }).catch(() => undefined);
@@ -93,16 +98,16 @@ export function Dashboard() {
     institutionName: selectedInstitution,
     projectNo: "multi-institution-analysis",
     meetingTime: snapshot?.generated_at || "",
-    reporters: userId,
+    reporters: userName,
     period: snapshot?.generated_at || "当前快照",
     status: "已编辑",
     owner: userId,
     sections: [{
       id: "dashboard_page",
       name: "多机构分析",
-      blocks: [makeTextBlock("dashboard_snapshot", "多机构分析页面及关联指标数据", JSON.stringify({ selectedBank, selectedProduct, snapshot, dashboardModel }))],
+      blocks: [makeTextBlock("dashboard_snapshot", "多机构分析页面及关联指标数据", JSON.stringify({ selectedProduct, snapshot, dashboardModel }))],
     }],
-  }), [dashboardModel, dashboardReportId, selectedBank, selectedInstitution, selectedProduct, snapshot, userId]);
+  }), [dashboardModel, dashboardReportId, selectedInstitution, selectedProduct, snapshot, userId, userName]);
 
   const contextTarget = (id: string, label: string, type: CommentTarget["type"], selectedText: string): CommentTarget => ({
     id: `dashboard:${id}`,
@@ -199,16 +204,73 @@ export function Dashboard() {
     setExpandedReplyInputs((current) => ({ ...current, [commentId]: false }));
   };
 
+  const dashboardSideRail = (
+    <WeeklyReportSideRail
+      pageKey="multi-institution-analysis"
+      pageTitle="多机构分析"
+      overallPrompt="结合当前多机构分析页面和关联指标数据，比较各机构消费贷与经营贷的规模、趋势、效率和风险，给出关键差异与行动建议。"
+      activeTab={rightRailTab}
+      onTabChange={setRightRailTab}
+      commentCount={comments.filter((comment) => comment.status === "open").length}
+      railHeight={720}
+      focusTargetId={selectedContextTarget?.id}
+      focusTarget={rightRailTab === "analysis" || rightRailTab === "message-board" ? selectedContextTarget : null}
+      onAnalysisTargetActivate={setSelectedContextTarget}
+      onAnalysisTargetDismiss={(target) => {
+        setAnalysisTarget((current) => current?.id === target.id ? null : current);
+        setSelectedContextTarget((current) => current?.id === target.id ? null : current);
+        setAnalysisSelectionTargets((current) => current.filter((item) => item.id !== target.id));
+      }}
+      commentsProps={{
+        selectedTarget: selectedContextTarget,
+        draftTargets,
+        commentDrafts,
+        onDraftChange: (targetId, value) => setCommentDrafts((current) => ({ ...current, [targetId]: value })),
+        comments: comments.filter((comment) => comment.status === "open"),
+        replyDrafts,
+        expandedReplyInputs,
+        expandedCommentReplies,
+        highlightedCommentId: activeCommentId,
+        activeCommentId,
+        activeDraftId,
+        railHeight: 720,
+        onSave: saveDashboardComment,
+        onCommentActivate: (commentId) => { setActiveCommentId(commentId); setActiveDraftId(null); },
+        onResolveComment: (commentId) => resolveComment(commentId),
+        onReplyDraftChange: (commentId, value) => setReplyDrafts((current) => ({ ...current, [commentId]: value })),
+        onReplyToggle: (commentId, expanded) => setExpandedReplyInputs((current) => ({ ...current, [commentId]: expanded })),
+        onReplySave: saveDashboardReply,
+        onCommentRepliesToggle: (commentId, expanded) => setExpandedCommentReplies((current) => ({ ...current, [commentId]: expanded })),
+      }}
+      analysisProps={{
+        report: dashboardReport,
+        target: analysisTarget,
+        tenantId,
+        userId,
+        selectedInstitution,
+        topicTable: null,
+        analysisSkill: null,
+        memoryIds: [],
+        railHeight: 720,
+        noDataMessage: "本页面没有找到这一数据，请检查要分析的内容",
+      }}
+    />
+  );
+
   if (loading && !snapshot) {
-    return <DashboardState message="正在读取受治理经营数据…" />;
+    return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><DashboardPageHeader controller={pageData} snapshot={snapshot} canEditLayout={isSuperAdmin} /><DashboardState message="正在读取受治理经营数据…" embedded /></div>;
   }
 
   if (!dashboardModel.hasData) {
-    return <DashboardState message={notice || "当前租户没有可用于多机构分析的授权经营数据，页面不会显示内置数字。"} />;
+    return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}>
+      <DashboardPageHeader controller={pageData} snapshot={snapshot} canEditLayout={isSuperAdmin} />
+      {!pageData.loading && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} showAssetPicker />}
+      {!pageData.loading && pageData.visibleAssets.length === 0 && <DashboardState message={notice || "当前租户没有可用于多机构分析的授权经营数据，页面不会显示内置数字。"} embedded />}
+    </div>;
   }
 
   return (
-    <div className="p-7">
+    <div className={PAGE_DATA_PAGE_GUTTER_CLASS}>
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_auto]">
       <AnalysisUnderlineProvider
         targets={[...dashboardCommentAnnotations, ...analysisSelectionTargets]}
@@ -216,28 +278,8 @@ export function Dashboard() {
         onActivate={activateDashboardAnnotation}
       >
       <main className="min-w-0" data-multi-institution-content="true" data-context-page-body="multi-institution-analysis">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">多机构分析</h2>
-          <p className="text-[13px] text-[#aeaeb2] mt-1">消费贷 + 经营贷 双产品经营全景 · 快照 {formatTimestamp(snapshot?.generated_at)}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <select
-              value={selectedBank}
-              onChange={(e) => {
-                setSelectedBank(e.target.value);
-                void runDashboardAction("select_bank", { selectedBank: e.target.value, selectedProduct });
-              }}
-              className="appearance-none pl-8 pr-7 py-[6px] bg-white border border-[#e5e5ea] rounded-lg text-[12px] text-[#636366] focus:outline-none cursor-pointer">
-              <option>全部分行</option>
-              {banks.map((b) => (<option key={b}>{b}</option>))}
-            </select>
-            <Building2 className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#c7c7cc]" />
-            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-[#c7c7cc] pointer-events-none" />
-          </div>
-        </div>
-      </div>
+      <DashboardPageHeader controller={pageData} snapshot={snapshot} canEditLayout={isSuperAdmin} />
+      {!pageData.loading && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} showAssetPicker />}
 
       {(notice || !snapshot?.publishable) && (
         <div className="mb-4 rounded-lg border border-[#e5e5ea] bg-white px-4 py-3 text-[12px] text-[#636366]">
@@ -393,7 +435,7 @@ export function Dashboard() {
                 key={p}
                 onClick={() => {
                   setSelectedProduct(p);
-                  void runDashboardAction("select_product", { selectedProduct: p, selectedBank });
+                  void runDashboardAction("select_product", { selectedProduct: p });
                 }}
                 className={`px-3 py-1 rounded-md text-[12px] transition-all ${selectedProduct === p ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e]"}`}>
                 {p === "all" ? "全部" : p === "consumer" ? "消费贷" : "经营贷"}
@@ -486,7 +528,7 @@ export function Dashboard() {
           {["消费贷详细分析", "经营贷详细分析", "各行对比报告", "风险预警明细"].map((action) => (
             <button
               key={action}
-              onClick={() => void runDashboardAction("open_insight_action", { action, selectedProduct, selectedBank })}
+              onClick={() => void runDashboardAction("open_insight_action", { action, selectedProduct })}
               className="px-3 py-1.5 border border-[#e5e5ea] rounded-lg text-[12px] text-[#636366] hover:bg-[#f2f2f7] transition-colors flex items-center gap-1"
             >
               {action}<ArrowUpRight className="w-3 h-3 opacity-40" />
@@ -505,7 +547,7 @@ export function Dashboard() {
         commentCount={comments.filter((comment) => comment.status === "open").length}
         railHeight={720}
         focusTargetId={selectedContextTarget?.id}
-        focusTarget={rightRailTab === "analysis" ? selectedContextTarget : null}
+        focusTarget={rightRailTab === "analysis" || rightRailTab === "message-board" ? selectedContextTarget : null}
         onAnalysisTargetActivate={setSelectedContextTarget}
         onAnalysisTargetDismiss={(target) => {
           setAnalysisTarget((current) => current?.id === target.id ? null : current);
@@ -564,10 +606,10 @@ type DashboardBankRow = {
   bBalance?: number;
 };
 
-function buildDashboardModel(snapshot: OperatingSnapshot | null, selectedBank = "全部分行") {
+function buildDashboardModel(snapshot: OperatingSnapshot | null) {
   const datasetRows = (key: string) => {
     const rows = snapshot?.datasets[key]?.status === "ready" ? snapshot.datasets[key].rows : [];
-    return selectedBank === "全部分行" ? rows : rows.filter((row) => row.branch_name === selectedBank);
+    return rows;
   };
   const loanRows = datasetRows("loan_operation");
   const riskRows = datasetRows("risk_operation");
@@ -672,12 +714,15 @@ function buildDashboardModel(snapshot: OperatingSnapshot | null, selectedBank = 
   };
 }
 
-function DashboardState({ message }: { message: string }) {
+function DashboardPageHeader({ controller, snapshot, canEditLayout }: { controller: PageDataComposerController; snapshot: OperatingSnapshot | null; canEditLayout: boolean }) {
+  return <div className="mb-6 flex items-start justify-between gap-3"><div><h2 className="text-[18px] text-[#1d1d1f] tracking-tight">多机构分析</h2><p className="mt-1 text-[13px] text-[#aeaeb2]">消费贷 + 经营贷 双产品经营全景 · 快照 {formatTimestamp(snapshot?.generated_at)}</p></div>{canEditLayout && <PageDataModeToggle controller={controller} />}</div>;
+}
+
+function DashboardState({ message, embedded = false }: { message: string; embedded?: boolean }) {
   return (
-    <div className="p-7">
-      <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">多机构分析</h2>
-      <p className="text-[13px] text-[#aeaeb2] mt-1">消费贷 + 经营贷 双产品经营全景</p>
-      <div className="mt-6 rounded-xl border border-[#f0f0f2] bg-white px-6 py-16 text-center text-[12px] text-[#aeaeb2]">{message}</div>
+    <div className={embedded ? "min-w-0" : "p-7"}>
+      {!embedded && <><h2 className="text-[18px] text-[#1d1d1f] tracking-tight">多机构分析</h2><p className="text-[13px] text-[#aeaeb2] mt-1">消费贷 + 经营贷 双产品经营全景</p></>}
+      <div className={`${embedded ? "mt-0" : "mt-6"} w-full rounded-xl border border-[#f0f0f2] bg-white px-6 py-16 text-center text-[12px] text-[#aeaeb2]`}>{message}</div>
     </div>
   );
 }

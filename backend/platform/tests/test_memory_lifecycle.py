@@ -5,11 +5,13 @@ import unittest
 
 from backend.platform.api.routes.analysis import run_analysis
 from backend.platform.bootstrap import build_local_platform
+from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
 
 
 class MemoryLifecycleTest(unittest.TestCase):
     def setUp(self) -> None:
         self.services = build_local_platform()
+        attach_governed_test_warehouse(self.services)
 
     def tearDown(self) -> None:
         self.services.close()
@@ -61,7 +63,7 @@ class MemoryLifecycleTest(unittest.TestCase):
     def test_analysis_candidate_is_not_recalled_until_reviewed(self) -> None:
         first = run_analysis(
             self.services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="2026年6月各分行放款金额排名TOP10",
         )
@@ -76,7 +78,7 @@ class MemoryLifecycleTest(unittest.TestCase):
 
         second = run_analysis(
             self.services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="2026年6月消费贷放款金额是多少",
         )
@@ -86,7 +88,7 @@ class MemoryLifecycleTest(unittest.TestCase):
         )
         third = run_analysis(
             self.services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="2026年6月经营贷放款金额是多少",
         )

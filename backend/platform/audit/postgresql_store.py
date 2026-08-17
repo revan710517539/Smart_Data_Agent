@@ -70,8 +70,9 @@ class PostgreSQLAuditEventStore(AuditEventStore):
                 row = cursor.fetchone()
         return {**event, "event_id": str(_value(row, "audit_event_id", 0)), "detail": metadata}
 
-    def list(self, tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    def list(self, tenant_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         bounded_limit = max(1, min(int(limit or 50), 200))
+        bounded_offset = max(0, int(offset or 0))
         with self.pool.connection() as connection:
             tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
             with connection.cursor() as cursor:
@@ -86,12 +87,64 @@ class PostgreSQLAuditEventStore(AuditEventStore):
                     LEFT JOIN platform_user_profiles u ON u.user_id = a.actor_user_id
                     WHERE a.tenant_id = %s
                     ORDER BY a.occurred_at DESC, a.audit_event_id DESC
-                    LIMIT %s
+                    LIMIT %s OFFSET %s
                     """,
-                    (tenant_key, bounded_limit),
+                    (tenant_key, bounded_limit, bounded_offset),
                 )
                 rows = cursor.fetchall()
         return [self._from_row(row) for row in rows]
+
+    def count(self, tenant_id: str) -> int:
+        with self.pool.connection() as connection:
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) AS count FROM platform_audit_events WHERE tenant_id = %s",
+                    (tenant_key,),
+                )
+                row = cursor.fetchone()
+        return int(_value(row, "count", 0) or 0)
+
+    def list_for_tenants(self, tenant_ids: list[str], limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        bounded_limit = max(1, min(int(limit or 50), 200))
+        bounded_offset = max(0, int(offset or 0))
+        with self.pool.connection() as connection:
+            tenant_keys = [PostgreSQLIdentityResolver.tenant_id(connection, tenant_id) for tenant_id in tenant_ids]
+            if not tenant_keys:
+                return []
+            placeholders = ", ".join("%s" for _ in tenant_keys)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT a.audit_event_id, t.tenant_code,
+                           COALESCE(u.external_subject, 'unknown') AS actor_user_code,
+                           a.action, a.resource_type, COALESCE(a.resource_id, '') AS resource_id,
+                           a.metadata, a.occurred_at
+                    FROM platform_audit_events a
+                    JOIN platform_tenants t ON t.tenant_id = a.tenant_id
+                    LEFT JOIN platform_user_profiles u ON u.user_id = a.actor_user_id
+                    WHERE a.tenant_id IN ({placeholders})
+                    ORDER BY a.occurred_at DESC, a.audit_event_id DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (*tenant_keys, bounded_limit, bounded_offset),
+                )
+                rows = cursor.fetchall()
+        return [self._from_row(row) for row in rows]
+
+    def count_for_tenants(self, tenant_ids: list[str]) -> int:
+        with self.pool.connection() as connection:
+            tenant_keys = [PostgreSQLIdentityResolver.tenant_id(connection, tenant_id) for tenant_id in tenant_ids]
+            if not tenant_keys:
+                return 0
+            placeholders = ", ".join("%s" for _ in tenant_keys)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"SELECT COUNT(*) AS count FROM platform_audit_events WHERE tenant_id IN ({placeholders})",
+                    tenant_keys,
+                )
+                row = cursor.fetchone()
+        return int(_value(row, "count", 0) or 0)
 
     @staticmethod
     def _from_row(row: Any) -> dict[str, Any]:

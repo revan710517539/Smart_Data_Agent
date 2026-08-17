@@ -16,6 +16,7 @@ import { usePlatformContext } from "../platform/PlatformContext";
 import { apiErrorMessage } from "../services/apiClient";
 import { runApplicationAction } from "../services/applicationApi";
 import { fetchOperatingSnapshot, type OperatingSnapshot } from "../services/operatingSnapshotApi";
+import { updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
 
 type ProductView = "consumer" | "business";
 
@@ -61,6 +62,24 @@ export function BusinessSandbox() {
   }, [selectedBank, tenantId, userId]);
 
   const model = useMemo(() => buildSandboxModel(snapshot, productView), [productView, snapshot]);
+
+  useEffect(() => {
+    if (!snapshot) return;
+    updateAnalysisWorkspacePageContext("sandbox", {
+      route: "sandbox",
+      filters: { branch_name: selectedBank === "全部分行" ? "" : selectedBank, product_line: productView === "consumer" ? "消费贷" : "经营贷" },
+      dataset_snapshot: snapshotDatasetSnapshot(snapshot),
+      evidence_refs: snapshotEvidenceRefs(snapshot),
+      visualization: { product_view: productView, simulation_parameters: simParams, simulation_executed: false, kpis: model.kpis, trend_points: model.trend.length },
+      analysis_plan_hint: {
+        dataset_id: "loan_operation_mart",
+        metrics: ["loan_amount", "drawdown_rate"],
+        dimensions: ["branch_name", "product_line", "month"],
+        chart_types: ["line", "column", "table"],
+        analysis_angles: ["分析当前筛选下的经营趋势", "说明沙盘参数尚未执行，不得把参数当成事实结果"],
+      },
+    });
+  }, [model.kpis, model.trend.length, productView, selectedBank, simParams, snapshot]);
 
   const resetSimulation = async () => {
     setSimParams({ rateAdjust: 0, creditLimit: 0, approvalRate: 0, pushRate: 0 });
@@ -162,6 +181,8 @@ function buildSandboxModel(snapshot: OperatingSnapshot | null, view: ProductView
 }
 
 function readyRows(snapshot: OperatingSnapshot | null, key: string) { return snapshot?.datasets[key]?.status === "ready" ? snapshot.datasets[key].rows : []; }
+function snapshotEvidenceRefs(snapshot: OperatingSnapshot) { return Object.entries(snapshot.datasets).flatMap(([key, dataset]) => dataset.evidence.evidence_id ? [{ id: dataset.evidence.evidence_id, type: "operating_snapshot", label: key }] : []); }
+function snapshotDatasetSnapshot(snapshot: OperatingSnapshot) { return { id: snapshot.view, version: snapshot.generated_at, generatedAt: snapshot.generated_at }; }
 function byMonth(left: Record<string, unknown>, right: Record<string, unknown>) { return String(left.month || "").localeCompare(String(right.month || "")); }
 function numeric(value: unknown) { const result = Number(value); return Number.isFinite(result) ? result : 0; }
 function scaled(value: unknown, scale: number) { const result = Number(value); return Number.isFinite(result) ? result / scale : undefined; }

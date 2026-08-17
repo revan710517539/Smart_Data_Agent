@@ -90,20 +90,32 @@ class SchemaContractsTest(unittest.TestCase):
 
     def test_production_schema_catalog_and_per_table_docs_do_not_drift(self) -> None:
         validate_catalog()
-        self.assertEqual(len(TABLES), 99)
-        self.assertEqual(len({table.name for table in TABLES}), 99)
+        self.assertEqual(len(TABLES), 106)
+        self.assertEqual(len({table.name for table in TABLES}), 106)
 
         docs_dir = Path("docs/database_tables")
         actual_docs = {path.stem for path in docs_dir.glob("*.md") if path.name != "README.md"}
         self.assertEqual(actual_docs, {table.name for table in TABLES})
 
         ddl = Path("backend/platform/database/postgresql/0001_production_schema.sql").read_text(encoding="utf-8")
-        self.assertEqual(ddl.count("CREATE TABLE "), 99)
+        self.assertEqual(ddl.count("CREATE TABLE "), 106)
         self.assertIn("platform_market_observations", ddl)
         self.assertIn("platform_operating_system_mappings", ddl)
         self.assertIn("platform_analysis_evidence", ddl)
         self.assertIn("platform_report_block_sources", ddl)
         self.assertIn("platform_acquisition_repair_proposals", ddl)
+        self.assertIn("platform_raw_table_external_references", ddl)
+        self.assertIn("platform_bridge_bindings", ddl)
+        self.assertIn("platform_bridge_enrollments", ddl)
+        self.assertIn("platform_analysis_workspaces", ddl)
+        self.assertIn("platform_analysis_threads", ddl)
+        self.assertIn("platform_analysis_turns", ddl)
+        self.assertIn("platform_analysis_result_cache", ddl)
+
+        mysql_ddl = Path("backend/platform/database/mysql/0001_production_schema.sql").read_text(encoding="utf-8")
+        self.assertEqual(mysql_ddl.count("CREATE TABLE "), 106)
+        self.assertNotIn("JSONB", mysql_ddl)
+        self.assertNotIn("TIMESTAMPTZ", mysql_ddl)
 
         subprocess.run(
             [sys.executable, "scripts/generate_database_schema.py", "--check"],
@@ -133,7 +145,7 @@ class SchemaContractsTest(unittest.TestCase):
             services = build_local_platform(db_path=Path(tmpdir) / "platform.sqlite")
             try:
                 self.assertTrue(services.permission_broker.enforcer.repository.list_roles())
-                self.assertEqual(migration_status(Path(tmpdir) / "platform.sqlite")["current_version"], "0025")
+                self.assertEqual(migration_status(Path(tmpdir) / "platform.sqlite")["current_version"], "0029")
             finally:
                 services.close()
 

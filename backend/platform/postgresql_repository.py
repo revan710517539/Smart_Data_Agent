@@ -12,6 +12,7 @@ from backend.platform.orchestration import AnalysisTask
 
 from .repository import (
     AnalysisTaskRepository,
+    _analysis_step_code,
     _content_hash,
     _external_model_call,
     _freshness_status,
@@ -156,6 +157,41 @@ class PostgreSQLAnalysisTaskRepository(AnalysisTaskRepository):
             task["updated_at"] = task["created_at"]
             tasks.append(task)
         return tasks
+
+    def execution_nodes(self, tenant_id: str, user_id: str, task_id: str) -> list[dict[str, Any]]:
+        with self.pool.connection() as connection:
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id, required=False)
+            user_key = PostgreSQLIdentityResolver.user_id(connection, user_id, required=False)
+            if tenant_key is None or user_key is None:
+                return []
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT s.step_code,s.sequence_no,s.step_type,s.status,s.input_refs,s.output_refs,
+                           s.attempt_no,s.started_at,s.finished_at,s.error_code
+                    FROM platform_analysis_steps s
+                    JOIN platform_analysis_tasks t ON t.analysis_task_id=s.analysis_task_id
+                    WHERE t.tenant_id=%s AND t.requested_by=%s AND t.task_key=%s
+                    ORDER BY s.sequence_no,s.attempt_no
+                    """,
+                    (tenant_key, user_key, task_id),
+                )
+                rows = cursor.fetchall()
+        return [
+            {
+                "step_code": str(_value(row, "step_code", 0)),
+                "sequence_no": int(_value(row, "sequence_no", 1) or 0),
+                "step_type": str(_value(row, "step_type", 2)),
+                "status": str(_value(row, "status", 3)),
+                "input_refs": _json_value(_value(row, "input_refs", 4), []),
+                "output_refs": _json_value(_value(row, "output_refs", 5), []),
+                "attempt_no": int(_value(row, "attempt_no", 6) or 1),
+                "started_at": _iso(_value(row, "started_at", 7)),
+                "finished_at": _iso(_value(row, "finished_at", 8)),
+                "error_code": str(_value(row, "error_code", 9) or ""),
+            }
+            for row in rows
+        ]
 
     def delete_task(self, tenant_id: str, user_id: str, task_id: str) -> bool:
         with self._transaction() as connection:
@@ -396,23 +432,45 @@ class PostgreSQLAnalysisTaskRepository(AnalysisTaskRepository):
 
     def _persist_steps(self, connection: Any, tenant_key: Any, user_key: Any, task_key: Any, payload: dict[str, Any]) -> None:
         with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM platform_analysis_steps WHERE analysis_task_id = %s", (task_key,))
+            previous_code = ""
             for index, step in enumerate(payload.get("plan") or []):
                 agent = str(step.get("agent") or "Agent")
                 action = str(step.get("action") or "run")
                 step_type = _step_type(agent, action)
+                step_code = _analysis_step_code(index, step)
+                dependencies = [str(item) for item in step.get("dependencies") or [] if str(item)]
+                if not dependencies and previous_code:
+                    dependencies = [previous_code]
+                status = str(step.get("status") or "succeeded")
+                if status not in {"pending", "queued", "running", "succeeded", "failed", "skipped", "cancelled"}:
+                    status = "failed"
+                attempt_no = max(1, int(step.get("attempt_no") or 1))
+                input_refs = [{"depends_on": item} for item in dependencies]
+                if action.startswith("supersonic") or action.startswith("data."):
+                    input_refs.append({"skill_id": action, "skill_version": str(step.get("skill_version") or "pinned")})
                 cursor.execute(
                     """
                     INSERT INTO platform_analysis_steps(
                         tenant_id, analysis_task_id, step_code, sequence_no, step_type,
-                        status, input_refs, output_refs, attempt_no, finished_at, created_by
-                    ) VALUES (%s, %s, %s, %s, %s, %s, '[]'::jsonb, %s::jsonb, 1, now(), %s)
+                        status, input_refs, output_refs, attempt_no, started_at, finished_at,
+                        error_code, created_by
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s,
+                              now(), CASE WHEN %s IN ('succeeded','failed','skipped','cancelled') THEN now() END,
+                              %s, %s)
+                    ON CONFLICT (analysis_task_id,step_code,attempt_no) DO UPDATE SET
+                        sequence_no=EXCLUDED.sequence_no,step_type=EXCLUDED.step_type,
+                        status=EXCLUDED.status,input_refs=EXCLUDED.input_refs,
+                        output_refs=EXCLUDED.output_refs,error_code=EXCLUDED.error_code,
+                        finished_at=EXCLUDED.finished_at,updated_at=now(),
+                        lock_version=platform_analysis_steps.lock_version+1
                     """,
                     (
-                        tenant_key, task_key, f"{index:03d}:{agent}:{action}"[:120], index,
-                        step_type, "succeeded", _json([{"response_snapshot_pointer": f"/plan/{index}"}]), user_key,
+                        tenant_key, task_key, step_code, index, step_type, status,
+                        _json(input_refs), _json([{"response_snapshot_pointer": f"/plan/{index}"}]),
+                        attempt_no, status, str(step.get("error_code") or "")[:100] or None, user_key,
                     ),
                 )
+                previous_code = step_code
 
     def _persist_execution_facts(
         self,
@@ -566,13 +624,13 @@ class PostgreSQLAnalysisTaskRepository(AnalysisTaskRepository):
                 """
                 SELECT model_integration_id
                 FROM platform_model_integrations
-                WHERE tenant_id = %s AND integration_code = %s AND status IN ('available','degraded')
+                WHERE tenant_id = %s AND integration_code = %s
                 """,
                 (tenant_key, model_call["model_integration_id"]),
             )
             row = cursor.fetchone()
             if not row:
-                raise KeyError("model_integration_not_available")
+                raise KeyError("model_integration_not_registered")
             model_key = _value(row, "model_integration_id", 0)
             prompt_key = None
             if model_call.get("prompt_template_id"):
@@ -789,7 +847,15 @@ def _json(value: Any) -> str:
 def _json_value(value: Any, default: Any) -> Any:
     if value is None:
         return default
-    return json.loads(value) if isinstance(value, str) else dict(value)
+    if isinstance(value, type(default)):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return default
+        return decoded if isinstance(decoded, type(default)) else default
+    return default
 
 
 def _iso(value: Any) -> str:

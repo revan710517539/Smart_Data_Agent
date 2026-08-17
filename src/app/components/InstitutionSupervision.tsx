@@ -14,23 +14,30 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { AlertTriangle, Building2, CreditCard, Download, Landmark, Sparkles } from "lucide-react";
+import { AlertTriangle, Building2, CreditCard, Landmark, Sparkles } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
 import { apiErrorMessage } from "../services/apiClient";
 import { runApplicationAction } from "../services/applicationApi";
 import { fetchOperatingSnapshot, type OperatingSnapshot } from "../services/operatingSnapshotApi";
+import { updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
+import { PAGE_DATA_PAGE_GUTTER_CLASS, PageDataModeToggle, PageDataVisualizationModules, usePageDataComposer, type PageDataComposerController } from "./page-data/PageDataComposer";
 
 type ProductFilter = "all" | "consumer" | "business";
 type ProductFacts = { loan?: number; drawdown?: number; balance?: number; m1?: number; month?: string };
 type BranchFacts = { name: string; consumer: ProductFacts; business: ProductFacts };
 
 export function InstitutionSupervision() {
-  const { tenantId, userId } = usePlatformContext();
+  const { tenantId, userId, isSuperAdmin } = usePlatformContext();
   const [productFilter, setProductFilter] = useState<ProductFilter>("all");
   const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<OperatingSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
+  const pageData = usePageDataComposer({ pageCode: "institution_supervision", moduleKey: "institution_supervision", railPageKey: "supervision" });
+
+  useEffect(() => {
+    if (!isSuperAdmin) pageData.setMode("browse");
+  }, [isSuperAdmin, pageData.setMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,21 +65,34 @@ export function InstitutionSupervision() {
 
   const model = useMemo(() => buildSupervisionModel(snapshot), [snapshot]);
   const selected = model.branches.find((branch) => branch.name === selectedBranch);
+
+  useEffect(() => {
+    if (!snapshot) return;
+    updateAnalysisWorkspacePageContext("supervision", {
+      route: "supervision",
+      filters: { branch_name: selectedBranch || "", product_line: productFilter === "consumer" ? "消费贷" : productFilter === "business" ? "经营贷" : "" },
+      dataset_snapshot: snapshotDatasetSnapshot(snapshot),
+      evidence_refs: snapshotEvidenceRefs(snapshot),
+      visualization: { product_filter: productFilter, selected_branch: selectedBranch, branch_count: model.branches.length, selected_branch_facts: selected || null },
+      analysis_plan_hint: {
+        dataset_id: productFilter === "all" || productFilter === "consumer" ? "loan_operation_mart" : "risk_operation_mart",
+        metrics: productFilter === "business" ? ["m1_overdue_rate", "loan_balance"] : ["loan_amount", "drawdown_rate"],
+        dimensions: ["branch_name", "product_line", "month"],
+        chart_types: ["column", "table"],
+        analysis_angles: ["比较机构规模、效率和风险", "仅基于当前筛选和重新执行的证据形成督导结论"],
+      },
+    });
+  }, [model.branches.length, productFilter, selected, selectedBranch, snapshot]);
   const runSupervisionAction = (action: string, payload: Record<string, unknown> = {}) =>
     runApplicationAction({ tenantId, userId, moduleKey: "institution_supervision", action, payload }).catch(() => undefined);
 
-  if (loading && !snapshot) return <SupervisionState message="正在读取受治理机构数据…" />;
-  if (!model.hasData) return <SupervisionState message={notice || "当前租户没有机构级经营事实，页面不会展示内置排名和督导结论。"} />;
+  if (loading && !snapshot) return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} /><SupervisionState message="正在读取受治理机构数据…" embedded /></div>;
+  if (!model.hasData) return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} />{!pageData.loading && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} />}{!pageData.loading && pageData.visibleAssets.length === 0 && <SupervisionState message={notice || "当前租户没有机构级经营事实，页面不会展示内置排名和督导结论。"} embedded />}</div>;
 
   return (
-    <div className="p-7">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">机构督导</h2>
-          <p className="text-[13px] text-[#aeaeb2] mt-1">分行 × 产品矩阵分析 · 消费贷/经营贷分维度督导</p>
-        </div>
-        <button onClick={() => setNotice("真实导出需先生成带授权和过期时间的 artifact；系统不会导出页面拼接数据。") } className="flex items-center gap-1 px-3 py-1.5 bg-white border border-[#e5e5ea] rounded-lg text-[12px] text-[#636366] hover:bg-[#f2f2f7]"><Download className="w-3.5 h-3.5" /> 导出报告</button>
-      </div>
+    <div className={PAGE_DATA_PAGE_GUTTER_CLASS}>
+      <SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} />
+      {!pageData.loading && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} />}
 
       {(notice || !snapshot?.publishable) && <div className="mb-4 rounded-lg border border-[#e5e5ea] bg-white px-4 py-3 text-[12px] text-[#636366]">{notice || `当前数据模式：${snapshot?.data_modes.join("、") || "未知"}；不可作为正式督导报告发布。`}</div>}
 
@@ -166,6 +186,8 @@ function factsFor(branch: string, product: string, loanRows: Record<string, unkn
 }
 
 function latest(rows: Record<string, unknown>[]) { return rows.slice().sort((left, right) => String(left.month || "").localeCompare(String(right.month || ""))).at(-1); }
+function snapshotEvidenceRefs(snapshot: OperatingSnapshot) { return Object.entries(snapshot.datasets).flatMap(([key, dataset]) => dataset.evidence.evidence_id ? [{ id: dataset.evidence.evidence_id, type: "operating_snapshot", label: key }] : []); }
+function snapshotDatasetSnapshot(snapshot: OperatingSnapshot) { return { id: snapshot.view, version: snapshot.generated_at, generatedAt: snapshot.generated_at }; }
 function scaled(value: unknown, scale: number) { const number = Number(value); return Number.isFinite(number) ? number / scale : undefined; }
 function percent(value: unknown) { const number = Number(value); return Number.isFinite(number) ? number * 100 : undefined; }
 function formatNumber(value?: number) { return value === undefined ? "—" : value.toLocaleString("zh-CN", { maximumFractionDigits: 2 }); }
@@ -181,6 +203,10 @@ function relativeRadar(selected: BranchFacts, branches: BranchFacts[]) {
   });
 }
 
-function SupervisionState({ message }: { message: string }) {
-  return <div className="p-7"><h2 className="text-[18px] text-[#1d1d1f] tracking-tight">机构督导</h2><p className="text-[13px] text-[#aeaeb2] mt-1">分行 × 产品矩阵分析 · 消费贷/经营贷分维度督导</p><div className="mt-6 rounded-xl border border-[#f0f0f2] bg-white px-6 py-16 text-center text-[12px] text-[#aeaeb2]">{message}</div></div>;
+function SupervisionHeader({ controller, canEditLayout }: { controller: PageDataComposerController; canEditLayout: boolean }) {
+  return <div className="mb-6 flex items-start justify-between gap-3"><div><h2 className="text-[18px] text-[#1d1d1f] tracking-tight">机构督导</h2><p className="mt-1 text-[13px] text-[#aeaeb2]">分行 × 产品矩阵分析 · 消费贷/经营贷分维度督导</p></div>{canEditLayout && <PageDataModeToggle controller={controller} />}</div>;
+}
+
+function SupervisionState({ message, embedded = false }: { message: string; embedded?: boolean }) {
+  return <div className={embedded ? "min-w-0" : PAGE_DATA_PAGE_GUTTER_CLASS}>{!embedded && <><h2 className="text-[18px] text-[#1d1d1f] tracking-tight">机构督导</h2><p className="text-[13px] text-[#aeaeb2] mt-1">分行 × 产品矩阵分析 · 消费贷/经营贷分维度督导</p></>}<div className={`${embedded ? "mt-0" : "mt-6"} w-full rounded-xl border border-[#f0f0f2] bg-white px-6 py-16 text-center text-[12px] text-[#aeaeb2]`}>{message}</div></div>;
 }

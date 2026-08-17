@@ -548,15 +548,14 @@ async def _read_body(receive: ASGIReceive) -> bytes:
 
 
 def create_application(
-    db_path: str = ".smart_data_agent.sqlite",
+    test_sqlite_db: str | None = None,
     static_root: str | Path | None = None,
 ) -> SmartDataAgentASGI:
     configured_static_root = static_root or os.getenv("SMART_DATA_AGENT_STATIC_ROOT", "").strip() or None
-    runtime_config = load_runtime_config()
     services = (
-        build_production_platform(runtime_config)
-        if runtime_config.environment in {"staging", "production"} and runtime_config.database_url
-        else build_local_platform(db_path=db_path)
+        build_local_platform(db_path=test_sqlite_db)
+        if test_sqlite_db is not None
+        else build_production_platform(load_runtime_config())
     )
     return SmartDataAgentASGI(services, static_root=configured_static_root)
 
@@ -565,17 +564,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run Smart Data Agent with an ASGI process server.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
-    parser.add_argument("--db", default=".smart_data_agent.sqlite")
+    parser.add_argument("--test-sqlite-db", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--static-root", default=os.getenv("SMART_DATA_AGENT_STATIC_ROOT", "dist"))
     args = parser.parse_args()
     import uvicorn
 
     runtime_config = load_runtime_config()
-    production_runtime = runtime_config.environment in {"staging", "production"} and bool(runtime_config.database_url)
-    if not production_runtime and args.workers != 1:
-        raise SystemExit("SQLite/local ASGI runtime requires --workers 1")
-    if production_runtime:
+    if args.test_sqlite_db is None:
         os.environ["SMART_DATA_AGENT_STATIC_ROOT"] = args.static_root
         uvicorn.run(
             "backend.platform.api.asgi:create_application",
@@ -587,8 +583,10 @@ def main() -> None:
             proxy_headers=True,
         )
     else:
+        if args.workers != 1:
+            raise SystemExit("The explicit SQLite test adapter requires --workers 1")
         uvicorn.run(
-            create_application(args.db, args.static_root),
+            create_application(args.test_sqlite_db, args.static_root),
             host=args.host,
             port=args.port,
             workers=1,

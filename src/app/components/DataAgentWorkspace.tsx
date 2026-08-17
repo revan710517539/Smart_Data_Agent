@@ -39,6 +39,7 @@ import type { MetricDictionaryItem } from "../data/metricDictionary";
 import { fetchSystemConfig, type ModelIntegration } from "../services/systemConfigApi";
 import { fetchPlatformCapabilities, type PlatformCapabilityResponse } from "../services/capabilitiesApi";
 import { TodoWorkspace } from "./TodoWorkspace";
+import { DataPageSelector, useClientPagination } from "./ui/DataPageSelector";
 
 type AgentTaskStatus = "ready" | "running" | "completed" | "alert" | "paused" | "terminated";
 type AutomationKind = "memory" | "automatic_analysis";
@@ -136,9 +137,11 @@ function getAgentSection(pathname: string): AgentSection {
 
 export function DataAgentWorkspace() {
   const location = useLocation();
-  const { tenantId, userId } = usePlatformContext();
+  const { tenantId, userId, userName } = usePlatformContext();
   const activeTab = getAgentSection(location.pathname);
   const [todoComposerRequest, setTodoComposerRequest] = useState(0);
+  const [todoToolbarLeftHost, setTodoToolbarLeftHost] = useState<HTMLDivElement | null>(null);
+  const [todoToolbarRightHost, setTodoToolbarRightHost] = useState<HTMLDivElement | null>(null);
   const headerCopy: Record<AgentSection, { title: string; subtitle: string; action: string }> = {
     todos: {
       title: "待办任务",
@@ -173,7 +176,9 @@ export function DataAgentWorkspace() {
   const [analysisModels, setAnalysisModels] = useState<ModelIntegration[]>([]);
 
   useEffect(() => {
+    if (activeTab !== "tasks") return;
     let cancelled = false;
+    setWorkspaceNotice("正在读取服务端任务与能力状态…");
     const loadTasks = async () => {
       try {
         const [automation, capabilityResponse] = await Promise.all([
@@ -212,7 +217,7 @@ export function DataAgentWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [tenantId, userId]);
+  }, [activeTab, tenantId, userId]);
 
   const automationTasks = workspaceTasks;
   const automaticAnalysisMetrics = useMemo(
@@ -348,13 +353,21 @@ export function DataAgentWorkspace() {
           </div>
         </div>
         {showHeaderAction && (
-          <button
-            onClick={handlePrimaryAction}
-            className="flex items-center gap-1.5 px-4 py-2 bg-[#1d1d1f] text-white rounded-lg text-[13px] hover:bg-[#2c2c2e] transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            {header.action}
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            {activeTab === "todos" && (
+              <div ref={setTodoToolbarLeftHost} className="flex items-center" data-todo-toolbar-host="left" />
+            )}
+            <button
+              onClick={handlePrimaryAction}
+              className="flex h-10 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-4 text-[13px] text-white transition-colors hover:bg-[#2c2c2e]"
+            >
+              <Plus className="w-4 h-4" />
+              {header.action}
+            </button>
+            {activeTab === "todos" && (
+              <div ref={setTodoToolbarRightHost} className="flex items-center" data-todo-toolbar-host="right" />
+            )}
+          </div>
         )}
       </div>
 
@@ -378,7 +391,14 @@ export function DataAgentWorkspace() {
       )}
 
       {activeTab === "todos" && (
-        <TodoWorkspace tenantId={tenantId} userId={userId} composerRequest={todoComposerRequest} />
+        <TodoWorkspace
+          tenantId={tenantId}
+          userId={userId}
+          userName={userName}
+          composerRequest={todoComposerRequest}
+          toolbarLeftHost={todoToolbarLeftHost}
+          toolbarRightHost={todoToolbarRightHost}
+        />
       )}
 
       {activeTab === "tasks" && (
@@ -478,6 +498,7 @@ function TaskSection({
   onEdit,
   onTaskAction,
 }: TaskSectionProps) {
+  const pagination = useClientPagination(tasks);
   return (
     <section className="rounded-xl border border-[#f0f0f2] bg-white p-5" data-task-section={title}>
       <div className="mb-4 flex items-start justify-between gap-4">
@@ -486,6 +507,7 @@ function TaskSection({
           <p className="mt-1 text-[12px] leading-[1.7] text-[#8a8a8e]">{description}</p>
         </div>
         <div className="flex items-center gap-2">
+          {pagination.paginated && <DataPageSelector page={pagination.page} totalPages={pagination.totalPages} shownCount={pagination.items.length} totalCount={pagination.total} onChange={pagination.setPage} ariaLabel={`${title}分页`} compact />}
           <span className="rounded-full bg-[#f2f2f7] px-2.5 py-1 text-[11px] text-[#636366]">
             {tasks.length} 条任务
           </span>
@@ -506,7 +528,7 @@ function TaskSection({
         </div>
       ) : (
         <div className="space-y-2">
-          {tasks.map((task) => (
+          {pagination.items.map((task) => (
             <AgentTaskCard
               key={task.id}
               task={task}
@@ -1084,8 +1106,8 @@ function memoryOutputList(value: unknown): MemoryOutputType[] {
 }
 
 function buildAutomaticAnalysisMetricOptions(
-  topicTables: TopicTableAsset[],
-  metricDictionary: MetricDictionaryItem[],
+  topicTables: TopicTableAsset[] = [],
+  metricDictionary: MetricDictionaryItem[] = [],
 ): AutomaticAnalysisMetricContext[] {
   const dictionaryByCode = new Map(metricDictionary.filter((item) => item.metricCode).map((item) => [item.metricCode!, item]));
   const dictionaryByName = new Map(metricDictionary.map((item) => [item.metricName.trim(), item]));
@@ -1138,7 +1160,9 @@ function buildAutomaticAnalysisModelChoices(models: ModelIntegration[]) {
   const choices: Array<{ value: string; integrationId: string; selectedModelName: string; label: string }> = [];
   const seen = new Set<string>();
   models
-    .filter((model) => model.applicationModule === "automatic_analysis" && ["available", "draft"].includes(model.status) && model.testStatus === "connected")
+    .filter((model) => (model.applicationModule === "automatic_analysis" || model.applicationModule === "global_text_model")
+      && ["available", "draft"].includes(model.status)
+      && (model.testStatus !== "failed" || model.id === "model_default_intelligent_analysis_relay"))
     .forEach((model) => {
       const names = (model.enabledModels?.length ? model.enabledModels : model.availableModels?.length ? model.availableModels : model.selectedModelName ? [model.selectedModelName] : [])
         .map((name) => String(name).trim())

@@ -20,6 +20,7 @@ import { usePlatformContext } from "../platform/PlatformContext";
 import { apiErrorMessage } from "../services/apiClient";
 import { fetchMarketBundle, type MarketBundle, type MarketEntity, type MarketObservation } from "../services/marketApi";
 import { runApplicationAction } from "../services/applicationApi";
+import { updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
 
 type ProductView = "consumer" | "business";
 type Competitor = {
@@ -86,12 +87,24 @@ export function CompetitionAnalysis() {
   const radarData = useMemo(() => buildRadarData(productView, competitors), [competitors, productView]);
   const publishers = Array.from(new Set(competitors.flatMap((competitor) => competitor.publishers)));
   const latestObservedAt = competitors.map((competitor) => competitor.observedAt || "").sort().at(-1) || "";
-  const relevantEvents = market.events.filter((event) => {
+  const relevantEvents = useMemo(() => market.events.filter((event) => {
     const observationId = String(event.evidence.observation_id || "");
     const observation = market.observations.find((item) => item.market_observation_id === observationId);
     const entity = market.entities.find((item) => item.market_entity_id === observation?.market_entity_id);
     return productType(entity) === productView;
-  });
+  }), [market.entities, market.events, market.observations, productView]);
+
+  useEffect(() => {
+    updateAnalysisWorkspacePageContext("competition", {
+      route: "competition",
+      filters: { product_line: productView === "consumer" ? "消费贷" : "经营贷" },
+      dataset_snapshot: { id: "market-monitoring", version: latestObservedAt || "unavailable", generatedAt: latestObservedAt || undefined },
+      evidence_refs: market.observations.filter((item) => productType(market.entities.find((entity) => entity.market_entity_id === item.market_entity_id)) === productView).slice(0, 40).map((item) => ({ id: item.evidence_hash || item.market_observation_id, type: "market_observation", label: item.publisher || item.entity_name })),
+      visualization: { product_view: productView, competitors, radar_data: radarData, events: relevantEvents.slice(0, 10) },
+      analysis_skill: { id: "competition-monitoring", name: "竞品监控分析", category: "场景", description: "基于当前产品视图与已授权市场观测证据进行对标分析。" },
+      analysis_policy: { engine: "IntelligentAnalysisEngine", resultDelivery: "data_first", conflictStrategy: "executed_query_evidence_overrides_page_context" },
+    });
+  }, [competitors, latestObservedAt, market.entities, market.observations, productView, radarData, relevantEvents]);
 
   return (
     <div className="p-7">

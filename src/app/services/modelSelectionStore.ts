@@ -12,6 +12,11 @@ export type TextModelOption = PersistedTextModelSelection & {
 };
 
 function storageKey(tenantId: string, userId: string) {
+  void tenantId;
+  return `smart-data-agent:text-model-selection:account:${userId}`;
+}
+
+function legacyStorageKey(tenantId: string, userId: string) {
   return `smart-data-agent:text-model-selection:${tenantId}:${userId}`;
 }
 
@@ -46,11 +51,14 @@ export function configuredTextModelOptions(models: ModelIntegration[]): TextMode
 
 export function readPersistedTextModelSelection(tenantId: string, userId: string): PersistedTextModelSelection | null {
   try {
-    const raw = window.localStorage.getItem(storageKey(tenantId, userId));
+    const raw = window.localStorage.getItem(storageKey(tenantId, userId))
+      || window.localStorage.getItem(legacyStorageKey(tenantId, userId));
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<PersistedTextModelSelection>;
     if (!value.integrationId || !value.selectedModelName) return null;
-    return { integrationId: value.integrationId, selectedModelName: value.selectedModelName };
+    const selection = { integrationId: value.integrationId, selectedModelName: value.selectedModelName };
+    window.localStorage.setItem(storageKey(tenantId, userId), JSON.stringify(selection));
+    return selection;
   } catch {
     return null;
   }

@@ -15,7 +15,13 @@ from backend.platform.api.router import API_ROUTE_REGISTRY
 from backend.platform.api.routes import DELETE_ROUTE_HANDLERS, GET_ROUTE_HANDLERS, POST_ROUTE_HANDLERS, PUT_ROUTE_HANDLERS
 from backend.platform.api.support import APIRequestContext, MAX_JSON_BODY_BYTES, RequestBodyTooLarge, format_prometheus_metrics
 from backend.platform.automation import AutomationWorker
-from backend.platform.bootstrap import LEGACY_TENANT_ID, LOCAL_ANALYSIS_USER_ID, PlatformServices, build_local_platform
+from backend.platform.bootstrap import (
+    LEGACY_TENANT_ID,
+    LOCAL_ANALYSIS_USER_ID,
+    PlatformServices,
+    build_local_platform,
+    build_production_platform,
+)
 from backend.platform.runtime_config import cors_origin_for_request
 from backend.platform.security import request_limits, resolve_request_context
 
@@ -258,6 +264,23 @@ class AnalysisAPIHandler(BaseHTTPRequestHandler):
             action,
         )
 
+    def _require_message_board_permission(self, context: APIRequestContext, action: str) -> None:
+        # The authenticated user is the resource owner. All product accounts
+        # may create/read their own messages; service methods enforce tenant
+        # and owner scope on every row. The admin aggregate remains separately
+        # guarded by _require_message_board_admin.
+        if not context.user_id or not context.tenant_id or action not in {"read", "create", "manage"}:
+            raise PermissionError("message_board_authenticated_user_required")
+
+    def _require_message_board_admin(self, context: APIRequestContext) -> None:
+        if not self.services.permission_broker.enforcer.has_super_admin_role(context.user_id, context.tenant_id):
+            raise PermissionError("global_super_admin_required")
+        self.services.permission_broker.require_resource(
+            context.to_execution_context(),
+            "message_board:admin",
+            "read",
+        )
+
     def _write_audit(
         self,
         context: APIRequestContext,
@@ -429,7 +452,7 @@ def _runtime_health(handler: AnalysisAPIHandler) -> dict[str, Any]:
     if services.runtime_config.is_production:
         if type(services.task_repository).__name__.startswith(("SQLite", "InMemory")):
             checks["database"].update(
-                {"ready": False, "error": "production_postgresql_adapter_required"}
+                {"ready": False, "error": "production_mysql_adapter_required"}
             )
         if not bool(checks["rate_limiter"].get("distributed")):
             checks["rate_limiter"].update(
@@ -448,8 +471,14 @@ def _runtime_health(handler: AnalysisAPIHandler) -> dict[str, Any]:
     }
 
 
-def create_server(host: str, port: int, db_path: str | Path) -> ThreadingHTTPServer:
-    services = build_local_platform(db_path=db_path)
+def create_server(host: str, port: int, test_sqlite_db: str | Path | None = None) -> ThreadingHTTPServer:
+    # SQLite remains an explicit isolated-test adapter. Every normal process,
+    # including local development, must be backed by the configured MySQL URL.
+    services = (
+        build_local_platform(db_path=test_sqlite_db)
+        if test_sqlite_db is not None
+        else build_production_platform()
+    )
 
     class BoundAnalysisAPIHandler(AnalysisAPIHandler):
         pass
@@ -467,7 +496,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the Smart Data Agent local API server.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8788)
-    parser.add_argument("--db", default=".smart_data_agent.sqlite")
+    parser.add_argument("--test-sqlite-db", default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     os.environ.setdefault(
@@ -475,7 +504,7 @@ def main() -> None:
         str(Path(__file__).resolve().parents[3] / "Topic_Data" / "artifacts"),
     )
 
-    server = create_server(args.host, args.port, args.db)
+    server = create_server(args.host, args.port, args.test_sqlite_db)
     print(f"Smart Data Agent API listening on http://{args.host}:{args.port}")
     try:
         server.serve_forever()

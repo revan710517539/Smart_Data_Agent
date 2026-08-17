@@ -6,15 +6,25 @@
   "scripts": {
     "build": "vite build && node scripts/precompress_frontend_assets.mjs",
     "dev": "vite",
-    "dev:api": "./.venv/bin/python -m backend.platform.api.server --host 127.0.0.1 --port 8788 --db .smart_data_agent.sqlite",
+    "dev:api": "./.venv/bin/python -m backend.platform.api.server --host 127.0.0.1 --port 8788",
     "typecheck": "tsc --noEmit",
-    "test:backend": "python3 -m unittest discover -s backend -t .",
+    "test:backend": "uv run python -m unittest discover -s backend -t .",
     "test:frontend-permissions": "node scripts/frontend-permission-smoke.mjs",
     "test:context-rail": "node scripts/context-rail-contract.mjs",
+    "test:visualization-interaction": "node scripts/visualization-interaction-contract.mjs",
+    "test:visualization-workbench": "node scripts/visualization-workbench-contract.mjs",
+    "test:visual-report-workbench": "node scripts/visual-report-workbench-contract.mjs",
+    "test:weekly-page-data-workbench": "node scripts/weekly-page-data-workbench-contract.mjs",
+    "test:page-data-modal": "node scripts/page-data-modal-contract.mjs",
+    "test:route-performance": "node scripts/route-performance-contract.mjs",
+    "test:field-semantics": "node scripts/field-semantics-contract.mjs",
+    "test:visible-account-name": "node scripts/visible-account-name-contract.mjs",
+    "test:product-consistency": "node scripts/product-consistency-telemetry-contract.mjs",
     "test:frontend-size": "python3 scripts/check_frontend_module_size.py",
     "test:frontend-delivery": "node scripts/check_frontend_delivery.mjs",
     "test:api-contract": "python3 scripts/generate_api_client.py --check",
-    "test": "npm run typecheck && npm run test:frontend-size && npm run test:api-contract && npm run build && npm run test:frontend-delivery && npm run test:backend && npm run test:frontend-permissions"
+    "test:licenses": "python3 scripts/check_commercial_licenses.py --write-sbom",
+    "test": "npm run typecheck && npm run test:frontend-size && npm run test:api-contract && npm run test:licenses && npm run build && npm run test:frontend-delivery && npm run test:backend && npm run test:frontend-permissions"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",

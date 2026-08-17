@@ -110,16 +110,16 @@ class PostgreSQLUserDirectoryStore(UserDirectoryStore):
     def _profile_select() -> str:
         return """
             SELECT u.external_subject AS user_code, u.display_name, u.email, u.status,
-                   u.last_login_at, COALESCE(primary_org.org_name, '未分配部门') AS department
+                   u.last_login_at,
+                   COALESCE((
+                       SELECT o.org_name
+                       FROM platform_user_tenant_memberships m
+                       LEFT JOIN platform_org_units o ON o.org_unit_id = m.org_unit_id
+                       WHERE m.user_id = u.user_id AND m.membership_status = 'active'
+                       ORDER BY (m.joined_at IS NULL), m.joined_at, m.created_at, m.membership_id
+                       LIMIT 1
+                   ), '未分配部门') AS department
             FROM platform_user_profiles u
-            LEFT JOIN LATERAL (
-                SELECT o.org_name
-                FROM platform_user_tenant_memberships m
-                LEFT JOIN platform_org_units o ON o.org_unit_id = m.org_unit_id
-                WHERE m.user_id = u.user_id AND m.membership_status = 'active'
-                ORDER BY m.joined_at NULLS LAST, m.created_at, m.membership_id
-                LIMIT 1
-            ) primary_org ON true
         """
 
     @staticmethod

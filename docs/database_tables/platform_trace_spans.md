@@ -2,7 +2,7 @@
 
 - 领域：可观测性
 - 用途：OpenTelemetry 兼容的父子 Span、耗时和资源属性。
-- 生产数据库：PostgreSQL
+- 结构化运行主库：MySQL 8.x
 
 ## 字段结构
 

@@ -42,6 +42,7 @@ export async function fetchAutomationWorkspace({ tenantId, userId = getDefaultUs
   return apiRequest<{ handlers: string[]; tasks: AutomationTask[]; runs: AutomationRun[] }>("/api/automation", {
     method: "GET",
     context: { tenantId, userId },
+    readCache: { ttlMs: 8_000, tags: ["automation-workspace"] },
   });
 }
 

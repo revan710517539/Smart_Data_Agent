@@ -17,6 +17,8 @@ _CHANNEL_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 _VISUAL_TYPES = {"bar", "line", "pie", "table"}
 _CHANNEL_LABELS = {
     "workbuddy": "WorkBuddy",
+    "codex": "Codex",
+    "qwork": "QWork",
     "feishu": "飞书",
     "dingtalk": "钉钉",
     "wecom": "企业微信",
@@ -34,7 +36,7 @@ class ReportIngressBinding:
     label: str = ""
 
 
-def resolve_report_ingress_binding(authorization: str | None) -> ReportIngressBinding:
+def resolve_report_ingress_binding(authorization: str | None, dynamic_store: Any | None = None) -> ReportIngressBinding:
     """Authenticate an external report publisher without accepting caller identity.
 
     Bindings are deployment-owned secrets.  The client can never select a
@@ -44,6 +46,18 @@ def resolve_report_ingress_binding(authorization: str | None) -> ReportIngressBi
     token = _bearer_token(authorization)
     if not token:
         raise AuthenticationError("report_ingress_token_required")
+    if dynamic_store is not None:
+        dynamic = dynamic_store.resolve_binding(token)
+        if dynamic:
+            return ReportIngressBinding(
+                binding_id=_text(dynamic.get("binding_id"))[:120],
+                token="",
+                channel=_channel(_text(dynamic.get("channel"))),
+                tenant_id=_text(dynamic.get("tenant_id")),
+                user_id=_text(dynamic.get("user_id")),
+                visibility=_text(dynamic.get("visibility")) or "private",
+                label=_text(dynamic.get("label"))[:120] or _CHANNEL_LABELS.get(_text(dynamic.get("channel")), _text(dynamic.get("channel"))),
+            )
     bindings = _load_bindings()
     if not bindings:
         raise AuthenticationError("report_ingress_not_configured")

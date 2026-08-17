@@ -15,9 +15,10 @@ export function LoginPage() {
   const [institution, setInstitution] = useState(institutions[0] || "");
   const [notice, setNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const registrationNotice = "建设中……";
 
   useEffect(() => {
-    if (isAuthenticated) navigate("/", { replace: true });
+    if (isAuthenticated) navigate("/self-analysis/query", { replace: true });
   }, [isAuthenticated, navigate]);
 
   useEffect(() => {
@@ -37,7 +38,7 @@ export function LoginPage() {
           ? await loginWithEmail({ email, password, institution })
           : await registerWithEmail({ name, email, institution });
       login(session);
-      navigate("/", { replace: true });
+      navigate("/self-analysis/query", { replace: true });
     } catch (error) {
       if (mode === "login" && error instanceof ApiRequestError && error.code === "external_identity_required") {
         try {
@@ -111,24 +112,38 @@ export function LoginPage() {
           </label>
 
           {notice && (
-            <div className="rounded-lg border border-[#ffd7d7] bg-[#fff5f5] px-3 py-2 text-[12px] text-[#d93025]">
+            <div
+              id="login-notice"
+              role="status"
+              aria-live="polite"
+              className={`rounded-lg border px-3 py-2 text-[12px] ${notice === registrationNotice ? "border-[#e5e5ea] bg-[#f5f5f7] text-[#8e8e93]" : "border-[#ffd7d7] bg-[#fff5f5] text-[#d93025]"}`}
+            >
               {notice}
             </div>
           )}
 
           <div className="flex items-center justify-between gap-2 pt-1">
-            <button
+            {mode === "register" ? <button
               type="button"
               onClick={() => {
-                setMode((current) => (current === "login" ? "register" : "login"));
+                setMode("login");
                 setNotice("");
               }}
               className="inline-flex items-center gap-1.5 rounded-lg px-2 py-2 text-[12px] text-[#636366] hover:bg-[#f2f2f7]"
             >
-              {mode === "login" ? <UserPlus className="h-3.5 w-3.5" /> : <LogIn className="h-3.5 w-3.5" />}
-              {mode === "login" ? "注册新用户" : "返回登录"}
-            </button>
-            <div className="flex gap-2">
+              <LogIn className="h-3.5 w-3.5" />返回登录
+            </button> : <button
+              type="button"
+              aria-disabled="true"
+              aria-describedby={notice === registrationNotice ? "login-notice" : undefined}
+              data-registration-placeholder="true"
+              onClick={() => setNotice(registrationNotice)}
+              className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-[#f5f5f7] px-3 py-2 text-[12px] text-[#a1a1a6]"
+              title="注册新用户功能建设中"
+            >
+              <UserPlus className="h-3.5 w-3.5" />注册新用户
+            </button>}
+            <div className="ml-auto flex gap-2" data-login-primary-actions="true">
               <button
                 type="button"
                 onClick={cancel}

@@ -54,10 +54,9 @@ import {
 } from "../services/systemConfigApi";
 import { ApiRequestError, apiErrorMessage } from "../services/apiClient";
 import { demoFallbackDisabledMessage, isDemoFallbackEnabled } from "../services/apiContext";
-import { modelApplicationModuleLabel, modelApplicationModuleOptions } from "../data/modelApplicationModules";
+import { DataPageSelector } from "./ui/DataPageSelector";
 import {
   type UserFormKey,
-  type SettingsSection,
   type AccessModal,
   type PermissionRole,
   type SystemUser,
@@ -86,8 +85,6 @@ import {
   modelSourceLabel,
   modelOptionDescription,
   availableModelOptions,
-  speechCapabilityDescriptions,
-  speechCapabilityOptions,
   initialSystemDataParams,
   getSettingsSection,
   formatAuditLog,
@@ -97,6 +94,14 @@ import {
 
 function normalizedModelName(value: string) {
   return value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+}
+
+const defaultRelayModelId = "model_default_intelligent_analysis_relay";
+const settingsReadRetryDelays = [1_500, 3_000, 5_000];
+const auditPageSize = 20;
+
+function isTransientSettingsReadFailure(error: unknown) {
+  return error instanceof ApiRequestError && (error.status === 0 || error.status >= 500);
 }
 
 function hasDuplicateModelName(models: ModelIntegration[], name: string, currentModelId = "") {
@@ -113,6 +118,7 @@ export function SystemSettings() {
     selectedInstitution,
     tenantId,
     userId,
+    userName,
   } = usePlatformContext();
   const activeTab = getSettingsSection(location.pathname);
   const [searchTerm, setSearchTerm] = useState("");
@@ -136,6 +142,8 @@ export function SystemSettings() {
   const [users, setUsers] = useState<SystemUser[]>(isDemoFallbackEnabled() ? initialUserList : []);
   const [accessNotice, setAccessNotice] = useState("");
   const [auditRows, setAuditRows] = useState<ReturnType<typeof formatAuditLog>[]>([]);
+  const [auditTotal, setAuditTotal] = useState(0);
+  const [auditPage, setAuditPage] = useState(1);
   const [auditNotice, setAuditNotice] = useState("");
   const [userEditorOpen, setUserEditorOpen] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
@@ -145,9 +153,11 @@ export function SystemSettings() {
   const [editingPermissionId, setEditingPermissionId] = useState<string | null>(null);
   const [permissionRole, setPermissionRole] = useState<PermissionRole>("管理员");
   useEffect(() => {
+    if (activeTab !== "config") return;
     let cancelled = false;
+    let retryTimer: number | undefined;
 
-    const syncSystemConfig = async () => {
+    const syncSystemConfig = async (attempt = 0) => {
       try {
         const response = await fetchSystemConfig({ tenantId, userId });
         if (cancelled) return;
@@ -161,6 +171,12 @@ export function SystemSettings() {
         );
       } catch (error) {
         if (cancelled) return;
+        if (isTransientSettingsReadFailure(error) && attempt < settingsReadRetryDelays.length) {
+          retryTimer = window.setTimeout(() => {
+            void syncSystemConfig(attempt + 1);
+          }, settingsReadRetryDelays[attempt]);
+          return;
+        }
         if (isDemoFallbackEnabled()) {
           setModelIntegrations(initialModelIntegrations);
           setSpeechIntegrations(initialSpeechIntegrations);
@@ -178,13 +194,16 @@ export function SystemSettings() {
     void syncSystemConfig();
     return () => {
       cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [selectedInstitution, tenantId, userId]);
+  }, [activeTab, selectedInstitution, tenantId, userId]);
 
   useEffect(() => {
+    if (activeTab !== "users" && activeTab !== "roles") return;
     let cancelled = false;
+    let retryTimer: number | undefined;
 
-    const syncAccessUsers = async () => {
+    const syncAccessUsers = async (attempt = 0) => {
       try {
         const [userResponse, permissionResponse] = await Promise.all([
           fetchAccessUsers({ tenantId }),
@@ -196,6 +215,12 @@ export function SystemSettings() {
         setAccessNotice(`用户与授权已连接后端：${selectedInstitution}`);
       } catch (error) {
         if (cancelled) return;
+        if (isTransientSettingsReadFailure(error) && attempt < settingsReadRetryDelays.length) {
+          retryTimer = window.setTimeout(() => {
+            void syncAccessUsers(attempt + 1);
+          }, settingsReadRetryDelays[attempt]);
+          return;
+        }
         if (isDemoFallbackEnabled()) {
           setUsers(initialUserList);
           setPermissionInstitutions(initialPermissionInstitutions);
@@ -211,28 +236,43 @@ export function SystemSettings() {
     void syncAccessUsers();
     return () => {
       cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [selectedInstitution, tenantId]);
+  }, [activeTab, selectedInstitution, tenantId]);
 
   useEffect(() => {
     if (activeTab !== "audit") return;
     let cancelled = false;
+    let retryTimer: number | undefined;
     setAuditNotice("审计日志同步中...");
 
-    const syncAuditLogs = async () => {
+    const syncAuditLogs = async (attempt = 0) => {
       try {
-        const response = await fetchAuditLogs({ tenantId });
+        const response = await fetchAuditLogs({
+          tenantId,
+          limit: auditPageSize,
+          offset: (auditPage - 1) * auditPageSize,
+        });
         if (cancelled) return;
         setAuditRows(response.logs.map(formatAuditLog));
-        setAuditNotice(`审计日志已连接后端：${selectedInstitution} · ${response.count} 条`);
+        setAuditTotal(response.total);
+        setAuditNotice(`审计日志已连接后端：${selectedInstitution} · 共 ${response.total} 条`);
       } catch (error) {
         if (cancelled) return;
+        if (isTransientSettingsReadFailure(error) && attempt < settingsReadRetryDelays.length) {
+          retryTimer = window.setTimeout(() => {
+            void syncAuditLogs(attempt + 1);
+          }, settingsReadRetryDelays[attempt]);
+          return;
+        }
         if (isDemoFallbackEnabled()) {
-          setAuditRows(fallbackAuditLogs);
+          setAuditRows(fallbackAuditLogs.map((log, index) => ({ eventId: `fallback_audit_${index}`, ...log })));
+          setAuditTotal(fallbackAuditLogs.length);
           setAuditNotice(`审计后端暂不可用，已显示显式 demo 样例日志。${apiErrorMessage(error, "")}`);
           return;
         }
         setAuditRows([]);
+        setAuditTotal(0);
         setAuditNotice(`${demoFallbackDisabledMessage("审计日志加载")} ${apiErrorMessage(error, "")}`);
       }
     };
@@ -240,12 +280,17 @@ export function SystemSettings() {
     void syncAuditLogs();
     return () => {
       cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [activeTab, selectedInstitution, tenantId]);
+  }, [activeTab, auditPage, selectedInstitution, tenantId]);
+
+  useEffect(() => {
+    setAuditPage(1);
+  }, [activeTab, tenantId]);
 
   const addModelIntegration = async () => {
     const nextName = modelForm.name.trim();
-    if (!nextName || !modelForm.modelName.trim() || !modelForm.applicationModule.trim() || !modelForm.key.trim() || !modelForm.value.trim()) return;
+    if (!nextName || !modelForm.modelName.trim() || !modelForm.key.trim() || !modelForm.value.trim()) return;
     if (hasDuplicateModelName(modelIntegrations, nextName)) {
       setConfigNotice("模型名称已存在，请使用不同的模型名称。");
       return;
@@ -261,7 +306,7 @@ export function SystemSettings() {
       modelName: modelForm.modelName.trim(),
       key: modelForm.key.trim(),
       value: modelForm.value.trim(),
-      applicationModule: modelForm.applicationModule.trim(),
+      applicationModule: "global_text_model",
       availableModels,
       enabledModels: availableModels.slice(0, 1),
       status: "available",
@@ -272,7 +317,7 @@ export function SystemSettings() {
       const response = await saveModelIntegration({ tenantId, userId, model: nextModel });
       const latest = await fetchSystemConfig({ tenantId, userId, forceRefresh: true });
       setModelIntegrations(latest.models.length ? latest.models : [response.model]);
-      setConfigNotice(nextModel.applicationModule === "memory_extraction" ? "模型接入已同步到后端；记忆模块仅保留当前这一条模型绑定。" : "模型接入已同步到后端。");
+      setConfigNotice("模型接入已同步到账号，并应用于全部非语音模型模块。");
     } catch (error) {
       if (isDemoFallbackEnabled()) {
         setConfigNotice(`模型接入已保留在 demo 本地状态，后端同步失败：${apiErrorMessage(error, "未知错误")}`);
@@ -328,6 +373,7 @@ export function SystemSettings() {
       modelName: nextSource,
       key: patch.key?.trim() || model.key,
       value: patchValue || model.value,
+      applicationModule: "global_text_model",
       availableModels,
       enabledModels,
     };
@@ -337,7 +383,7 @@ export function SystemSettings() {
       const response = await saveModelIntegration({ tenantId, userId, model: nextModel });
       const latest = await fetchSystemConfig({ tenantId, userId, forceRefresh: true });
       setModelIntegrations(latest.models.length ? latest.models : [response.model]);
-      setConfigNotice(nextModel.applicationModule === "memory_extraction" ? "模型接入已更新；记忆模块仅保留当前这一条模型绑定。" : "模型接入已更新。");
+      setConfigNotice("模型接入已更新，并应用于全部非语音模型模块。");
     } catch (error) {
       if (isDemoFallbackEnabled()) {
         setConfigNotice(`模型接入已保留在 demo 本地状态，后端同步失败：${apiErrorMessage(error, "未知错误")}`);
@@ -379,7 +425,7 @@ export function SystemSettings() {
   };
 
   const addSpeechIntegration = async () => {
-    if (!speechForm.name.trim() || !speechForm.provider.trim() || !speechForm.applicationModule.trim() || !speechForm.apiBase.trim() || !speechForm.apiKey.trim()) return;
+    if (!speechForm.name.trim() || !speechForm.provider.trim() || !speechForm.apiBase.trim() || !speechForm.apiKey.trim()) return;
     const previousIntegrations = speechIntegrations;
     const nextIntegration: SpeechIntegration = {
       id: `speech_${Date.now()}`,
@@ -388,7 +434,7 @@ export function SystemSettings() {
       source: speechForm.source.trim() || speechProviderLabel(speechForm.provider),
       apiBase: speechForm.apiBase.trim(),
       apiKey: speechForm.apiKey.trim(),
-      applicationModule: speechForm.applicationModule,
+      applicationModule: "global_voice_model",
       status: "available",
     };
     setSpeechIntegrations((current) => [...current, nextIntegration]);
@@ -474,10 +520,10 @@ export function SystemSettings() {
       source: patch.source?.trim() || integration.source || speechProviderLabel(integration.provider),
       apiBase: patch.apiBase?.trim() || integration.apiBase,
       apiKey: patch.apiKey?.trim() || integration.apiKey,
-      applicationModule: patch.applicationModule?.trim() || integration.applicationModule,
+      applicationModule: "global_voice_model",
       status: patch.status || integration.status,
     };
-    if (!nextIntegration.name || !nextIntegration.provider || !nextIntegration.applicationModule || !nextIntegration.apiBase || !nextIntegration.apiKey) return;
+    if (!nextIntegration.name || !nextIntegration.provider || !nextIntegration.apiBase || !nextIntegration.apiKey) return;
     setSpeechIntegrations((current) => current.map((item) => (item.id === integration.id ? nextIntegration : item)));
     try {
       const response = await saveSpeechIntegration({ tenantId, speechIntegration: nextIntegration });
@@ -602,7 +648,7 @@ export function SystemSettings() {
     const previousPermissions = permissionInstitutions;
     const optimisticPermission = {
       ...nextPermission,
-      updatedBy: "当前用户",
+      updatedBy: userName,
       updatedAt: "刚刚",
     };
     setPermissionInstitutions((current) =>
@@ -624,22 +670,125 @@ export function SystemSettings() {
   };
 
   const editingPermission = permissionInstitutions.find((item) => item.id === editingPermissionId) ?? null;
+  const pageHeading = {
+    users: { title: "用户管理", description: "管理当前机构用户、角色绑定与账号状态" },
+    roles: { title: "角色权限", description: "按机构维护管理员、操作员和自定义角色权限" },
+    audit: { title: "审计日志", description: "查看当前机构的系统操作与安全审计记录" },
+    config: { title: "系统配置", description: "维护模型接入与系统运行参数" },
+  }[activeTab];
+  const pageStatusNotice = activeTab === "audit"
+    ? auditNotice
+    : activeTab === "config"
+      ? configNotice
+      : accessNotice;
+  const pageStatusClassName = /失败|不可用|错误/.test(pageStatusNotice)
+    ? "text-[#c83a3a]"
+    : "text-[#258a3f]";
+  const displayedAuditRows = auditRows;
+  const auditPageCount = Math.max(1, Math.ceil(auditTotal / auditPageSize));
+  const overviewStats = activeTab === "users"
+    ? [
+        { label: "角色数", value: String(roles.length), icon: Shield },
+        { label: "总用户数", value: String(users.length), icon: Users },
+        { label: "今日登录", value: "42", icon: Key },
+        { label: "在线用户", value: String(users.filter((user) => user.status === "active").length), icon: CheckCircle2 },
+      ]
+    : activeTab === "roles"
+      ? [
+          { label: "接入机构", value: String(permissionInstitutions.length), icon: Database },
+          { label: "权限菜单", value: String(permissionMenus.length), icon: Shield },
+          { label: "数据范围", value: String(permissionDataScopes.length), icon: Key },
+          { label: "自定义角色", value: String(customRoleOptions.length), icon: Users },
+        ]
+      : activeTab === "audit"
+        ? [
+            { label: "审计记录", value: String(auditTotal), icon: Activity },
+            { label: "涉及用户", value: String(new Set(displayedAuditRows.map((row) => row.user)).size), icon: Users },
+            { label: "操作类型", value: String(new Set(displayedAuditRows.map((row) => row.action)).size), icon: Shield },
+            { label: "涉及机构", value: String(new Set(displayedAuditRows.map((row) => row.institution)).size), icon: Database },
+          ]
+        : [];
+  const configOverviewStats = [
+    { label: "数据刷新", value: systemDataParams.find((param) => param.id === "data_refresh_frequency")?.value || "未配置", icon: Database },
+    { label: "单次采集", value: systemDataParams.find((param) => param.id === "acquisition_max_rows")?.value || "未配置", icon: Database },
+    { label: "分析时限", value: systemDataParams.find((param) => param.id === "analysis_deadline_seconds")?.value || "未配置", icon: Clock },
+    { label: "AI分析并发", value: systemDataParams.find((param) => param.id === "analysis_user_concurrency_limit")?.value || "未配置", icon: Activity },
+  ];
+  const upperModuleKind = {
+    users: "user-overview",
+    roles: "role-overview",
+    audit: "audit-overview",
+    config: "model-access",
+  }[activeTab];
 
   return (
     <div className="p-7">
       <div className="mb-7">
-        <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">系统管理</h2>
-        <p className="text-[13px] text-[#aeaeb2] mt-1">用户管理 · 角色权限 · 审计日志 · 系统配置</p>
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">{pageHeading.title}</h2>
+          {pageStatusNotice && (
+            <span className={`text-[11px] ${pageStatusClassName}`}>{pageStatusNotice}</span>
+          )}
+        </div>
+        <p className="text-[13px] text-[#aeaeb2] mt-1">{pageHeading.description}</p>
+        <div className="mt-5" data-settings-upper-module={upperModuleKind}>
+          {activeTab === "config" ? (
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
+              <section className="rounded-xl border border-[#f0f0f2] bg-white p-4" data-system-config-summary="true">
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <div className="text-[14px] text-[#1d1d1f]">系统运行概览</div>
+                    <div className="mt-0.5 text-[12px] text-[#8a8a8e]">当前机构的关键运行参数</div>
+                  </div>
+                  <span className="text-[12px] text-[#8a8a8e]">当前机构</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {configOverviewStats.map((stat) => (
+                    <div key={stat.label} className="rounded-lg bg-[#fafbfc] p-3">
+                      <div className="mb-2 flex items-center justify-between"><stat.icon className="h-4 w-4 text-[#636366]" /></div>
+                      <div className="truncate text-[14px] font-medium leading-5 tracking-tight text-gray-900" title={stat.value}>{stat.value}</div>
+                      <div className="mt-1 text-[12px] leading-4 text-[#8a8a8e]">{stat.label}</div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+              <AccessConfigCard
+                title="模型接入"
+                subtitle="统一维护大模型与语音转文字接入"
+                icon={Key}
+                items={[
+                  `${modelIntegrations.length} 个大模型接入`,
+                  `${speechIntegrations.length} 个语音转文字接入`,
+                  modelIntegrations.map((model) => model.name).join("、") || "暂无大模型接入",
+                  speechIntegrations.map((integration) => integration.name).join("、") || "暂无语音转文字接入",
+                ]}
+                onEdit={() => setAccessModal("model")}
+              />
+            </div>
+          ) : (
+            <section className="rounded-xl border border-[#f0f0f2] bg-white p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="text-[13px] text-[#1d1d1f]">
+                  {activeTab === "users" ? "用户与角色概览" : activeTab === "roles" ? "权限范围概览" : "审计数据概览"}
+                </div>
+                <span className="text-[11px] text-[#aeaeb2]">当前机构</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                {overviewStats.map((stat) => (
+                  <div key={stat.label} className="rounded-lg bg-[#fafbfc] p-3">
+                    <div className="mb-2 flex items-center justify-between"><stat.icon className="h-4 w-4 text-[#636366]" /></div>
+                    <div className="text-[21px] tracking-tight text-gray-900">{stat.value}</div>
+                    <div className="mt-0.5 text-[11px] text-gray-400">{stat.label}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
       </div>
 
-      {(activeTab === "users" || activeTab === "roles") && accessNotice && (
-        <div className="mb-4 rounded-lg border border-[#d7efd9] bg-[#eef8f1] px-3 py-2 text-[12px] text-[#258a3f]">
-          {accessNotice}
-        </div>
-      )}
-
       {activeTab === "users" && (
-        <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
+        <div className="bg-white rounded-xl border border-[#f0f0f2] p-5" data-settings-route-body="users">
           <div className="flex items-center justify-between mb-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
@@ -732,17 +881,18 @@ export function SystemSettings() {
       )}
 
       {activeTab === "roles" && (
-        <RolePermissionView
-          institutions={permissionInstitutions}
-          onEdit={openPermissionEditor}
-        />
+        <div data-settings-route-body="roles">
+          <RolePermissionView
+            institutions={permissionInstitutions}
+            onEdit={openPermissionEditor}
+          />
+        </div>
       )}
 
       {activeTab === "audit" && (
-        <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
+        <div className="bg-white rounded-xl border border-[#f0f0f2] p-5" data-settings-route-body="audit">
           <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <h3 className="text-[14px] text-gray-800">操作审计日志</h3>
-            {auditNotice && <span className="text-[11px] text-[#8a8a8e]">{auditNotice}</span>}
           </div>
           <table className="w-full text-[12px]">
             <thead>
@@ -756,8 +906,8 @@ export function SystemSettings() {
               </tr>
             </thead>
             <tbody>
-              {(auditRows.length ? auditRows : isDemoFallbackEnabled() ? fallbackAuditLogs : []).map((log, i) => (
-                <tr key={i} className="border-t border-gray-50 text-gray-700 hover:bg-[#f5f5f7]">
+              {displayedAuditRows.map((log) => (
+                <tr key={log.eventId} className="border-t border-gray-50 text-gray-700 hover:bg-[#f5f5f7]">
                   <td className="py-3 px-3 text-gray-400">{log.time}</td>
                   <td className="py-3 px-3 text-gray-600">{log.institution}</td>
                   <td className="py-3 px-3">{log.user}</td>
@@ -768,7 +918,7 @@ export function SystemSettings() {
                   <td className="py-3 px-3 text-gray-400 font-mono text-[11px]">{log.ip}</td>
                 </tr>
               ))}
-              {!auditRows.length && !isDemoFallbackEnabled() && (
+              {!displayedAuditRows.length && (
                 <tr className="border-t border-gray-50">
                   <td className="px-3 py-6 text-center text-[12px] text-[#8a8a8e]" colSpan={6}>
                     暂无后端审计日志，或当前角色无权查看。
@@ -777,29 +927,14 @@ export function SystemSettings() {
               )}
             </tbody>
           </table>
+          <div className="mt-4 flex justify-end border-t border-[#f0f0f2] pt-4" data-audit-pagination="true">
+            <DataPageSelector page={auditPage} totalPages={auditPageCount} shownCount={displayedAuditRows.length} totalCount={auditTotal} onChange={setAuditPage} ariaLabel="审计日志分页" />
+          </div>
         </div>
       )}
 
       {activeTab === "config" && (
-        <div className="space-y-5">
-          {configNotice && (
-            <div className="rounded-lg border border-[#d7efd9] bg-[#eef8f1] px-3 py-2 text-[12px] text-[#258a3f]">
-              {configNotice}
-            </div>
-          )}
-          <section className="flex items-center justify-between rounded-xl border border-[#f0f0f2] bg-white px-5 py-4">
-            <div>
-              <h3 className="text-[14px] text-[#1d1d1f]">模型接入管理</h3>
-              <p className="mt-1 text-[12px] text-[#8a8a8e]">统一用户下的大模型可在已授权机构间复用；语音接入独立管理。</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setAccessModal("model")}
-              className="rounded-lg border border-[#d8d8dc] bg-white px-3 py-2 text-[12px] text-[#1d1d1f] shadow-sm"
-            >
-              管理模型
-            </button>
-          </section>
+        <div className="space-y-5" data-settings-route-body="config">
           <SystemDataParamsPanel params={systemDataParams} currentTenantId={tenantId} onSave={updateSystemDataParam} />
         </div>
       )}
@@ -1802,8 +1937,8 @@ function ModelAccessModal({
   const [editingSpeechId, setEditingSpeechId] = useState("");
   const [expandedModelId, setExpandedModelId] = useState("");
   const [expandedSpeechId, setExpandedSpeechId] = useState("");
-  const [modelEditDraft, setModelEditDraft] = useState({ name: "", modelName: "中转站", applicationModule: "", key: "", value: "" });
-  const [speechEditDraft, setSpeechEditDraft] = useState({ name: "", provider: "aliyun_fun_asr", source: "阿里云", apiBase: "", apiKey: "", applicationModule: "" });
+  const [modelEditDraft, setModelEditDraft] = useState({ name: "", modelName: "中转站", applicationModule: "global_text_model", key: "", value: "" });
+  const [speechEditDraft, setSpeechEditDraft] = useState({ name: "", provider: "aliyun_fun_asr", source: "阿里云", apiBase: "", apiKey: "", applicationModule: "global_voice_model" });
 
   useEffect(() => {
     setExpandedModelId((current) => {
@@ -1817,7 +1952,7 @@ function ModelAccessModal({
     try {
       await onUpdate(model, modelEditDraft);
       setEditingModelId("");
-      setModelEditDraft({ name: "", modelName: "中转站", applicationModule: "", key: "", value: "" });
+      setModelEditDraft({ name: "", modelName: "中转站", applicationModule: "global_text_model", key: "", value: "" });
     } catch {
       // Parent owns user-facing notice; keep row editable.
     }
@@ -1828,7 +1963,7 @@ function ModelAccessModal({
     try {
       await onUpdateSpeech(integration, speechEditDraft);
       setEditingSpeechId("");
-      setSpeechEditDraft({ name: "", provider: "aliyun_fun_asr", source: "阿里云", apiBase: "", apiKey: "", applicationModule: "" });
+      setSpeechEditDraft({ name: "", provider: "aliyun_fun_asr", source: "阿里云", apiBase: "", apiKey: "", applicationModule: "global_voice_model" });
     } catch {
       // Parent owns user-facing notice; keep row editable.
     }
@@ -1861,8 +1996,9 @@ function ModelAccessModal({
   }, [editingSpeechId, speechEditDraft, speechIntegrations]);
 
   const startModelEdit = (model: ModelIntegration) => {
+    if (model.id === defaultRelayModelId) return;
     setEditingModelId(model.id);
-    setModelEditDraft({ name: model.name, modelName: modelSourceLabel(model.modelName), applicationModule: model.applicationModule || "", key: model.key, value: "" });
+    setModelEditDraft({ name: model.name, modelName: modelSourceLabel(model.modelName), applicationModule: "global_text_model", key: model.key, value: "" });
   };
 
   const startSpeechEdit = (integration: SpeechIntegration) => {
@@ -1873,7 +2009,7 @@ function ModelAccessModal({
       source: integration.source || speechProviderLabel(integration.provider),
       apiBase: integration.apiBase,
       apiKey: "",
-      applicationModule: integration.applicationModule || "realtime_voice_input",
+      applicationModule: "global_voice_model",
     });
   };
 
@@ -1917,12 +2053,11 @@ function ModelAccessModal({
         {activeAccessTab === "llm" && (
           <div className="grid h-full min-h-0 gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_340px]">
             <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-[#f0f0f2]">
-              <div className="grid grid-cols-[1fr_0.7fr_1fr_0.72fr_1fr_112px] gap-3 border-b border-[#f0f0f2] bg-[#fafbfc] px-3 py-2 text-[11px] text-[#8a8a8e]">
+              <div className="grid grid-cols-[minmax(120px,1fr)_90px_minmax(150px,1.2fr)_100px_112px] gap-3 border-b border-[#f0f0f2] bg-[#fafbfc] px-3 py-2 text-[11px] text-[#8a8a8e]">
                 <span>模型名称</span>
                 <span>模型来源</span>
                 <span>API地址</span>
                 <span>API密钥</span>
-                <span>应用模块</span>
                 <span className="text-right">操作</span>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto" data-model-integrations-scroll="true">
@@ -1940,7 +2075,7 @@ function ModelAccessModal({
                       onClick={() => {
                         if (!isEditing) setExpandedModelId(expanded ? "" : model.id);
                       }}
-                      className={`grid grid-cols-[1fr_0.7fr_1fr_0.72fr_1fr_112px] items-center gap-3 px-3 py-2.5 transition-colors ${
+                      className={`grid grid-cols-[minmax(120px,1fr)_90px_minmax(150px,1.2fr)_100px_112px] items-center gap-3 px-3 py-2.5 transition-colors ${
                         isEditing ? "" : "cursor-pointer hover:bg-[#fafbfc]"
                       }`}
                     >
@@ -1948,18 +2083,16 @@ function ModelAccessModal({
                         <>
                           <input
                             value={modelEditDraft.name}
+                            autoComplete="off"
+                            data-1p-ignore="true"
                             onChange={(event) => setModelEditDraft((current) => ({ ...current, name: event.target.value }))}
-                            className="h-8 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
+                            className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
                           />
-                          <select value={modelEditDraft.modelName} onChange={(event) => setModelEditDraft((current) => ({ ...current, modelName: event.target.value }))} className="h-8 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]">
+                          <select value={modelEditDraft.modelName} onChange={(event) => setModelEditDraft((current) => ({ ...current, modelName: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]">
                             {modelSourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}
                           </select>
-                          <input value={modelEditDraft.key} onChange={(event) => setModelEditDraft((current) => ({ ...current, key: event.target.value }))} className="h-8 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]" />
-                          <input value={modelEditDraft.value} type="password" placeholder="留空保持原密钥" onChange={(event) => setModelEditDraft((current) => ({ ...current, value: event.target.value }))} className="h-8 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]" />
-                          <select value={modelEditDraft.applicationModule} onChange={(event) => setModelEditDraft((current) => ({ ...current, applicationModule: event.target.value }))} className="h-8 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]">
-                            <option value="">未分配</option>
-                            {modelApplicationModuleOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                          </select>
+                          <input value={modelEditDraft.key} autoComplete="off" data-1p-ignore="true" onChange={(event) => setModelEditDraft((current) => ({ ...current, key: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]" />
+                          <input value={modelEditDraft.value} type="password" autoComplete="new-password" data-1p-ignore="true" placeholder="留空保持原密钥" onChange={(event) => setModelEditDraft((current) => ({ ...current, value: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]" />
                         </>
                       ) : (
                         <>
@@ -1967,10 +2100,9 @@ function ModelAccessModal({
                           <span className="truncate text-[11px] text-[#3a3a3c]">{modelSourceLabel(model.modelName)}</span>
                           <span className="truncate text-[11px] text-[#8a8a8e]" title="点击编辑后查看和修改">API地址已配置</span>
                           <span className="font-mono text-[11px] text-[#636366]" title="API密钥已隐藏">{maskApiSecret(model.value)}</span>
-                          <span className="truncate text-[11px] text-[#3a3a3c]" title={modelApplicationModuleLabel(model.applicationModule)}>{modelApplicationModuleLabel(model.applicationModule)}</span>
                         </>
                       )}
-                      <span className="flex justify-end gap-1.5">
+                      <span className="relative z-20 flex min-w-[112px] justify-end gap-1.5 bg-white/95">
                         <button
                           type="button"
                           onClick={(event) => {
@@ -1996,7 +2128,8 @@ function ModelAccessModal({
                             if (isEditing) void saveModelEdit(model);
                             else startModelEdit(model);
                           }}
-                          className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f]"
+                          disabled={model.id === defaultRelayModelId}
+                          className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f] disabled:cursor-not-allowed disabled:opacity-30"
                           aria-label={`修改${model.name}模型接入`}
                         >
                           {isEditing ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Edit3 className="h-3.5 w-3.5" />}
@@ -2005,10 +2138,11 @@ function ModelAccessModal({
                           type="button"
                           onClick={(event) => {
                             event.stopPropagation();
-                            onDelete(model.id);
+                            if (model.id !== defaultRelayModelId) onDelete(model.id);
                           }}
-                          className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#fff0f0] hover:text-[#d93025]"
-                          aria-label={`删除${model.name}`}
+                          disabled={model.id === defaultRelayModelId}
+                          className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#fff0f0] hover:text-[#d93025] disabled:cursor-not-allowed disabled:opacity-30"
+                          aria-label={model.id === defaultRelayModelId ? "系统默认模型不可删除" : `删除${model.name}`}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -2066,16 +2200,13 @@ function ModelAccessModal({
             <div className="overflow-y-auto rounded-lg bg-[#fafbfc] p-4">
               <div className="mb-3 text-[13px] text-[#1d1d1f]">新增模型</div>
               <ModelInput label="模型名称" value={form.name} onChange={(value) => onFormChange("name", value)} />
-              <div className="grid grid-cols-2 gap-3">
-                <ModelSelect label="模型来源" value={modelSourceOptions.includes(form.modelName) ? form.modelName : modelSourceOptions[0]} options={modelSourceOptions.map((source) => ({ label: source, value: source }))} onChange={(value) => onFormChange("modelName", value)} />
-                <ModelSelect label="应用模块" value={form.applicationModule} options={[{ label: "请选择", value: "" }, ...modelApplicationModuleOptions]} onChange={(value) => onFormChange("applicationModule", value)} />
-              </div>
+              <ModelSelect label="模型来源" value={modelSourceOptions.includes(form.modelName) ? form.modelName : modelSourceOptions[0]} options={modelSourceOptions.map((source) => ({ label: source, value: source }))} onChange={(value) => onFormChange("modelName", value)} />
               <ModelInput label="API地址" value={form.key} placeholder="https://zetatechs.com/api/v1/..." onChange={(value) => onFormChange("key", value)} />
               <ModelInput label="API密钥" value={form.value} type="password" placeholder="请输入 API 密钥" onChange={(value) => onFormChange("value", value)} />
               <button
                 type="button"
                 onClick={onAdd}
-                disabled={!form.name.trim() || !form.modelName.trim() || !form.applicationModule.trim() || !form.key.trim() || !form.value.trim()}
+                disabled={!form.name.trim() || !form.modelName.trim() || !form.key.trim() || !form.value.trim()}
                 className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 py-2 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-40"
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -2088,12 +2219,11 @@ function ModelAccessModal({
         {activeAccessTab === "speech" && (
           <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_320px]">
             <div className="overflow-hidden rounded-lg border border-[#f0f0f2]">
-              <div className="grid grid-cols-[0.9fr_0.8fr_1.2fr_0.8fr_1.1fr_128px] gap-3 border-b border-[#f0f0f2] bg-[#fafbfc] px-3 py-2 text-[11px] text-[#8a8a8e]">
+              <div className="grid grid-cols-[minmax(120px,0.9fr)_100px_minmax(160px,1.2fr)_100px_128px] gap-3 border-b border-[#f0f0f2] bg-[#fafbfc] px-3 py-2 text-[11px] text-[#8a8a8e]">
                 <span>模型名称</span>
                 <span>模型来源</span>
                 <span>API地址</span>
                 <span>API密钥</span>
-                <span>应用模块</span>
                 <span className="text-right">操作</span>
               </div>
               {speechIntegrations.map((integration) => {
@@ -2108,25 +2238,22 @@ function ModelAccessModal({
                       onClick={() => {
                         if (!isEditing) setExpandedSpeechId(expanded ? "" : integration.id);
                       }}
-                      className={`grid grid-cols-[0.9fr_0.8fr_1.2fr_0.8fr_1.1fr_128px] items-center gap-3 px-3 py-2.5 transition-colors ${
+                      className={`grid grid-cols-[minmax(120px,0.9fr)_100px_minmax(160px,1.2fr)_100px_128px] items-center gap-3 px-3 py-2.5 transition-colors ${
                         isEditing ? "" : "cursor-pointer hover:bg-[#fafbfc]"
                       }`}
                     >
                       {isEditing ? (
                         <>
-                          <input value={speechEditDraft.name} onChange={(event) => setSpeechEditDraft((current) => ({ ...current, name: event.target.value }))} className="h-8 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]" />
+                          <input value={speechEditDraft.name} autoComplete="off" data-1p-ignore="true" onChange={(event) => setSpeechEditDraft((current) => ({ ...current, name: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]" />
                           <select
                             value={speechEditDraft.provider}
                             onChange={(event) => setSpeechEditDraft((current) => ({ ...current, provider: event.target.value, source: speechProviderLabel(event.target.value) }))}
-                            className="h-8 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]"
+                            className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]"
                           >
                             <option value="aliyun_fun_asr">阿里云 Fun-ASR</option>
                           </select>
-                          <input value={speechEditDraft.apiBase} onChange={(event) => setSpeechEditDraft((current) => ({ ...current, apiBase: event.target.value }))} className="h-8 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]" />
-                          <input value={speechEditDraft.apiKey} type="password" placeholder="留空保持原密钥" onChange={(event) => setSpeechEditDraft((current) => ({ ...current, apiKey: event.target.value }))} className="h-8 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]" />
-                          <select value={speechEditDraft.applicationModule} onChange={(event) => setSpeechEditDraft((current) => ({ ...current, applicationModule: event.target.value }))} className="h-8 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]">
-                            {modelApplicationModuleOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                          </select>
+                          <input value={speechEditDraft.apiBase} autoComplete="off" data-1p-ignore="true" onChange={(event) => setSpeechEditDraft((current) => ({ ...current, apiBase: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]" />
+                          <input value={speechEditDraft.apiKey} type="password" autoComplete="new-password" data-1p-ignore="true" placeholder="留空保持原密钥" onChange={(event) => setSpeechEditDraft((current) => ({ ...current, apiKey: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]" />
                         </>
                       ) : (
                         <>
@@ -2134,10 +2261,9 @@ function ModelAccessModal({
                           <span className="text-[12px] text-[#636366]">{integration.source || speechProviderLabel(integration.provider)}</span>
                           <span className="truncate text-[11px] text-[#8a8a8e]" title="点击编辑后查看和修改">API地址已配置</span>
                           <span className="font-mono text-[11px] text-[#636366]" title="API密钥已隐藏">{maskApiSecret(integration.apiKey)}</span>
-                          <span className="truncate text-[11px] text-[#3a3a3c]" title={modelApplicationModuleLabel(integration.applicationModule)}>{modelApplicationModuleLabel(integration.applicationModule)}</span>
                         </>
                       )}
-                      <span className="flex justify-end gap-1.5">
+                      <span className="relative z-20 flex min-w-[128px] justify-end gap-1.5 bg-white/95">
                         <button
                           type="button"
                           onClick={(event) => {
@@ -2195,28 +2321,6 @@ function ModelAccessModal({
                             )}
                           </div>
                         )}
-                        <div className="rounded-lg border border-[#f0f0f2] bg-white p-2">
-                          <div className="mb-2 flex items-center justify-between gap-2">
-                            <span className="text-[11px] text-[#8a8a8e]">语音转文字能力</span>
-                            <span className="text-[10px] text-[#aeaeb2]">保存并启用后可直接使用；测试仅用于排查</span>
-                          </div>
-                          <div className="grid gap-2 md:grid-cols-2">
-                            {speechCapabilityOptions(integration).map((capability) => (
-                              <label
-                                key={capability.model}
-                                onClick={(event) => event.stopPropagation()}
-                                className="flex cursor-default items-start gap-2 rounded-lg border border-[#e5e5ea] bg-white px-2.5 py-2 text-left"
-                              >
-                                <input type="checkbox" checked readOnly className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[#1d1d1f]" />
-                                <span className="min-w-0">
-                                  <span className="block text-[11px] text-[#3a3a3c]">{capability.title}</span>
-                                  <span className="mt-0.5 block truncate font-mono text-[10px] text-[#8a8a8e]">{capability.model}</span>
-                                  <span className="mt-0.5 block text-[10px] leading-relaxed text-[#8a8a8e]">{capability.description}</span>
-                                </span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
                       </div>
                     )}
                   </div>
@@ -2227,16 +2331,13 @@ function ModelAccessModal({
             <div className="rounded-lg bg-[#fafbfc] p-4">
               <div className="mb-3 text-[13px] text-[#1d1d1f]">新增语音转文字接入</div>
               <ModelInput label="模型名称" value={speechForm.name} onChange={(value) => onSpeechFormChange("name", value)} />
-              <div className="grid grid-cols-2 gap-3">
-                <ModelSelect label="模型来源" value={speechForm.provider} options={[{ label: "阿里云 Fun-ASR", value: "aliyun_fun_asr" }]} onChange={(value) => { onSpeechFormChange("provider", value); onSpeechFormChange("source", speechProviderLabel(value)); }} />
-                <ModelSelect label="应用模块" value={speechForm.applicationModule} options={[...modelApplicationModuleOptions]} onChange={(value) => onSpeechFormChange("applicationModule", value)} />
-              </div>
+              <ModelSelect label="模型来源" value={speechForm.provider} options={[{ label: "阿里云 Fun-ASR", value: "aliyun_fun_asr" }]} onChange={(value) => { onSpeechFormChange("provider", value); onSpeechFormChange("source", speechProviderLabel(value)); }} />
               <ModelInput label="API地址" value={speechForm.apiBase} placeholder="https://ws-xxx.cn-beijing.maas.aliyuncs.com/api/v1" onChange={(value) => onSpeechFormChange("apiBase", value)} />
               <ModelInput label="API密钥" value={speechForm.apiKey} type="password" placeholder="请输入 DashScope API Key" onChange={(value) => onSpeechFormChange("apiKey", value)} />
               <button
                 type="button"
                 onClick={onAddSpeech}
-                disabled={!speechForm.name.trim() || !speechForm.provider.trim() || !speechForm.applicationModule.trim() || !speechForm.apiBase.trim() || !speechForm.apiKey.trim()}
+                disabled={!speechForm.name.trim() || !speechForm.provider.trim() || !speechForm.apiBase.trim() || !speechForm.apiKey.trim()}
                 className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 py-2 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-40"
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -2288,6 +2389,8 @@ function ModelInput({
       <span className="mb-1.5 block text-[11px] text-[#8a8a8e]">{label}</span>
       <input
         type={type}
+        autoComplete={type === "password" ? "new-password" : "off"}
+        data-1p-ignore="true"
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}

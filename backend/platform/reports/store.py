@@ -15,8 +15,14 @@ ANALYSIS_RESULT_FIELDS = (
     "id", "title", "query", "plan", "summary", "visualTypes", "savedAt",
     "analysisTaskId", "ownerUserId", "visibility", "topicData", "source",
     "weeklyReportEligible", "weeklyReportSavedAt", "analysisInstitution",
-    "currentInstitution", "uploadedDataInstitutions",
+    "currentInstitution", "uploadedDataInstitutions", "visualizations",
 )
+
+SAVED_ANALYSIS_VISUALIZATION_TYPES = frozenset({
+    "kpi", "line", "area", "column", "bar", "stacked_bar", "combo", "donut",
+    "scatter", "funnel", "treemap", "radar", "table", "pivot",
+})
+SAVED_ANALYSIS_FILTER_OPERATORS = frozenset({"in", "not_in", "contains", "not_contains"})
 
 
 class CommentRevisionConflict(ValueError):
@@ -1403,6 +1409,7 @@ def _normalize_analysis_result(result: dict[str, Any]) -> dict[str, Any]:
         str(item).strip()[:120]
         for item in uploaded_institutions if str(item).strip()
     ][:20] if isinstance(uploaded_institutions, list) else []
+    normalized["visualizations"] = _normalize_saved_analysis_visualizations(normalized.get("visualizations"))
     topic_data = normalized.get("topicData")
     is_topic_data_report = isinstance(topic_data, dict) and str(topic_data.get("reference_type") or "") == "report"
     if not normalized["analysisTaskId"] and not is_topic_data_report:
@@ -1432,6 +1439,97 @@ def _normalize_analysis_result(result: dict[str, Any]) -> dict[str, Any]:
     if not normalized["savedAt"]:
         normalized["savedAt"] = "未记录"
     return normalized
+
+
+def _normalize_saved_analysis_visualizations(value: Any) -> list[dict[str, Any]]:
+    """Bound user-authored presentation metadata without copying analysis facts."""
+
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("saved_analysis_visualizations_invalid")
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, raw_card in enumerate(value[:40]):
+        if not isinstance(raw_card, dict):
+            raise ValueError("saved_analysis_visualizations_invalid")
+        card_id = str(raw_card.get("id") or f"visual-{index + 1}").strip()[:160]
+        card_type = str(raw_card.get("type") or "table").strip()
+        if not card_id or card_id in seen_ids or card_type not in SAVED_ANALYSIS_VISUALIZATION_TYPES:
+            raise ValueError("saved_analysis_visualizations_invalid")
+        seen_ids.add(card_id)
+        key = str(raw_card.get("key") or "").strip()
+        card: dict[str, Any] = {
+            "id": card_id,
+            "title": str(raw_card.get("title") or "未命名可视化").strip()[:500] or "未命名可视化",
+            "type": card_type,
+        }
+        if key in {"primary", "secondary"}:
+            card["key"] = key
+        raw_config = raw_card.get("config")
+        if raw_config is not None:
+            if not isinstance(raw_config, dict):
+                raise ValueError("saved_analysis_visualizations_invalid")
+            card["config"] = _normalize_saved_analysis_visualization_config(raw_config)
+        normalized.append(card)
+    return normalized
+
+
+def _normalize_saved_analysis_visualization_config(value: dict[str, Any]) -> dict[str, Any]:
+    def string_list(raw: Any, *, limit: int = 100, width: int = 300) -> list[str]:
+        if not isinstance(raw, list):
+            return []
+        result: list[str] = []
+        for item in raw[:limit]:
+            text = str(item or "").strip()[:width]
+            if text and text not in result:
+                result.append(text)
+        return result
+
+    filters: dict[str, list[str]] = {}
+    raw_filters = value.get("filters")
+    if isinstance(raw_filters, dict):
+        for raw_field, raw_values in list(raw_filters.items())[:100]:
+            field = str(raw_field or "").strip()[:300]
+            values = string_list(raw_values, limit=200, width=500)
+            if field and values:
+                filters[field] = values
+
+    filter_groups: list[dict[str, Any]] = []
+    raw_groups = value.get("filterGroups")
+    if isinstance(raw_groups, list):
+        for group_index, raw_group in enumerate(raw_groups[:20]):
+            if not isinstance(raw_group, dict):
+                continue
+            rules: list[dict[str, Any]] = []
+            for rule_index, raw_rule in enumerate((raw_group.get("rules") or [])[:50] if isinstance(raw_group.get("rules"), list) else []):
+                if not isinstance(raw_rule, dict):
+                    continue
+                field = str(raw_rule.get("field") or "").strip()[:300]
+                values = string_list(raw_rule.get("values"), limit=200, width=500)
+                operator = str(raw_rule.get("operator") or "in").strip()
+                if not field or not values:
+                    continue
+                rules.append({
+                    "id": str(raw_rule.get("id") or f"filter-rule-{group_index}-{rule_index}").strip()[:160],
+                    "field": field,
+                    "operator": operator if operator in SAVED_ANALYSIS_FILTER_OPERATORS else "in",
+                    "values": values,
+                })
+            if rules:
+                filter_groups.append({
+                    "id": str(raw_group.get("id") or f"filter-group-{group_index}").strip()[:160],
+                    "rules": rules,
+                })
+
+    return {
+        "metricFields": string_list(value.get("metricFields")),
+        "dimensionFields": string_list(value.get("dimensionFields")),
+        "filters": filters,
+        "filterGroups": filter_groups,
+        "sumFilteredRows": bool(value.get("sumFilteredRows")),
+        "comboLineFields": string_list(value.get("comboLineFields")),
+    }
 
 
 def _report_object_visible(item: dict[str, Any], actor_user_id: str | None) -> bool:

@@ -8,6 +8,8 @@ from backend.platform.api.routes import run_analysis
 from backend.platform.bootstrap import build_local_platform
 from backend.platform.intelligent_analysis import IntelligentAnalysisEngine
 from backend.platform.intelligent_analysis.engine import IntelligentAnalysisRequest
+from backend.platform.settings.store import account_system_config_scope
+from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
 
 
 class IntelligentAnalysisPipelineTest(unittest.TestCase):
@@ -22,7 +24,7 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
         request = IntelligentAnalysisRequest(
             question="分行放款金额",
             tenant_id="tenant_demo",
-            user_id="u_admin",
+            user_id="u_super_admin",
             analysis_plan={"dataset_id": "loan_operation_mart", "metrics": ["loan_amount"], "dimensions": ["branch_name"], "limit": 10, "chart_types": ["bar"]},
             model={"id": "model_two_stage", "name": "两阶段分析模型"},
         )
@@ -52,7 +54,7 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
         request = IntelligentAnalysisRequest(
             question="比较各分行放款金额",
             tenant_id="tenant_demo",
-            user_id="u_admin",
+            user_id="u_super_admin",
             model={"id": "model_two_stage", "name": "两阶段分析模型"},
             query_result={"data": [{"branch_name": "华东分行", "metric_value": 100}]},
         )
@@ -76,7 +78,7 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
         request = IntelligentAnalysisRequest(
             question="比较各分行放款金额",
             tenant_id="tenant_demo",
-            user_id="u_admin",
+            user_id="u_super_admin",
             model={"id": "model_two_stage", "name": "两阶段分析模型"},
             query_result={"data": [{"branch_name": "华东分行", "metric_value": 100}]},
         )
@@ -95,10 +97,33 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
         self.assertEqual(result["model_invocation"]["error_code"], "model_final_output_invalid")
         self.assertEqual(result["model_invocation"]["retry_count"], 1)
 
+    def test_empty_query_result_skips_slow_model_conclusion(self) -> None:
+        request = IntelligentAnalysisRequest(
+            question="分析本周经营周报",
+            tenant_id="tenant_demo",
+            user_id="u_super_admin",
+            model={"id": "model_two_stage", "name": "两阶段分析模型"},
+            analysis_plan={"metrics": ["loan_amount"], "dimensions": ["branch_name"]},
+            query_result={
+                "data": [],
+                "evidence": {"evidence_id": "ev_empty_result"},
+                "semantic_info": {"schema_mapping": {"metrics": ["loan_amount"], "dimensions": ["branch_name"]}},
+            },
+        )
+        with patch("backend.platform.intelligent_analysis.engine.call_model_text_completion") as completion:
+            result = IntelligentAnalysisEngine().analyze(request, {"visualization_suggestions": [{"type": "column"}]})
+
+        completion.assert_not_called()
+        self.assertEqual(result["model_invocation"]["status"], "skipped")
+        self.assertEqual(result["model_invocation"]["reason"], "empty_query_result")
+        self.assertEqual(result["visualization_suggestions"], [])
+        self.assertIn("未返回可用于分析", result["analysis_summary"])
+
     def setUp(self) -> None:
         self.services = build_local_platform()
+        attach_governed_test_warehouse(self.services)
         self.services.system_config_store.upsert_model(
-            "tenant_demo",
+            account_system_config_scope("u_super_admin"),
             {
                 "id": "model_two_stage",
                 "name": "两阶段分析模型",
@@ -111,7 +136,7 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
                 "testStatus": "connected",
                 "status": "available",
             },
-            updated_by="u_admin",
+            updated_by="u_super_admin",
         )
 
     def tearDown(self) -> None:
@@ -211,7 +236,7 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
         ) as completion:
             response = run_analysis(
                 self.services,
-                user_id="u_admin",
+                user_id="u_super_admin",
                 tenant_id="tenant_demo",
                 question="2026年7月各分行放款金额排名TOP10",
                 page_context={"selected_model": {"id": "model_two_stage"}},
@@ -260,7 +285,7 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
         ) as completion:
             response = run_analysis(
                 self.services,
-                user_id="u_admin",
+                user_id="u_super_admin",
                 tenant_id="tenant_demo",
                 question="请按周报分析2026年7月各分行放款金额",
                 page_context={
@@ -300,7 +325,7 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
         ) as completion:
             response = run_analysis(
                 self.services,
-                user_id="u_admin",
+                user_id="u_super_admin",
                 tenant_id="tenant_demo",
                 question="2026年7月各分行放款金额排名TOP10",
                 page_context={
@@ -321,6 +346,100 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
             "data_first.server_plan.v1",
         )
         self.assertEqual(response["intelligent_analysis"]["model_invocation"]["status"], "connected")
+
+    def test_visualization_follow_up_binds_page_filters_model_and_context(self) -> None:
+        final_json = json.dumps(
+            {
+                "analysis_summary": "仅基于当前分行漏斗的重新查询证据生成结论。",
+                "conclusions": ["上海分行当前漏斗阶段数据已完成重新查询。"],
+                "metric_findings": [],
+                "visualization_suggestions": [],
+            },
+            ensure_ascii=False,
+        )
+        page_context = {
+            "route": "funnel",
+            "page_key": "funnel",
+            "filters": {"branch_name": "上海分行", "product_line": "经营贷"},
+            "dataset_snapshot": {"id": "business_funnel", "version": "2026-08-14T00:00:00Z"},
+            "evidence_refs": [{"id": "snap_page_evidence", "type": "operating_snapshot"}],
+            "visualization": {"stage_names": ["进件", "完件", "授信", "动支"]},
+            "analysis_plan_hint": {
+                "dataset_id": "funnel_operation_mart",
+                "metrics": ["stage_count"],
+                "dimensions": ["branch_name", "product_line", "stage_name", "stage_order", "stat_date"],
+                "chart_types": ["column", "table"],
+            },
+            "model_application_module": "intelligent_analysis_reasoning",
+            "analysis_skill": {"id": "page-funnel", "name": "业务漏斗页面追问", "category": "场景"},
+            "analysis_context_skills": [{"id": "page-funnel", "name": "业务漏斗页面追问", "category": "场景"}],
+            "analysis_policy": {"resultDelivery": "data_first"},
+        }
+        with patch(
+            "backend.platform.intelligent_analysis.engine.call_model_text_completion",
+            return_value={
+                "status": "connected",
+                "model_id": "model_two_stage",
+                "used_model": "finance-analysis-v2",
+                "response_text": final_json,
+            },
+        ) as completion:
+            response = run_analysis(
+                self.services,
+                user_id="u_super_admin",
+                tenant_id="tenant_demo",
+                question="当前漏斗主要断点在哪里",
+                page_context=page_context,
+            )
+
+        self.assertEqual(completion.call_count, 1)
+        plan = response["analysis_plan"]
+        self.assertEqual(plan["dataset_id"], "funnel_operation_mart")
+        self.assertEqual(plan["metrics"], ["stage_count"])
+        self.assertEqual(plan["filters"]["branch_name"], "上海分行")
+        self.assertEqual(plan["filters"]["product_line"], "经营贷")
+        applied_filters = response["skill_results"][0]["semantic_info"]["applied_filters"]
+        self.assertEqual(applied_filters["branch_name"], "上海分行")
+        self.assertEqual(applied_filters["product_line"], "经营贷")
+        prompt = completion.call_args.args[1]
+        self.assertIn("current_page_context_untrusted", prompt)
+        self.assertIn("snap_page_evidence", prompt)
+        self.assertIn("业务漏斗页面追问", prompt)
+        self.assertIn("实际执行证据", prompt)
+
+    def test_surface_context_and_reviewed_memories_are_bounded_into_model_prompt(self) -> None:
+        request = IntelligentAnalysisRequest(
+            question="继续分析当前图表",
+            tenant_id="tenant_demo",
+            user_id="u_super_admin",
+            analysis_plan={
+                "metrics": ["loan_amount"],
+                "dimensions": ["branch_name"],
+                "memory_refs": [{"memory_id": "mem_reviewed", "memory_type": "analysis_case", "title": "已审核经验", "content": {"rule": "先校验口径"}, "confidence": 0.9}],
+            },
+            asset_context={
+                "matched_intents": [{"id": "intent_branch", "name": "机构排名", "keywords": "分行,排名"}],
+                "experiences": [{"id": "exp_branch", "title": "机构比较经验", "steps": ["校验", "比较"]}],
+            },
+            model={"id": "model_two_stage", "name": "两阶段分析模型"},
+            surface_context={
+                "route": "supervision",
+                "filters": {"branch_name": "上海分行"},
+                "selected_data_point": {"targetType": "institution", "targetId": "上海分行"},
+                "secret": "must-not-enter-prompt",
+            },
+        )
+        with patch(
+            "backend.platform.intelligent_analysis.engine.call_model_text_completion",
+            return_value={"status": "failed", "message": "offline"},
+        ) as completion:
+            IntelligentAnalysisEngine().plan(request)
+        prompt = completion.call_args.args[1]
+        self.assertIn("mem_reviewed", prompt)
+        self.assertIn("intent_branch", prompt)
+        self.assertIn("exp_branch", prompt)
+        self.assertIn("上海分行", prompt)
+        self.assertNotIn("must-not-enter-prompt", prompt)
 
     def test_runtime_invalid_model_visualization_falls_back_without_failing_analysis(self) -> None:
         planning_json = json.dumps(
@@ -356,7 +475,7 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
         ):
             response = run_analysis(
                 self.services,
-                user_id="u_admin",
+                user_id="u_super_admin",
                 tenant_id="tenant_demo",
                 question="2026年7月各分行放款金额排名TOP10",
                 page_context={"selected_model": {"id": "model_two_stage"}},

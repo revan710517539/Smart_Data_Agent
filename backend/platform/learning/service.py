@@ -124,8 +124,8 @@ class SkillLearningService:
                     "source_action": action,
                 },
             )
-        candidate = self._maybe_create_operation_candidate(event)
         memory_candidate = self._maybe_create_operation_memory_candidate(event)
+        candidate = self._maybe_create_operation_candidate(event)
         return {
             "observed": True,
             "applied_skill_ids": [str(skill.get("id") or "") for skill in applied],
@@ -151,9 +151,9 @@ class SkillLearningService:
         skills = published.get("analysis_skills", [])
         matched: list[dict[str, Any]] = []
         for skill in skills:
-            if not self._is_generated_skill(skill, kind="analysis_procedure"):
+            if not self._is_learned_skill(skill, kind="analysis_procedure"):
                 continue
-            owner_user_id = str(skill.get("ownerUserId") or "")
+            owner_user_id = self._learning_owner_user_id(skill)
             if owner_user_id and owner_user_id != context.user_id:
                 continue
             trigger = skill.get("learningTrigger") if isinstance(skill.get("learningTrigger"), dict) else {}
@@ -196,6 +196,9 @@ class SkillLearningService:
             "metrics": _strings(plan.get("metrics"))[:12],
             "dimensions": _strings(plan.get("dimensions"))[:12],
             "chart_types": _strings(plan.get("chart_types"))[:8],
+            "procedure_steps": _strings(plan.get("procedure_steps"))[:20],
+            "methodology": str(plan.get("methodology") or "").strip()[:2000],
+            "evidence_memory_ids": _strings(plan.get("evidence_memory_ids"))[:8],
         }
         fingerprint = _stable_hash(
             {
@@ -341,6 +344,7 @@ class SkillLearningService:
                 "target_fingerprint": target_fingerprint,
             }
         )
+        template = self._reusable_scene_template(tenant_id, action=action)
         candidate = self.memory_service.create_candidate(
             tenant_id,
             {
@@ -356,7 +360,7 @@ class SkillLearningService:
                     "target_type": target_type,
                     "target_fingerprint": target_fingerprint,
                     "observation_count": len(matching),
-                    "procedure_skill_id": f"learned-operation-{fingerprint}",
+                    "procedure_skill_id": str((template or {}).get("id") or f"learned-operation-{fingerprint}"),
                     "interpretation_policy": (
                         "仅记录重复操作习惯，不推断业务意图、客户属性或权限。"
                     ),
@@ -411,16 +415,42 @@ class SkillLearningService:
         ]
         if len(matching) < OPERATION_PATTERN_THRESHOLD:
             return None
+        template = self._reusable_scene_template(tenant_id, action=action)
+        evidence_ids = [str(item.get("event_id") or "") for item in matching[:10]]
+        memory_id = f"learned-memory-{fingerprint}"
+        if not self._memory_exists(tenant_id, memory_id):
+            return None
+        if template is not None:
+            return self._evolve_existing_scene(
+                tenant_id,
+                template,
+                actor_user_id,
+                kind="operation_workflow",
+                trigger={
+                    "action": action,
+                    "targetType": target_type,
+                    "targetFingerprint": target_fingerprint,
+                },
+                evidence={
+                    "eventIds": evidence_ids,
+                    "observationCount": len(matching),
+                    "fingerprint": fingerprint,
+                },
+                memory_id=memory_id,
+                summary=(
+                    f"将连续 {len(matching)} 次同类操作抽象为可审计的操作顺序、"
+                    "权限边界与结果校验；不保留原始目标值或业务正文。"
+                ),
+            )
         skill_id = f"learned-operation-{fingerprint}"
         if self.data_asset_store.get_item(tenant_id, "analysis_skill", skill_id):
             return None
-        evidence_ids = [str(item.get("event_id") or "") for item in matching[:10]]
         payload = {
             "id": skill_id,
-            "name": f"操作流程：{_display_action(action)}",
+            "name": f"操作流程：{_display_action(action)}（AI）",
             "category": "场景",
-            "description": f"根据用户连续 {len(matching)} 次 {action} 操作提炼的可复用流程。",
-            "memoryRefs": [],
+            "description": f"根据用户连续 {len(matching)} 次同类操作提炼的 AI 辅助流程。",
+            "memoryRefs": [memory_id] if self._memory_exists(tenant_id, memory_id) else [],
             "toolRefs": [],
             "analysisMethod": f"执行 {action} 时沿用已确认的操作顺序、权限边界和结果校验，不跳过原业务处理。",
             "documentAbstraction": "仅提取操作编码、页面模块、目标类型、结果状态和审计引用，不复制业务正文或凭证。",
@@ -454,19 +484,83 @@ class SkillLearningService:
         pattern: dict[str, Any],
         events: list[dict[str, Any]],
     ) -> dict[str, Any] | None:
-        skill_id = f"learned-analysis-{fingerprint}"
-        existing = self.data_asset_store.get_item(context.tenant_id, "analysis_skill", skill_id)
-        if existing is not None:
-            return None
+        template = self._reusable_scene_template(
+            context.tenant_id,
+            dataset_id=str(pattern.get("dataset_id") or ""),
+            intent_rule_id=str(pattern.get("intent_rule_id") or ""),
+        )
         metrics = _strings(pattern.get("metrics"))
         dimensions = _strings(pattern.get("dimensions"))
         charts = _strings(pattern.get("chart_types"))
+        observed_patterns = [
+            dict((event.get("detail") or {}).get("pattern") or {})
+            for event in events
+            if isinstance((event.get("detail") or {}).get("pattern"), dict)
+        ]
+        source_memory_ids = _unique_strings([
+            *(_strings(pattern.get("evidence_memory_ids"))),
+            *(memory_id for observed in observed_patterns for memory_id in _strings(observed.get("evidence_memory_ids"))),
+        ])[:20]
+        procedure_steps = _unique_strings([
+            *(_strings(pattern.get("procedure_steps"))),
+            *(step for observed in observed_patterns for step in _strings(observed.get("procedure_steps"))),
+        ])[:20]
+        methodology = str(pattern.get("methodology") or "").strip()
+        if not methodology:
+            methodology = next((str(observed.get("methodology") or "").strip() for observed in observed_patterns if str(observed.get("methodology") or "").strip()), "")
+        memory_id = self._ensure_analysis_memory_candidate(
+            context,
+            fingerprint,
+            pattern,
+            events,
+            canonical_skill_id=str((template or {}).get("id") or ""),
+            canonical_skill_name=str((template or {}).get("name") or "智能分析"),
+        )
+        if not memory_id:
+            return None
+        memory_ids = _unique_strings([memory_id, *source_memory_ids])
+        evidence = {
+            "eventIds": [str(item.get("event_id") or "") for item in events[:20]],
+            "successfulObservationCount": len(events),
+            "fingerprint": fingerprint,
+        }
+        trigger = {
+            "intentRuleId": pattern.get("intent_rule_id"),
+            "datasetId": pattern.get("dataset_id"),
+        }
+        if template is not None:
+            return self._evolve_existing_scene(
+                context.tenant_id,
+                template,
+                context.user_id,
+                kind="analysis_procedure",
+                trigger=trigger,
+                evidence=evidence,
+                memory_id=memory_id,
+                additional_memory_ids=source_memory_ids,
+                summary=(
+                    "将审核通过的同类分析轨迹归纳为口径核对、结构拆解、"
+                    "异常反证与结论边界四个稳定步骤；不保存原始提问或明细。"
+                ),
+                procedure={
+                    "metrics": metrics,
+                    "dimensions": dimensions,
+                    "chartTypes": charts,
+                    "analysisAngles": procedure_steps or [
+                        "先核对指标和时间口径", "再做结构与趋势拆解", "对异常保留反证和治理边界",
+                    ],
+                    "sourceMethodology": methodology,
+                },
+            )
+        skill_id = f"learned-analysis-{fingerprint}"
+        if self.data_asset_store.get_item(context.tenant_id, "analysis_skill", skill_id):
+            return None
         payload = {
             "id": skill_id,
-            "name": f"自学习分析流程：{pattern.get('dataset_id') or '通用数据'}",
+            "name": "智能分析（AI）",
             "category": "场景",
-            "description": f"根据 {len(events)} 次审核通过的同类分析轨迹形成的用户级程序性 Skill。",
-            "memoryRefs": [],
+            "description": f"根据 {len(events)} 次审核通过的同类分析轨迹形成的 AI 辅助程序性 Skill。",
+            "memoryRefs": memory_ids,
             "toolRefs": [],
             "analysisMethod": (
                 f"优先核对数据集 {pattern.get('dataset_id') or '当前数据集'}；"
@@ -482,29 +576,217 @@ class SkillLearningService:
             "ownerUserId": context.user_id,
             "learningOrigin": LEARNING_ORIGIN,
             "learningKind": "analysis_procedure",
-            "learningTrigger": {
-                "intentRuleId": pattern.get("intent_rule_id"),
-                "datasetId": pattern.get("dataset_id"),
-            },
+            "learningTrigger": trigger,
             "learnedProcedure": {
                 "metrics": metrics,
                 "dimensions": dimensions,
                 "chartTypes": charts,
-                "analysisAngles": [
-                    "先核对指标和时间口径",
-                    "再做结构与趋势拆解",
-                    "对异常保留反证和治理边界",
+                "analysisAngles": procedure_steps or [
+                    "先核对指标和时间口径", "再做结构与趋势拆解", "对异常保留反证和治理边界",
                 ],
+                "sourceMethodology": methodology,
             },
-            "learningEvidence": {
-                "eventIds": [str(item.get("event_id") or "") for item in events[:20]],
-                "successfulObservationCount": len(events),
-                "fingerprint": fingerprint,
-            },
+            "learningEvidence": evidence,
             "learningGuardrails": _guardrails(),
             "updatedAt": _utc_now(),
         }
         return self._persist_candidate(context.tenant_id, payload, context.user_id)
+
+    def _reusable_scene_template(
+        self,
+        tenant_id: str,
+        *,
+        dataset_id: str = "",
+        intent_rule_id: str = "",
+        action: str = "",
+    ) -> dict[str, Any] | None:
+        """Choose a maintained scene before creating an AI-named candidate."""
+        bundle = self.data_asset_store.list_published_bundle(tenant_id)
+        available_memory_ids = {
+            str(item.get("id") or "")
+            for key in ("intents", "analysis_experiences", "behavior_habits")
+            for item in bundle.get(key, [])
+            if str(item.get("id") or "")
+        }
+        enabled_tool_ids = {
+            str(item.get("id") or "")
+            for item in bundle.get("external_tools", [])
+            if bool(item.get("enabled")) and str(item.get("id") or "")
+        }
+        markers = " ".join((dataset_id, intent_rule_id, action)).casefold()
+
+        def score(skill: dict[str, Any]) -> int:
+            text = " ".join((str(skill.get("name") or ""), str(skill.get("description") or ""))).casefold()
+            if any(token in markers for token in ("risk", "overdue", "m1", "逾期", "风险")):
+                return 30 if "风险" in text or "risk" in text else 0
+            if any(token in markers for token in ("weekly", "week", "周报", "branch_rank")):
+                return 30 if "周报" in text or "weekly" in text else 0
+            if any(token in markers for token in ("operation", "customer", "loan", "经营", "机构")):
+                return 20 if "运营" in text or "日常" in text else 0
+            return 0
+
+        scenes = [
+            skill
+            for skill in bundle.get("analysis_skills", [])
+            if str(skill.get("category") or "") == "场景"
+            and bool(skill.get("enabled", True))
+            and not self._is_generated_skill(skill)
+        ]
+        scenes.sort(key=lambda skill: (-score(skill), int(skill.get("sortOrder") or 999), str(skill.get("name") or "")))
+        for index, skill in enumerate(scenes):
+            return {
+                "id": str(skill.get("id") or ""),
+                "name": str(skill.get("name") or "智能分析"),
+                "memory_refs": [
+                    reference
+                    for reference in _strings(skill.get("memoryRefs"))
+                    if reference in available_memory_ids
+                ],
+                "tool_refs": [
+                    reference
+                    for reference in _strings(skill.get("toolRefs"))
+                    if reference in enabled_tool_ids
+                ],
+                "recommended_skill_ids": _strings(skill.get("recommendedSkillIds")),
+                "related_scene_ids": [
+                    str(candidate.get("id") or "")
+                    for candidate in scenes[index + 1 :]
+                    if score(candidate) > 0
+                ][:3],
+            }
+        return None
+
+    def _ensure_analysis_memory_candidate(
+        self,
+        context: ExecutionContext,
+        fingerprint: str,
+        pattern: dict[str, Any],
+        events: list[dict[str, Any]],
+        *,
+        canonical_skill_id: str,
+        canonical_skill_name: str,
+    ) -> str:
+        if self.memory_service is None:
+            return ""
+        memory_id = f"learned-analysis-memory-{fingerprint}"
+        if self._memory_exists(context.tenant_id, memory_id):
+            return memory_id
+        evidence_ids = [str(item.get("event_id") or "") for item in events[:20]]
+        evidence_hash = _stable_hash({"event_ids": evidence_ids, "pattern": pattern})
+        self.memory_service.create_candidate(
+            context.tenant_id,
+            {
+                "memory_id": memory_id,
+                "memory_type": "analysis_case",
+                "subject_type": "user",
+                "subject_id": context.user_id,
+                "title": f"分析方法记忆：{canonical_skill_name}",
+                "content": {
+                    "learning_origin": LEARNING_ORIGIN,
+                    "learning_kind": "analysis_procedure",
+                    "canonical_skill_id": canonical_skill_id,
+                    "pattern": {
+                        "intent_rule_id": str(pattern.get("intent_rule_id") or ""),
+                        "dataset_id": str(pattern.get("dataset_id") or ""),
+                        "metrics": _strings(pattern.get("metrics"))[:12],
+                        "dimensions": _strings(pattern.get("dimensions"))[:12],
+                    },
+                    "observation_count": len(events),
+                    "abstracted_procedure": [
+                        "核对口径与数据范围",
+                        "拆解结构、趋势与异常",
+                        "保留反证、证据与适用边界",
+                    ],
+                    "interpretation_policy": "仅保存去标识化的程序性方法，不保存原始问题、客户明细或业务正文。",
+                },
+                "confidence": min(0.95, 0.6 + len(events) * 0.05),
+                "weight": 1.0,
+                "evidence": {
+                    "evidence_type": "audit_event_group",
+                    "evidence_id": fingerprint,
+                    "evidence_hash": evidence_hash,
+                },
+            },
+            context.user_id,
+        )
+        self._write_learning_audit(
+            context.tenant_id,
+            context.user_id,
+            "learning.memory.candidate.created",
+            "memory",
+            memory_id,
+            {
+                "memory_type": "analysis_case",
+                "learning_kind": "analysis_procedure",
+                "evidence_fingerprint": fingerprint,
+                "observation_count": len(events),
+            },
+        )
+        return memory_id
+
+    def _evolve_existing_scene(
+        self,
+        tenant_id: str,
+        template: dict[str, Any],
+        actor_user_id: str,
+        *,
+        kind: str,
+        trigger: dict[str, Any],
+        evidence: dict[str, Any],
+        memory_id: str,
+        additional_memory_ids: list[str] | None = None,
+        summary: str,
+        procedure: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        skill_id = str(template.get("id") or "")
+        current = self.data_asset_store.get_item(tenant_id, "analysis_skill", skill_id)
+        if not skill_id or current is None:
+            return None
+        if current.get("lifecycleStatus") == "review":
+            return current
+        active = next(
+            (
+                skill
+                for skill in self.data_asset_store.list_published_bundle(tenant_id).get("analysis_skills", [])
+                if str(skill.get("id") or "") == skill_id
+            ),
+            current,
+        )
+        memory_refs = _unique_strings([
+            *_strings(template.get("memory_refs")),
+            *([memory_id] if memory_id else []),
+            *_strings(additional_memory_ids),
+        ])
+        payload = {
+            **active,
+            "memoryRefs": memory_refs,
+            "toolRefs": _unique_strings(template.get("tool_refs")),
+            "recommendedSkillIds": _unique_strings(template.get("recommended_skill_ids")),
+            "learningTrigger": trigger,
+            "learnedProcedure": procedure or dict(active.get("learnedProcedure") or {}),
+            "learningEvidence": evidence,
+            "learningGuardrails": _guardrails(),
+            "learningEvolution": {
+                "mode": "patch",
+                "strategy": "reuse_patch" if not template.get("related_scene_ids") else "reuse_patch_fusion",
+                "parentVersion": int(active.get("assetVersion") or 1),
+                "kind": kind,
+                "ownerUserId": actor_user_id,
+                "canonicalSkillId": skill_id,
+                "relatedCanonicalSkillIds": _strings(template.get("related_scene_ids")),
+                "memoryCandidateId": memory_id,
+                "sourceMemoryCandidateIds": _strings(additional_memory_ids),
+                "summary": summary,
+            },
+            "updatedAt": _utc_now(),
+        }
+        for field in (
+            "lifecycleStatus", "assetVersion", "schemaVersion", "lockVersion",
+            "submittedBy", "reviewedBy", "reviewedAt", "publishedAt",
+            "learningOrigin", "learningKind", "ownerUserId",
+        ):
+            payload.pop(field, None)
+        return self._persist_candidate(tenant_id, payload, actor_user_id)
 
     def _propose_skill_improvement(
         self,
@@ -521,9 +803,9 @@ class SkillLearningService:
             ),
             None,
         )
-        if not active or not self._is_generated_skill(active, kind="analysis_procedure"):
+        if not active or not self._is_learned_skill(active, kind="analysis_procedure"):
             return None
-        if str(active.get("ownerUserId") or "") not in {"", context.user_id}:
+        if self._learning_owner_user_id(active) not in {"", context.user_id}:
             return None
         current = self.data_asset_store.get_item(context.tenant_id, "analysis_skill", skill_id)
         if current and current.get("lifecycleStatus") == "review":
@@ -545,6 +827,9 @@ class SkillLearningService:
                 "reason": reason,
                 "engine": "constraint_guided_reflection",
                 "pattern": pattern,
+                "kind": self._learning_kind(active),
+                "ownerUserId": self._learning_owner_user_id(active),
+                "canonicalSkillId": str(active.get("id") or ""),
             },
             "learningEvidence": {
                 **dict(active.get("learningEvidence") or {}),
@@ -577,9 +862,9 @@ class SkillLearningService:
         target_fingerprint = _stable_hash(target_id)[:16] if target_id else ""
         matched = []
         for skill in published.get("analysis_skills", []):
-            if not self._is_generated_skill(skill, kind="operation_workflow"):
+            if not self._is_learned_skill(skill, kind="operation_workflow"):
                 continue
-            if str(skill.get("ownerUserId") or "") not in {"", actor_user_id}:
+            if self._learning_owner_user_id(skill) not in {"", actor_user_id}:
                 continue
             trigger = skill.get("learningTrigger") if isinstance(skill.get("learningTrigger"), dict) else {}
             if str(trigger.get("action") or "") != action:
@@ -699,7 +984,7 @@ class SkillLearningService:
             str(candidate.get("id") or ""),
             {
                 "asset_version": candidate.get("assetVersion"),
-                "learning_kind": candidate.get("learningKind"),
+                "learning_kind": self._learning_kind(candidate),
                 "evidence": candidate.get("learningEvidence"),
                 "guardrails": candidate.get("learningGuardrails"),
             },
@@ -714,14 +999,21 @@ class SkillLearningService:
         forbidden = next((token for token in _FORBIDDEN_SKILL_CONTENT if token in text), None)
         if forbidden:
             raise ValueError(f"learned_skill_forbidden_content:{forbidden}")
-        if payload.get("learningOrigin") != LEARNING_ORIGIN:
+        evolution = payload.get("learningEvolution") if isinstance(payload.get("learningEvolution"), dict) else {}
+        learning_origin = payload.get("learningOrigin")
+        if not learning_origin and evolution:
+            learning_origin = LEARNING_ORIGIN
+        learning_kind = payload.get("learningKind") or evolution.get("kind")
+        if learning_origin != LEARNING_ORIGIN:
             raise ValueError("learned_skill_origin_required")
-        if payload.get("learningKind") not in {"analysis_procedure", "operation_workflow"}:
+        if learning_kind not in {"analysis_procedure", "operation_workflow"}:
             raise ValueError("learned_skill_kind_invalid")
+        if not _strings(payload.get("memoryRefs")):
+            raise ValueError("learned_skill_memory_required")
         evidence = payload.get("learningEvidence")
         if not isinstance(evidence, dict) or not evidence.get("eventIds"):
             raise ValueError("learned_skill_evidence_required")
-        if payload.get("learningKind") == "analysis_procedure":
+        if learning_kind == "analysis_procedure":
             trigger = payload.get("learningTrigger")
             if not isinstance(trigger, dict) or not trigger.get("datasetId"):
                 raise ValueError("learned_skill_analysis_trigger_required")
@@ -748,6 +1040,24 @@ class SkillLearningService:
         if kind and skill.get("learningKind") != kind:
             return False
         return bool(skill.get("enabled", True))
+
+    @classmethod
+    def _learning_kind(cls, skill: dict[str, Any]) -> str:
+        if skill.get("learningOrigin") == LEARNING_ORIGIN:
+            return str(skill.get("learningKind") or "")
+        evolution = skill.get("learningEvolution") if isinstance(skill.get("learningEvolution"), dict) else {}
+        return str(evolution.get("kind") or "")
+
+    @classmethod
+    def _learning_owner_user_id(cls, skill: dict[str, Any]) -> str:
+        if skill.get("learningOrigin") == LEARNING_ORIGIN:
+            return str(skill.get("ownerUserId") or "")
+        evolution = skill.get("learningEvolution") if isinstance(skill.get("learningEvolution"), dict) else {}
+        return str(evolution.get("ownerUserId") or "")
+
+    @classmethod
+    def _is_learned_skill(cls, skill: dict[str, Any], *, kind: str) -> bool:
+        return cls._learning_kind(skill) == kind and bool(skill.get("enabled", True))
 
     @staticmethod
     def _is_learnable_operation(action: str) -> bool:
@@ -791,6 +1101,10 @@ def _strings(value: Any) -> list[str]:
     if not isinstance(value, (list, tuple)):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _unique_strings(value: Any) -> list[str]:
+    return list(dict.fromkeys(_strings(value)))
 
 
 def _display_action(action: str) -> str:

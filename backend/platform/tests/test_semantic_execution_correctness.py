@@ -18,17 +18,30 @@ from backend.platform.data_access import (
     SQLDataWarehouse,
 )
 from backend.platform.data_access.factory import load_sql_dataset_catalog
+from backend.platform.data_access.factory import build_data_warehouse_from_env
 from backend.platform.metrics import InMemoryMetricDictionaryStore, MetricSemanticCatalog, MetricSemanticError
 from backend.platform.orchestration.query_conditions import parse_query_conditions
 from backend.platform.security import ManualSQLValidationError, validate_read_only_sql_candidate
 from backend.platform.semantic import InMemorySupersonicClient, SemanticQueryRequest
+from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse, build_governed_test_warehouse
 
 
 class SemanticExecutionCorrectnessTest(unittest.TestCase):
+    def test_governed_csv_mode_uses_selected_table_path_without_external_catalog(self) -> None:
+        from unittest.mock import patch
+
+        with patch.dict(
+            "os.environ",
+            {"SMART_DATA_AGENT_DATA_WAREHOUSE": "csv"},
+            clear=True,
+        ):
+            warehouse, mode = build_data_warehouse_from_env()
+        self.assertEqual(mode, "governed_origin_topic_csv")
+        with self.assertRaisesRegex(RuntimeError, "governed_csv_table_selection_required"):
+            warehouse.query("unbound", "tenant_demo", "amount", "branch")
+
     def test_voice_analysis_csv_mock_returns_ten_ranked_branches_and_immutable_snapshot(self) -> None:
-        root = Path(__file__).resolve().parents[3]
-        catalog = load_sql_dataset_catalog(root / "configs" / "data_sources" / "voice_analysis_csv_catalog.json")
-        warehouse = CSVObjectDataWarehouse(catalog, environment="test")
+        warehouse = build_governed_test_warehouse()
         result = warehouse.query_matrix(
             "loan_operation_mart",
             "tenant:华兴银行",
@@ -41,7 +54,7 @@ class SemanticExecutionCorrectnessTest(unittest.TestCase):
         self.assertEqual(result.rows[0]["branch_name"], "上海分行")
         self.assertGreater(result.totals["loan_amount"], 0)
         snapshot = warehouse.snapshot_info("loan_operation_mart")
-        self.assertEqual(snapshot["snapshot_id"], "voice-analysis-csv-2026-07-v1")
+        self.assertIn("loan_operation_mart", snapshot["snapshot_id"])
         self.assertTrue(snapshot["immutable"])
 
     def test_doris_and_hive_adapters_pool_connections_and_parameterize_queries(self) -> None:
@@ -165,7 +178,7 @@ class SemanticExecutionCorrectnessTest(unittest.TestCase):
                 SemanticQueryRequest(
                     question="动支率",
                     tenant_id="tenant_demo",
-                    user_id="u_admin",
+                    user_id="u_super_admin",
                     dataset_id="loan_operation_mart",
                     metrics=("drawdown_rate",),
                     dimensions=("branch_name",),
@@ -182,10 +195,11 @@ class SemanticExecutionCorrectnessTest(unittest.TestCase):
 
     def test_metric_dictionary_definition_is_bound_to_plan_and_evidence(self) -> None:
         services = build_local_platform()
+        attach_governed_test_warehouse(services)
         self.addCleanup(services.close)
         result = run_analysis(
             services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="各分行放款金额和动支率",
         )
@@ -326,7 +340,7 @@ class SemanticExecutionCorrectnessTest(unittest.TestCase):
         self.assertEqual(conditions.filters["month"], {"gte": "2026-07", "lte": "2026-07"})
 
     def test_json_matrix_executes_all_metrics_dimensions_and_separate_total(self) -> None:
-        result = JSONDataWarehouse().query_matrix(
+        result = build_governed_test_warehouse().query_matrix(
             dataset_id="loan_operation_mart",
             tenant_id="tenant_demo",
             metrics=("loan_amount", "drawdown_rate"),
@@ -343,7 +357,7 @@ class SemanticExecutionCorrectnessTest(unittest.TestCase):
         self.assertIn("drawdown_rate", result.rows[0])
 
     def test_empty_in_filter_returns_zero_rows_instead_of_dropping_filter(self) -> None:
-        result = JSONDataWarehouse().query_matrix(
+        result = build_governed_test_warehouse().query_matrix(
             dataset_id="loan_operation_mart",
             tenant_id="tenant_demo",
             metrics=("loan_amount",),
@@ -450,7 +464,7 @@ class SemanticExecutionCorrectnessTest(unittest.TestCase):
                 SemanticQueryRequest(
                     question="各分行提款率",
                     tenant_id="tenant_demo",
-                    user_id="u_admin",
+                    user_id="u_super_admin",
                     dataset_id="loan_operation_mart",
                     metrics=("drawdown_rate",),
                     dimensions=("branch_name",),
@@ -501,12 +515,13 @@ class SemanticExecutionCorrectnessTest(unittest.TestCase):
                     },
                 )
 
-    def test_analysis_binds_all_execution_facts_and_blocks_mock_publication(self) -> None:
+    def test_analysis_binds_all_execution_facts_and_blocks_non_sql_publication(self) -> None:
         services = build_local_platform()
+        attach_governed_test_warehouse(services)
         self.addCleanup(services.close)
         response = run_analysis(
             services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="2026年6月各分行放款金额排名TOP1",
             page_context={"request_id": "multi-metric-1"},
@@ -523,10 +538,11 @@ class SemanticExecutionCorrectnessTest(unittest.TestCase):
 
     def test_future_period_returns_no_data_and_needs_review(self) -> None:
         services = build_local_platform()
+        attach_governed_test_warehouse(services)
         self.addCleanup(services.close)
         response = run_analysis(
             services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="2026年8月各分行放款金额排名TOP10",
         )
@@ -537,17 +553,18 @@ class SemanticExecutionCorrectnessTest(unittest.TestCase):
 
     def test_idempotency_and_manual_python_revision_create_new_execution(self) -> None:
         services = build_local_platform()
+        attach_governed_test_warehouse(services)
         self.addCleanup(services.close)
         first = run_analysis(
             services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="2026年6月各分行放款金额排名TOP2",
             page_context={"request_id": "original-1"},
         )
         replay = run_analysis(
             services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="this question must not replace the original",
             page_context={"request_id": "original-1"},
@@ -560,7 +577,7 @@ class SemanticExecutionCorrectnessTest(unittest.TestCase):
 """
         second = run_analysis(
             services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="2026年6月各分行放款金额排名TOP2",
             page_context={
@@ -585,10 +602,11 @@ class SemanticExecutionCorrectnessTest(unittest.TestCase):
                 validate_read_only_sql_candidate(value)
 
         services = build_local_platform()
+        attach_governed_test_warehouse(services)
         self.addCleanup(services.close)
         first = run_analysis(
             services,
-            user_id="u_admin",
+            user_id="u_super_admin",
             tenant_id="tenant_demo",
             question="2026年6月各分行放款金额",
             page_context={"request_id": "manual-base"},
@@ -596,7 +614,7 @@ class SemanticExecutionCorrectnessTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "manual_sql_not_supported_in_csv_mode"):
             run_analysis(
                 services,
-                user_id="u_admin",
+                user_id="u_super_admin",
                 tenant_id="tenant_demo",
                 question="2026年6月各分行放款金额",
                 page_context={

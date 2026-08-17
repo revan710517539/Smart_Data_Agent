@@ -106,11 +106,7 @@ class InMemorySystemConfigStore:
         reveal_secret: bool = False,
     ) -> list[dict[str, Any]]:
         scope = account_system_config_scope(user_id)
-        collected: dict[str, dict[str, Any]] = {}
-        for source_tenant_id in (scope, tenant_id):
-            for item in self._models_by_tenant.get(source_tenant_id, {}).values():
-                collected.setdefault(str(item.get("id") or ""), item)
-        items = sorted(collected.values(), key=lambda item: item.get("id", ""))
+        items = sorted(self._models_by_tenant.get(scope, {}).values(), key=lambda item: item.get("id", ""))
         return [dict(item) if reveal_secret else _mask_model_secret(item) for item in items]
 
     def get_model(self, tenant_id: str, model_id: str, reveal_secret: bool = False) -> dict[str, Any] | None:
@@ -145,11 +141,7 @@ class InMemorySystemConfigStore:
         reveal_secret: bool = False,
     ) -> list[dict[str, str]]:
         scope = account_system_config_scope(user_id)
-        collected: dict[str, dict[str, Any]] = {}
-        for source_tenant_id in (scope, tenant_id):
-            for item in self._speech_by_tenant.get(source_tenant_id, {}).values():
-                collected.setdefault(str(item.get("id") or ""), item)
-        items = sorted(collected.values(), key=lambda item: item.get("id", ""))
+        items = sorted(self._speech_by_tenant.get(scope, {}).values(), key=lambda item: item.get("id", ""))
         return [dict(item) if reveal_secret else _mask_speech_secret(item) for item in items]
 
     def get_speech_integration(self, tenant_id: str, integration_id: str, reveal_secret: bool = False) -> dict[str, str] | None:
@@ -340,17 +332,10 @@ class SQLiteSystemConfigStore:
             """
             SELECT tenant_id, model_id, payload, created_by, updated_by, updated_at
             FROM platform_model_integrations
-            WHERE tenant_id IN (?, ?)
-            ORDER BY
-                CASE
-                    WHEN tenant_id = ? THEN 0
-                    WHEN tenant_id = ? THEN 1
-                    ELSE 2
-                END,
-                updated_at DESC,
-                model_id
+            WHERE tenant_id = ?
+            ORDER BY updated_at DESC, model_id
             """,
-            (account_scope, tenant_id, account_scope, tenant_id),
+            (account_scope,),
         ).fetchall()
         collected: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -469,19 +454,10 @@ class SQLiteSystemConfigStore:
             """
             SELECT tenant_id, integration_id, payload, created_by, updated_by, updated_at
             FROM platform_speech_integrations
-            WHERE tenant_id IN (?, ?)
-               OR created_by = ?
-               OR updated_by = ?
-            ORDER BY
-                CASE
-                    WHEN tenant_id = ? THEN 0
-                    WHEN tenant_id = ? THEN 1
-                    ELSE 2
-                END,
-                updated_at DESC,
-                integration_id
+            WHERE tenant_id = ?
+            ORDER BY updated_at DESC, integration_id
             """,
-            (account_scope, tenant_id, user_id, user_id, account_scope, tenant_id),
+            (account_scope,),
         ).fetchall()
         collected: dict[str, dict[str, str]] = {}
         for row in rows:

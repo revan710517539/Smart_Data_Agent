@@ -16,7 +16,7 @@ from .mock_analysis_defaults import MOCK_RAW_TABLES, MOCK_TOPIC_TABLES
 
 ASSET_TYPES = {
     "raw_table", "topic_table", "intent", "analysis_experience", "knowledge_file", "user_behavior_habit",
-    "analysis_skill", "external_tool", "analysis_shortcut",
+    "analysis_skill", "external_tool", "analysis_shortcut", "page_data", "table_relationship",
 }
 ASSET_LIFECYCLE_STATUSES = {"draft", "review", "active", "rejected", "archived"}
 ASSET_BUNDLE_KEYS = {
@@ -29,11 +29,52 @@ ASSET_BUNDLE_KEYS = {
     "analysis_skill": "analysis_skills",
     "external_tool": "external_tools",
     "analysis_shortcut": "analysis_shortcuts",
+    "page_data": "page_data",
+    "table_relationship": "table_relationships",
 }
 
 SYSTEM_MANAGED_ASSET_IDS = {
     ("topic_table", "topic_core_weekly_metrics"),
 }
+
+# Historical demonstration assets are deliberately identified by stable IDs,
+# never by a broad tenant or title match. They must not reappear when a real
+# tenant starts with an empty production catalog.
+RETIRED_SAMPLE_ASSET_IDS = frozenset({
+    ("raw_table", "raw_loan_operation_fact"),
+    ("raw_table", "raw_mock_institution_100"),
+    ("raw_table", "raw_mock_customer_100"),
+    ("raw_table", "raw_mock_loan_order_100"),
+    ("topic_table", "topic_core_weekly_metrics"),
+    ("topic_table", "topic_weekly_branch_rank"),
+    ("topic_table", "topic_m1_overdue_diagnosis"),
+    ("topic_table", "topic_channel_roi"),
+    ("topic_table", "topic_customer_conversion"),
+    ("topic_table", "topic_mock_institution_operation"),
+    ("topic_table", "topic_mock_customer_profile"),
+    ("topic_table", "topic_mock_loan_funnel"),
+    ("intent", "intent_branch_rank"),
+    ("intent", "intent_risk_diagnosis"),
+    ("analysis_experience", "exp_weekly_growth_quality"),
+    ("analysis_experience", "exp_m1_risk_check"),
+    ("knowledge_file", "kf_consumer_loan_playbook"),
+    ("knowledge_file", "kf_weekly_report_memory"),
+    ("analysis_shortcut", "shortcut-branch-ranking"),
+    ("analysis_shortcut", "shortcut-m1-attribution"),
+    ("analysis_shortcut", "shortcut-channel-roi"),
+    ("analysis_shortcut", "shortcut-customer-conversion"),
+    ("analysis_shortcut", "shortcut-institution-operation"),
+    ("analysis_shortcut", "shortcut-customer-profile"),
+    ("analysis_shortcut", "shortcut-loan-funnel"),
+})
+
+
+def _runtime_default_items(item_type: str) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in DEFAULT_ASSET_ITEMS.get(item_type, [])
+        if (item_type, str(item.get("id") or "")) not in RETIRED_SAMPLE_ASSET_IDS
+    ]
 
 
 def _require_deletable_asset(item_type: str, item_id: str) -> None:
@@ -430,6 +471,7 @@ class InMemoryDataAssetStore:
         self._items_by_tenant_type: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
         self._versions: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
         self._reviews: list[dict[str, Any]] = []
+        self._raw_table_external_references: dict[tuple[str, str], dict[str, Any]] = {}
         if seed_defaults:
             self.seed_defaults("tenant_demo")
 
@@ -439,19 +481,37 @@ class InMemoryDataAssetStore:
     def list_published_bundle(self, tenant_id: str) -> dict[str, list[dict[str, Any]]]:
         return {output_key: self._list_published(tenant_id, item_type) for item_type, output_key in ASSET_BUNDLE_KEYS.items()}
 
+    def list_raw_table_external_references(self, tenant_id: str) -> dict[str, dict[str, Any]]:
+        return {
+            source_key: dict(record)
+            for (record_tenant, source_key), record in self._raw_table_external_references.items()
+            if record_tenant == tenant_id
+        }
+
+    def set_raw_table_external_reference(
+        self, tenant_id: str, source_key: str, mode: str, schema_fingerprint: str, updated_by: str,
+    ) -> dict[str, Any]:
+        record = _raw_table_external_reference_record(source_key, mode, schema_fingerprint, updated_by)
+        self._raw_table_external_references[(tenant_id, source_key)] = record
+        return dict(record)
+
     def seed_defaults(self, tenant_id: str, updated_by: str = "development_seed") -> None:
-        for item_type, items in DEFAULT_ASSET_ITEMS.items():
-            for item in deepcopy(items):
+        for item_type in DEFAULT_ASSET_ITEMS:
+            for item in deepcopy(_runtime_default_items(item_type)):
                 self.upsert_item(tenant_id, item_type, item, updated_by=updated_by, lifecycle_status="active")
 
     def seed_missing_defaults(self, tenant_id: str, updated_by: str = "development_seed") -> None:
         bundle = self.list_bundle(tenant_id)
-        for item_type, items in DEFAULT_ASSET_ITEMS.items():
+        for item_type in DEFAULT_ASSET_ITEMS:
+            # Skills are user-maintained runtime configuration. A successful
+            # deletion must not be undone by the next local bootstrap.
+            if item_type == "analysis_skill":
+                continue
             existing = {
                 str(item.get("id") or ""): item
                 for item in bundle.get(ASSET_BUNDLE_KEYS[item_type], [])
             }
-            for item in deepcopy(items):
+            for item in deepcopy(_runtime_default_items(item_type)):
                 item_id = str(item.get("id") or "")
                 if item_id not in existing:
                     self.upsert_item(tenant_id, item_type, item, updated_by=updated_by, lifecycle_status="active")
@@ -481,6 +541,16 @@ class InMemoryDataAssetStore:
                             updated_by=updated_by,
                             lifecycle_status="active",
                         )
+
+    def purge_retired_sample_assets(self, tenant_id: str) -> int:
+        removed = 0
+        for item_type, item_id in RETIRED_SAMPLE_ASSET_IDS:
+            key = (tenant_id, item_type)
+            if item_id in self._items_by_tenant_type.get(key, {}):
+                del self._items_by_tenant_type[key][item_id]
+                self._versions.pop((tenant_id, item_type, item_id), None)
+                removed += 1
+        return removed
 
     def upsert_item(
         self,
@@ -614,6 +684,16 @@ class SQLiteDataAssetStore:
 
             CREATE INDEX IF NOT EXISTS idx_platform_data_asset_items_tenant_type
                 ON platform_data_asset_items(tenant_id, item_type, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS platform_raw_table_external_references (
+                tenant_id TEXT NOT NULL,
+                source_key TEXT NOT NULL,
+                mode TEXT NOT NULL CHECK (mode IN ('private', 'shared')),
+                schema_fingerprint TEXT NOT NULL,
+                updated_by TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (tenant_id, source_key)
+            );
             """
         )
         self._conn.commit()
@@ -624,19 +704,55 @@ class SQLiteDataAssetStore:
     def list_published_bundle(self, tenant_id: str) -> dict[str, list[dict[str, Any]]]:
         return {output_key: self._list_published(tenant_id, item_type) for item_type, output_key in ASSET_BUNDLE_KEYS.items()}
 
+    def list_raw_table_external_references(self, tenant_id: str) -> dict[str, dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT source_key, mode, schema_fingerprint, updated_by, updated_at FROM platform_raw_table_external_references WHERE tenant_id = ?",
+            (tenant_id,),
+        ).fetchall()
+        return {
+            str(row["source_key"]): {
+                "sourceKey": str(row["source_key"]), "mode": str(row["mode"]),
+                "schemaFingerprint": str(row["schema_fingerprint"]), "updatedBy": str(row["updated_by"]),
+                "updatedAt": str(row["updated_at"]),
+            }
+            for row in rows
+        }
+
+    def set_raw_table_external_reference(
+        self, tenant_id: str, source_key: str, mode: str, schema_fingerprint: str, updated_by: str,
+    ) -> dict[str, Any]:
+        record = _raw_table_external_reference_record(source_key, mode, schema_fingerprint, updated_by)
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO platform_raw_table_external_references(
+                    tenant_id, source_key, mode, schema_fingerprint, updated_by, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tenant_id, source_key) DO UPDATE SET
+                    mode = excluded.mode, schema_fingerprint = excluded.schema_fingerprint,
+                    updated_by = excluded.updated_by, updated_at = excluded.updated_at
+                """,
+                (tenant_id, source_key, record["mode"], record["schemaFingerprint"], updated_by, record["updatedAt"]),
+            )
+        return record
+
     def seed_defaults(self, tenant_id: str, updated_by: str = "development_seed") -> None:
-        for item_type, items in DEFAULT_ASSET_ITEMS.items():
-            for item in deepcopy(items):
+        for item_type in DEFAULT_ASSET_ITEMS:
+            for item in deepcopy(_runtime_default_items(item_type)):
                 self.upsert_item(tenant_id, item_type, item, updated_by=updated_by, lifecycle_status="active")
 
     def seed_missing_defaults(self, tenant_id: str, updated_by: str = "development_seed") -> None:
         bundle = self.list_bundle(tenant_id)
-        for item_type, items in DEFAULT_ASSET_ITEMS.items():
+        for item_type in DEFAULT_ASSET_ITEMS:
+            # Skills are user-maintained runtime configuration. A successful
+            # deletion must not be undone by the next local bootstrap.
+            if item_type == "analysis_skill":
+                continue
             existing = {
                 str(item.get("id") or ""): item
                 for item in bundle.get(ASSET_BUNDLE_KEYS[item_type], [])
             }
-            for item in deepcopy(items):
+            for item in deepcopy(_runtime_default_items(item_type)):
                 item_id = str(item.get("id") or "")
                 if item_id not in existing:
                     self.upsert_item(tenant_id, item_type, item, updated_by=updated_by, lifecycle_status="active")
@@ -662,6 +778,33 @@ class SQLiteDataAssetStore:
                             updated_by=updated_by,
                             lifecycle_status="active",
                         )
+
+    def purge_retired_sample_assets(self, tenant_id: str) -> int:
+        candidates = [
+            (item_type, item_id)
+            for item_type, item_id in RETIRED_SAMPLE_ASSET_IDS
+            if self._conn.execute(
+                "SELECT 1 FROM platform_data_asset_items WHERE tenant_id = ? AND item_type = ? AND item_id = ?",
+                (tenant_id, item_type, item_id),
+            ).fetchone()
+        ]
+        if not candidates:
+            return 0
+        with self._conn:
+            for item_type, item_id in candidates:
+                self._conn.execute(
+                    "DELETE FROM platform_data_asset_reviews WHERE tenant_id = ? AND item_type = ? AND item_id = ?",
+                    (tenant_id, item_type, item_id),
+                )
+                self._conn.execute(
+                    "DELETE FROM platform_data_asset_versions WHERE tenant_id = ? AND item_type = ? AND item_id = ?",
+                    (tenant_id, item_type, item_id),
+                )
+                self._conn.execute(
+                    "DELETE FROM platform_data_asset_items WHERE tenant_id = ? AND item_type = ? AND item_id = ?",
+                    (tenant_id, item_type, item_id),
+                )
+        return len(candidates)
 
     def upsert_item(
         self,
@@ -935,6 +1078,29 @@ def _normalize_item(item_type: str, item: dict[str, Any], updated_by: str | None
     return normalized
 
 
+def _raw_table_external_reference_record(
+    source_key: str, mode: str, schema_fingerprint: str, updated_by: str,
+) -> dict[str, Any]:
+    normalized_key = str(source_key or "").strip()
+    normalized_mode = str(mode or "").strip().lower()
+    normalized_schema = str(schema_fingerprint or "").strip()
+    if not re.fullmatch(r"[a-f0-9]{16,128}", normalized_key):
+        raise ValueError("raw_table_external_reference_source_key_invalid")
+    if normalized_mode not in {"private", "shared"}:
+        raise ValueError("raw_table_external_reference_mode_invalid")
+    if not re.fullmatch(r"[a-f0-9]{16,128}", normalized_schema):
+        raise ValueError("raw_table_external_reference_schema_invalid")
+    if not str(updated_by or "").strip():
+        raise ValueError("raw_table_external_reference_actor_required")
+    return {
+        "sourceKey": normalized_key,
+        "mode": normalized_mode,
+        "schemaFingerprint": normalized_schema,
+        "updatedBy": str(updated_by).strip(),
+        "updatedAt": _utc_now(),
+    }
+
+
 def _asset_status(value: str | None) -> str:
     status = str(value or "review").strip().lower()
     if status not in ASSET_LIFECYCLE_STATUSES:
@@ -995,11 +1161,38 @@ def _validate_asset_schema(item_type: str, item: dict[str, Any]) -> None:
         _require_text(item, "tableNameEn", "tableNameCn", "source", "description")
         _require_identifier(str(item["tableNameEn"]), "tableNameEn")
         _validate_fields(item.get("fields"), required=True)
+        if item.get("metadataOverlayVersion") == 1:
+            _require_text(item, "sourceKey", "schemaFingerprint")
+            primary_count = 0
+            for field in item.get("fields") or ():
+                role = str(field.get("semanticRole") or "")
+                data_type = str(field.get("type") or "")
+                if role not in {"metric", "dimension", "date"}:
+                    raise ValueError("raw_table_metadata_role_invalid")
+                allowed_types = {"metric": {"integer", "decimal", "rate"}, "dimension": {"string"}, "date": {"date"}}
+                if data_type not in allowed_types[role]:
+                    raise ValueError("raw_table_metadata_type_invalid")
+                if role == "date" and field.get("dateFormat") != "yyyy-MM-dd":
+                    raise ValueError("raw_table_metadata_date_format_invalid")
+                if field.get("isPrimaryKey"):
+                    if role != "dimension":
+                        raise ValueError("raw_table_metadata_primary_key_must_be_dimension")
+                    primary_count += 1
+            if primary_count < 1:
+                raise ValueError("raw_table_metadata_primary_key_required")
         return
     if item_type == "topic_table":
         _require_text(item, "name", "code", "description", "sql")
         _require_identifier(str(item["code"]), "code")
-        _validate_topic_sql(str(item["sql"]))
+        task_bound = bool(
+            item.get("tenantBindingMode") == "analysis_task_scoped"
+            and str(item.get("analysisTaskId") or "").strip()
+            and str(item.get("executionId") or "").strip()
+            and str(item.get("evidenceId") or "").strip()
+            and isinstance(item.get("sourceSnapshot"), dict)
+            and item.get("sourceSnapshot")
+        )
+        _validate_topic_sql(str(item["sql"]), allow_analysis_task_binding=task_bound)
         _validate_fields(item.get("fields"), required=True)
         return
     if item_type == "intent":
@@ -1037,6 +1230,78 @@ def _validate_asset_schema(item_type: str, item: dict[str, Any]) -> None:
     if item_type == "analysis_shortcut":
         _require_text(item, "title", "query")
         return
+    if item_type == "page_data":
+        _require_text(item, "name", "sourceKey", "schemaFingerprint", "sourceTableName", "visualizationType")
+        pages = item.get("targetPages")
+        scope = str(item.get("institutionScope") or "single_institution")
+        if scope not in {"single_institution", "multi_institution"}:
+            raise ValueError("page_data_institution_scope_invalid")
+        allowed_pages = {"weekly_report", "institution_supervision"} if scope == "single_institution" else {"dashboard"}
+        if not isinstance(pages, list) or len(pages) != 1 or str(pages[0]) not in allowed_pages:
+            raise ValueError("page_data_target_pages_invalid")
+        source_fields = item.get("sourceFields")
+        _validate_fields(source_fields, required=True)
+        available = {str(field.get("fieldNameEn") or "") for field in source_fields if isinstance(field, dict)}
+        metrics = _validated_page_data_fields(item.get("metricFields"), available, required=True, kind="metric")
+        dimensions = _validated_page_data_fields(item.get("dimensionFields"), available, required=True, kind="dimension")
+        if set(metrics) & set(dimensions):
+            raise ValueError("page_data_metric_dimension_overlap")
+        allowed_styles = {"kpi", "line", "area", "column", "bar", "stacked_bar", "combo", "donut", "scatter", "funnel", "treemap", "radar", "table", "pivot"}
+        if str(item.get("visualizationType")) not in allowed_styles:
+            raise ValueError("page_data_visualization_type_invalid")
+        if scope == "multi_institution":
+            if str(item.get("relationshipGroupId") or "") != str(item.get("sourceKey") or ""):
+                raise ValueError("multi_institution_page_data_relationship_invalid")
+            sources = item.get("institutionSources")
+            if not isinstance(sources, list) or len(sources) < 2:
+                raise ValueError("multi_institution_page_data_sources_invalid")
+            tenant_ids = [str(source.get("tenantId") or "") for source in sources if isinstance(source, dict)]
+            source_refs = [(str(source.get("tenantId") or ""), str(source.get("sourceKey") or "")) for source in sources if isinstance(source, dict)]
+            if (
+                len(tenant_ids) != len(sources)
+                or any(not tenant_id for tenant_id in tenant_ids)
+                or len(set(tenant_ids)) < 2
+                or len(source_refs) != len(set(source_refs))
+                or any(not source_key for _, source_key in source_refs)
+            ):
+                raise ValueError("multi_institution_page_data_sources_invalid")
+        return
+    if item_type == "table_relationship":
+        _require_text(item, "name", "relationshipScope")
+        relationship_scope = str(item.get("relationshipScope") or "")
+        if relationship_scope not in {"single_institution", "multi_institution"}:
+            raise ValueError("table_relationship_scope_invalid")
+        nodes = item.get("nodes")
+        edges = item.get("edges")
+        if not isinstance(nodes, list) or len(nodes) < 2 or len(nodes) > 12:
+            raise ValueError("table_relationship_nodes_invalid")
+        if not isinstance(edges, list) or not edges or len(edges) > 24:
+            raise ValueError("table_relationship_edges_invalid")
+        node_ids: set[str] = set()
+        for node in nodes:
+            if not isinstance(node, dict):
+                raise ValueError("table_relationship_node_invalid")
+            _require_text(node, "id", "tenantId", "institutionName", "sourceKey", "sourceTableName", "schemaFingerprint")
+            node_id = str(node["id"])
+            if node_id in node_ids:
+                raise ValueError("table_relationship_duplicate_node")
+            node_ids.add(node_id)
+            _validate_fields(node.get("fields"), required=True)
+        tenant_ids = {str(node.get("tenantId") or "") for node in nodes if isinstance(node, dict)}
+        if (relationship_scope == "multi_institution") != (len(tenant_ids) > 1):
+            raise ValueError("table_relationship_scope_tenant_mismatch")
+        edge_ids: set[str] = set()
+        for edge in edges:
+            if not isinstance(edge, dict):
+                raise ValueError("table_relationship_edge_invalid")
+            _require_text(edge, "id", "sourceNodeId", "sourceField", "targetNodeId", "targetField")
+            edge_id = str(edge["id"])
+            if edge_id in edge_ids:
+                raise ValueError("table_relationship_duplicate_edge")
+            edge_ids.add(edge_id)
+            if str(edge["sourceNodeId"]) not in node_ids or str(edge["targetNodeId"]) not in node_ids:
+                raise ValueError("table_relationship_edge_node_invalid")
+        return
 
 
 def _require_text(item: dict[str, Any], *fields: str) -> None:
@@ -1069,7 +1334,18 @@ def _validate_fields(value: Any, *, required: bool) -> None:
             raise ValueError(f"data_asset_field_type_required:{name}")
 
 
-def _validate_topic_sql(sql: str) -> None:
+def _validated_page_data_fields(value: Any, available: set[str], *, required: bool, kind: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"page_data_{kind}_fields_invalid")
+    fields = [str(field or "").strip() for field in value]
+    if required and not fields:
+        raise ValueError(f"page_data_{kind}_fields_required")
+    if len(fields) != len(set(fields)) or any(not field or field not in available for field in fields):
+        raise ValueError(f"page_data_{kind}_fields_invalid")
+    return fields
+
+
+def _validate_topic_sql(sql: str, *, allow_analysis_task_binding: bool = False) -> None:
     normalized = re.sub(r"/\*.*?\*/|--[^\n]*", " ", sql, flags=re.DOTALL).strip()
     if not re.match(r"^(select|with)\b", normalized, flags=re.IGNORECASE):
         raise ValueError("topic_table_sql_must_be_select")
@@ -1077,7 +1353,7 @@ def _validate_topic_sql(sql: str) -> None:
         raise ValueError("topic_table_sql_contains_forbidden_statement")
     if ";" in normalized.rstrip(";"):
         raise ValueError("topic_table_sql_multiple_statements_forbidden")
-    if not re.search(r"(?::tenant_id\b|\btenant_id\s*=\s*\?)", normalized, flags=re.IGNORECASE):
+    if not allow_analysis_task_binding and not re.search(r"(?::tenant_id\b|\btenant_id\s*=\s*\?)", normalized, flags=re.IGNORECASE):
         raise ValueError("topic_table_sql_tenant_binding_required")
 
 
@@ -1233,6 +1509,10 @@ def _item_title(item_type: str, item: dict[str, Any]) -> str:
         return str(item.get("name") or item["id"])
     if item_type == "analysis_shortcut":
         return str(item.get("title") or item["id"])
+    if item_type == "page_data":
+        return str(item.get("name") or item.get("sourceTableName") or item["id"])
+    if item_type == "table_relationship":
+        return str(item.get("name") or item["id"])
     return str(item.get("title") or item["id"])
 
 

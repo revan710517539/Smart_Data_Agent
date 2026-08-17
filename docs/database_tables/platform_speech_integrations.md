@@ -2,7 +2,7 @@
 
 - 领域：Agent与模型
 - 用途：ASR/TTS 提供商接入和凭证。
-- 生产数据库：PostgreSQL
+- 结构化运行主库：MySQL 8.x
 
 ## 字段结构
 

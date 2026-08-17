@@ -24,5 +24,6 @@ export async function fetchNavigation({
   return apiRequest<NavigationResponse>("/api/navigation", {
     method: "GET",
     context: { tenantId, userId },
+    readCache: { ttlMs: 10_000, tags: ["navigation"] },
   });
 }

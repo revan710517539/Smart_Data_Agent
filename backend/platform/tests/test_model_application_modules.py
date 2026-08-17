@@ -45,7 +45,7 @@ class ModelApplicationModuleTest(unittest.TestCase):
 
         self.assertEqual([model["id"] for model in models], ["model_untested"])
 
-    def test_tenant_application_binding_survives_unbound_account_copy(self) -> None:
+    def test_authenticated_account_scope_does_not_fall_back_to_tenant_binding(self) -> None:
         store = InMemorySystemConfigStore()
         configured = {
             "id": "model_shared",
@@ -81,7 +81,7 @@ class ModelApplicationModuleTest(unittest.TestCase):
 
         self.assertEqual([model["id"] for model in models], ["model_shared"])
         self.assertEqual(models[0]["applicationModule"], "intelligent_analysis_reasoning")
-        self.assertEqual(models[0]["value"], "tenant-secret")
+        self.assertEqual(models[0]["value"], "account-secret")
 
     def test_memory_module_has_one_current_binding_in_memory_store(self) -> None:
         store = InMemorySystemConfigStore()
@@ -123,6 +123,49 @@ class ModelApplicationModuleTest(unittest.TestCase):
 
         self.assertEqual(
             list_models_for_application(store, "tenant_demo", "intelligent_analysis_reasoning"),
+            [],
+        )
+
+    def test_system_default_relay_remains_routable_after_local_connectivity_failure(self) -> None:
+        store = InMemorySystemConfigStore()
+        failed_default = self._model(
+            "model_default_intelligent_analysis_relay",
+            "默认模型",
+            "global_text_model",
+        )
+        failed_default["status"] = "draft"
+        failed_default["testStatus"] = "failed"
+        store.upsert_model(account_system_config_scope("u_admin"), failed_default)
+
+        self.assertEqual(
+            [item["id"] for item in list_models_for_application(
+                store,
+                "tenant_demo",
+                "automatic_analysis",
+                user_id="u_admin",
+            )],
+            ["model_default_intelligent_analysis_relay"],
+        )
+
+    def test_account_global_text_model_routes_to_every_non_voice_module_only(self) -> None:
+        store = InMemorySystemConfigStore()
+        account_scope = account_system_config_scope("u_admin")
+        store.upsert_model(account_scope, self._model("global_relay", "账号全局模型", "global_text_model"))
+        store.upsert_model("tenant_demo", self._model("legacy_tenant", "机构旧模型", "intelligent_analysis_reasoning"))
+
+        for module in (
+            "intelligent_analysis_reasoning",
+            "weekly_report_conclusion_regeneration",
+            "automatic_analysis",
+            "memory_extraction",
+            "skill_evolution_learning",
+        ):
+            self.assertEqual(
+                [item["id"] for item in list_models_for_application(store, "tenant_demo", module, user_id="u_admin")],
+                ["global_relay"],
+            )
+        self.assertEqual(
+            list_models_for_application(store, "tenant_demo", "realtime_voice_input", user_id="u_admin"),
             [],
         )
 

@@ -550,22 +550,17 @@ def _resolve_fun_asr_speech_integration(
     requested_module = str(event.get("applicationModule") or first_query_value(params, "application_module") or "").strip()
     if requested_module:
         requested_module = normalize_application_module(requested_module, allow_empty=False)
-    integrations = list_integrations(tenant_id, reveal_secret=True)
     list_owned = getattr(handler.services.system_config_store, "list_speech_integrations_owned_by", None)
     if user_id and callable(list_owned):
-        owned = list_owned(user_id, tenant_id, reveal_secret=True)
-        seen = {(str(item.get("id") or ""), str(item.get("apiKey") or "")) for item in integrations}
-        integrations.extend(
-            item
-            for item in owned
-            if (str(item.get("id") or ""), str(item.get("apiKey") or "")) not in seen
-        )
+        integrations = list_owned(user_id, tenant_id, reveal_secret=True)
+    else:
+        integrations = list_integrations(tenant_id, reveal_secret=True)
     candidates = [
         integration
         for integration in integrations
         if str(integration.get("provider") or "") == "aliyun_fun_asr"
         and str(integration.get("status") or "available") in {"available", "draft"}
-        and (not requested_module or requested_module == _speech_application_module(integration))
+        and (not requested_module or _speech_integration_supports_module(integration, requested_module))
     ]
     if requested_id:
         for integration in candidates:
@@ -586,6 +581,14 @@ def _speech_application_module(integration: dict[str, Any]) -> str:
     legacy = integration.get("applicationModules") or integration.get("application_modules") or []
     legacy_first = next((str(item).strip() for item in legacy if str(item).strip()), "") if isinstance(legacy, (list, tuple)) else ""
     return normalize_application_module(direct or legacy_first or "realtime_voice_input", allow_empty=False)
+
+
+def _speech_integration_supports_module(integration: dict[str, Any], requested_module: str) -> bool:
+    configured = _speech_application_module(integration)
+    return configured == requested_module or configured == "global_voice_model" and requested_module in {
+        "realtime_voice_input",
+        "popup_voice_input",
+    }
 
 
 def _is_demo_fun_asr_integration(integration: dict[str, Any]) -> bool:

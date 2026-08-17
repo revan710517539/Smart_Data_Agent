@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from typing import Any, Iterable
 
+from backend.authz import SUPER_ADMIN_USER_ID
+
 from .store import account_system_config_scope
 
 
@@ -47,7 +49,7 @@ def configure_default_relay_model(
 def _default_relay_model(api_key: str, *, api_base: str | None = None) -> dict[str, Any]:
     return {
         "id": DEFAULT_RELAY_MODEL_ID,
-        "name": "智能分析默认中转模型",
+        "name": "默认模型",
         "modelName": "中转站",
         "key": str(api_base or os.getenv("SMART_DATA_AGENT_DEFAULT_MODEL_API_BASE", DEFAULT_RELAY_MODEL_API_BASE)).strip()
         or DEFAULT_RELAY_MODEL_API_BASE,
@@ -68,8 +70,21 @@ def ensure_default_models_for_account(system_config_store: Any, user_id: str, *,
     if not user_id or template is None:
         return []
     scope = account_system_config_scope(user_id)
-    existing = system_config_store.get_model(scope, DEFAULT_RELAY_MODEL_ID, reveal_secret=False)
+    existing = system_config_store.get_model(scope, DEFAULT_RELAY_MODEL_ID, reveal_secret=True)
     if existing is not None:
+        # This relay is a system default, not an account-created integration.
+        # Replace an older empty/stale local shell with the authoritative
+        # template as a whole; otherwise the UI can retain a submodel name
+        # while the server sees no permitted submodels for that account.
+        canonical = _canonical_default_relay(template)
+        if any(
+            existing.get(key) != canonical.get(key)
+            for key in (
+                "name", "modelName", "key", "value", "applicationModule",
+                "availableModels", "enabledModels", "testStatus", "status",
+            )
+        ):
+            system_config_store.upsert_model(scope, canonical, updated_by=updated_by)
         return []
     system_config_store.upsert_model(scope, template, updated_by=updated_by)
     return [DEFAULT_RELAY_MODEL_ID]
@@ -81,7 +96,7 @@ def ensure_default_models_for_accounts(
     *,
     updated_by: str = "system",
 ) -> dict[str, list[str]]:
-    """Backfill account defaults without replacing any saved account model."""
+    """Backfill and reconcile the protected default relay for known accounts."""
 
     created: dict[str, list[str]] = {}
     for user_id in user_ids:
@@ -100,4 +115,85 @@ def _configured_default_relay_model(system_config_store: Any) -> dict[str, Any] 
         )
     except Exception:
         template = None
-    return template or default_relay_model_from_environment()
+    if not _is_usable_default_relay(template):
+        template = _promote_connected_super_admin_default(system_config_store) or template
+    configured = template or default_relay_model_from_environment()
+    if configured is None:
+        return None
+    canonical = _canonical_default_relay(configured)
+    # Keep the protected template's display label in sync too. Account rows
+    # are reconciled from this record on startup, so leaving an old label here
+    # would make a later account provision reintroduce it.
+    if isinstance(template, dict) and any(
+        template.get(key) != canonical.get(key)
+        for key in ("name", "modelName", "key", "applicationModule")
+    ):
+        try:
+            system_config_store.upsert_model(
+                DEFAULT_MODEL_TEMPLATE_SCOPE,
+                canonical,
+                updated_by=SUPER_ADMIN_USER_ID,
+            )
+        except Exception:
+            pass
+    return canonical
+
+
+def _canonical_default_relay(model: dict[str, Any]) -> dict[str, Any]:
+    """Normalize the protected relay while retaining its encrypted secret."""
+
+    return {
+        **model,
+        "id": DEFAULT_RELAY_MODEL_ID,
+        "name": "默认模型",
+        "modelName": "中转站",
+        "key": DEFAULT_RELAY_MODEL_API_BASE,
+        "applicationModule": "global_text_model",
+    }
+
+
+def _is_usable_default_relay(model: dict[str, Any] | None) -> bool:
+    if not isinstance(model, dict):
+        return False
+    if str(model.get("id") or "") != DEFAULT_RELAY_MODEL_ID:
+        return False
+    if str(model.get("status") or "") != "available" or str(model.get("testStatus") or "") != "connected":
+        return False
+    if not str(model.get("key") or "").strip() or not str(model.get("value") or "").strip():
+        return False
+    return any(str(item or "").strip() for item in [*(model.get("enabledModels") or []), *(model.get("availableModels") or [])])
+
+
+def _promote_connected_super_admin_default(system_config_store: Any) -> dict[str, Any] | None:
+    """Recover an older blank template from the sole global administrator's relay.
+
+    Earlier local builds stored the real default under the global
+    administrator's account but left the system template as an empty draft.
+    Only the fixed global-super-admin account is eligible as the migration
+    source, so an ordinary account cannot become a system-wide model source.
+    """
+
+    try:
+        source = system_config_store.get_model(
+            account_system_config_scope(SUPER_ADMIN_USER_ID),
+            DEFAULT_RELAY_MODEL_ID,
+            reveal_secret=True,
+        )
+    except Exception:
+        return None
+    if not _is_usable_default_relay(source):
+        return None
+    canonical = _canonical_default_relay(source)
+    try:
+        system_config_store.upsert_model(
+            DEFAULT_MODEL_TEMPLATE_SCOPE,
+            canonical,
+            updated_by=SUPER_ADMIN_USER_ID,
+        )
+        return system_config_store.get_model(
+            DEFAULT_MODEL_TEMPLATE_SCOPE,
+            DEFAULT_RELAY_MODEL_ID,
+            reveal_secret=True,
+        )
+    except Exception:
+        return None

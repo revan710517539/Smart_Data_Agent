@@ -20,6 +20,12 @@ from .store import (
     _require_module_key,
 )
 
+SHARED_PAGE_LAYOUT_MODULES = frozenset({"dashboard", "institution_supervision"})
+
+
+def _shared_page_layout_module(module_key: str) -> bool:
+    return module_key in SHARED_PAGE_LAYOUT_MODULES
+
 
 class PostgreSQLApplicationStore:
     """Production page state; core todos/tasks are projected from normalized tables."""
@@ -38,6 +44,9 @@ class PostgreSQLApplicationStore:
             tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
             actor_key = PostgreSQLIdentityResolver.user_id(connection, actor_user_id, required=False) if actor_user_id else None
             state = self._load_state(connection, tenant_key, module_key, actor_key)
+            if _shared_page_layout_module(module_key):
+                shared_state = self._load_state(connection, tenant_key, module_key, None)
+                state["pageDataLayout"] = list(shared_state.get("pageDataLayout") or [])
             if module_key == "agent_workspace":
                 state["todos"] = self._todos(connection, tenant_key, actor_key)
                 state["createdTasks"] = self._tasks(connection, tenant_key, actor_key)
@@ -62,6 +71,9 @@ class PostgreSQLApplicationStore:
             tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
             actor_key = PostgreSQLIdentityResolver.user_id(connection, actor_user_id)
             state = self._load_state(connection, tenant_key, module_key, actor_key)
+            if _shared_page_layout_module(module_key):
+                shared_state = self._load_state(connection, tenant_key, module_key, None)
+                state["pageDataLayout"] = list(shared_state.get("pageDataLayout") or [])
             if module_key == "agent_workspace":
                 state["todos"] = self._todos(connection, tenant_key, actor_key)
                 state["createdTasks"] = self._tasks(connection, tenant_key, actor_key)
@@ -82,7 +94,18 @@ class PostgreSQLApplicationStore:
                 handler_ref = "application.automation_draft"
                 self._persist_task_draft(connection, tenant_key, actor_key, action, result)
                 next_state["createdTasks"] = self._tasks(connection, tenant_key, actor_key)
-            self._save_non_core_state(connection, tenant_key, module_key, actor_key, next_state)
+            if _shared_page_layout_module(module_key) and action == "set_page_data_layout":
+                shared_state = self._load_state(connection, tenant_key, module_key, None)
+                shared_state["pageDataLayout"] = list(next_state.get("pageDataLayout") or [])
+                self._save_non_core_state(
+                    connection, tenant_key, module_key, None, shared_state,
+                    created_by_key=actor_key,
+                )
+            else:
+                self._save_non_core_state(
+                    connection, tenant_key, module_key, actor_key, next_state,
+                    created_by_key=actor_key,
+                )
             record = _action_record(module_key, action, payload, result, actor_user_id)
             self._record_action(connection, tenant_key, actor_key, record, handler_ref)
             actions = self._actions(connection, tenant_key, module_key, actor_key)
@@ -112,7 +135,15 @@ class PostgreSQLApplicationStore:
         return _merge_defaults(module_key, value if isinstance(value, dict) else {})
 
     @staticmethod
-    def _save_non_core_state(connection: Any, tenant_key: Any, module_key: str, actor_key: Any, state: dict[str, Any]) -> None:
+    def _save_non_core_state(
+        connection: Any,
+        tenant_key: Any,
+        module_key: str,
+        owner_key: Any | None,
+        state: dict[str, Any],
+        *,
+        created_by_key: Any,
+    ) -> None:
         clean = deepcopy(state)
         if module_key == "agent_workspace":
             clean.pop("todos", None)
@@ -124,15 +155,15 @@ class PostgreSQLApplicationStore:
             # expression-based unique index.
             cursor.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"application-state:{tenant_key}:{module_key}:{actor_key}",),
+                (f"application-state:{tenant_key}:{module_key}:{owner_key}",),
             )
             cursor.execute(
                 """
                 SELECT module_state_id FROM platform_application_module_state
-                WHERE tenant_id=%s AND module_code=%s AND owner_user_id=%s AND state_key='state'
+                WHERE tenant_id=%s AND module_code=%s AND owner_user_id IS NOT DISTINCT FROM %s AND state_key='state'
                 FOR UPDATE
                 """,
-                (tenant_key, module_key, actor_key),
+                (tenant_key, module_key, owner_key),
             )
             row = cursor.fetchone()
             if row:
@@ -143,7 +174,7 @@ class PostgreSQLApplicationStore:
             else:
                 cursor.execute(
                     "INSERT INTO platform_application_module_state(tenant_id,module_code,owner_user_id,state_key,state_value,created_by) VALUES (%s,%s,%s,'state',%s::jsonb,%s)",
-                    (tenant_key, module_key, actor_key, _json(clean), actor_key),
+                    (tenant_key, module_key, owner_key, _json(clean), created_by_key),
                 )
 
     @staticmethod
@@ -310,7 +341,7 @@ class PostgreSQLApplicationStore:
                 """
                 SELECT t.todo_key,t.title,t.description,t.status,t.priority,t.due_at,
                        owner.external_subject AS owner_user_id,assignee.external_subject AS assignee_user_id,
-                       t.source_type,t.todo_metadata,t.created_at,t.updated_at
+                       assignee.display_name AS assignee_name,t.source_type,t.todo_metadata,t.created_at,t.updated_at
                 FROM platform_todos t
                 JOIN platform_user_profiles owner ON owner.user_id=t.owner_user_id
                 JOIN platform_user_profiles assignee ON assignee.user_id=t.assignee_user_id
@@ -323,17 +354,18 @@ class PostgreSQLApplicationStore:
             rows=cursor.fetchall()
         result=[]
         for row in rows:
-            metadata=_json_value(_value(row,"todo_metadata",9),{})
+            metadata=_json_value(_value(row,"todo_metadata",10),{})
             owner=str(_value(row,"owner_user_id",6))
             assignee=str(_value(row,"assignee_user_id",7))
+            assignee_name=str(_value(row,"assignee_name",8) or "").strip()
             result.append({
                 "id":str(_value(row,"todo_key",0)),"title":str(_value(row,"title",1)),"description":str(_value(row,"description",2)),
                 "status":_todo_status_ui(str(_value(row,"status",3))),"priority":str(_value(row,"priority",4)),
-                "dueDate":_date_text(_value(row,"due_at",5)),"assignee":str(metadata.get("assignee") or assignee),
+                "dueDate":_date_text(_value(row,"due_at",5)),"assignee":assignee_name or "未知用户",
                 "assigneeUserId":assignee,"listName":str(metadata.get("listName") or "个人待办"),
-                "labels":metadata.get("labels") if isinstance(metadata.get("labels"),list) else [],"source":str(_value(row,"source_type",8) or "manual"),
-                "ownerUserId":owner,"createdBy":owner,"createdAt":str(metadata.get("createdAt") or _iso(_value(row,"created_at",10))),
-                "updatedAt":_iso(_value(row,"updated_at",11)),
+                "labels":metadata.get("labels") if isinstance(metadata.get("labels"),list) else [],"source":str(_value(row,"source_type",9) or "manual"),
+                "ownerUserId":owner,"createdBy":owner,"createdAt":str(metadata.get("createdAt") or _iso(_value(row,"created_at",11))),
+                "updatedAt":_iso(_value(row,"updated_at",12)),
                 **{key:metadata.get(key) for key in ("sourceVersionId","sourceText","background","suggestion","relatedOrg","relatedMetric","confidence") if key in metadata},
             })
         return result

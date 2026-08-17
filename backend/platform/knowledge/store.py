@@ -391,7 +391,7 @@ class SQLiteKnowledgeStore:
         resource_type: str = "knowledge_document",
     ) -> dict[str, Any]:
         resource_type = str(resource_type or "").strip()
-        if resource_type not in {"knowledge_document", "weekly_report_image"}:
+        if resource_type not in {"knowledge_document", "weekly_report_image", "message_board_image"}:
             raise ValueError("unsupported_attachment_resource_type")
         attachment_id = f"fa_{uuid4().hex}"
         now = _utcnow()

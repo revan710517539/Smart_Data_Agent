@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+command -v python3 >/dev/null 2>&1 || {
+  echo "SDA: Python 3.10+ is required." >&2
+  exit 127
+}
+exec python3 "$HOME/.local/share/smart-data-agent-bridge/bin/sda_report.py" "$@"

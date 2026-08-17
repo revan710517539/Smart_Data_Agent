@@ -1,8 +1,8 @@
 # Smart Data Agent 数据库逐表设计
 
-目标生产模型共 **99 张表**。表数量由业务边界和可追溯性决定，与用户数并非线性关系；约 100 人规模仍采用模块化单体和同一 PostgreSQL 集群。
+目标生产模型共 **106 张表**。表数量由业务边界和可追溯性决定，与用户数并非线性关系；约 100 人规模仍采用模块化单体和同一 MySQL 集群。
 
-SQLite 仅用于本地开发和测试；生产 DDL 位于 `backend/platform/database/postgresql/0001_production_schema.sql`。每张表均有独立 Markdown，且与 DDL 由同一 schema catalog 生成。
+MySQL 8.x 是结构化数据运行主库；DDL 位于 `backend/platform/database/mysql/0001_production_schema.sql`。PostgreSQL DDL 仅保留为迁移源对照，SQLite 仅用于迁移测试。每张表均有独立 Markdown，且与 DDL 由同一 schema catalog 生成。
 
 ## 领域统计
 
@@ -11,11 +11,12 @@ SQLite 仅用于本地开发和测试；生产 DDL 位于 `backend/platform/data
 | Agent与模型 | 11 |
 | 可观测性 | 2 |
 | 基础设施 | 5 |
+| 外部集成 | 2 |
 | 市场监控 | 5 |
 | 指标语义 | 6 |
 | 数据接入 | 14 |
-| 数据治理 | 6 |
-| 智能分析 | 8 |
+| 数据治理 | 7 |
+| 智能分析 | 12 |
 | 知识记忆 | 8 |
 | 经营周报 | 9 |
 | 自动化与通知 | 11 |
@@ -50,6 +51,11 @@ SQLite 仅用于本地开发和测试；生产 DDL 位于 `backend/platform/data
 - [`platform_audit_events`](./platform_audit_events.md)：脱敏、追加写的安全与业务审计事件。
 - [`platform_outbox_events`](./platform_outbox_events.md)：事务内登记待发布领域事件，支持可靠异步副作用。
 - [`platform_system_data_params`](./platform_system_data_params.md)：可审计且真正进入运行时的租户系统参数。
+
+### 外部集成
+
+- [`platform_bridge_bindings`](./platform_bridge_bindings.md)：WorkBuddy、Codex、QWork 一次点击授权形成的可撤销 Bridge 设备绑定；只保存令牌哈希。
+- [`platform_bridge_enrollments`](./platform_bridge_enrollments.md)：十分钟内有效、只能领取一次的 Bridge 设备授权事务。
 
 ### 市场监控
 
@@ -91,6 +97,7 @@ SQLite 仅用于本地开发和测试；生产 DDL 位于 `backend/platform/data
 - [`platform_data_quality_results`](./platform_data_quality_results.md)：质量规则对指定分区/快照的执行结果。
 - [`platform_lineage_edges`](./platform_lineage_edges.md)：字段、指标、主题表、分析、报告之间的有向血缘。
 - [`platform_data_asset_items`](./platform_data_asset_items.md)：兼容现有数据资产页面的版本化目录记录。
+- [`platform_raw_table_external_references`](./platform_raw_table_external_references.md)：CSV 原始表在 SDA 中的外部引用授权；不写入或修改 CSV 文件。
 - [`platform_data_asset_versions`](./platform_data_asset_versions.md)：数据资产不可变版本、schema 校验结果与发布状态。
 - [`platform_data_asset_reviews`](./platform_data_asset_reviews.md)：数据资产版本的追加式人工复核决策。
 
@@ -104,6 +111,10 @@ SQLite 仅用于本地开发和测试；生产 DDL 位于 `backend/platform/data
 - [`platform_evaluations`](./platform_evaluations.md)：对最终 SQL、数据、图表、结论和权限的质量评审。
 - [`platform_saved_analysis_results`](./platform_saved_analysis_results.md)：用户收藏的分析执行引用，不复制任务事实。
 - [`platform_analysis_feedback`](./platform_analysis_feedback.md)：用户对分析结果的评分、纠错和采用结果。
+- [`platform_analysis_workspaces`](./platform_analysis_workspaces.md)：页面、报告或自主分析对应的持久化分析工作区。
+- [`platform_analysis_threads`](./platform_analysis_threads.md)：总体分析及图表、指标、机构或数据点的分支线程。
+- [`platform_analysis_turns`](./platform_analysis_turns.md)：线程内不可变问题、回答、规划和证据轮次。
+- [`platform_analysis_result_cache`](./platform_analysis_result_cache.md)：权限、CSV、语义和执行版本绑定的安全结果缓存索引。
 
 ### 知识记忆
 

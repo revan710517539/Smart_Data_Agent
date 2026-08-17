@@ -13,6 +13,11 @@ class AgentStep:
     agent: str
     action: str
     output: dict[str, Any] = field(default_factory=dict)
+    status: str = "succeeded"
+    dependencies: tuple[str, ...] = ()
+    skill_version: str = "pinned"
+    attempt_no: int = 1
+    error_code: str = ""
 
 
 @dataclass

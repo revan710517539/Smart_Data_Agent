@@ -26,7 +26,7 @@ class RuntimeConfigTest(unittest.TestCase):
         message = str(raised.exception)
         self.assertIn("auth", message.lower())
         self.assertIn("mock/json", message)
-        self.assertIn("PostgreSQL", message)
+        self.assertIn("MySQL", message)
 
     def test_explicit_secure_production_profile_is_accepted(self) -> None:
         with patch.dict(
@@ -35,8 +35,8 @@ class RuntimeConfigTest(unittest.TestCase):
                 "SMART_DATA_AGENT_ENV": "production",
                 "SMART_DATA_AGENT_AUTH_MODE": "strict",
                 "SMART_DATA_AGENT_AUTH_SECRET": "test-only-secret-with-32-characters-minimum",
-                "SMART_DATA_AGENT_DATA_WAREHOUSE": "postgresql",
-                "SMART_DATA_AGENT_DATABASE_URL": "postgresql://db.example/smart_data_agent?sslmode=verify-full",
+                "SMART_DATA_AGENT_DATA_WAREHOUSE": "csv_object",
+                "SMART_DATA_AGENT_DATABASE_URL": "mysql+pymysql://sda@db.example/smart_data_agent?ssl_mode=verify_identity",
                 "SMART_DATA_AGENT_SECRET_PROVIDER": "kms",
                 "SMART_DATA_AGENT_KMS_COMMAND": "vault-helper",
                 "SMART_DATA_AGENT_OBJECT_STORE": "s3",
@@ -72,8 +72,8 @@ class RuntimeConfigTest(unittest.TestCase):
                 "SMART_DATA_AGENT_ENV": "production",
                 "SMART_DATA_AGENT_AUTH_MODE": "strict",
                 "SMART_DATA_AGENT_AUTH_SECRET": "test-only-secret-with-32-characters-minimum",
-                "SMART_DATA_AGENT_DATA_WAREHOUSE": "postgresql",
-                "SMART_DATA_AGENT_DATABASE_URL": "postgresql://db.example/smart_data_agent?sslmode=verify-full",
+                "SMART_DATA_AGENT_DATA_WAREHOUSE": "csv_object",
+                "SMART_DATA_AGENT_DATABASE_URL": "mysql+pymysql://sda@db.example/smart_data_agent?ssl_mode=verify_identity",
                 "SMART_DATA_AGENT_SECRET_PROVIDER": "kms",
                 "SMART_DATA_AGENT_KMS_COMMAND": "vault-helper",
                 "SMART_DATA_AGENT_OBJECT_STORE": "s3",

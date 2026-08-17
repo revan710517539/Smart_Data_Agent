@@ -41,18 +41,69 @@ class DataWarehouse(Protocol):
         ...
 
 
+class UnconfiguredDataWarehouse:
+    """Fail closed until a governed production analytical source is configured."""
+
+    data_source_name = "production_data_source_not_configured"
+
+    def list_datasets(self) -> list[dict[str, Any]]:
+        return []
+
+    def metric_universe(self) -> set[str]:
+        return set()
+
+    def dimension_universe(self) -> set[str]:
+        return set()
+
+    def has_dataset(self, dataset_id: str) -> bool:
+        return False
+
+    def query(
+        self,
+        dataset_id: str,
+        tenant_id: str,
+        metric: str,
+        dimension: str,
+        filters: dict[str, Any] | None = None,
+        limit: int = 20,
+    ) -> Any:
+        raise RuntimeError("production_data_source_not_configured")
+
+
+class GovernedCSVDataWarehouse(UnconfiguredDataWarehouse):
+    """Marker for the Origin/Topic CSV catalog executed by the selected-table path."""
+
+    data_source_name = "governed_origin_topic_csv"
+
+    def query(
+        self,
+        dataset_id: str,
+        tenant_id: str,
+        metric: str,
+        dimension: str,
+        filters: dict[str, Any] | None = None,
+        limit: int = 20,
+    ) -> Any:
+        raise RuntimeError("governed_csv_table_selection_required")
+
+
 def build_data_warehouse_from_env() -> tuple[DataWarehouse, str]:
     """Build the local semantic warehouse from environment configuration.
 
-    Defaults to the JSON mock warehouse. Set SMART_DATA_AGENT_DATA_WAREHOUSE=sqlite
-    with SMART_DATA_AGENT_SQLITE_WAREHOUSE_PATH and SMART_DATA_AGENT_SQL_WAREHOUSE_CATALOG
-    to route semantic queries to a DB-API/SQLite warehouse.
+    Starts without a semantic warehouse until a governed production source is
+    configured. Data Management remains available through the selected
+    institution's delivered CSV catalog; semantic analysis fails closed instead
+    of returning mock data.
     """
 
-    mode = os.getenv("SMART_DATA_AGENT_DATA_WAREHOUSE", "json").strip().lower()
-    if mode in {"", "json", "mock", "json_mock"}:
-        path = os.getenv("SMART_DATA_AGENT_JSON_WAREHOUSE_PATH", "").strip()
-        warehouse = JSONDataWarehouse(path) if path else JSONDataWarehouse()
+    mode = os.getenv("SMART_DATA_AGENT_DATA_WAREHOUSE", "").strip().lower()
+    if mode in {"", "unconfigured", "production_pending"}:
+        warehouse = UnconfiguredDataWarehouse()
+        return warehouse, warehouse.data_source_name
+    if mode in {"json", "mock", "json_mock"}:
+        raise ValueError("mock_data_warehouse_removed: configure a governed production warehouse instead.")
+    if mode == "csv":
+        warehouse = GovernedCSVDataWarehouse()
         return warehouse, warehouse.data_source_name
     if mode in {"sqlite", "sql", "dbapi"}:
         db_path = os.getenv("SMART_DATA_AGENT_SQLITE_WAREHOUSE_PATH", "").strip()
@@ -84,7 +135,7 @@ def build_data_warehouse_from_env() -> tuple[DataWarehouse, str]:
             statement_timeout_ms=int(os.getenv("SMART_DATA_AGENT_WAREHOUSE_STATEMENT_TIMEOUT_MS", "30000")),
         )
         return warehouse, warehouse.data_source_name
-    if mode in {"csv", "csv_object", "object_csv"}:
+    if mode in {"csv_object", "object_csv"}:
         catalog_path = os.getenv("SMART_DATA_AGENT_SQL_WAREHOUSE_CATALOG", "").strip()
         if not catalog_path:
             raise ValueError("SMART_DATA_AGENT_SQL_WAREHOUSE_CATALOG is required for CSV/object warehouse mode.")

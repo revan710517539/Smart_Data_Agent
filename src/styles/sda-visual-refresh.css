@@ -1,0 +1,315 @@
+/*
+ * SDA light visual refresh
+ *
+ * Presentation-only layer derived from the supplied light dashboard reference.
+ * It intentionally leaves layout, routes, event handlers and service contracts
+ * untouched. The reference image's black annotation canvas is not part of this
+ * theme.
+ */
+
+:root {
+  --sda-brand: #0f8554;
+  --sda-brand-strong: #096b43;
+  --sda-brand-soft: #eaf8f1;
+  --sda-brand-softer: #f3fbf7;
+  --sda-blue: #2aa8ed;
+  --sda-cyan: #22bfd2;
+  --sda-amber: #f2a83a;
+  --sda-canvas: #f3f7f5;
+  --sda-surface: #ffffff;
+  --sda-surface-subtle: #f7faf9;
+  /*
+   * Neutral boundaries use three quiet levels so nested content does not read
+   * as a stack of boxes. Semantic focus/selection colours stay independent.
+   */
+  --sda-border: rgba(64, 91, 76, 0.10);
+  --sda-border-soft: rgba(64, 91, 76, 0.065);
+  --sda-border-control: rgba(64, 91, 76, 0.16);
+  --sda-border-strong: rgba(64, 91, 76, 0.20);
+  --sda-text: #18231f;
+  --sda-text-secondary: #596a63;
+  --sda-text-tertiary: #8b9a94;
+
+  --background: var(--sda-canvas);
+  --foreground: var(--sda-text);
+  --card: var(--sda-surface);
+  --card-foreground: var(--sda-text);
+  --popover: var(--sda-surface);
+  --popover-foreground: var(--sda-text);
+  --primary: var(--sda-brand);
+  --primary-foreground: #ffffff;
+  --secondary: #edf4f1;
+  --secondary-foreground: #254239;
+  --muted: #eef4f1;
+  --muted-foreground: var(--sda-text-secondary);
+  --accent: var(--sda-brand-soft);
+  --accent-foreground: var(--sda-brand-strong);
+  --border: var(--sda-border);
+  --input: var(--sda-border-control);
+  --input-background: #ffffff;
+  --ring: var(--sda-brand);
+  --sidebar: #f7faf9;
+  --sidebar-foreground: var(--sda-text);
+  --sidebar-primary: var(--sda-brand);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: var(--sda-brand-soft);
+  --sidebar-accent-foreground: var(--sda-brand-strong);
+  --sidebar-border: var(--sda-border);
+  --sidebar-ring: var(--sda-brand);
+  --chart-1: var(--sda-brand);
+  --chart-2: var(--sda-blue);
+  --chart-3: var(--sda-cyan);
+  --chart-4: var(--sda-amber);
+  --chart-5: #76b947;
+  --radius: 0.5rem;
+}
+
+html,
+body,
+#root {
+  background: var(--sda-canvas);
+  color: var(--sda-text);
+}
+
+::selection {
+  background: rgba(22, 168, 107, 0.18);
+  color: var(--sda-text);
+}
+
+#root [data-agent-main-shell="true"] {
+  background: var(--sda-canvas) !important;
+}
+
+#root [data-agent-sidebar="true"] {
+  background: #f8fbfa !important;
+  border-color: var(--sda-border) !important;
+}
+
+/* Quiet neutral surfaces with a faint, consistent depth hierarchy. */
+#root [class~="border-[#f0f0f2]"],
+#root [class~="border-[#ebebf0]"],
+#root [class~="border-[#ececf0]"] {
+  border-color: var(--sda-border-soft) !important;
+}
+
+#root [class~="border-[#e5e5ea]"],
+#root [class~="border-[#dce7df]"] {
+  border-color: var(--sda-border) !important;
+}
+
+#root [class~="border-[#d9d9de]"] {
+  border-color: var(--sda-border-control) !important;
+}
+
+#root [class~="bg-[#f8f8fa]"],
+#root [class~="bg-[#fafbfc]"],
+#root [class~="bg-[#f8f8f8]"] {
+  background-color: var(--sda-surface-subtle) !important;
+}
+
+body #root [data-agent-main-shell="true"] {
+  background: var(--sda-canvas) !important;
+}
+
+#root [class~="bg-[#f2f2f7]"],
+#root [class~="bg-[#f5f5f7]"] {
+  background-color: #f0f5f3 !important;
+}
+
+#root [class~="bg-white"][class~="rounded-xl"][class*="border"],
+#root [class~="bg-white"][class~="rounded-2xl"][class*="border"],
+#root [data-slot="card"] {
+  border-color: var(--sda-border) !important;
+  box-shadow: 0 1px 2px rgba(20, 49, 38, 0.025), 0 8px 22px rgba(20, 49, 38, 0.035);
+}
+
+#root [class~="rounded-xl"] {
+  border-radius: 10px;
+}
+
+#root [class~="rounded-2xl"] {
+  border-radius: 12px;
+}
+
+/* Primary actions: replace the old near-black fill with the reference green. */
+#root [class~="bg-[#1d1d1f]"],
+#root [class~="bg-[#030213]"],
+#root [class~="bg-black"] {
+  background-color: var(--sda-brand) !important;
+  border-color: var(--sda-brand) !important;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  #root [class~="hover:bg-[#2c2c2e]"]:hover,
+  #root [class~="hover:bg-black/90"]:hover,
+  #root [class~="bg-[#1d1d1f]"]:hover,
+  #root [class~="bg-[#030213]"]:hover,
+  #root [class~="bg-black"]:hover {
+    background-color: var(--sda-brand-strong) !important;
+    border-color: var(--sda-brand-strong) !important;
+    box-shadow: 0 6px 16px rgba(13, 135, 85, 0.16) !important;
+  }
+}
+
+#root button:focus-visible,
+#root [role="button"]:focus-visible,
+#root a:focus-visible {
+  outline-color: rgba(22, 168, 107, 0.72) !important;
+  outline-width: 1px !important;
+  outline-offset: 1px !important;
+  box-shadow: none !important;
+}
+
+#root input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+#root select,
+#root textarea,
+#root [data-slot="input"],
+#root [data-slot="select-trigger"],
+#root [data-slot="textarea"] {
+  border-color: var(--sda-border-control) !important;
+  background-color: #ffffff;
+  border-radius: 7px;
+}
+
+#root input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):focus,
+#root select:focus,
+#root textarea:focus,
+#root [data-slot="input"]:focus-visible,
+#root [data-slot="select-trigger"]:focus-visible,
+#root [data-slot="textarea"]:focus-visible {
+  border-color: var(--sda-brand) !important;
+  box-shadow: 0 0 0 3px rgba(22, 168, 107, 0.10) !important;
+  outline: none !important;
+}
+
+#root textarea[data-plain-query-input="true"],
+#root textarea[data-plain-query-input="true"]:focus,
+#root textarea[data-plain-query-input="true"]:focus-visible,
+#root input[data-table-picker-search="true"],
+#root input[data-table-picker-search="true"]:focus,
+#root input[data-table-picker-search="true"]:focus-visible {
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+#root input[type="checkbox"],
+#root input[type="radio"] {
+  accent-color: var(--sda-brand);
+}
+
+/* Selected navigation and compact segmented controls use a pale green field. */
+#root [data-agent-sidebar="true"] [class~="bg-black/[0.05]"] {
+  background-color: var(--sda-brand-soft) !important;
+  color: var(--sda-brand-strong) !important;
+}
+
+#root [data-agent-sidebar="true"] [class~="bg-black/[0.05]"] svg,
+#root [data-agent-sidebar="true"] [aria-current="page"] svg {
+  color: var(--sda-brand) !important;
+  opacity: 0.9 !important;
+}
+
+#root [data-state="active"],
+#root [aria-selected="true"] {
+  border-color: rgba(22, 168, 107, 0.28) !important;
+}
+
+/* Tables carry the same light-green header and thin dividers as the reference. */
+#root table {
+  border-color: var(--sda-border);
+}
+
+#root thead,
+#root [data-slot="table-header"] {
+  background: var(--sda-brand-softer);
+}
+
+#root th,
+#root [data-slot="table-head"] {
+  color: #53675f;
+  border-color: var(--sda-border) !important;
+  font-weight: 600;
+}
+
+#root td,
+#root tr,
+#root [data-slot="table-row"],
+#root [data-slot="table-cell"] {
+  border-color: var(--sda-border-soft) !important;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  #root tbody tr:hover,
+  #root [data-slot="table-row"]:hover {
+    background: #f5fbf8 !important;
+  }
+}
+
+/* Popovers, menus and every shared or custom dialog follow one surface model. */
+#root [role="dialog"],
+#root [data-slot="dialog-content"],
+#root [data-slot="alert-dialog-content"],
+#root [data-slot="sheet-content"],
+#root [data-slot="drawer-content"],
+#root [data-slot="popover-content"],
+#root [data-slot="select-content"],
+#root [role="menu"] {
+  background: #ffffff !important;
+  border-color: var(--sda-border-strong) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 18px 50px rgba(20, 49, 38, 0.16), 0 3px 10px rgba(20, 49, 38, 0.06) !important;
+}
+
+#root [role="dialog"] [class~="border-b"],
+#root [role="dialog"] [class~="border-t"],
+#root [data-slot="dialog-header"],
+#root [data-slot="dialog-footer"] {
+  border-color: var(--sda-border) !important;
+}
+
+#root [data-slot="dialog-overlay"],
+#root [data-slot="alert-dialog-overlay"],
+#root [data-slot="sheet-overlay"],
+#root [data-slot="drawer-overlay"],
+#root [class~="fixed"][class~="inset-0"][class~="bg-black/20"],
+#root [class~="fixed"][class~="inset-0"][class~="bg-black/10"],
+#root [class~="fixed"][class~="inset-0"][class~="bg-[#1d1d1f]/35"] {
+  background-color: rgba(18, 33, 27, 0.28) !important;
+  backdrop-filter: blur(2px);
+}
+
+#root [role="alert"],
+#root [data-slot="alert"] {
+  border-radius: 8px;
+  border-width: 1px;
+}
+
+/* Preserve the reference's secondary data accents without turning the shell dark. */
+#root [class~="text-[#258a3f]"],
+#root [class~="text-[#248a3d]"],
+#root [class~="text-[#34a853]"] {
+  color: var(--sda-brand-strong) !important;
+}
+
+#root [class~="bg-[#eef8f1]"],
+#root [class~="bg-[#edf8f0]"],
+#root [class~="bg-[#eaf8ed]"] {
+  background-color: var(--sda-brand-soft) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #root *,
+  #root *::before,
+  #root *::after {
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  html,
+  body,
+  #root,
+  #root [data-agent-main-shell="true"] {
+    background: #ffffff !important;
+  }
+}

@@ -602,8 +602,14 @@ TABLES: tuple[TableSpec, ...] = (
             c("allowed_dimensions", "JSONB", "NOT NULL DEFAULT '[]'::jsonb", "允许维度 ID。"),
             c("effective_from", "TIMESTAMPTZ", "NOT NULL", "生效起点。"),
             c("effective_to", "TIMESTAMPTZ", "", "失效时间。"),
-            c("status", "VARCHAR(24)", "NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','review','published','superseded','rejected'))", "版本状态。"),
+            c("status", "VARCHAR(24)", "NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','review','published','superseded','rejected','archived'))", "版本状态。"),
             c("checksum", "CHAR(64)", "NOT NULL", "口径 hash。"),
+            c("parent_version_id", "UUID", "REFERENCES platform_metric_versions(metric_version_id) ON DELETE RESTRICT", "来源版本；回滚和修订均创建新版本。"),
+            c("submitted_by", "UUID", "REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT", "提交复核人。"),
+            c("submitted_at", "TIMESTAMPTZ", "", "提交复核时间。"),
+            c("reviewed_by", "UUID", "REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT", "审批人。"),
+            c("reviewed_at", "TIMESTAMPTZ", "", "审批时间。"),
+            c("review_comment", "TEXT", "NOT NULL DEFAULT ''", "审批意见。"),
         ),
         (idx("uq_platform_metric_versions", "metric_id", "version_no", unique=True), idx("idx_platform_metric_versions_effective", "metric_id", "status", "effective_from")),
         ("ratio/weighted_rate 必须同时提供 numerator_expression 和 denominator_expression，且聚合顺序为 SUM(分子)/SUM(分母)。",),
@@ -889,6 +895,19 @@ TABLES: tuple[TableSpec, ...] = (
         ),
         (idx("uq_platform_data_asset_items", "tenant_id", "item_type", "item_code", unique=True),),
         ("新功能优先写入规范化实体，本表只作页面兼容和迁移索引。",),
+    ),
+    TableSpec(
+        "platform_raw_table_external_references", "数据治理", "CSV 原始表在 SDA 中的外部引用授权；不写入或修改 CSV 文件。",
+        (
+            c("tenant_id", "UUID", "NOT NULL REFERENCES platform_tenants(tenant_id) ON DELETE CASCADE", "授权所属租户。"),
+            c("source_key", "VARCHAR(128)", "NOT NULL", "原始表的稳定来源键。"),
+            c("mode", "VARCHAR(16)", "NOT NULL CHECK (mode IN ('private','shared'))", "外部引用模式；shared 才允许 Bridge 读取。"),
+            c("schema_fingerprint", "VARCHAR(128)", "NOT NULL", "授权时表结构指纹，结构变化后授权失效。"),
+            c("updated_by", "UUID", "NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT", "最近明确授权或收回授权的用户。"),
+            c("updated_at", "TIMESTAMPTZ", "NOT NULL DEFAULT now()", "最近授权状态更新时间。"),
+            c("", "", "PRIMARY KEY (tenant_id, source_key)", "租户内每张原始表只有一条外部引用授权。"),
+        ),
+        notes=("只记录用户授权和 schema 指纹；原始行数据仍留在权威 CSV 来源。",),
     ),
     tenant_entity(
         "platform_data_asset_versions", "数据治理", "数据资产不可变版本、schema 校验结果与发布状态。", "asset_version_id",
@@ -1762,6 +1781,116 @@ TABLES: tuple[TableSpec, ...] = (
         (idx("uq_platform_application_action_key", "tenant_id", "application_action_key", unique=True), idx("uq_platform_application_actions_idempotency", "tenant_id", "module_code", "action_code", "idempotency_key", unique=True), idx("idx_platform_application_actions_actor", "tenant_id", "actor_user_id", "created_at")),
         ("未注册 action_code 必须由 API 返回 4xx，不得记录为成功。",),
     ),
+    global_entity(
+        "platform_bridge_bindings", "外部集成", "WorkBuddy、Codex、QWork 一次点击授权形成的可撤销 Bridge 设备绑定；只保存令牌哈希。", "binding_id",
+        (
+            c("binding_key", "VARCHAR(160)", "NOT NULL UNIQUE", "不含密钥的稳定绑定标识。"),
+            c("token_hash", "CHAR(64)", "NOT NULL UNIQUE", "Bridge bearer token 的 SHA-256；明文不落库。"),
+            c("channel", "VARCHAR(32)", "NOT NULL CHECK (channel IN ('workbuddy','codex','qwork'))", "发起连接的客户端渠道。"),
+            c("tenant_id", "UUID", "NOT NULL REFERENCES platform_tenants(tenant_id) ON DELETE CASCADE", "用户点击允许时明确选择的租户。"),
+            c("user_id", "UUID", "NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE CASCADE", "完成浏览器授权的用户。"),
+            c("visibility", "VARCHAR(16)", "NOT NULL DEFAULT 'private' CHECK (visibility IN ('private','tenant'))", "报告默认可见范围。"),
+            c("display_label", "VARCHAR(120)", "NOT NULL", "授权管理页展示名称。"),
+            c("device_name", "VARCHAR(160)", "NOT NULL", "客户端提供的设备名称。"),
+            c("created_at_epoch", "BIGINT", "NOT NULL", "创建时间的 Unix 秒值，供本地与 PostgreSQL 行为一致。"),
+            c("revoked_at_epoch", "BIGINT", "", "撤销时间；非空即拒绝后续访问。"),
+        ),
+        (idx("idx_platform_bridge_bindings_owner", "tenant_id", "user_id", "channel", "revoked_at_epoch"),),
+        ("令牌只在一次性领取响应中返回，数据库仅保存摘要。",),
+    ),
+    global_entity(
+        "platform_bridge_enrollments", "外部集成", "十分钟内有效、只能领取一次的 Bridge 设备授权事务。", "enrollment_id",
+        (
+            c("enrollment_key", "VARCHAR(160)", "NOT NULL UNIQUE", "不含密钥的稳定授权事务标识。"),
+            c("device_code_hash", "CHAR(64)", "NOT NULL UNIQUE", "设备码 SHA-256；明文不落库。"),
+            c("user_code_hash", "CHAR(64)", "NOT NULL UNIQUE", "用户确认码 SHA-256；明文不落库。"),
+            c("channel", "VARCHAR(32)", "NOT NULL CHECK (channel IN ('workbuddy','codex','qwork'))", "发起授权的客户端渠道。"),
+            c("device_name", "VARCHAR(160)", "NOT NULL", "客户端提供的设备名称。"),
+            c("verifier_hash", "CHAR(64)", "NOT NULL", "客户端 verifier 的 SHA-256，用于防止设备码被截获后领取。"),
+            c("status", "VARCHAR(16)", "NOT NULL CHECK (status IN ('pending','approved','consumed'))", "一次性授权事务状态。"),
+            c("tenant_id", "UUID", "REFERENCES platform_tenants(tenant_id) ON DELETE CASCADE", "批准时绑定的明确租户。"),
+            c("user_id", "UUID", "REFERENCES platform_user_profiles(user_id) ON DELETE CASCADE", "批准时绑定的用户。"),
+            c("approved_by", "UUID", "REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL", "在浏览器中点击允许的用户。"),
+            c("expires_at_epoch", "BIGINT", "NOT NULL", "授权事务过期的 Unix 秒值。"),
+            c("approved_at_epoch", "BIGINT", "", "批准时间。"),
+            c("consumed_at_epoch", "BIGINT", "", "令牌被客户端领取的时间；非空后禁止重放。"),
+            c("binding_id", "UUID", "REFERENCES platform_bridge_bindings(binding_id) ON DELETE SET NULL", "领取后创建的设备绑定。"),
+            c("created_at_epoch", "BIGINT", "NOT NULL", "创建时间的 Unix 秒值。"),
+        ),
+        (idx("idx_platform_bridge_enrollments_expiry", "status", "expires_at_epoch"),),
+        ("批准必须来自真实浏览器会话；轮询还需匹配客户端 verifier，且只能成功一次。",),
+    ),
+    tenant_entity(
+        "platform_analysis_workspaces", "智能分析", "页面、报告或自主分析对应的持久化分析工作区。", "workspace_id",
+        (
+            c("workspace_key", "VARCHAR(160)", "NOT NULL", "租户内稳定工作区标识。"),
+            c("owner_user_id", "UUID", "NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE CASCADE", "工作区所有者。"),
+            c("page_key", "VARCHAR(160)", "NOT NULL", "页面或业务场景编码。"),
+            c("artifact_ref", "VARCHAR(240)", "NOT NULL DEFAULT ''", "关联报表或可视化产物引用。"),
+            c("context_snapshot", "JSONB", "NOT NULL DEFAULT '{}'::jsonb", "数据快照、指标版本、筛选器与授权动作。"),
+            c("status", "VARCHAR(24)", "NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived','deleted'))", "工作区状态。"),
+        ),
+        (
+            idx("uq_platform_analysis_workspaces_key", "tenant_id", "workspace_key", unique=True),
+            idx("idx_platform_analysis_workspaces_owner", "tenant_id", "owner_user_id", "updated_at"),
+        ),
+    ),
+    tenant_entity(
+        "platform_analysis_threads", "智能分析", "总体分析及图表、指标、机构或数据点的分支线程。", "thread_id",
+        (
+            c("workspace_id", "UUID", "NOT NULL REFERENCES platform_analysis_workspaces(workspace_id) ON DELETE CASCADE", "所属工作区。"),
+            c("parent_thread_id", "UUID", "REFERENCES platform_analysis_threads(thread_id) ON DELETE RESTRICT", "父线程；根线程为空。"),
+            c("root_thread_id", "UUID", "REFERENCES platform_analysis_threads(thread_id) ON DELETE RESTRICT", "根线程；创建根线程后回填自身。"),
+            c("title", "VARCHAR(240)", "NOT NULL DEFAULT ''", "线程标题。"),
+            c("anchor", "JSONB", "NOT NULL DEFAULT '{}'::jsonb", "图表、文本、指标或数据点锚点。"),
+            c("status", "VARCHAR(24)", "NOT NULL DEFAULT 'active' CHECK (status IN ('active','merged','archived'))", "线程状态。"),
+            c("merged_into_thread_id", "UUID", "REFERENCES platform_analysis_threads(thread_id) ON DELETE RESTRICT", "合并目标线程。"),
+        ),
+        (
+            idx("idx_platform_analysis_threads_workspace", "tenant_id", "workspace_id", "updated_at"),
+            idx("idx_platform_analysis_threads_parent", "workspace_id", "parent_thread_id"),
+        ),
+    ),
+    tenant_entity(
+        "platform_analysis_turns", "智能分析", "线程内不可变问题、回答、规划和证据轮次。", "turn_id",
+        (
+            c("thread_id", "UUID", "NOT NULL REFERENCES platform_analysis_threads(thread_id) ON DELETE CASCADE", "所属线程。"),
+            c("turn_no", "INTEGER", "NOT NULL CHECK (turn_no > 0)", "线程内单调轮次。"),
+            c("actor_user_id", "UUID", "NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT", "发起用户。"),
+            c("question", "TEXT", "NOT NULL", "本轮问题。"),
+            c("answer", "TEXT", "NOT NULL DEFAULT ''", "本轮结论。"),
+            c("intent", "JSONB", "NOT NULL DEFAULT '{}'::jsonb", "结构化意图及置信度。"),
+            c("execution_plan", "JSONB", "NOT NULL DEFAULT '{}'::jsonb", "持久化 DAG 摘要。"),
+            c("artifact_refs", "JSONB", "NOT NULL DEFAULT '[]'::jsonb", "产物引用列表。"),
+            c("evidence_refs", "JSONB", "NOT NULL DEFAULT '[]'::jsonb", "证据引用列表。"),
+            c("status", "VARCHAR(24)", "NOT NULL CHECK (status IN ('clarification','queued','running','completed','partial','failed','cancelled'))", "轮次执行状态。"),
+        ),
+        (
+            idx("uq_platform_analysis_turns_no", "thread_id", "turn_no", unique=True),
+            idx("idx_platform_analysis_turns_thread", "tenant_id", "thread_id", "created_at"),
+        ),
+        ("已完成轮次不可覆盖；重跑和合并必须创建新轮次。",),
+    ),
+    tenant_entity(
+        "platform_analysis_result_cache", "智能分析", "权限、CSV、语义和执行版本绑定的安全结果缓存索引。", "cache_id",
+        (
+            c("cache_key", "CHAR(64)", "NOT NULL", "规范化缓存输入 SHA-256。"),
+            c("owner_user_id", "UUID", "NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE CASCADE", "缓存创建用户。"),
+            c("authorization_hash", "CHAR(64)", "NOT NULL", "授权策略快照摘要。"),
+            c("csv_snapshot_hash", "CHAR(64)", "NOT NULL", "CSV 数据快照摘要。"),
+            c("semantic_version_hash", "CHAR(64)", "NOT NULL", "指标和语义版本摘要。"),
+            c("execution_version_hash", "CHAR(64)", "NOT NULL", "Skill、模型和代码版本摘要。"),
+            c("result_ref", "VARCHAR(240)", "NOT NULL", "可信产物引用。"),
+            c("expires_at", "TIMESTAMPTZ", "NOT NULL", "缓存到期时间。"),
+            c("invalidated_at", "TIMESTAMPTZ", "", "失效时间。"),
+            c("invalidation_reason", "VARCHAR(120)", "NOT NULL DEFAULT ''", "失效原因稳定码。"),
+        ),
+        (
+            idx("uq_platform_analysis_result_cache_key", "tenant_id", "cache_key", unique=True),
+            idx("idx_platform_analysis_result_cache_expiry", "tenant_id", "expires_at", "invalidated_at"),
+        ),
+        ("缓存命中仍需重新计算 authorization_hash；任何组成摘要变化都不得复用。",),
+    ),
 )
 
 
@@ -1778,8 +1907,8 @@ DEFERRED_FOREIGN_KEYS: tuple[tuple[str, str, str, str, str], ...] = (
 
 def validate_catalog(tables: tuple[TableSpec, ...] = TABLES) -> None:
     names = [table.name for table in tables]
-    if len(names) != 99:
-        raise ValueError(f"Expected 99 production tables, found {len(names)}")
+    if len(names) != 106:
+        raise ValueError(f"Expected 106 production tables, found {len(names)}")
     if len(names) != len(set(names)):
         raise ValueError("Duplicate table names in production schema catalog")
     for table in tables:

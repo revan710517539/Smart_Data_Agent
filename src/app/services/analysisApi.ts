@@ -9,7 +9,21 @@ export type BackendAnalysisPlan = {
   chart_types?: string[];
   analysis_angles?: string[];
   business_focus?: string;
+  metric_definitions?: BackendMetricDefinition[];
   model_planning?: BackendModelPlanning;
+};
+
+export type BackendMetricDefinition = {
+  metric_code?: string;
+  metric_name?: string;
+  aggregation?: string;
+  numerator?: string;
+  denominator?: string;
+  multiplier?: number;
+  unit?: string;
+  grain?: string;
+  source?: string;
+  version?: string;
 };
 
 export type BackendModelInvocation = {
@@ -91,6 +105,20 @@ export type BackendSkillResult = {
     y?: string;
     title?: string;
   };
+  visualization_spec?: {
+    chart_type?: string;
+    title?: string;
+    x?: string;
+    y?: string[];
+    series?: string;
+    orientation?: "horizontal" | "vertical" | string;
+    reason?: string;
+    alternatives?: string[];
+    unit?: string;
+    precision?: number;
+    interactions?: string[];
+    pivot?: Record<string, unknown> | null;
+  };
   semantic_info?: Record<string, unknown>;
   evidence?: {
     evidence_id?: string;
@@ -152,6 +180,7 @@ export type BackendAnalysisResponse = {
   trace_id?: string;
   asset_context?: Record<string, unknown>;
   intelligent_analysis?: BackendIntelligentAnalysis;
+  workspace_turn?: Record<string, unknown>;
 };
 
 type RunSelfAnalysisParams = {
@@ -311,19 +340,27 @@ export async function waitForSelfAnalysis({
   pageContext = {},
   requestId = crypto.randomUUID(),
   onRun,
+  resumeRunId,
+  signal,
   pollIntervalMs = 1_500,
   deadlineMs = 15 * 60 * 1000,
 }: RunSelfAnalysisParams & {
   onRun?: (run: AsyncAnalysisRun) => void;
+  resumeRunId?: string;
+  signal?: AbortSignal;
   pollIntervalMs?: number;
   deadlineMs?: number;
 }): Promise<BackendAnalysisResponse> {
-  let run = await enqueueSelfAnalysis({ question, tenantId, userId, pageContext, requestId });
+  throwIfAnalysisWaitAborted(signal);
+  let run = resumeRunId
+    ? await fetchAsyncAnalysisRun({ runId: resumeRunId, tenantId, userId })
+    : await enqueueSelfAnalysis({ question, tenantId, userId, pageContext, requestId });
   onRun?.(run);
+  throwIfAnalysisWaitAborted(signal);
   const deadline = Date.now() + deadlineMs;
   while (!["succeeded", "failed", "cancelled"].includes(run.status)) {
     if (Date.now() >= deadline) throw new ApiRequestError("analysis_deadline_exceeded", 0, "analysis_deadline_exceeded");
-    await new Promise((resolve) => window.setTimeout(resolve, pollIntervalMs));
+    await waitForAnalysisPoll(pollIntervalMs, signal);
     try {
       run = await fetchAsyncAnalysisRun({ runId: run.automation_run_id, tenantId, userId });
     } catch (error) {
@@ -331,12 +368,13 @@ export async function waitForSelfAnalysis({
         const payload = error.payload as { retry_after_seconds?: number } | null;
         const retryAfterSeconds = Number(payload?.retry_after_seconds || 2);
         const retryDelayMs = Math.min(60_000, Math.max(1_500, retryAfterSeconds * 1_000));
-        await new Promise((resolve) => window.setTimeout(resolve, retryDelayMs));
+        await waitForAnalysisPoll(retryDelayMs, signal);
         continue;
       }
       throw error;
     }
     onRun?.(run);
+    throwIfAnalysisWaitAborted(signal);
   }
   if (run.status !== "succeeded") {
     throw new ApiRequestError(
@@ -348,7 +386,29 @@ export async function waitForSelfAnalysis({
   }
   const taskRef = run.result_refs?.find((ref) => ref.type === "task" && ref.id);
   if (!taskRef?.id) throw new ApiRequestError("analysis_task_reference_missing", 0, "analysis_task_reference_missing", run);
-  return fetchAnalysisTask({ taskId: taskRef.id, tenantId, userId });
+  const task = await fetchAnalysisTask({ taskId: taskRef.id, tenantId, userId });
+  throwIfAnalysisWaitAborted(signal);
+  return task;
+}
+
+function throwIfAnalysisWaitAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw new DOMException("analysis_wait_aborted", "AbortError");
+}
+
+function waitForAnalysisPoll(delayMs: number, signal?: AbortSignal): Promise<void> {
+  throwIfAnalysisWaitAborted(signal);
+  return new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, delayMs);
+    const abort = () => {
+      window.clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", abort);
+      reject(new DOMException("analysis_wait_aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 export async function fetchAnalysisTask({

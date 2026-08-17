@@ -6,7 +6,13 @@ from urllib.parse import parse_qs
 from backend.authz import normalize_tenant_id
 from backend.authz.seed import OPERATING_TENANTS
 from backend.platform.api.support import first_query_value, send_route_exception
-from backend.platform.settings import account_system_config_scope, test_model_integration, test_speech_integration
+from backend.platform.settings import (
+    DEFAULT_RELAY_MODEL_ID,
+    account_system_config_scope,
+    ensure_default_models_for_account,
+    test_model_integration,
+    test_speech_integration,
+)
 from backend.platform.tenancy import ExecutionContext
 
 
@@ -16,6 +22,7 @@ def handle_system_config_get(handler: Any, query: str) -> None:
         context = handler._request_context(params=params)
         handler._require_system_config_permission(context, "read")
         config_scope = _account_config_scope(context)
+        ensure_default_models_for_account(handler.services.system_config_store, context.user_id)
         models = _list_account_models(handler, context, config_scope)
         speech_integrations = _list_account_speech_integrations(handler, context, config_scope)
         parameter_tenant_ids = _authorized_system_config_tenant_ids(handler, context)
@@ -57,7 +64,8 @@ def handle_system_model_upsert(handler: Any) -> None:
         if not isinstance(model, dict):
             raise ValueError("model must be an object.")
         handler._require_system_config_permission(context, "manage")
-        config_scope = _model_storage_scope(handler, context, str(model.get("id") or ""))
+        model = {**model, "applicationModule": "global_text_model"}
+        config_scope = _model_account_scope(context)
         saved = handler.services.system_config_store.upsert_model(
             config_scope,
             model,
@@ -77,7 +85,9 @@ def handle_system_model_delete(handler: Any, query: str) -> None:
         if not model_id:
             raise ValueError("model_id is required.")
         handler._require_system_config_permission(context, "manage")
-        config_scope = _model_storage_scope(handler, context, model_id)
+        if model_id == DEFAULT_RELAY_MODEL_ID:
+            raise ValueError("default_model_cannot_be_deleted")
+        config_scope = _model_account_scope(context)
         deleted = handler.services.system_config_store.delete_model(
             config_scope,
             model_id,
@@ -181,6 +191,7 @@ def handle_system_speech_integration_upsert(handler: Any) -> None:
         if not isinstance(integration, dict):
             raise ValueError("speech_integration must be an object.")
         handler._require_system_config_permission(context, "manage")
+        integration = {**integration, "applicationModule": "global_voice_model"}
         config_scope = _account_config_scope(context)
         saved = handler.services.system_config_store.upsert_speech_integration(
             config_scope,
@@ -218,6 +229,7 @@ def handle_system_speech_integration_test(handler: Any) -> None:
                 _account_config_scope(context),
                 {
                     **integration,
+                    "applicationModule": "global_voice_model",
                     "testStatus": result.get("status"),
                     "testMessage": result.get("message"),
                     "testResponse": result.get("response_preview") or result.get("endpoint"),
@@ -259,7 +271,7 @@ def handle_system_speech_integration_delete(handler: Any, query: str) -> None:
 
 
 def _account_config_scope(context: Any) -> str:
-    return context.tenant_id
+    return account_system_config_scope(context.user_id)
 
 
 def _institution_label(tenant_id: str) -> str:
@@ -291,9 +303,14 @@ def _authorized_system_config_tenant_ids(handler: Any, context: Any) -> tuple[st
 
 
 def _list_account_models(handler: Any, context: Any, config_scope: str) -> list[dict[str, Any]]:
-    list_owned = getattr(handler.services.system_config_store, "list_models_owned_by", None)
-    if context.user_id and callable(list_owned):
-        return list_owned(context.user_id, context.tenant_id)
+    for model in handler.services.system_config_store.list_models(config_scope, reveal_secret=True):
+        if str(model.get("applicationModule") or "") == "global_text_model":
+            continue
+        handler.services.system_config_store.upsert_model(
+            config_scope,
+            {**model, "applicationModule": "global_text_model"},
+            updated_by=context.user_id,
+        )
     return handler.services.system_config_store.list_models(config_scope)
 
 
@@ -336,6 +353,14 @@ def _model_account_scope(context: Any) -> str:
 
 
 def _list_account_speech_integrations(handler: Any, context: Any, config_scope: str) -> list[dict[str, Any]]:
+    for integration in handler.services.system_config_store.list_speech_integrations(config_scope, reveal_secret=True):
+        if str(integration.get("applicationModule") or "") == "global_voice_model":
+            continue
+        handler.services.system_config_store.upsert_speech_integration(
+            config_scope,
+            {**integration, "applicationModule": "global_voice_model"},
+            updated_by=context.user_id,
+        )
     return handler.services.system_config_store.list_speech_integrations(config_scope)
 
 

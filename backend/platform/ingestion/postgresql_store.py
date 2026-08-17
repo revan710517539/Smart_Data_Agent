@@ -1141,14 +1141,14 @@ class PostgreSQLAcquisitionStore:
                    r.lease_owner, r.lease_expires_at, r.input_cursor, r.output_cursor,
                    r.rows_read, r.rows_written, r.source_snapshot, r.quality_summary,
                    artifact.artifact_key AS output_artifact_id,
-                   partition.partition_code AS partition_id,
+                   part.partition_code AS partition_id,
                    r.started_at, r.finished_at, r.error_code, r.error_summary,
                    creator.external_subject AS created_by, r.created_at, r.updated_at
             FROM platform_acquisition_job_runs r
             JOIN platform_tenants t ON t.tenant_id = r.tenant_id
             JOIN platform_acquisition_jobs j ON j.acquisition_job_id = r.acquisition_job_id
             LEFT JOIN platform_data_artifacts artifact ON artifact.artifact_id = r.output_artifact_id
-            LEFT JOIN platform_dataset_partitions partition ON partition.partition_id = r.partition_id
+            LEFT JOIN platform_dataset_partitions part ON part.partition_id = r.partition_id
             LEFT JOIN platform_user_profiles creator ON creator.user_id = r.created_by
         """
 

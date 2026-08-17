@@ -10,6 +10,7 @@ from urllib.parse import parse_qs
 
 from backend.platform.api.support import send_route_exception
 from backend.platform.security import AuthenticationError, make_session_token
+from backend.platform.settings import ensure_default_models_for_account
 
 
 def handle_auth_login(handler: Any) -> None:
@@ -32,6 +33,23 @@ def handle_auth_login(handler: Any) -> None:
         tenant_hint = str(payload.get("tenant_id") or payload.get("institution") or "").strip() or None
         session = handler.services.access_service.login_by_email(email, tenant_hint=tenant_hint)
         response, cookies = _issue_session(handler, session)
+        user = session.get("user") if isinstance(session.get("user"), dict) else {}
+        try:
+            handler.services.interaction_event_store.write(
+                tenant_id=str(session.get("tenant_id") or ""),
+                actor_user_id=str(user.get("id") or ""),
+                actor_account=str(user.get("email") or email),
+                event_name="login_submit",
+                event_type="click",
+                page_path="/login",
+                page_name="登录",
+                resource_type="authentication",
+                extension={"outcome": "success"},
+            )
+        except Exception:
+            # Telemetry is best effort. A metrics-table outage must never turn a
+            # valid authentication result into a failed login.
+            pass
         handler._send_json(response, headers={"Set-Cookie": cookies})
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
         send_route_exception(handler, exc)
@@ -50,6 +68,12 @@ def handle_auth_register(handler: Any) -> None:
             return
         payload = handler._read_json()
         session = handler.services.access_service.register_operator_by_email(payload)
+        user = session.get("user") if isinstance(session.get("user"), dict) else {}
+        ensure_default_models_for_account(
+            handler.services.system_config_store,
+            str(user.get("id") or ""),
+            updated_by="system",
+        )
         response, cookies = _issue_session(handler, session)
         handler._send_json(
             response,

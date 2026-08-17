@@ -14,6 +14,7 @@ dependencies = [
   "redis>=5,<7",
   "pypdf>=5,<7",
   "python-docx>=1.1,<2",
+  "openpyxl>=3.1,<4",
   "croniter>=6,<7",
   "psycopg[binary,pool]>=3.2,<4",
   "boto3>=1.35,<2",
@@ -21,6 +22,7 @@ dependencies = [
   "PyMySQL>=1.1,<2",
   "PyHive>=0.7,<1",
   "sqlglot>=30.12,<31",
+  "polars>=1.31,<2",
 ]
 
 [project.optional-dependencies]

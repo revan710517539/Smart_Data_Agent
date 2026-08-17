@@ -48,17 +48,17 @@ export function useInstitutionCommentThread({
       .then((response) => {
         if (cancelled || scopeKeyRef.current !== scopeKey) return;
         revisionRef.current = Number(response.revision || 0);
-        replaceComments(normalizeComments(response.comments));
+        replaceComments(normalizeComments(response.comments, userId, userName));
       })
       .catch(() => {
         if (cancelled || scopeKeyRef.current !== scopeKey) return;
-        replaceComments(isDemoFallbackEnabled() ? loadLocalReportComments(tenantId, reportId) : []);
+        replaceComments(isDemoFallbackEnabled() ? loadLocalReportComments(tenantId, reportId, userId, userName) : []);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [reportId, replaceComments, scopeKey, tenantId, userId]);
+  }, [reportId, replaceComments, scopeKey, tenantId, userId, userName]);
 
   const enqueueMutation = useCallback((
     execute: (expectedRevision: number) => Promise<MutationResponse>,
@@ -72,14 +72,14 @@ export function useInstitutionCommentThread({
           const response = await execute(revisionRef.current);
           if (scopeKeyRef.current !== mutationScope) return;
           revisionRef.current = Number(response.revision || revisionRef.current + 1);
-          replaceComments(normalizeComments(response.comments));
+          replaceComments(normalizeComments(response.comments, userId, userName));
           return;
         } catch {
           try {
             const latest = await fetchReportComments({ tenantId, userId, reportId });
             if (scopeKeyRef.current !== mutationScope) return;
             revisionRef.current = Number(latest.revision || 0);
-            replaceComments(normalizeComments(latest.comments));
+            replaceComments(normalizeComments(latest.comments, userId, userName));
           } catch {
             break;
           }
@@ -90,7 +90,7 @@ export function useInstitutionCommentThread({
         replaceComments(optimisticComments);
       }
     });
-  }, [reportId, replaceComments, scopeKey, tenantId, userId]);
+  }, [reportId, replaceComments, scopeKey, tenantId, userId, userName]);
 
   const createComment = useCallback((target: CommentTarget, text: string) => {
     const body = text.trim();

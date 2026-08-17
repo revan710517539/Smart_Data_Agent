@@ -6,9 +6,24 @@ from tempfile import TemporaryDirectory
 
 from backend.platform.database import apply_migrations
 from backend.platform.governance import SQLiteCapabilityApprovalStore, approval_input_hash
+from backend.platform.governance.approvals import _validate_consumption
 
 
 class CapabilityApprovalTest(unittest.TestCase):
+    def test_mysql_style_naive_expiration_is_treated_as_utc(self) -> None:
+        item = {
+            "status": "approved",
+            "tenant_id": "tenant_a",
+            "requested_by": "user_a",
+            "subject_type": "skill",
+            "subject_id": "skill_a",
+            "action": "execute",
+            "input_hash": "abc",
+            "expires_at": "2999-01-01T00:00:00.000000",
+        }
+
+        _validate_consumption(item, "tenant_a", "user_a", "skill", "skill_a", "execute", "abc")
+
     def test_approval_is_four_eyes_hash_bound_one_time_and_durable(self) -> None:
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "platform.sqlite"

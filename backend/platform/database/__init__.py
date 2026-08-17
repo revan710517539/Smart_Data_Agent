@@ -9,6 +9,20 @@ from .postgresql import (
 )
 from .sqlite_maintenance import backup_sqlite_database, inspect_sqlite_database, vacuum_sqlite_database
 from .identity import PostgreSQLIdentityResolver
+from .mysql import (
+    MySQLConnectionPool,
+    MySQLMigrationError,
+    MySQLMigrationResult,
+    apply_mysql_schema,
+    mysql_tls_configured,
+    parse_mysql_url,
+)
+from .mysql_compat import (
+    MySQLSQLTranslationError,
+    MySQLStoreConnectionPool,
+    TranslatedSQL,
+    translate_postgresql_sql,
+)
 
 __all__ = [
     "MigrationDriftError",
@@ -23,4 +37,14 @@ __all__ = [
     "inspect_sqlite_database",
     "vacuum_sqlite_database",
     "PostgreSQLIdentityResolver",
+    "MySQLConnectionPool",
+    "MySQLMigrationError",
+    "MySQLMigrationResult",
+    "apply_mysql_schema",
+    "mysql_tls_configured",
+    "parse_mysql_url",
+    "MySQLSQLTranslationError",
+    "MySQLStoreConnectionPool",
+    "TranslatedSQL",
+    "translate_postgresql_sql",
 ]

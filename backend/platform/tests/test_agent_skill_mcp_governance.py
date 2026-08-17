@@ -7,11 +7,13 @@ from backend.platform.governance import approval_input_hash
 from backend.platform.mcp import MCPToolCall
 from backend.platform.skills import SkillRequest
 from backend.platform.tenancy import ExecutionContext
+from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
 
 
 class AgentSkillMCPGovernanceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.services = build_local_platform()
+        attach_governed_test_warehouse(self.services)
 
     def tearDown(self) -> None:
         self.services.close()
@@ -24,7 +26,7 @@ class AgentSkillMCPGovernanceTest(unittest.TestCase):
             self.services.skill_executor.execute(
                 SkillRequest(
                     skill_id="model.train",
-                    context=ExecutionContext("u_admin", "tenant_demo"),
+                    context=ExecutionContext("u_super_admin", "tenant_demo"),
                     inputs={},
                     agent_id="training_validation",
                     approval_id="approval-not-enough-without-handler",
@@ -45,7 +47,7 @@ class AgentSkillMCPGovernanceTest(unittest.TestCase):
         self.assertEqual(runtime.snapshot(run)["status"], "completed")
 
     def test_mcp_requires_declared_agent_and_uses_semantic_permission_path(self) -> None:
-        context = ExecutionContext("u_admin", "tenant_demo")
+        context = ExecutionContext("u_super_admin", "tenant_demo")
         with self.assertRaisesRegex(PermissionError, "mcp_agent_identity_required"):
             self.services.mcp_gateway.call(
                 MCPToolCall("database", "query", context, {"dataset_id": "loan_operation_mart"})
@@ -72,7 +74,7 @@ class AgentSkillMCPGovernanceTest(unittest.TestCase):
             "database.query",
             "execute",
             approval_input_hash(arguments),
-            "u_admin",
+            "u_super_admin",
         )
         self.services.approval_store.review(
             "tenant_demo", approval["approval_id"], "u_reviewer", "approved"

@@ -3,6 +3,8 @@ import { getAccessManagerUserId } from "./apiContext";
 
 export type AccessTenantRole = {
   tenant: string;
+  /** Stable tenant code used by API/RBAC. `tenant` is only the display label. */
+  tenantId?: string;
   role: string;
 };
 

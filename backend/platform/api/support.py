@@ -135,6 +135,15 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
         )
         if error_text in metric_workbook_messages:
             error_code, message = metric_workbook_messages[error_text]
+        if error_text == "name and email are required.":
+            error_code = "access_user_identity_required"
+            message = "姓名和邮箱不能为空。"
+        if error_text.startswith("角色不存在，请检查："):
+            error_code = "access_user_role_not_found"
+            message = error_text
+        if error_text.startswith("用户邮箱已存在"):
+            error_code = "access_user_email_conflict"
+            message = "该邮箱已绑定其他用户，请检查邮箱或编辑已有用户。"
         if error_text.startswith("Unsupported metric:"):
             error_code = "analysis_metric_not_bound_to_selected_data"
             message = "当前问题中的指标没有绑定到已选数据表。请先选择包含该指标的当前机构数据表，再发起分析。"

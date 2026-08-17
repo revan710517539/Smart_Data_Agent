@@ -1580,7 +1580,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                             "email": "access-case@bank.com",
                             "status": "active",
                             "lastLogin": "未登录",
-                        "tenantRoles": [{"tenant": "华兴银行", "role": "操作员"}],
+                        "tenantRoles": [{"tenant": "仅用于显示", "tenantId": tenant_id, "role": "操作员"}],
                         },
                         "user_id": "u_super_admin",
                         "tenant_id": tenant_id,
@@ -1637,7 +1637,10 @@ class PlatformWorkflowTest(unittest.TestCase):
 
             self.assertEqual(save_response.status, 200)
             self.assertEqual(save_payload["user"]["id"], "u_access_case")
-            self.assertEqual(save_payload["user"]["tenantRoles"], [{"tenant": "华兴银行", "role": "操作员"}])
+            self.assertEqual(
+                save_payload["user"]["tenantRoles"],
+                [{"tenant": "华兴银行", "tenantId": tenant_id, "role": "操作员"}],
+            )
             self.assertEqual(list_response.status, 200)
             self.assertIn("u_access_case", {user["id"] for user in list_payload["users"]})
             self.assertTrue(can_read_metric)
@@ -1692,10 +1695,57 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(
             payload["user"]["tenantRoles"],
-            [{"tenant": "华兴银行", "role": "管理员"}, {"tenant": "广州银行", "role": "管理员"}],
+            [
+                {"tenant": "华兴银行", "tenantId": primary_tenant_id, "role": "管理员"},
+                {"tenant": "广州银行", "tenantId": secondary_tenant_id, "role": "管理员"},
+            ],
         )
         self.assertTrue(can_manage_primary)
         self.assertTrue(can_manage_secondary)
+
+    def test_http_access_user_upsert_returns_actionable_role_validation(self) -> None:
+        tenant_id = normalize_tenant_id("华兴银行")
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/access/user",
+                    body=json.dumps(
+                        {
+                            "user_id": "u_super_admin",
+                            "tenant_id": tenant_id,
+                            "user": {
+                                "id": "",
+                                "name": "校验用户",
+                                "department": "华兴银行",
+                                "email": "validation-user@example.com",
+                                "status": "active",
+                                "lastLogin": "未登录",
+                                "tenantRoles": [
+                                    {"tenant": "华兴银行", "tenantId": tenant_id, "role": "不存在的角色"},
+                                ],
+                            },
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertIsNone(server.services.access_service.user_store.get_profile("u_validation_user"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertEqual(response.status, 400)
+        self.assertEqual(payload["error"], "access_user_role_not_found")
+        self.assertEqual(payload["message"], "角色不存在，请检查：华兴银行 · 不存在的角色")
 
     def test_access_role_policy_save_rewrites_rbac_policies(self) -> None:
         tenant_id = normalize_tenant_id("华兴银行")
@@ -2090,7 +2140,10 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertTrue(super_login_payload["is_super_admin"])
 
         self.assertEqual(register_response.status, 201)
-        self.assertEqual(register_payload["user"]["tenantRoles"], [{"tenant": "郑州银行", "role": "操作员"}])
+        self.assertEqual(
+            register_payload["user"]["tenantRoles"],
+            [{"tenant": "郑州银行", "tenantId": normalize_tenant_id("郑州银行"), "role": "操作员"}],
+        )
         self.assertEqual(register_payload["institutions"], ["郑州银行"])
         self.assertEqual(register_payload["tenant_id"], normalize_tenant_id("郑州银行"))
         self.assertEqual(nav_response.status, 200)
@@ -2164,10 +2217,16 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertEqual(multi_response.status, 200)
         self.assertEqual(
             multi_payload["user"]["tenantRoles"],
-            [{"tenant": "郑州银行", "role": "操作员"}, {"tenant": "南京银行", "role": "操作员"}],
+            [
+                {"tenant": "郑州银行", "tenantId": normalize_tenant_id("郑州银行"), "role": "操作员"},
+                {"tenant": "南京银行", "tenantId": normalize_tenant_id("南京银行"), "role": "操作员"},
+            ],
         )
         self.assertEqual(duplicate_admin_response.status, 200)
-        self.assertEqual(duplicate_admin_payload["user"]["tenantRoles"], [{"tenant": "华兴银行", "role": "管理员"}])
+        self.assertEqual(
+            duplicate_admin_payload["user"]["tenantRoles"],
+            [{"tenant": "华兴银行", "tenantId": normalize_tenant_id("华兴银行"), "role": "管理员"}],
+        )
 
     def test_http_metric_dictionary_is_tenant_scoped(self) -> None:
         with TemporaryDirectory() as tmpdir:

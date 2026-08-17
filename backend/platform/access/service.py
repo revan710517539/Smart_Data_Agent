@@ -362,7 +362,8 @@ class AccessControlService:
             if role_name == "超级管理员":
                 assignments.append(RoleAssignment(user_id, "*", SUPER_ADMIN_ROLE_ID, granted_by=context.user_id))
                 continue
-            tenant_id = _tenant_id_from_label(tenant_value or _tenant_label(context.tenant_id))
+            tenant_code = str(item.get("tenantId") or item.get("tenant_id") or "").strip()
+            tenant_id = _tenant_id_from_label(tenant_code or tenant_value or _tenant_label(context.tenant_id))
             role = self._find_role_by_name(tenant_id, role_name)
             if role is None:
                 raise ValueError(f"角色不存在，请检查：{tenant_value} · {role_name}")
@@ -575,6 +576,7 @@ class AccessControlService:
             tenant_roles.append(
                 {
                     "tenant": "全部机构" if role.level == RoleLevel.SUPER_ADMIN else _tenant_label(assignment.tenant_id),
+                    "tenantId": "*" if role.level == RoleLevel.SUPER_ADMIN else assignment.tenant_id,
                     "role": "超级管理员" if role.level == RoleLevel.SUPER_ADMIN else role.name,
                 }
             )

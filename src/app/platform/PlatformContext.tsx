@@ -30,6 +30,7 @@ type PlatformContextValue = {
   selectedInstitution: string;
   setSelectedInstitution: (institution: string) => void;
   tenantId: string;
+  tenantIdForInstitution: (institution: string) => string;
   userId: string;
   userName: string;
 };
@@ -211,6 +212,10 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
     : [];
   const isSuperAdmin = Boolean(hasGlobalTenantAccess || currentTenantRoles.some((role) => role.role === "超级管理员"));
   const isInstitutionAdmin = Boolean(isSuperAdmin || currentTenantRoles.some((role) => role.role === "管理员"));
+  const tenantIdForInstitution = useCallback(
+    (institution: string) => resolveTenantIdForInstitution(institution, authSession, tenantIdByInstitution),
+    [authSession, tenantIdByInstitution],
+  );
 
   const value = useMemo<PlatformContextValue>(
     () => ({
@@ -227,10 +232,11 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       selectedInstitution,
       setSelectedInstitution,
       tenantId: resolveTenantIdForInstitution(selectedInstitution, authSession, tenantIdByInstitution),
+      tenantIdForInstitution,
       userId: authSession?.user.id || getDefaultUserId(),
       userName: authSession?.user.name || "未登录",
     }),
-    [authSession, currentTenantRoles, institutions, isInstitutionAdmin, isSuperAdmin, selectedInstitution, setSelectedInstitution, tenantIdByInstitution],
+    [authSession, currentTenantRoles, institutions, isInstitutionAdmin, isSuperAdmin, selectedInstitution, setSelectedInstitution, tenantIdByInstitution, tenantIdForInstitution],
   );
 
   return (

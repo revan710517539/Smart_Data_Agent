@@ -9,6 +9,7 @@ const files = await Promise.all([
   "src/app/components/LoginPage.tsx",
   "src/app/components/ui/DataPageSelector.tsx",
   "src/app/components/Layout.tsx",
+  "src/app/components/SystemSettings.tsx",
   "src/app/components/self-analysis/ResultViews.tsx",
   "src/app/components/agent-supervisor/AgentSupervisor.tsx",
   "src/app/services/interactionTelemetry.ts",
@@ -18,7 +19,7 @@ const files = await Promise.all([
   "backend/platform/database/mysql/migrations/0031_user_interaction_events.sql",
 ].map((path) => readFile(path, "utf8")));
 
-const [visualReport, selfAnalysis, dataAssets, relationships, login, pagination, layout, visualCard, supervisor, telemetryClient, telemetryRoute, authRoute, telemetryStore, migration] = files;
+const [visualReport, selfAnalysis, dataAssets, relationships, login, pagination, layout, systemSettings, visualCard, supervisor, telemetryClient, telemetryRoute, authRoute, telemetryStore, migration] = files;
 
 assert.ok(!visualReport.includes('label="存主题"'), "可视化报表不得显示存主题按钮");
 assert.ok(!selfAnalysis.includes('handleSaveTarget("topic")'), "智能分析不得显示存主题入口");
@@ -47,6 +48,11 @@ assert.match(login, /setPassword\(""\)/, "取消登录必须清空密码");
 assert.ok(!login.includes("123456"), "登录页源码不得包含可用的默认密码");
 assert.match(authRoute, /os\.getenv\("SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD", ""\)/, "开发登录密码缺失时必须失败关闭");
 assert.ok(!authRoute.includes('"123456"'), "认证路由不得保留历史密码兜底");
+assert.match(systemSettings, /institutionOptions=\{visibleInstitutions\}/, "新增用户只能选择权威目录中已登记的机构");
+assert.match(systemSettings, /tenantId: tenantIdForInstitution\(nextTenant\)/, "新增用户必须把稳定 tenant ID 与显示名分开提交");
+assert.ok(!systemSettings.includes("institutionOptions={isSuperAdmin ? operatingTenantNames"), "超级管理员也不得向未登记静态机构授权");
+assert.match(systemSettings, /setUserEditorError\(message\)[\s\S]*?setAccessNotice\(message\)/, "新增用户失败必须保留弹窗和表单并显示具体原因");
+assert.match(systemSettings, /role="alert" aria-live="polite"[\s\S]*?\{saveError\}/, "新增用户校验错误必须在弹窗内可访问地呈现");
 assert.match(selfAnalysis, /reportKindTab === "analysis" \? "新建智能分析" : "新建可视化报表"/);
 assert.ok(!selfAnalysis.includes(">全部</button>"), "我的报表智能分析 Tab 不得保留全部按钮");
 

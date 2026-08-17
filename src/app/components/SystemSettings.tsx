@@ -23,7 +23,6 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { operatingTenantNames } from "../data/operatingTenants";
 import { usePlatformContext } from "../platform/PlatformContext";
 import {
   deleteAccessUser,
@@ -110,6 +109,25 @@ function hasDuplicateModelName(models: ModelIntegration[], name: string, current
   return models.some((model) => model.id !== currentModelId && normalizedModelName(model.name) === target);
 }
 
+function normalizeAccessUserTenantLabels(
+  user: AccessUser,
+  institutions: string[],
+  tenantIdForInstitution: (institution: string) => string,
+): AccessUser {
+  const institutionByTenantId = new Map(
+    institutions.map((institution) => [tenantIdForInstitution(institution), institution]),
+  );
+  return {
+    ...user,
+    tenantRoles: user.tenantRoles.map((tenantRole) => ({
+      ...tenantRole,
+      tenant: tenantRole.role === "超级管理员"
+        ? "全部机构"
+        : institutionByTenantId.get(tenantRole.tenantId || "") || tenantRole.tenant,
+    })),
+  };
+}
+
 export function SystemSettings() {
   const location = useLocation();
   const {
@@ -117,6 +135,7 @@ export function SystemSettings() {
     isSuperAdmin,
     selectedInstitution,
     tenantId,
+    tenantIdForInstitution,
     userId,
     userName,
   } = usePlatformContext();
@@ -146,6 +165,7 @@ export function SystemSettings() {
   const [auditPage, setAuditPage] = useState(1);
   const [auditNotice, setAuditNotice] = useState("");
   const [userEditorOpen, setUserEditorOpen] = useState(false);
+  const [userEditorError, setUserEditorError] = useState("");
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [userForm, setUserForm] = useState(emptyUserForm);
   const [permissionInstitutions, setPermissionInstitutions] =
@@ -210,7 +230,7 @@ export function SystemSettings() {
           fetchAccessRolePolicies({ tenantId }),
         ]);
         if (cancelled) return;
-        setUsers(userResponse.users);
+        setUsers(userResponse.users.map((user) => normalizeAccessUserTenantLabels(user, visibleInstitutions, tenantIdForInstitution)));
         setPermissionInstitutions(permissionResponse.permissions);
         setAccessNotice(`用户与授权已连接后端：${selectedInstitution}`);
       } catch (error) {
@@ -238,7 +258,7 @@ export function SystemSettings() {
       cancelled = true;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [activeTab, selectedInstitution, tenantId]);
+  }, [activeTab, selectedInstitution, tenantId, tenantIdForInstitution, visibleInstitutions]);
 
   useEffect(() => {
     if (activeTab !== "audit") return;
@@ -564,6 +584,7 @@ export function SystemSettings() {
   };
 
   const openUserEditor = (user?: SystemUser) => {
+    setUserEditorError("");
     if (user) {
       setEditingUserId(user.id);
       setUserForm({
@@ -571,14 +592,16 @@ export function SystemSettings() {
         department: user.department,
         email: user.email,
         status: user.status,
-        tenantRoles: user.tenantRoles.length ? user.tenantRoles : [{ tenant: selectedInstitution, role: "操作员" }],
+        tenantRoles: user.tenantRoles.length
+          ? user.tenantRoles
+          : [{ tenant: selectedInstitution, tenantId: tenantIdForInstitution(selectedInstitution), role: "操作员" }],
       });
     } else {
       setEditingUserId(null);
       setUserForm({
         ...emptyUserForm,
         department: selectedInstitution,
-        tenantRoles: [{ tenant: selectedInstitution, role: "操作员" }],
+        tenantRoles: [{ tenant: selectedInstitution, tenantId: tenantIdForInstitution(selectedInstitution), role: "操作员" }],
       });
     }
     setUserEditorOpen(true);
@@ -589,7 +612,7 @@ export function SystemSettings() {
     const fallbackUserId = editingUserId ?? `u_local_${Date.now()}`;
     const tenantRoles = userForm.tenantRoles.length
       ? userForm.tenantRoles
-      : [{ tenant: selectedInstitution, role: "操作员" }];
+      : [{ tenant: selectedInstitution, tenantId: tenantIdForInstitution(selectedInstitution), role: "操作员" }];
     const draftUser: SystemUser = {
       id: editingUserId ?? "",
       name: userForm.name.trim(),
@@ -601,12 +624,14 @@ export function SystemSettings() {
     };
     try {
       const response = await saveAccessUser({ tenantId, user: draftUser });
+      const savedUser = normalizeAccessUserTenantLabels(response.user, visibleInstitutions, tenantIdForInstitution);
       setUsers((current) =>
         editingUserId
-          ? current.map((user) => (user.id === editingUserId ? response.user : user))
-          : [response.user, ...current],
+          ? current.map((user) => (user.id === editingUserId ? savedUser : user))
+          : [savedUser, ...current],
       );
       setAccessNotice("用户信息和角色授权已同步到后端。");
+      setUserEditorError("");
       setUserEditorOpen(false);
       setEditingUserId(null);
     } catch (error) {
@@ -618,11 +643,15 @@ export function SystemSettings() {
             : [localUser, ...current],
         );
         setAccessNotice(`用户已保存到 demo 本地状态，后端同步失败：${apiErrorMessage(error, "未知错误")}`);
+        setUserEditorError("");
+        setUserEditorOpen(false);
+        setEditingUserId(null);
+        return;
       } else {
-        setAccessNotice(`${demoFallbackDisabledMessage("用户保存")} ${apiErrorMessage(error, "未知错误")}`);
+        const message = `用户保存失败，未写入本地缓存：${apiErrorMessage(error, "未知错误")}`;
+        setUserEditorError(message);
+        setAccessNotice(message);
       }
-      setUserEditorOpen(false);
-      setEditingUserId(null);
     }
   };
 
@@ -977,14 +1006,19 @@ export function SystemSettings() {
         <UserEditorModal
           editing={editingUserId !== null}
           form={userForm}
-          institutionOptions={isSuperAdmin ? operatingTenantNames : visibleInstitutions}
+          saveError={userEditorError}
+          institutionOptions={visibleInstitutions}
+          tenantIdForInstitution={tenantIdForInstitution}
           rolePermissions={permissionInstitutions}
           canGrantAdminRole={isSuperAdmin}
           canGrantSuperAdminRole={isSuperAdmin}
           onChange={(key, value) => setUserForm((current) => ({ ...current, [key]: value }))}
           onTenantRolesChange={(tenantRoles) => setUserForm((current) => ({ ...current, tenantRoles }))}
           onSave={saveUser}
-          onClose={() => setUserEditorOpen(false)}
+          onClose={() => {
+            setUserEditorError("");
+            setUserEditorOpen(false);
+          }}
         />
       )}
     </div>
@@ -1050,7 +1084,9 @@ function AccessConfigCard({
 function UserEditorModal({
   editing,
   form,
+  saveError,
   institutionOptions,
+  tenantIdForInstitution,
   rolePermissions,
   canGrantAdminRole,
   canGrantSuperAdminRole,
@@ -1061,7 +1097,9 @@ function UserEditorModal({
 }: {
   editing: boolean;
   form: typeof emptyUserForm;
+  saveError: string;
   institutionOptions: string[];
+  tenantIdForInstitution: (institution: string) => string;
   rolePermissions: InstitutionPermission[];
   canGrantAdminRole: boolean;
   canGrantSuperAdminRole: boolean;
@@ -1071,11 +1109,13 @@ function UserEditorModal({
   onClose: () => void;
 }) {
   const isGlobalSuperAdmin = form.tenantRoles.some((role) => role.role === "超级管理员");
-  const availableInstitutions = institutionOptions.length ? institutionOptions : operatingTenantNames;
+  const availableInstitutions = institutionOptions;
   const addTenantRole = () => {
+    const institution = availableInstitutions[0];
+    if (!institution) return;
     onTenantRolesChange([
       ...form.tenantRoles,
-      { tenant: availableInstitutions[0], role: "操作员" },
+      { tenant: institution, tenantId: tenantIdForInstitution(institution), role: "操作员" },
     ]);
   };
   const updateTenantRole = (index: number, patch: Partial<AccessTenantRole>) => {
@@ -1091,8 +1131,10 @@ function UserEditorModal({
   const toggleSuperAdminRole = () => {
     onTenantRolesChange(
       isGlobalSuperAdmin
-        ? [{ tenant: availableInstitutions[0], role: "操作员" }]
-        : [{ tenant: "全部机构", role: "超级管理员" }],
+        ? availableInstitutions[0]
+          ? [{ tenant: availableInstitutions[0], tenantId: tenantIdForInstitution(availableInstitutions[0]), role: "操作员" }]
+          : []
+        : [{ tenant: "全部机构", tenantId: "*", role: "超级管理员" }],
     );
   };
 
@@ -1165,7 +1207,11 @@ function UserEditorModal({
                       onChange={(event) => {
                         const nextTenant = event.target.value;
                         const nextRoleOptions = roleOptionsForInstitution(nextTenant, rolePermissions, canGrantAdminRole, role.role);
-                        updateTenantRole(index, { tenant: nextTenant, role: nextRoleOptions[0] || "操作员" });
+                        updateTenantRole(index, {
+                          tenant: nextTenant,
+                          tenantId: tenantIdForInstitution(nextTenant),
+                          role: nextRoleOptions[0] || "操作员",
+                        });
                       }}
                       className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
                     >
@@ -1201,22 +1247,27 @@ function UserEditorModal({
             </div>
           </div>
         </div>
-        <div className="flex items-center justify-end gap-2 border-t border-[#f0f0f2] px-5 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[12px] text-[#636366] hover:bg-[#f2f2f7]"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={onSave}
-            disabled={!form.name.trim() || !form.email.trim() || !form.tenantRoles.length}
-            className="rounded-lg bg-[#1d1d1f] px-4 py-2 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-40"
-          >
-            保存用户
-          </button>
+        <div className="flex items-center gap-3 border-t border-[#f0f0f2] px-5 py-4">
+          <span className="min-w-0 flex-1 text-[12px] leading-[1.5] text-[#d93025]" role="alert" aria-live="polite">
+            {saveError}
+          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[12px] text-[#636366] hover:bg-[#f2f2f7]"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={!form.name.trim() || !form.email.trim() || !form.tenantRoles.length}
+              className="rounded-lg bg-[#1d1d1f] px-4 py-2 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-40"
+            >
+              保存用户
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -1437,7 +1437,6 @@ function DataManagement({ searchTerm, tenantId, userId }: { searchTerm: string; 
         <div className="mb-4 grid gap-3 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-start">
           <div>
             <h3 className="text-[14px] text-[#1d1d1f]">数据管理</h3>
-            <p className="mt-1 text-[11px] text-[#aeaeb2]">原始表自动读取 CSV 文件并展示前 10 行和字段解读；主题表保存可复用分析 SQL。</p>
           </div>
           <div className="flex min-w-0 flex-col items-end gap-2">
             <div className="flex max-w-full flex-nowrap items-center gap-2 overflow-x-auto pb-0.5 [&>*]:shrink-0" data-data-management-control-row="true">

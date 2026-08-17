@@ -43,6 +43,9 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
   // the local API responds.
   const [isSessionResolved, setIsSessionResolved] = useState(true);
   const [tenantCatalog, setTenantCatalog] = useState<string[]>(operatingTenantNames);
+  const [tenantIdByInstitution, setTenantIdByInstitution] = useState<Record<string, string>>(() =>
+    Object.fromEntries(operatingTenantNames.map((name) => [name, tenantIdFromInstitution(name)])),
+  );
   const [selectedInstitution, setSelectedInstitutionState] = useState(() => resolveInitialInstitution(authSession));
   const sessionMutationVersion = useRef(0);
   const sessionSyncPromise = useRef<Promise<void> | null>(null);
@@ -66,6 +69,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           .map((tenant) => tenant.name || tenant.id));
         if (!cancelled && names.length) {
           setTenantCatalog(names);
+          setTenantIdByInstitution(buildTenantIdCatalog(response.tenants));
         }
       } catch {
         if (!cancelled) {
@@ -154,12 +158,12 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         ...authSession,
         institutions: nextInstitutions,
         institution: target,
-        tenant_id: tenantIdFromInstitution(target),
+        tenant_id: resolveTenantIdForInstitution(target, authSession, tenantIdByInstitution),
       };
       setAuthSession(nextSession);
       window.localStorage.setItem(authSessionStorageKey, JSON.stringify(nextSession));
     },
-    [authSession, hasGlobalTenantAccess, institutions, tenantCatalog],
+    [authSession, hasGlobalTenantAccess, institutions, tenantCatalog, tenantIdByInstitution],
   );
 
   useEffect(() => {
@@ -216,11 +220,11 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       logout,
       selectedInstitution,
       setSelectedInstitution,
-      tenantId: tenantIdFromInstitution(selectedInstitution),
+      tenantId: resolveTenantIdForInstitution(selectedInstitution, authSession, tenantIdByInstitution),
       userId: authSession?.user.id || getDefaultUserId(),
       userName: authSession?.user.name || "未登录",
     }),
-    [authSession, currentTenantRoles, institutions, isInstitutionAdmin, isSuperAdmin, selectedInstitution, setSelectedInstitution],
+    [authSession, currentTenantRoles, institutions, isInstitutionAdmin, isSuperAdmin, selectedInstitution, setSelectedInstitution, tenantIdByInstitution],
   );
 
   return (
@@ -250,7 +254,7 @@ function loadStoredSession(): AuthSession | null {
     const normalizedSession = {
       ...session,
       institution,
-      tenant_id: tenantIdFromInstitution(institution),
+      tenant_id: resolveTenantIdForInstitution(institution, session),
     };
     // Keep request context safe while the HttpOnly session is being verified.
     // The selected-institution cache is intentionally left untouched so the
@@ -305,8 +309,40 @@ function normalizeAuthSession(session: AuthSession): AuthSession {
     ...safeSession,
     institution,
     institutions,
-    tenant_id: tenantIdFromInstitution(institution),
+    tenant_id: resolveTenantIdForInstitution(institution, safeSession),
   };
+}
+
+function buildTenantIdCatalog(tenants: Array<{ id: string; name: string; status: string }>) {
+  const catalog: Record<string, string> = {};
+  for (const tenant of tenants) {
+    if (tenant.status !== "active") continue;
+    const tenantId = String(tenant.id || "").trim();
+    const displayName = normalizeSelectableInstitution(tenant.name || tenantId);
+    const codeLabel = normalizeSelectableInstitution(tenantId);
+    if (!tenantId) continue;
+    if (displayName) catalog[displayName] = tenantId;
+    if (codeLabel) catalog[codeLabel] = tenantId;
+  }
+  return catalog;
+}
+
+function resolveTenantIdForInstitution(
+  institution: string,
+  session: AuthSession | null,
+  catalog: Record<string, string> = {},
+) {
+  const normalized = normalizeSelectableInstitution(institution);
+  const catalogTenantId = normalized ? catalog[normalized] : "";
+  if (catalogTenantId) return catalogTenantId;
+  if (session?.tenant_id) {
+    const sessionInstitution = normalizeSelectableInstitution(session.institution || "");
+    const sessionTenantLabel = normalizeSelectableInstitution(session.tenant_id);
+    if (normalized && (normalized === sessionInstitution || normalized === sessionTenantLabel)) {
+      return session.tenant_id;
+    }
+  }
+  return tenantIdFromInstitution(institution);
 }
 
 function resolveSessionInstitution(session: AuthSession | null) {

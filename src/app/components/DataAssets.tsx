@@ -1434,67 +1434,71 @@ function DataManagement({ searchTerm, tenantId, userId }: { searchTerm: string; 
     <div className="space-y-5">
       <AssetNotice notice={notice} />
       <div className="rounded-xl border border-[#f0f0f2] bg-white p-5">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="mb-4 grid gap-3 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-start">
           <div>
             <h3 className="text-[14px] text-[#1d1d1f]">数据管理</h3>
             <p className="mt-1 text-[11px] text-[#aeaeb2]">原始表自动读取 CSV 文件并展示前 10 行和字段解读；主题表保存可复用分析 SQL。</p>
           </div>
-          <div className="flex items-center gap-2">
-            {activeTab !== "relationships" && currentTotal > dataTablePageSize && (
-              <DataTablePagination
-                compact
-                page={currentPage}
-                totalPages={currentPageCount}
-                total={currentTotal}
-                onChange={setCurrentPage}
+          <div className="flex min-w-0 flex-col items-end gap-2">
+            <div className="flex max-w-full flex-nowrap items-center gap-2 overflow-x-auto pb-0.5 [&>*]:shrink-0" data-data-management-control-row="true">
+              {activeTab === "raw" && (
+                <button
+                  type="button"
+                  onClick={() => setRawUploadOpen(true)}
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-[#0f8f58] px-3 text-[12px] text-white hover:bg-[#0b7d4c]"
+                  data-active-tab-action="upload-static-workbook"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  上传Excel文件
+                </button>
+              )}
+              {activeTab === "relationships" && (
+                <button
+                  type="button"
+                  onClick={() => setRelationshipCreateRequestId((value) => value + 1)}
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-[#0f8f58] px-3 text-[12px] text-white hover:bg-[#0b7d4c]"
+                  data-active-tab-action="create-table-relationship"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  新增表关系
+                </button>
+              )}
+              {activeTab === "topic" && (
+                <button
+                  type="button"
+                  aria-label="新增主题表"
+                  onClick={() => setCreateType("topic")}
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white hover:bg-[#2c2c2e]"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  新增主题表
+                </button>
+              )}
+              {activeTab === "single_page" && <PageDataCreateButton scope="single_institution" onClick={() => void openPageDataEditor("single_institution")} />}
+              {activeTab === "multi_page" && <PageDataCreateButton scope="multi_institution" onClick={() => void openPageDataEditor("multi_institution")} />}
+              <SegmentedTabs
+                tabs={[
+                  { key: "raw", label: `原始表 ${rawTables.length}` },
+                  { key: "single_page", label: `单机构页面 ${singlePageDataAssets.length}` },
+                  { key: "multi_page", label: `多机构页面 ${multiPageDataAssets.length}` },
+                  { key: "topic", label: `主题表 ${topicTables.length}` },
+                  { key: "relationships", label: `表关系 ${bundle.table_relationships.length}` },
+                ]}
+                activeKey={activeTab}
+                onChange={(key) => setActiveTab(key as DataManagementTab | "relationships")}
               />
+            </div>
+            {activeTab !== "relationships" && currentTotal > dataTablePageSize && (
+              <div data-data-management-pagination="true">
+                <DataTablePagination
+                  compact
+                  page={currentPage}
+                  totalPages={currentPageCount}
+                  total={currentTotal}
+                  onChange={setCurrentPage}
+                />
+              </div>
             )}
-            {activeTab === "raw" && (
-              <button
-                type="button"
-                onClick={() => setRawUploadOpen(true)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#0f8f58] px-3 text-[12px] text-white hover:bg-[#0b7d4c]"
-                data-active-tab-action="upload-static-workbook"
-              >
-                <Upload className="h-3.5 w-3.5" />
-                上传Excel文件
-              </button>
-            )}
-            {activeTab === "relationships" && (
-              <button
-                type="button"
-                onClick={() => setRelationshipCreateRequestId((value) => value + 1)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#0f8f58] px-3 text-[12px] text-white hover:bg-[#0b7d4c]"
-                data-active-tab-action="create-table-relationship"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                新增表关系
-              </button>
-            )}
-            {activeTab === "topic" && (
-              <button
-                type="button"
-                aria-label="新增主题表"
-                onClick={() => setCreateType("topic")}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white hover:bg-[#2c2c2e]"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                新增主题表
-              </button>
-            )}
-            {activeTab === "single_page" && <PageDataCreateButton scope="single_institution" onClick={() => void openPageDataEditor("single_institution")} />}
-            {activeTab === "multi_page" && <PageDataCreateButton scope="multi_institution" onClick={() => void openPageDataEditor("multi_institution")} />}
-            <SegmentedTabs
-              tabs={[
-                { key: "raw", label: `原始表 ${rawTables.length}` },
-                { key: "single_page", label: `单机构页面 ${singlePageDataAssets.length}` },
-                { key: "multi_page", label: `多机构页面 ${multiPageDataAssets.length}` },
-                { key: "topic", label: `主题表 ${topicTables.length}` },
-                { key: "relationships", label: `表关系 ${bundle.table_relationships.length}` },
-              ]}
-              activeKey={activeTab}
-              onChange={(key) => setActiveTab(key as DataManagementTab | "relationships")}
-            />
           </div>
         </div>
 
@@ -2522,32 +2526,32 @@ function RawTableCard({
 
   return (
     <div className="rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-4">
-      <div className={`${expanded ? "mb-3" : ""} flex flex-wrap items-start justify-between gap-3`}>
-        <div>
-          <div className="flex items-center gap-2">
-            <Database className="h-4 w-4 text-[#8a8a8e]" />
-            <h4 className="text-[13px] text-[#1d1d1f]">{table.tableNameCn}</h4>
-            <span className="font-mono text-[11px] text-[#8a8a8e]">{table.tableNameEn}</span>
-            {table.fileName && <span className="max-w-[280px] truncate rounded-full border border-[#e5e5ea] bg-white px-2 py-0.5 text-[10px] text-[#636366]" title={table.fileName}>文件：{table.fileName}</span>}
+      <div className={`${expanded ? "mb-3" : ""} flex flex-col items-stretch gap-3 lg:flex-row lg:items-start`} data-raw-table-summary="true">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+            <Database className="h-4 w-4 shrink-0 text-[#8a8a8e]" />
+            <h4 className="min-w-0 max-w-[320px] truncate text-[13px] text-[#1d1d1f]" title={table.tableNameCn}>{table.tableNameCn}</h4>
+            <span className="shrink-0 font-mono text-[11px] text-[#8a8a8e]">{table.tableNameEn}</span>
+            {table.fileName && <span className="min-w-0 max-w-[280px] truncate rounded-full border border-[#e5e5ea] bg-white px-2 py-0.5 text-[10px] text-[#636366]" title={table.fileName} data-raw-table-file-name="true">文件：{table.fileName}</span>}
           </div>
           <p className="mt-1 text-[11px] leading-[1.6] text-[#636366]">更新时间：{formatAssetTime(table.updatedAt)}</p>
         </div>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 text-[11px] text-[#636366]">
+        <div className="flex shrink-0 flex-nowrap items-center gap-2 self-end whitespace-nowrap lg:self-start" data-raw-table-actions="true">
+          <label className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] text-[#636366]">
             <span>外部引用</span>
             <select
               aria-label={`${table.tableNameCn} 外部引用`}
               value={table.externalReferenceMode || "private"}
               disabled={!table.sourceKey || !table.schemaFingerprint}
               onChange={(event) => void onExternalReferenceChange(table, event.target.value as "private" | "shared")}
-              className="h-7 rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none disabled:cursor-not-allowed disabled:text-[#aeaeb2]"
+              className="h-7 shrink-0 rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none disabled:cursor-not-allowed disabled:text-[#aeaeb2]"
               title={table.externalReferenceSchemaChanged ? "文件字段结构已变化，已自动改为单独使用；如需继续授权，请重新选择可分享。" : "该设置仅管理 WorkBuddy、Codex、QWork Bridge 能否读取此 CSV，不会写入或修改 CSV 文件。"}
             >
               <option value="private">单独使用</option>
               <option value="shared">可分享</option>
             </select>
           </label>
-          <span className="h-7 rounded-md border border-[#e5e5ea] bg-white px-2 py-1 text-[11px] text-[#636366]">
+          <span className="h-7 shrink-0 whitespace-nowrap rounded-md border border-[#e5e5ea] bg-white px-2 py-1 text-[11px] text-[#636366]">
             CSV 文件 · {table.rowCount ?? 0} 行
           </span>
           <AssetEditActions
@@ -2751,7 +2755,7 @@ function AssetCollapseButton({
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#e5e5ea] bg-white text-[#636366] hover:bg-[#f2f2f7]"
+      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[#e5e5ea] bg-white text-[#636366] hover:bg-[#f2f2f7]"
     >
       <Icon className="h-3.5 w-3.5 text-[#8a8a8e]" />
     </button>
@@ -2776,7 +2780,7 @@ function AssetEditActions({
       <button
         type="button"
         onClick={onEdit}
-        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#636366] hover:bg-[#f2f2f7]"
+        className="inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#636366] hover:bg-[#f2f2f7]"
       >
         <Pencil className="h-3.5 w-3.5 text-[#8a8a8e]" />
         编辑
@@ -2789,7 +2793,7 @@ function AssetEditActions({
         type="button"
         onClick={onSave}
         disabled={saving}
-        className="inline-flex h-7 items-center gap-1.5 rounded-md bg-[#1d1d1f] px-2 text-[11px] text-white hover:bg-[#2c2c2e] disabled:opacity-50"
+        className="inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-[#1d1d1f] px-2 text-[11px] text-white hover:bg-[#2c2c2e] disabled:opacity-50"
       >
         <Save className="h-3.5 w-3.5" />
         保存
@@ -2798,7 +2802,7 @@ function AssetEditActions({
         type="button"
         onClick={onCancel}
         disabled={saving}
-        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-50"
+        className="inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-50"
       >
         <X className="h-3.5 w-3.5 text-[#8a8a8e]" />
         取消
@@ -3259,13 +3263,13 @@ function SegmentedTabs({
   onChange: (key: string) => void;
 }) {
   return (
-    <div className="flex gap-px rounded-lg bg-[#f2f2f7] p-0.5">
+    <div className="flex shrink-0 flex-nowrap gap-px whitespace-nowrap rounded-lg bg-[#f2f2f7] p-0.5" data-segmented-tabs="true">
       {tabs.map((tab) => (
         <button
           key={tab.key}
           type="button"
           onClick={() => onChange(tab.key)}
-          className={`rounded-md px-3 py-1.5 text-[12px] transition-all ${
+          className={`shrink-0 whitespace-nowrap rounded-md px-3 py-1.5 text-[12px] transition-all ${
             activeKey === tab.key ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:text-[#636366]"
           }`}
         >

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from http import HTTPStatus
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -105,6 +106,65 @@ class MetricDictionaryImportTest(unittest.TestCase):
         self.assertEqual(response["created_count"], 1)
         self.assertEqual(response["skipped_count"], 1)
         self.assertEqual(response["skipped_names"], ["2段客户信息校验未通过人数"])
+
+    def test_import_endpoint_returns_actionable_workbook_validation_message(self) -> None:
+        handler = SimpleNamespace(
+            headers={},
+            services=SimpleNamespace(),
+            _read_json=lambda max_bytes: {"file_name": "metrics.xlsx", "file_content_base64": "ignored"},
+            _request_context=lambda payload: SimpleNamespace(tenant_id="tenant:test", user_id="u_admin"),
+            _require_metric_permission=lambda context, action: None,
+        )
+        response: dict[str, object] = {}
+
+        def send_json(payload, status=HTTPStatus.OK, headers=None):
+            response.update(payload)
+            response["status"] = status
+
+        handler._send_json = send_json
+        with patch(
+            "backend.platform.api.routes.metrics.parse_metric_workbook",
+            side_effect=ValueError("Excel 缺少指标模板必填列，请使用“指标库-指标体系”工作表。"),
+        ):
+            handle_metric_dictionary_import(handler)
+
+        self.assertEqual(response["status"], HTTPStatus.BAD_REQUEST)
+        self.assertEqual(response["error"], "metric_workbook_columns_missing")
+        self.assertEqual(
+            response["message"],
+            "Excel 缺少模板必填列，请使用包含完整表头的“指标库-指标体系”工作表。",
+        )
+        self.assertNotEqual(response["message"], "The request failed validation.")
+
+    def test_import_endpoint_returns_actionable_duplicate_conflict_message(self) -> None:
+        class Store:
+            def list(self, tenant_id: str) -> list[dict[str, object]]:
+                return [{"metricName": "动支率"}]
+
+        handler = SimpleNamespace(
+            headers={},
+            services=SimpleNamespace(metric_dictionary_store=Store()),
+            _read_json=lambda max_bytes: {"file_name": "metrics.xlsx", "file_content_base64": "ignored"},
+            _request_context=lambda payload: SimpleNamespace(tenant_id="tenant:test", user_id="u_admin"),
+            _require_metric_permission=lambda context, action: None,
+        )
+        response: dict[str, object] = {}
+
+        def send_json(payload, status=HTTPStatus.OK, headers=None):
+            response.update(payload)
+            response["status"] = status
+
+        handler._send_json = send_json
+        with patch(
+            "backend.platform.api.routes.metrics.parse_metric_workbook",
+            return_value=[{"metricName": "动支率", "definition": "动支人数/授信人数"}],
+        ):
+            handle_metric_dictionary_import(handler)
+
+        self.assertEqual(response["status"], HTTPStatus.BAD_REQUEST)
+        self.assertEqual(response["error"], "metric_dictionary_duplicate_names")
+        self.assertIn("以下指标名称存在冲突：动支率", str(response["message"]))
+        self.assertIn("指标库中已有的同名指标", str(response["message"]))
 
 
 if __name__ == "__main__":

@@ -112,6 +112,15 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             "analysis_automation_disabled": "智能分析任务已被管理员停用，请联系机构管理员启用后重试。",
             "automation_task_is_not_active": "智能分析任务当前不可运行，请刷新页面后重试；若仍失败，请联系机构管理员。",
         }
+        metric_workbook_messages = {
+            "请上传 .xlsx 格式的指标文件。": ("metric_workbook_file_type", "仅支持 .xlsx 格式的指标文件，请重新选择。"),
+            "指标文件内容无效，请重新选择 .xlsx 文件。": ("metric_workbook_invalid_content", "指标文件内容无效，请重新选择 .xlsx 文件。"),
+            "指标文件不能为空且不得超过 8MB。": ("metric_workbook_size_invalid", "指标文件不能为空且不得超过 8MB。"),
+            "无法解析指标 Excel，请使用标准 .xlsx 模板。": ("metric_workbook_parse_failed", "无法解析指标 Excel，请确认文件未损坏并使用标准 .xlsx 模板。"),
+            "Excel 中未找到指标数据。": ("metric_workbook_empty", "Excel 中未找到指标数据，请检查“指标库-指标体系”工作表。"),
+            "Excel 缺少指标模板必填列，请使用“指标库-指标体系”工作表。": ("metric_workbook_columns_missing", "Excel 缺少模板必填列，请使用包含完整表头的“指标库-指标体系”工作表。"),
+            "Excel 中没有可导入的指标名称。": ("metric_workbook_no_metric_names", "Excel 中没有可导入的指标名称，请填写“新指标名称”或“原指标名称”。"),
+        }
         error_text = str(exc)
         message = validation_messages.get(error_text, "The request failed validation.")
         error_code = (
@@ -124,6 +133,8 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             }
             else "invalid_request"
         )
+        if error_text in metric_workbook_messages:
+            error_code, message = metric_workbook_messages[error_text]
         if error_text.startswith("Unsupported metric:"):
             error_code = "analysis_metric_not_bound_to_selected_data"
             message = "当前问题中的指标没有绑定到已选数据表。请先选择包含该指标的当前机构数据表，再发起分析。"
@@ -133,7 +144,7 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
         if error_text.startswith("metric_dictionary_duplicate_names:"):
             error_code = "metric_dictionary_duplicate_names"
             duplicate_names = error_text.split(":", 1)[1] or "所选"
-            message = f"{duplicate_names}指标有重名，请检查指标"
+            message = f"以下指标名称存在冲突：{duplicate_names}。请修改口径不同的重名指标，或移除指标库中已有的同名指标后再导入。"
         handler._send_json(
             {"error": error_code, "message": message, "request_id": request_id},
             HTTPStatus.BAD_REQUEST,

@@ -530,7 +530,7 @@ export function DataAssets() {
       setMetricImportFile(null);
       setMetricImportNotice("");
     } catch (error) {
-      setMetricImportNotice(`${demoFallbackDisabledMessage("批量导入指标")} ${apiErrorMessage(error, "未知错误")}`);
+      setMetricImportNotice(`批量导入失败：${apiErrorMessage(error, "未知错误")}`);
     } finally {
       setMetricImporting(false);
     }
@@ -948,7 +948,7 @@ function MetricBatchImportModal({
             <span>✓ 保留：原指标名称、数据机构与备注</span>
             <span>✓ 规则：相同重复行自动合并，冲突名称整批失败</span>
           </div>
-          {notice && <div className="rounded-lg bg-[#fafbfc] px-3 py-2 text-[12px] leading-[1.6] text-[#636366]">{notice}</div>}
+          {notice && <div className={`rounded-lg px-3 py-2 text-[12px] leading-[1.6] ${/失败|无效|无法|缺少|为空|超过|冲突|重名/.test(notice) ? "bg-[#fff5f4] text-[#c5221f]" : "bg-[#fafbfc] text-[#636366]"}`}>{notice}</div>}
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-[#f0f0f2] px-5 py-4">
           <button type="button" onClick={onClose} disabled={importing} className="rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[12px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-40">取消</button>

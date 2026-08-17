@@ -16,6 +16,7 @@ RUN npm run typecheck && npm run build
 FROM python:3.13-slim-bookworm AS runtime-base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
     SMART_DATA_AGENT_ENV=production \
     SMART_DATA_AGENT_STATIC_ROOT=/app/dist \
     SMART_DATA_AGENT_DATA_WAREHOUSE=csv \

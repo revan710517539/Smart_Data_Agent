@@ -5,11 +5,13 @@ import json
 import threading
 import unittest
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import quote
 
 from backend.authz import normalize_tenant_id
 from backend.platform.api.routes.analysis import _resolve_selected_model
+from backend.platform.api.routes.settings import _available_system_parameter_scopes, handle_system_config_get
 from backend.platform.api.server import create_server
 from backend.platform.bootstrap import build_local_platform
 from backend.platform.settings import (
@@ -109,6 +111,72 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
         self.assertEqual(preset["value"], "")
         self.assertEqual(preset["availableModels"], list(DEFAULT_RELAY_SHARED_MODELS))
         self.assertEqual(preset["enabledModels"], list(DEFAULT_RELAY_SHARED_MODELS))
+
+    def test_system_config_skips_authorized_but_unprovisioned_parameter_scopes(self) -> None:
+        class RelationalStoreStub:
+            def get_model(self, tenant_id: str, model_id: str, reveal_secret: bool = False):
+                return None
+
+            def list_models(self, tenant_id: str, reveal_secret: bool = False):
+                return []
+
+            def list_speech_integrations(self, tenant_id: str, reveal_secret: bool = False):
+                return []
+
+            def list_system_params(self, tenant_id: str):
+                if tenant_id != "tenant:sda-internal":
+                    raise KeyError("tenant_not_provisioned")
+                return [{"id": "ai_analysis_concurrency", "name": "AI分析并发上限", "value": "2", "category": "system", "description": ""}]
+
+        repository = SimpleNamespace(
+            list_user_assignments=lambda user_id: [SimpleNamespace(tenant_id="*")],
+        )
+        broker = SimpleNamespace(
+            enforcer=SimpleNamespace(repository=repository),
+            require_resource=lambda context, resource, action: None,
+        )
+        handler = SimpleNamespace(
+            services=SimpleNamespace(system_config_store=RelationalStoreStub(), permission_broker=broker),
+            _request_context=lambda params: SimpleNamespace(user_id="u_super_admin", tenant_id="tenant:sda-internal"),
+            _require_system_config_permission=lambda context, action: None,
+        )
+        response: dict[str, object] = {}
+        handler._send_json = lambda payload: response.update(payload)
+
+        with patch.dict("os.environ", {"SMART_DATA_AGENT_DEFAULT_MODEL_API_KEY": ""}):
+            handle_system_config_get(handler, "")
+
+        self.assertEqual(response["parameter_tenant_ids"], ["tenant:sda-internal"])
+        self.assertEqual(response["system_params"], [{
+            "id": "ai_analysis_concurrency",
+            "name": "AI分析并发上限",
+            "value": "2",
+            "category": "system",
+            "description": "",
+            "tenantId": "tenant:sda-internal",
+            "institution": "sda-internal",
+        }])
+
+    def test_system_config_does_not_hide_other_parameter_store_failures(self) -> None:
+        store = SimpleNamespace(
+            list_system_params=lambda tenant_id: (_ for _ in ()).throw(KeyError("unexpected_store_failure")),
+        )
+        repository = SimpleNamespace(
+            list_user_assignments=lambda user_id: [],
+        )
+        broker = SimpleNamespace(
+            enforcer=SimpleNamespace(repository=repository),
+            require_resource=lambda context, resource, action: None,
+        )
+        handler = SimpleNamespace(
+            services=SimpleNamespace(system_config_store=store, permission_broker=broker),
+        )
+
+        with self.assertRaisesRegex(KeyError, "unexpected_store_failure"):
+            _available_system_parameter_scopes(
+                handler,
+                SimpleNamespace(user_id="u_super_admin", tenant_id="tenant:sda-internal"),
+            )
 
     def test_default_preset_contains_no_credential(self) -> None:
         preset = default_relay_model_preset()

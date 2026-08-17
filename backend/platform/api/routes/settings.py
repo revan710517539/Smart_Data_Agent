@@ -28,15 +28,16 @@ def handle_system_config_get(handler: Any, query: str) -> None:
         if not any(str(model.get("id") or "") == DEFAULT_RELAY_MODEL_ID for model in models):
             models = [default_relay_model_preset(), *models]
         speech_integrations = _list_account_speech_integrations(handler, context, config_scope)
-        parameter_tenant_ids = _authorized_system_config_tenant_ids(handler, context)
+        parameter_scopes = _available_system_parameter_scopes(handler, context)
+        parameter_tenant_ids = tuple(tenant_id for tenant_id, _ in parameter_scopes)
         system_params = [
             {
                 **param,
                 "tenantId": tenant_id,
                 "institution": _institution_label(tenant_id),
             }
-            for tenant_id in parameter_tenant_ids
-            for param in handler.services.system_config_store.list_system_params(tenant_id)
+            for tenant_id, params in parameter_scopes
+            for param in params
         ]
         handler._send_json(
             {
@@ -303,6 +304,29 @@ def _authorized_system_config_tenant_ids(handler: Any, context: Any) -> tuple[st
             continue
         allowed.append(tenant_id)
     return tuple(allowed)
+
+
+def _available_system_parameter_scopes(
+    handler: Any,
+    context: Any,
+) -> tuple[tuple[str, list[dict[str, Any]]], ...]:
+    """Read only authorized scopes that exist in the relational tenant catalog.
+
+    A global administrator's wildcard grant is broader than the set of tenants
+    already provisioned in a minimal deployment. Missing tenants therefore
+    contribute no parameter rows; every other storage failure remains fatal.
+    """
+
+    available: list[tuple[str, list[dict[str, Any]]]] = []
+    for tenant_id in _authorized_system_config_tenant_ids(handler, context):
+        try:
+            params = handler.services.system_config_store.list_system_params(tenant_id)
+        except KeyError as exc:
+            if exc.args != ("tenant_not_provisioned",):
+                raise
+            continue
+        available.append((tenant_id, params))
+    return tuple(available)
 
 
 def _list_account_models(handler: Any, context: Any, config_scope: str) -> list[dict[str, Any]]:

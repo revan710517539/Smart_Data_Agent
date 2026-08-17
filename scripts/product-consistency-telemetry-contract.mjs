@@ -15,11 +15,12 @@ const files = await Promise.all([
   "src/app/services/interactionTelemetry.ts",
   "backend/platform/api/routes/interaction_events.py",
   "backend/platform/api/routes/auth.py",
+  "backend/platform/access/service.py",
   "backend/platform/interaction_events.py",
   "backend/platform/database/mysql/migrations/0031_user_interaction_events.sql",
 ].map((path) => readFile(path, "utf8")));
 
-const [visualReport, selfAnalysis, dataAssets, relationships, login, pagination, layout, systemSettings, visualCard, supervisor, telemetryClient, telemetryRoute, authRoute, telemetryStore, migration] = files;
+const [visualReport, selfAnalysis, dataAssets, relationships, login, pagination, layout, systemSettings, visualCard, supervisor, telemetryClient, telemetryRoute, authRoute, accessService, telemetryStore, migration] = files;
 
 assert.ok(!visualReport.includes('label="存主题"'), "可视化报表不得显示存主题按钮");
 assert.ok(!selfAnalysis.includes('handleSaveTarget("topic")'), "智能分析不得显示存主题入口");
@@ -53,6 +54,7 @@ assert.match(systemSettings, /tenantId: tenantIdForInstitution\(nextTenant\)/, "
 assert.ok(!systemSettings.includes("institutionOptions={isSuperAdmin ? operatingTenantNames"), "超级管理员也不得向未登记静态机构授权");
 assert.match(systemSettings, /setUserEditorError\(message\)[\s\S]*?setAccessNotice\(message\)/, "新增用户失败必须保留弹窗和表单并显示具体原因");
 assert.match(systemSettings, /role="alert" aria-live="polite"[\s\S]*?\{saveError\}/, "新增用户校验错误必须在弹窗内可访问地呈现");
+assert.match(accessService, /existing_by_email and not requested_user_id[\s\S]*?用户邮箱已存在/, "新增用户不得用已存在邮箱隐式覆盖已有账号");
 assert.match(selfAnalysis, /reportKindTab === "analysis" \? "新建智能分析" : "新建可视化报表"/);
 assert.ok(!selfAnalysis.includes(">全部</button>"), "我的报表智能分析 Tab 不得保留全部按钮");
 

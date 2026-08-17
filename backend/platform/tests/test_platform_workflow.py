@@ -24,7 +24,7 @@ from backend.platform.api.router import API_ROUTE_REGISTRY
 from backend.platform.api.server import create_server
 from backend.platform.application import ApplicationActionUnavailable, SQLiteApplicationStore, UnsupportedApplicationAction
 from backend.platform.bootstrap import build_local_platform, build_supersonic_client_from_env
-from backend.authz import normalize_tenant_id, tenant_role_id
+from backend.authz import SUPER_ADMIN_ROLE_ID, normalize_tenant_id, tenant_role_id
 from backend.authz.models import PermissionPolicy, Role, RoleAssignment, RoleLevel
 from backend.platform.data_access import JSONDataWarehouse, SQLDataWarehouse
 from backend.platform.data_processing import PythonSandbox
@@ -1746,6 +1746,56 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status, 400)
         self.assertEqual(payload["error"], "access_user_role_not_found")
         self.assertEqual(payload["message"], "角色不存在，请检查：华兴银行 · 不存在的角色")
+
+    def test_http_access_user_create_rejects_existing_email_without_overwriting_account(self) -> None:
+        tenant_id = normalize_tenant_id("华兴银行")
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/access/user",
+                    body=json.dumps(
+                        {
+                            "user_id": "u_super_admin",
+                            "tenant_id": tenant_id,
+                            "user": {
+                                "id": "",
+                                "name": "不应覆盖管理员",
+                                "department": "华兴银行",
+                                "email": "xujingbo-jk@qifu.com",
+                                "status": "active",
+                                "lastLogin": "未登录",
+                                "tenantRoles": [
+                                    {"tenant": "华兴银行", "tenantId": tenant_id, "role": "操作员"},
+                                ],
+                            },
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                profile = server.services.access_service.user_store.get_profile("u_super_admin")
+                assignments = server.services.permission_broker.enforcer.repository.list_user_assignments(
+                    "u_super_admin"
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertEqual(response.status, 400)
+        self.assertEqual(payload["error"], "access_user_email_conflict")
+        self.assertEqual(payload["message"], "该邮箱已绑定其他用户，请检查邮箱或编辑已有用户。")
+        self.assertIsNotNone(profile)
+        self.assertEqual(profile.name, "胥京波")
+        self.assertTrue(any(assignment.role_id == SUPER_ADMIN_ROLE_ID for assignment in assignments))
 
     def test_access_role_policy_save_rewrites_rbac_policies(self) -> None:
         tenant_id = normalize_tenant_id("华兴银行")

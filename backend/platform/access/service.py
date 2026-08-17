@@ -280,8 +280,12 @@ class AccessControlService:
     def upsert_user(self, context: ExecutionContext, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise ValueError("user must be an object.")
+        requested_user_id = str(payload.get("id") or payload.get("user_id") or "").strip()
+        requested_email = str(payload.get("email") or "").strip()
+        existing_by_email = self.user_store.get_profile_by_email(requested_email) if requested_email else None
+        if existing_by_email and not requested_user_id:
+            raise ValueError("用户邮箱已存在，请检查……")
         profile = self._profile_from_payload(payload)
-        existing_by_email = self.user_store.get_profile_by_email(profile.email)
         if existing_by_email and existing_by_email.user_id != profile.user_id:
             raise ValueError("用户邮箱已存在，请检查……")
 

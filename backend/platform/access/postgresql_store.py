@@ -65,25 +65,23 @@ class PostgreSQLUserDirectoryStore(UserDirectoryStore):
                 with connection.cursor() as cursor:
                     cursor.execute(
                         """
-                        WITH candidates AS (
-                            SELECT m.membership_id,
-                                   (
-                                       SELECT o.org_unit_id
-                                       FROM platform_org_units o
-                                       WHERE o.tenant_id = m.tenant_id
-                                         AND o.org_name = %s AND o.status = 'active'
-                                       ORDER BY o.path LIMIT 1
-                                   ) AS org_unit_id
-                            FROM platform_user_tenant_memberships m
-                            WHERE m.user_id = %s AND m.membership_status = 'active'
-                        )
                         UPDATE platform_user_tenant_memberships m
-                        SET org_unit_id = candidates.org_unit_id
-                        FROM candidates
-                        WHERE m.membership_id = candidates.membership_id
-                          AND candidates.org_unit_id IS NOT NULL
+                        SET org_unit_id = (
+                            SELECT o.org_unit_id
+                            FROM platform_org_units o
+                            WHERE o.tenant_id = m.tenant_id
+                              AND o.org_name = %s AND o.status = 'active'
+                            ORDER BY o.path LIMIT 1
+                        )
+                        WHERE m.user_id = %s AND m.membership_status = 'active'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM platform_org_units o
+                              WHERE o.tenant_id = m.tenant_id
+                                AND o.org_name = %s AND o.status = 'active'
+                          )
                         """,
-                        (department, user_key),
+                        (department, user_key, department),
                     )
         return UserProfile(
             user_id=profile.user_id,

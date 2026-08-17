@@ -9,6 +9,11 @@ from backend.platform.database.identity import PostgreSQLIdentityResolver
 from backend.platform.database.postgresql import PostgreSQLConnectionPool
 from backend.platform.observability import RuntimeEvent, TraceSpan
 from backend.platform.orchestration import AnalysisTask
+from backend.platform.settings.store import (
+    account_system_config_scope,
+    system_config_storage_code,
+    system_config_storage_tenant,
+)
 
 from .repository import (
     AnalysisTaskRepository,
@@ -620,15 +625,12 @@ class PostgreSQLAnalysisTaskRepository(AnalysisTaskRepository):
         model_call: dict[str, Any],
     ) -> None:
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT model_integration_id
-                FROM platform_model_integrations
-                WHERE tenant_id = %s AND integration_code = %s
-                """,
-                (tenant_key, model_call["model_integration_id"]),
+            row = self._model_integration_row(
+                connection,
+                tenant_key,
+                actor_key,
+                model_call["model_integration_id"],
             )
-            row = cursor.fetchone()
             if not row:
                 raise KeyError("model_integration_not_registered")
             model_key = _value(row, "model_integration_id", 0)
@@ -674,6 +676,55 @@ class PostgreSQLAnalysisTaskRepository(AnalysisTaskRepository):
                     model_call["error_code"][:100], actor_key,
                 ),
             )
+
+    @staticmethod
+    def _model_integration_row(
+        connection: Any,
+        tenant_key: Any,
+        actor_key: Any,
+        integration_code: str,
+    ) -> Any | None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT model_integration_id
+                FROM platform_model_integrations
+                WHERE tenant_id = %s AND integration_code = %s
+                """,
+                (tenant_key, integration_code),
+            )
+            row = cursor.fetchone()
+            if row:
+                return row
+            cursor.execute(
+                "SELECT external_subject FROM platform_user_profiles WHERE user_id = %s AND status = 'active'",
+                (actor_key,),
+            )
+            subject_row = cursor.fetchone()
+        if not subject_row:
+            return None
+        external_subject = str(_value(subject_row, "external_subject", 0) or "").strip()
+        if not external_subject:
+            return None
+        account_scope = account_system_config_scope(external_subject)
+        global_tenant_key = PostgreSQLIdentityResolver.tenant_id(
+            connection,
+            system_config_storage_tenant(account_scope),
+            required=False,
+        )
+        if global_tenant_key is None:
+            return None
+        stored_code = system_config_storage_code(account_scope, integration_code)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT model_integration_id
+                FROM platform_model_integrations
+                WHERE tenant_id = %s AND integration_code = %s
+                """,
+                (global_tenant_key, stored_code),
+            )
+            return cursor.fetchone()
 
     @staticmethod
     def _task_from_row(row: Any) -> dict[str, Any]:

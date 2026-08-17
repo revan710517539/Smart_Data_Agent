@@ -100,7 +100,7 @@ def handle_metric_dictionary_import(handler: Any) -> None:
         rows = parse_metric_workbook(str(payload.get("file_content_base64") or ""))
         existing = handler.services.metric_dictionary_store.list(context.tenant_id)
         existing_names = {str(metric.get("metricName") or "").strip() for metric in existing}
-        duplicate_names = _duplicate_metric_names(rows, existing_names)
+        rows, duplicate_names, skipped_names, skipped_count = _prepare_metric_import(rows, existing_names)
         if duplicate_names:
             raise ValueError(f"metric_dictionary_duplicate_names:{'、'.join(duplicate_names[:20])}")
         used_ids = {str(metric.get("metricId") or "").strip() for metric in existing}
@@ -116,8 +116,22 @@ def handle_metric_dictionary_import(handler: Any) -> None:
             next_number += 1
         for metric in created:
             handler.services.metric_dictionary_store.upsert(context.tenant_id, metric, updated_by=context.user_id)
-        handler._write_audit(context, "metric.dictionary.import", "metric_dictionary", "xlsx", {"file_name": file_name, "created": len(created), "skipped": 0})
-        handler._send_json({"tenant_id": context.tenant_id, "created": created, "created_count": len(created), "skipped_count": 0, "skipped_names": []})
+        handler._write_audit(
+            context,
+            "metric.dictionary.import",
+            "metric_dictionary",
+            "xlsx",
+            {"file_name": file_name, "created": len(created), "skipped": skipped_count},
+        )
+        handler._send_json(
+            {
+                "tenant_id": context.tenant_id,
+                "created": created,
+                "created_count": len(created),
+                "skipped_count": skipped_count,
+                "skipped_names": skipped_names,
+            }
+        )
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
         send_route_exception(handler, exc)
 
@@ -305,14 +319,51 @@ def _next_metric_number(metric_ids: set[str]) -> int:
     return max(values, default=-1) + 1
 
 
-def _duplicate_metric_names(rows: list[dict[str, Any]], existing_names: set[str]) -> list[str]:
-    workbook_name_counts: dict[str, int] = {}
+def _prepare_metric_import(
+    rows: list[dict[str, Any]],
+    existing_names: set[str],
+) -> tuple[list[dict[str, Any]], list[str], list[str], int]:
+    """Collapse exact workbook duplicates without weakening name conflicts.
+
+    A repeated row with the same normalized payload carries no second metric
+    definition, so importing it once is lossless.  The same name with a
+    different payload, or any name already present in the tenant dictionary,
+    still blocks the entire batch before the first write.
+    """
+
+    accepted: list[dict[str, Any]] = []
+    seen: dict[str, tuple[tuple[str, str], ...]] = {}
+    conflicts: list[str] = []
+    skipped_names: list[str] = []
+    skipped_count = 0
     for metric in rows:
         name = str(metric.get("metricName") or "").strip()
-        workbook_name_counts[name] = workbook_name_counts.get(name, 0) + 1
-    return list(dict.fromkeys(
+        signature = tuple(sorted((str(key), str(value or "").strip()) for key, value in metric.items()))
+        if name in existing_names:
+            conflicts.append(name)
+        previous = seen.get(name)
+        if previous is None:
+            seen[name] = signature
+            accepted.append(metric)
+            continue
+        if previous == signature:
+            skipped_count += 1
+            skipped_names.append(name)
+            continue
+        conflicts.append(name)
+    conflict_names = set(conflicts)
+    ordered_conflicts = list(dict.fromkeys(
         str(metric.get("metricName") or "").strip()
         for metric in rows
-        if str(metric.get("metricName") or "").strip() in existing_names
-        or workbook_name_counts.get(str(metric.get("metricName") or "").strip(), 0) > 1
+        if str(metric.get("metricName") or "").strip() in conflict_names
     ))
+    return (
+        accepted,
+        ordered_conflicts,
+        list(dict.fromkeys(skipped_names)),
+        skipped_count,
+    )
+
+
+def _duplicate_metric_names(rows: list[dict[str, Any]], existing_names: set[str]) -> list[str]:
+    return _prepare_metric_import(rows, existing_names)[1]

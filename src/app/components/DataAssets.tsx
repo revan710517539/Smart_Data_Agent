@@ -522,7 +522,10 @@ export function DataAssets() {
       setMetrics((current) => [...result.created, ...current]);
       setMetricDataSource("backend");
       setMetricPage(1);
-      setMetricNotice(`已新增 ${result.created_count} 条指标，原指标未被覆盖。`);
+      const skippedNotice = result.skipped_count
+        ? `；已合并 ${result.skipped_count} 条完全相同的重复行（${result.skipped_names.join("、")}）`
+        : "";
+      setMetricNotice(`已新增 ${result.created_count} 条指标${skippedNotice}，原指标未被覆盖。`);
       setMetricImportOpen(false);
       setMetricImportFile(null);
       setMetricImportNotice("");
@@ -928,7 +931,7 @@ function MetricBatchImportModal({
         <div className="flex items-center justify-between border-b border-[#f0f0f2] px-5 py-4">
           <div>
             <h3 className="text-[14px] text-[#1d1d1f]">批量添加指标</h3>
-            <p className="mt-0.5 text-[11px] text-[#8a8a8e]">上传标准 Excel 后新增指标；发现重名时整批不写入，并提示检查。</p>
+            <p className="mt-0.5 text-[11px] text-[#8a8a8e]">上传标准 Excel 后新增指标；完全相同的重复行只导入一次，口径冲突时整批不写入。</p>
           </div>
           <button type="button" onClick={onClose} disabled={importing} className="rounded-lg px-3 py-1.5 text-[12px] text-[#8a8a8e] hover:bg-[#f2f2f7] disabled:opacity-40">关闭</button>
         </div>
@@ -943,7 +946,7 @@ function MetricBatchImportModal({
             <span>✓ 读取：名称、口径、取值逻辑、表名与维度</span>
             <span>✓ 同步：场景、来源、统计时间与引用文档</span>
             <span>✓ 保留：原指标名称、数据机构与备注</span>
-            <span>✓ 规则：重复名称整批失败，已有指标不改动</span>
+            <span>✓ 规则：相同重复行自动合并，冲突名称整批失败</span>
           </div>
           {notice && <div className="rounded-lg bg-[#fafbfc] px-3 py-2 text-[12px] leading-[1.6] text-[#636366]">{notice}</div>}
         </div>

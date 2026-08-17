@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
+import { createClientUuid } from "../utils/clientUuid";
 import {
   createAutomationTask,
   fetchAutomationWorkspace,
@@ -317,7 +318,7 @@ export function DataAgentWorkspace() {
         });
         setWorkspaceNotice("任务已暂停；历史洞察与运行证据仍保留");
       } else {
-        const requestId = `manual-${crypto.randomUUID()}`;
+        const requestId = `manual-${createClientUuid()}`;
         const response = await triggerAutomationTask({ tenantId, userId, taskId: task.id, idempotencyKey: requestId });
         setWorkspaceNotice(`任务已进入持久队列：${response.run.automation_run_id} · ${response.run.status}`);
       }
@@ -990,7 +991,7 @@ function taskFormToAutomationDefinition(
 ): Record<string, unknown> {
   const scheduleExpression = humanScheduleToCron(form.schedule);
   const triggerType = scheduleExpression ? "schedule" : "manual";
-  const taskCode = existing?.taskCode || `ui_automation_${crypto.randomUUID().replaceAll("-", "")}`;
+  const taskCode = existing?.taskCode || `ui_automation_${createClientUuid().replaceAll("-", "")}`;
   const isMemory = form.automationKind === "memory";
   const isAutomaticAnalysis = form.automationKind === "automatic_analysis";
   const selectedMetrics = metricOptions.filter((metric) => form.selectedMetricIds.includes(metric.optionId));

@@ -15,6 +15,7 @@ export type ModelIntegration = {
   testStatus?: "untested" | "connected" | "failed" | "mock";
   testMessage?: string;
   testResponse?: string;
+  requiresCredential?: boolean;
   status: "available" | "draft";
 };
 

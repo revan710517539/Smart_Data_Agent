@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { usePlatformContext } from "../platform/PlatformContext";
+import { createClientUuid } from "../utils/clientUuid";
 import type { MetricDictionaryItem } from "../data/metricDictionary";
 import { cancelAsyncAnalysisRun, deleteAnalysisHistoryTask, fetchAnalysisTask, fetchAnalysisHistory, fetchAnalysisHistoryDetail, waitForSelfAnalysis, type AnalysisProgressStep, type AnalysisTraceSpan, type BackendAnalysisPlan, type BackendAnalysisResponse } from "../services/analysisApi";
 import { ExecutionHistoryDrawer } from "./self-analysis/ExecutionHistoryDrawer";
@@ -1228,7 +1229,7 @@ export function SelfAnalysis() {
         question: nextQuery,
         tenantId,
         userId,
-        requestId: crypto.randomUUID(),
+        requestId: createClientUuid(),
         signal: waitController.signal,
         onRun: (run) => {
           if (analysisGeneration !== analysisGenerationRef.current || waitController.signal.aborted) return;
@@ -1492,7 +1493,7 @@ export function SelfAnalysis() {
         question: nextQuery,
         tenantId,
         userId,
-        requestId: crypto.randomUUID(),
+        requestId: createClientUuid(),
         signal: waitController.signal,
         onRun: (run) => {
           if (analysisGeneration !== analysisGenerationRef.current || waitController.signal.aborted) return;

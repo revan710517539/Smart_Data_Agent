@@ -35,6 +35,8 @@ const visualCommand = read("src/app/components/visualization/visualizationComman
 const messageBoard = read("src/app/components/message-board/MessageBoardPanel.tsx");
 const messageBoardAdmin = read("src/app/components/MessageBoardManagement.tsx");
 const dataAssets = read("src/app/components/DataAssets.tsx");
+const systemSettings = read("src/app/components/SystemSettings.tsx");
+const defaultModels = read("backend/platform/settings/default_models.py");
 const analysisApi = read("src/app/services/analysisApi.ts");
 const metricRoutes = read("backend/platform/api/routes/metrics.py");
 const csvFolder = read("backend/platform/ingestion/csv_folder.py");
@@ -105,7 +107,8 @@ const checks = [
   [!dashboard.includes("setSelectedBank") && !dashboard.includes("全部分行</option>") && !dashboard.includes('runDashboardAction("select_bank"'), "多机构分析右上角不得保留分支机构下拉选项"],
   [!comments.includes("border-t-[4px]") && !comments.includes("ring-2 ring-[#fbbc04]") && !analysis.includes("ring-2 ring-[#0a66c2]") && !messageBoard.includes("shadow-sm shadow-black/[0.03]"), "评论、AI 分析和留言板子模块必须统一为飞书式浅灰单边框，不得各用粗顶边或双重光环"],
   [pendingAnalysis.includes("smart-data-agent:pending-analysis") && selfAnalysis.includes("resumeRunId: pending.runId") && selfAnalysis.includes("analysisWaitAbortRef.current?.abort()") && analysisApi.includes("waitForAnalysisPoll") && analysisApi.includes("signal?: AbortSignal"), "智能分析运行必须持久保存运行句柄，离开页面停止旧轮询，返回后从同一任务继续"],
-  [dataAssets.includes("发现重名时整批不写入") && dataAssets.includes("重复名称整批失败") && metricRoutes.includes("_duplicate_metric_names") && metricRoutes.includes("metric_dictionary_duplicate_names"), "批量指标导入发现文件内或指标库重名时必须整批失败，不得跳过后继续写入"],
+  [dataAssets.includes("完全相同的重复行只导入一次") && dataAssets.includes("相同重复行自动合并") && dataAssets.includes("冲突名称整批失败") && metricRoutes.includes("_prepare_metric_import") && metricRoutes.includes("metric_dictionary_duplicate_names"), "批量指标导入只能合并完全相同的文件内重复行；定义冲突或指标库已有名称仍须整批失败"],
+  [systemSettings.includes('model.requiresCredential ? "待配置"') && systemSettings.includes("model.requiresCredential && !modelEditDraft.value.trim()") && defaultModels.includes("DEFAULT_RELAY_SHARED_MODELS") && defaultModels.includes('"gpt-5.5"'), "未配置默认模型密钥时必须显示安全预置目录和待配置状态，不得伪装为已连接或把密钥写入源码"],
   [weekly.includes('{ id: afterParagraphId, type: "paragraph" as const, text: afterText }') && weekly.includes('data-comment-editor-id="${afterParagraphId}"'), "周报文字模块粘贴图片后必须始终创建并聚焦图片下方文本行"],
   [csvFolder.includes("_crawler_source_roots") && csvFolder.includes('self.root / "csv" / source_id') && csvFolder.includes("institutionId") && !csvFolder.includes("self.root / \"csv\"\n"), "SDA 必须按 Crawler 机构绑定读取 source-id 输出目录，不得无边界扫描公共 csv 根目录"],
 ];

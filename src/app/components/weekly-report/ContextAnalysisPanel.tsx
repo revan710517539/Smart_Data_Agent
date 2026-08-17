@@ -21,6 +21,7 @@ import {
 } from "../../services/analysisWorkspaceApi";
 import type { AnalysisSkillAsset, TopicTableAsset } from "../../services/dataAssetApi";
 import { fetchAnalysisRuntimeConfig } from "../../services/systemConfigApi";
+import { createClientUuid } from "../../utils/clientUuid";
 import { AnalysisProgressPanel } from "../self-analysis/AnalysisProgressPanel";
 import { TrustedArtifactPanel } from "../analysis-workspace/TrustedArtifactPanel";
 import { completedProgressSteps } from "../self-analysis/analysisRuntime";
@@ -513,7 +514,7 @@ export function WeeklyContextAnalysisPanel({
         question: nextQuestion,
         tenantId,
         userId,
-        requestId: crypto.randomUUID(),
+        requestId: createClientUuid(),
         onRun: (run) => {
           if (mountedRef.current) setProgressSteps(run.progress_steps || []);
         },

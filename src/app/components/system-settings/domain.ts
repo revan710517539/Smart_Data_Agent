@@ -287,6 +287,11 @@ export function modelSourceLabel(source: string) {
 }
 
 export const modelOptionDescriptions: Record<string, string> = {
+  "360/deepseek-v4-flash": "共享通用模型，适合经营分析、归因判断和快速长文本总结。",
+  "360/deepseek-v4-pro": "共享复杂推理模型，适合策略分析和多步骤经营诊断。",
+  "deepbank/glm-5.2": "共享中文业务模型，适合摘要、周报和经营分析。",
+  "glm-5.2-codex": "共享代码与 SQL 模型，适合脚本、查询和结构化分析任务。",
+  "gpt-5.5": "共享通用高级模型，适合综合推理、报告生成和结果复核。",
   "deepseek-v4-flash": "适合经营分析、归因判断和长文本总结，响应速度较快。",
   "deepseek-v4-pro": "适合复杂推理、策略分析和多步骤经营诊断。",
   "gpt-5.3-codex-spark": "适合代码、SQL、脚本和结构化分析任务。",

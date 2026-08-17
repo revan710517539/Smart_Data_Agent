@@ -20,6 +20,7 @@ import {
 } from "../self-analysis/domain";
 import { agentActionRegistry, type AgentActionDefinition } from "./actionRegistry";
 import { boundedInteractionText, trackInteraction } from "../../services/interactionTelemetry";
+import { createClientUuid } from "../../utils/clientUuid";
 
 type Message = {
   id: string;
@@ -140,7 +141,7 @@ export function AgentSupervisor() {
 
   const appendMessage = (message: Omit<Message, "id">) => {
     if (message.role !== "user") trackInteraction({ eventName: "assistant_reply", resourceType: "agent_supervisor", extension: { reply: boundedInteractionText(message.content), role: message.role } });
-    setMessages((current) => [...current, { ...message, id: crypto.randomUUID() }]);
+    setMessages((current) => [...current, { ...message, id: createClientUuid() }]);
   };
 
   const clearVoiceSilenceTimer = () => {
@@ -334,7 +335,7 @@ export function AgentSupervisor() {
     const firstQuestion = next.find((item) => item.role === "user")?.content;
     if (!firstQuestion) return;
     const entry: StoredConversation = {
-      id: crypto.randomUUID(),
+      id: createClientUuid(),
       title: firstQuestion.slice(0, 30),
       updatedAt: new Date().toISOString(),
       messages: next.slice(-30),
@@ -366,7 +367,7 @@ export function AgentSupervisor() {
     const question = (override ?? input).trim();
     if (!question || running) return;
     trackInteraction({ eventName: "assistant_question_submit", resourceType: "agent_supervisor", extension: { question: boundedInteractionText(question) } });
-    const userMessage: Message = { id: crypto.randomUUID(), role: "user", content: question };
+    const userMessage: Message = { id: createClientUuid(), role: "user", content: question };
     setMessages((current) => {
       const next = [...current, userMessage];
       persistHistory(next);
@@ -679,7 +680,7 @@ async function runAnalysis(question: string, context: { tenantId: string; userId
     question,
     tenantId: context.tenantId,
     userId: context.userId,
-    requestId: crypto.randomUUID(),
+    requestId: createClientUuid(),
     pageContext: {
       route: "agent_supervisor",
       selected_institution: context.selectedInstitution,

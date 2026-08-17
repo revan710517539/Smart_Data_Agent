@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -64,6 +65,8 @@ DATA_CONNECTION_FIELDS = (
 SYSTEM_PARAM_FIELDS = ("id", "name", "value", "category", "description")
 MASKED_SECRET = "******"
 ACCOUNT_CONFIG_SCOPE_PREFIX = "account:"
+SYSTEM_CONFIG_SCOPE_PREFIX = "system:"
+GLOBAL_SYSTEM_CONFIG_TENANT = "__global__"
 
 DEFAULT_SYSTEM_PARAMS = [
     {"id": "acquisition_max_rows", "name": "单次采集最大行数", "value": "50000", "category": "data", "description": "数据获取任务单次允许写入的最大行数。"},
@@ -85,6 +88,33 @@ SYSTEM_PARAM_INTEGER_RANGES = {
 def account_system_config_scope(user_id: str) -> str:
     normalized = str(user_id or "").strip()
     return f"{ACCOUNT_CONFIG_SCOPE_PREFIX}{normalized or 'anonymous'}"
+
+
+def system_config_storage_tenant(scope: str) -> str:
+    return GLOBAL_SYSTEM_CONFIG_TENANT if _is_virtual_system_config_scope(scope) else str(scope)
+
+
+def system_config_storage_code(scope: str, integration_code: str) -> str:
+    prefix = system_config_storage_prefix(scope)
+    return f"{prefix}{integration_code}" if prefix else str(integration_code)
+
+
+def system_config_external_code(scope: str, stored_code: str) -> str:
+    prefix = system_config_storage_prefix(scope)
+    return str(stored_code).removeprefix(prefix) if prefix else str(stored_code)
+
+
+def system_config_storage_prefix(scope: str) -> str:
+    normalized = str(scope or "").strip()
+    if not _is_virtual_system_config_scope(normalized):
+        return ""
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
+    return f"cfg_{digest}__"
+
+
+def _is_virtual_system_config_scope(scope: str) -> bool:
+    normalized = str(scope or "").strip()
+    return normalized.startswith(ACCOUNT_CONFIG_SCOPE_PREFIX) or normalized.startswith(SYSTEM_CONFIG_SCOPE_PREFIX)
 
 
 class InMemorySystemConfigStore:

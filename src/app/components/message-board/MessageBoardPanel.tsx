@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ClipboardEvent } from "react";
 import { AudioLines, ChevronDown, ChevronRight, LoaderCircle, MessageSquarePlus, Plus, Save, X } from "lucide-react";
 import { fetchAnalysisRuntimeConfig } from "../../services/systemConfigApi";
+import { createClientUuid } from "../../utils/clientUuid";
 import {
   deleteMessageBoardEntry,
   createMessageBoardEntry,
@@ -409,5 +410,5 @@ function quoteForTarget(target?: CommentTarget | null): MessageBoardQuote | Reco
   return { target_id: target.id, target_type: target.type, label: target.label, selected_text: selectedText.slice(0, 1000) };
 }
 
-function newMessageId() { return `mb_${crypto.randomUUID().replaceAll("-", "")}`; }
+function newMessageId() { return `mb_${createClientUuid().replaceAll("-", "")}`; }
 function formatDate(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date); }

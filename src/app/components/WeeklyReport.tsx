@@ -23,6 +23,7 @@ import {
   Send,
   ThumbsUp,
 } from "lucide-react";
+import { createClientUuid } from "../utils/clientUuid";
 import {
   CartesianGrid,
   Line,
@@ -848,7 +849,7 @@ export function WeeklyReport() {
           : sourceTask?.question || block.title,
         tenantId,
         userId,
-        requestId: crypto.randomUUID(),
+        requestId: createClientUuid(),
         onRun: (run) => {
           if (analysisRevisionRef.current[block.id] === revision) {
             analysisRunRef.current[block.id] = run.automation_run_id;

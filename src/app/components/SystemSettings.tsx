@@ -1948,7 +1948,7 @@ function ModelAccessModal({
   }, [models]);
 
   const saveModelEdit = async (model: ModelIntegration) => {
-    if (!modelEditDraft.name.trim() || !modelEditDraft.key.trim()) return;
+    if (!modelEditDraft.name.trim() || !modelEditDraft.key.trim() || (model.requiresCredential && !modelEditDraft.value.trim())) return;
     try {
       await onUpdate(model, modelEditDraft);
       setEditingModelId("");
@@ -1996,7 +1996,7 @@ function ModelAccessModal({
   }, [editingSpeechId, speechEditDraft, speechIntegrations]);
 
   const startModelEdit = (model: ModelIntegration) => {
-    if (model.id === defaultRelayModelId) return;
+    if (model.id === defaultRelayModelId && !model.requiresCredential) return;
     setEditingModelId(model.id);
     setModelEditDraft({ name: model.name, modelName: modelSourceLabel(model.modelName), applicationModule: "global_text_model", key: model.key, value: "" });
   };
@@ -2098,8 +2098,8 @@ function ModelAccessModal({
                         <>
                           <span className="truncate text-left text-[12px] text-[#1d1d1f]">{model.name}</span>
                           <span className="truncate text-[11px] text-[#3a3a3c]">{modelSourceLabel(model.modelName)}</span>
-                          <span className="truncate text-[11px] text-[#8a8a8e]" title="点击编辑后查看和修改">API地址已配置</span>
-                          <span className="font-mono text-[11px] text-[#636366]" title="API密钥已隐藏">{maskApiSecret(model.value)}</span>
+                          <span className="truncate text-[11px] text-[#8a8a8e]" title={model.requiresCredential ? model.key : "点击编辑后查看和修改"}>{model.requiresCredential ? "系统预置地址" : "API地址已配置"}</span>
+                          <span className="font-mono text-[11px] text-[#636366]" title={model.requiresCredential ? "需要管理员配置受保护密钥" : "API密钥已隐藏"}>{model.requiresCredential ? "待配置" : maskApiSecret(model.value)}</span>
                         </>
                       )}
                       <span className="relative z-20 flex min-w-[112px] justify-end gap-1.5 bg-white/95">
@@ -2110,7 +2110,7 @@ function ModelAccessModal({
                             setExpandedModelId(model.id);
                             onTest(model);
                           }}
-                          disabled={Boolean(testingModelId) || isEditing}
+                          disabled={Boolean(testingModelId) || isEditing || model.requiresCredential}
                           className={`relative rounded-md p-1.5 transition-colors ${
                             isTesting
                               ? "cursor-wait bg-[#f2f2f7] text-[#c7c7cc]"
@@ -2128,7 +2128,7 @@ function ModelAccessModal({
                             if (isEditing) void saveModelEdit(model);
                             else startModelEdit(model);
                           }}
-                          disabled={model.id === defaultRelayModelId}
+                          disabled={model.id === defaultRelayModelId && !model.requiresCredential}
                           className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f] disabled:cursor-not-allowed disabled:opacity-30"
                           aria-label={`修改${model.name}模型接入`}
                         >
@@ -2179,6 +2179,7 @@ function ModelAccessModal({
                                   type="checkbox"
                                   checked={enabledModels.includes(childModel)}
                                   onChange={() => toggleEnabledModel(model, childModel)}
+                                  disabled={model.requiresCredential}
                                   className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[#1d1d1f]"
                                 />
                                 <span className="min-w-0">

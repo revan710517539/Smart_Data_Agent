@@ -15,11 +15,19 @@ from backend.platform.bootstrap import build_local_platform
 from backend.platform.settings import (
     DEFAULT_MODEL_TEMPLATE_SCOPE,
     DEFAULT_RELAY_MODEL_ID,
+    DEFAULT_RELAY_SHARED_MODELS,
     configure_default_relay_model,
+    default_relay_model_preset,
     ensure_default_models_for_account,
 )
 from backend.platform.settings.model_modules import list_models_for_application
-from backend.platform.settings.store import account_system_config_scope
+from backend.platform.settings.store import (
+    account_system_config_scope,
+    system_config_external_code,
+    system_config_storage_code,
+    system_config_storage_prefix,
+    system_config_storage_tenant,
+)
 
 
 class AccountBoundModelVisibilityTest(unittest.TestCase):
@@ -73,6 +81,51 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
         self.assertIn("account_bound_model", {item["id"] for item in same_account["models"]})
         self.assertIn("account_bound_model", {item["id"] for item in other_institution["models"]})
         self.assertNotIn("account_bound_model", {item["id"] for item in other_account_models})
+
+    def test_unconfigured_system_config_returns_safe_shared_model_preset(self) -> None:
+        with TemporaryDirectory() as tmpdir, patch.dict(
+            "os.environ",
+            {"SMART_DATA_AGENT_DEFAULT_MODEL_API_KEY": ""},
+        ):
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+                conn.request(
+                    "GET",
+                    f"/api/system-config?tenant_id={quote(normalize_tenant_id('华兴银行'))}&user_id=u_super_admin",
+                )
+                response = conn.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        preset = next(item for item in payload["models"] if item["id"] == DEFAULT_RELAY_MODEL_ID)
+        self.assertEqual(response.status, 200)
+        self.assertTrue(preset["requiresCredential"])
+        self.assertEqual(preset["value"], "")
+        self.assertEqual(preset["availableModels"], list(DEFAULT_RELAY_SHARED_MODELS))
+        self.assertEqual(preset["enabledModels"], list(DEFAULT_RELAY_SHARED_MODELS))
+
+    def test_default_preset_contains_no_credential(self) -> None:
+        preset = default_relay_model_preset()
+        self.assertEqual(preset["value"], "")
+        self.assertEqual(preset["status"], "draft")
+        self.assertEqual(preset["testStatus"], "untested")
+
+    def test_relational_virtual_scope_codes_are_global_isolated_and_reversible(self) -> None:
+        first_scope = account_system_config_scope("u_super_admin")
+        second_scope = account_system_config_scope("u_lina")
+        first_code = system_config_storage_code(first_scope, "model_shared")
+        second_code = system_config_storage_code(second_scope, "model_shared")
+
+        self.assertEqual(system_config_storage_tenant(first_scope), "__global__")
+        self.assertNotEqual(system_config_storage_prefix(first_scope), system_config_storage_prefix(second_scope))
+        self.assertNotEqual(first_code, second_code)
+        self.assertEqual(system_config_external_code(first_scope, first_code), "model_shared")
 
     def test_analysis_direct_selection_resolves_account_model(self) -> None:
         services = build_local_platform()

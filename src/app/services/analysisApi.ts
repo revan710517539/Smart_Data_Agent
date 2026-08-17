@@ -1,5 +1,6 @@
 import { ApiRequestError, apiRequest } from "./apiClient";
 import { getDefaultTenantId, getDefaultUserId } from "./apiContext";
+import { createClientUuid } from "../utils/clientUuid";
 
 export type BackendAnalysisPlan = {
   dataset_id?: string;
@@ -242,7 +243,7 @@ export async function enqueueSelfAnalysis({
   tenantId = getDefaultTenantId(),
   userId = getDefaultUserId(),
   pageContext = {},
-  requestId = crypto.randomUUID(),
+  requestId = createClientUuid(),
 }: RunSelfAnalysisParams): Promise<AsyncAnalysisRun> {
   const response = await apiRequest<{ tenant_id: string; run: AsyncAnalysisRun }>("/api/analysis/run-async", {
     method: "POST",
@@ -338,7 +339,7 @@ export async function waitForSelfAnalysis({
   tenantId = getDefaultTenantId(),
   userId = getDefaultUserId(),
   pageContext = {},
-  requestId = crypto.randomUUID(),
+  requestId = createClientUuid(),
   onRun,
   resumeRunId,
   signal,

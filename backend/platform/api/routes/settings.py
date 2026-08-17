@@ -9,6 +9,7 @@ from backend.platform.api.support import first_query_value, send_route_exception
 from backend.platform.settings import (
     DEFAULT_RELAY_MODEL_ID,
     account_system_config_scope,
+    default_relay_model_preset,
     ensure_default_models_for_account,
     test_model_integration,
     test_speech_integration,
@@ -24,6 +25,8 @@ def handle_system_config_get(handler: Any, query: str) -> None:
         config_scope = _account_config_scope(context)
         ensure_default_models_for_account(handler.services.system_config_store, context.user_id)
         models = _list_account_models(handler, context, config_scope)
+        if not any(str(model.get("id") or "") == DEFAULT_RELAY_MODEL_ID for model in models):
+            models = [default_relay_model_preset(), *models]
         speech_integrations = _list_account_speech_integrations(handler, context, config_scope)
         parameter_tenant_ids = _authorized_system_config_tenant_ids(handler, context)
         system_params = [

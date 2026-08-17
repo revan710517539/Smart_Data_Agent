@@ -26,6 +26,7 @@ from backend.platform.postgresql_repository import PostgreSQLAnalysisTaskReposit
 from backend.platform.orchestration import AnalysisTask
 from backend.platform.reports import PostgreSQLReportStore
 from backend.platform.settings import PostgreSQLSystemConfigStore
+from backend.platform.settings.store import account_system_config_scope
 from backend.platform.security import PostgreSQLOIDCTransactionStore, PostgreSQLSessionStore
 from backend.platform.security.rate_limit import InMemoryRateLimiter
 from backend.platform.runtime_config import RuntimeConfig, RuntimeConfigurationError
@@ -81,6 +82,16 @@ class PostgreSQLStoresIntegrationTest(unittest.TestCase):
 
     def test_normalized_production_workflow(self) -> None:
         settings=PostgreSQLSystemConfigStore(self.pool)
+        account_scope=account_system_config_scope("u_admin")
+        account_model=settings.upsert_model(account_scope,{
+            "id":"account_model","name":"账号模型","modelName":"中转站",
+            "key":"https://models.invalid/v1","value":"account-model-secret",
+            "applicationModule":"global_text_model","availableModels":["shared-model"],
+            "enabledModels":["shared-model"],"testStatus":"connected","status":"available",
+        },updated_by="u_admin")
+        self.assertEqual(account_model["id"],"account_model")
+        self.assertEqual(settings.get_model(account_scope,"account_model",reveal_secret=True)["value"],"account-model-secret")
+        self.assertEqual([item["id"] for item in settings.list_models(account_scope)],["account_model"])
         connection=settings.upsert_data_connection(self.tenant,{
             "id":"conn_prod","institution":"集成测试机构","sourceName":"受控经营库","sourceType":"PostgreSQL",
             "apiUrl":"postgresql://warehouse.invalid/analytics","account":"reader","password":"secret",

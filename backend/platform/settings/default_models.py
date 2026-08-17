@@ -12,6 +12,13 @@ DEFAULT_RELAY_MODEL_ID = "model_default_intelligent_analysis_relay"
 DEFAULT_RELAY_MODEL_API_BASE = "https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net"
 DEFAULT_RELAY_MODEL_API_KEY_ENV = "SMART_DATA_AGENT_DEFAULT_MODEL_API_KEY"
 DEFAULT_MODEL_TEMPLATE_SCOPE = "system:default-model-template"
+DEFAULT_RELAY_SHARED_MODELS = (
+    "360/deepseek-v4-flash",
+    "360/deepseek-v4-pro",
+    "deepbank/glm-5.2",
+    "glm-5.2-codex",
+    "gpt-5.5",
+)
 
 
 def default_relay_model_from_environment() -> dict[str, Any] | None:
@@ -46,6 +53,12 @@ def configure_default_relay_model(
     )
 
 
+def default_relay_model_preset() -> dict[str, Any]:
+    """Return a display-only safe preset when no protected credential exists."""
+
+    return {**_default_relay_model(""), "requiresCredential": True}
+
+
 def _default_relay_model(api_key: str, *, api_base: str | None = None) -> dict[str, Any]:
     return {
         "id": DEFAULT_RELAY_MODEL_ID,
@@ -55,8 +68,8 @@ def _default_relay_model(api_key: str, *, api_base: str | None = None) -> dict[s
         or DEFAULT_RELAY_MODEL_API_BASE,
         "value": api_key,
         "applicationModule": "global_text_model",
-        "availableModels": [],
-        "enabledModels": [],
+        "availableModels": list(DEFAULT_RELAY_SHARED_MODELS),
+        "enabledModels": list(DEFAULT_RELAY_SHARED_MODELS),
         "testStatus": "untested",
         "status": "draft",
     }
@@ -142,6 +155,12 @@ def _configured_default_relay_model(system_config_store: Any) -> dict[str, Any] 
 def _canonical_default_relay(model: dict[str, Any]) -> dict[str, Any]:
     """Normalize the protected relay while retaining its encrypted secret."""
 
+    available_models = [str(item).strip() for item in model.get("availableModels") or [] if str(item).strip()]
+    enabled_models = [str(item).strip() for item in model.get("enabledModels") or [] if str(item).strip()]
+    if not available_models:
+        available_models = list(DEFAULT_RELAY_SHARED_MODELS)
+    if not enabled_models:
+        enabled_models = [item for item in DEFAULT_RELAY_SHARED_MODELS if item in available_models]
     return {
         **model,
         "id": DEFAULT_RELAY_MODEL_ID,
@@ -149,6 +168,8 @@ def _canonical_default_relay(model: dict[str, Any]) -> dict[str, Any]:
         "modelName": "中转站",
         "key": DEFAULT_RELAY_MODEL_API_BASE,
         "applicationModule": "global_text_model",
+        "availableModels": available_models,
+        "enabledModels": enabled_models,
     }
 
 

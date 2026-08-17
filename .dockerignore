@@ -19,6 +19,8 @@ Topic_Data
 # Institution business CSVs are delivered through the server host mount and
 # must never be copied into the application image or remote build cache.
 src/app/data/*/
+!src/app/data/*.ts
+!src/app/data/*.json
 Origin_Data/*
 !Origin_Data/__init__.py
 !Origin_Data/metric_dictionary_seed.json

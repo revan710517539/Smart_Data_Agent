@@ -10,7 +10,7 @@ export function LoginPage() {
   const { institutions, isAuthenticated, login } = usePlatformContext();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("123456");
+  const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [institution, setInstitution] = useState(institutions[0] || "");
   const [notice, setNotice] = useState("");
@@ -58,7 +58,7 @@ export function LoginPage() {
 
   const cancel = () => {
     setEmail("");
-    setPassword("123456");
+    setPassword("");
     setName("");
     setNotice("");
     setMode("login");
@@ -87,14 +87,17 @@ export function LoginPage() {
           )}
           <LoginInput label="邮箱" value={email} onChange={setEmail} placeholder="name@bank.com" type="email" />
           {mode === "login" && (
-            <LoginInput
-              label="密码"
-              value={password}
-              onChange={setPassword}
-              placeholder="请输入密码"
-              type="password"
-              autoComplete="current-password"
-            />
+            <div>
+              <LoginInput
+                label="密码"
+                value={password}
+                onChange={setPassword}
+                placeholder="请输入密码"
+                type="password"
+                autoComplete="current-password"
+              />
+              <p className="mt-1.5 text-[11px] text-[#8e8e93]">密码由部署环境安全配置，系统不会展示或预填。</p>
+            </div>
           )}
           <label>
             <span className="mb-1.5 block text-[12px] text-[#636366]">机构</span>

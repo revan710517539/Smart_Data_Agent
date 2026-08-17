@@ -7,11 +7,14 @@ import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from backend.platform.api.server import create_server
 from backend.platform.database import apply_migrations
 from backend.platform.integrations.bridge_auth import InMemoryBridgeAuthStore, SQLiteBridgeAuthStore
 from backend.platform.security import AuthenticationError
+
+TEST_DEVELOPMENT_LOGIN_PASSWORD = "test-only-explicit-login-secret"
 
 
 def _request(
@@ -74,6 +77,16 @@ class BridgeAuthStoreContractTest(unittest.TestCase):
 
 
 class BridgeDeviceAuthorizationHTTPTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.login_password_environment = patch.dict(
+            "os.environ",
+            {"SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD": TEST_DEVELOPMENT_LOGIN_PASSWORD},
+        )
+        self.login_password_environment.start()
+
+    def tearDown(self) -> None:
+        self.login_password_environment.stop()
+
     def test_browser_click_authorizes_dynamic_binding_once_and_can_revoke(self) -> None:
         with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/platform.sqlite")
@@ -85,7 +98,7 @@ class BridgeDeviceAuthorizationHTTPTest(unittest.TestCase):
                     port,
                     "POST",
                     "/api/auth/login",
-                    {"email": "lina@bank.com", "password": "123456"},
+                    {"email": "lina@bank.com", "password": TEST_DEVELOPMENT_LOGIN_PASSWORD},
                 )
                 self.assertEqual(login_status, 200)
                 self.assertIsInstance(login, dict)

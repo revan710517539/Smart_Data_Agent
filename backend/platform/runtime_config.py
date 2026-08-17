@@ -73,6 +73,14 @@ def validate_runtime_config(config: RuntimeConfig) -> None:
             raise RuntimeConfigurationError(f"Invalid CORS origin: {origin}")
     if config.database_url and not config.database_url.lower().startswith(("mysql://", "mysql+pymysql://")):
         raise RuntimeConfigurationError("SMART_DATA_AGENT_DATABASE_URL must point to MySQL")
+    if (
+        config.environment == "staging"
+        and config.auth_mode == "development"
+        and not os.getenv("SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD", "")
+    ):
+        raise RuntimeConfigurationError(
+            "SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD is required for staging development login"
+        )
     if not config.is_production:
         return
     errors: list[str] = []

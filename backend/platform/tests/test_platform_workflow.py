@@ -41,6 +41,8 @@ from backend.platform.semantic import (
 from backend.platform.tenancy import ExecutionContext
 from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse, build_governed_test_warehouse
 
+TEST_DEVELOPMENT_LOGIN_PASSWORD = "test-only-explicit-login-secret"
+
 
 def _stateful_test_token(server, user_id: str, tenant_id: str, tenant_ids: tuple[str, ...] | None = None) -> str:
     grant = server.services.session_store.issue(
@@ -96,11 +98,19 @@ class BrokenSupersonicClient:
 
 class PlatformWorkflowTest(unittest.TestCase):
     def setUp(self) -> None:
+        self.login_password_environment = patch.dict(
+            "os.environ",
+            {"SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD": TEST_DEVELOPMENT_LOGIN_PASSWORD},
+        )
+        self.login_password_environment.start()
         self.services = build_local_platform()
         attach_governed_test_warehouse(self.services)
 
     def tearDown(self) -> None:
-        self.services.close()
+        try:
+            self.services.close()
+        finally:
+            self.login_password_environment.stop()
 
     def approved_mcp_call(self, subject_id: str, arguments: dict, user_id: str = "u_super_admin") -> str:
         approval = self.services.approval_store.request(
@@ -1873,7 +1883,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                     login_conn.request(
                         "POST",
                         "/api/auth/login",
-                        body=json.dumps({"email": "lina@bank.com", "password": "123456"}).encode("utf-8"),
+                        body=json.dumps({"email": "lina@bank.com", "password": TEST_DEVELOPMENT_LOGIN_PASSWORD}).encode("utf-8"),
                         headers={"Content-Type": "application/json"},
                     )
                     login_response = login_conn.getresponse()
@@ -2015,7 +2025,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                 login_conn.request(
                     "POST",
                     "/api/auth/login",
-                    body=json.dumps({"email": "lina@bank.com", "password": "123456"}, ensure_ascii=False).encode("utf-8"),
+                    body=json.dumps({"email": "lina@bank.com", "password": TEST_DEVELOPMENT_LOGIN_PASSWORD}, ensure_ascii=False).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                 )
                 login_response = login_conn.getresponse()
@@ -2026,7 +2036,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                 super_login_conn.request(
                     "POST",
                     "/api/auth/login",
-                    body=json.dumps({"email": "xujingbo-jk@qifu.com", "password": "123456", "institution": "华兴银行"}, ensure_ascii=False).encode("utf-8"),
+                    body=json.dumps({"email": "xujingbo-jk@qifu.com", "password": TEST_DEVELOPMENT_LOGIN_PASSWORD, "institution": "华兴银行"}, ensure_ascii=False).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                 )
                 super_login_response = super_login_conn.getresponse()

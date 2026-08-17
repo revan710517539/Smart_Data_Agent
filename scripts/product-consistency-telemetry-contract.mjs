@@ -42,6 +42,11 @@ assert.match(login, /data-registration-placeholder="true"[\s\S]*?onClick=\{\(\) 
 assert.match(login, /aria-disabled="true"[\s\S]*?cursor-not-allowed/, "注册占位按钮必须使用灰显的不可用语义和样式");
 assert.match(login, /registrationNotice = "建设中……"/, "注册占位按钮必须反馈建设中状态");
 assert.match(login, /data-login-primary-actions="true"/, "取消和登录按钮必须保持右侧操作组");
+assert.match(login, /const \[password, setPassword\] = useState\(""\)/, "登录页密码必须默认留空");
+assert.match(login, /setPassword\(""\)/, "取消登录必须清空密码");
+assert.ok(!login.includes("123456"), "登录页源码不得包含可用的默认密码");
+assert.match(authRoute, /os\.getenv\("SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD", ""\)/, "开发登录密码缺失时必须失败关闭");
+assert.ok(!authRoute.includes('"123456"'), "认证路由不得保留历史密码兜底");
 assert.match(selfAnalysis, /reportKindTab === "analysis" \? "新建智能分析" : "新建可视化报表"/);
 assert.ok(!selfAnalysis.includes(">全部</button>"), "我的报表智能分析 Tab 不得保留全部按钮");
 

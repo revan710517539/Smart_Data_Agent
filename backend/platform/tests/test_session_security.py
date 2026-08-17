@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import threading
 from http.cookies import SimpleCookie
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from backend.platform.api.server import create_server
 from backend.platform.database import apply_migrations
 from backend.platform.security import AuthenticationError, InMemorySessionStore, SQLiteSessionStore
+
+TEST_DEVELOPMENT_LOGIN_PASSWORD = "test-only-explicit-login-secret"
 
 
 def _cookie_jar(response: http.client.HTTPResponse) -> dict[str, str]:
@@ -33,6 +37,44 @@ def _cookie_header(jar: dict[str, str]) -> str:
 
 
 class SessionSecurityTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.login_password_environment = patch.dict(
+            "os.environ",
+            {"SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD": TEST_DEVELOPMENT_LOGIN_PASSWORD},
+        )
+        self.login_password_environment.start()
+
+    def tearDown(self) -> None:
+        self.login_password_environment.stop()
+
+    def test_development_email_login_fails_closed_when_password_is_not_configured(self) -> None:
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD", None)
+            with TemporaryDirectory() as tmpdir:
+                server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+                    connection.request(
+                        "POST",
+                        "/api/auth/login",
+                        body=json.dumps(
+                            {"email": "lina@bank.com", "password": TEST_DEVELOPMENT_LOGIN_PASSWORD}
+                        ).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    response = connection.getresponse()
+                    payload = json.loads(response.read().decode("utf-8"))
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
+
+        self.assertEqual(response.status, 400)
+        self.assertEqual(payload["error"], "invalid_request")
+        self.assertEqual(payload["message"], "邮箱或密码不正确，请确认后重试。")
+
     def test_development_email_login_requires_the_configured_password(self) -> None:
         with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
@@ -54,7 +96,7 @@ class SessionSecurityTest(unittest.TestCase):
                 correct_password.request(
                     "POST",
                     "/api/auth/login",
-                    body=json.dumps({"email": "lina@bank.com", "password": "123456"}).encode("utf-8"),
+                    body=json.dumps({"email": "lina@bank.com", "password": TEST_DEVELOPMENT_LOGIN_PASSWORD}).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                 )
                 accepted = correct_password.getresponse()
@@ -141,7 +183,7 @@ class SessionSecurityTest(unittest.TestCase):
                 login.request(
                     "POST",
                     "/api/auth/login",
-                    body=json.dumps({"email": "lina@bank.com", "password": "123456"}).encode("utf-8"),
+                    body=json.dumps({"email": "lina@bank.com", "password": TEST_DEVELOPMENT_LOGIN_PASSWORD}).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                 )
                 login_response = login.getresponse()

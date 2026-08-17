@@ -8,6 +8,7 @@ const root = process.cwd();
 const chromePath = process.env.CHROME_PATH || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const authStorageKey = "smart_data_agent_auth_session_v1";
 const selectedInstitutionStorageKey = "smart_data_agent_selected_institution_v1";
+const testDevelopmentLoginPassword = "test-only-explicit-login-secret";
 
 async function main() {
   const apiPort = await freePort();
@@ -35,6 +36,7 @@ async function main() {
       env: {
         ...process.env,
         SMART_DATA_AGENT_DATABASE_URL: "",
+        SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD: testDevelopmentLoginPassword,
         SMART_DATA_AGENT_REPORT_INGRESS_BINDINGS_JSON: reportIngressBindings,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -185,7 +187,7 @@ async function main() {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: "zhaomin@bank.com", password: "123456", institution: "郑州银行" })
+      body: JSON.stringify({ email: "zhaomin@bank.com", password: ${JSON.stringify(testDevelopmentLoginPassword)}, institution: "郑州银行" })
     }).then((response) => {
       if (!response.ok) throw new Error("failed to switch the shared cookie session");
       window.dispatchEvent(new Event("focus"));
@@ -733,7 +735,7 @@ async function installSession(cdp, apiUrl, email, institution) {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: ${JSON.stringify(email)}, password: "123456", institution: ${JSON.stringify(institution)} })
+        body: JSON.stringify({ email: ${JSON.stringify(email)}, password: ${JSON.stringify(testDevelopmentLoginPassword)}, institution: ${JSON.stringify(institution)} })
       });
       if (!response.ok) throw new Error(await response.text());
       const session = await response.json();

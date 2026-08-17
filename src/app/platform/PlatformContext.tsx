@@ -381,6 +381,7 @@ function normalizeSelectableInstitutions(values: string[]) {
 function normalizeSelectableInstitution(value: string) {
   const normalized = institutionNameFromTenant(String(value || ""));
   if (!normalized || normalized === globalInstitutionScopeLabel) return "";
+  if (normalized === "sda-internal" || normalized === "SDA 内部环境") return "";
   // Do not leak legacy/internal tenant placeholders into the institution UI.
   // Proper identifiers such as `tenant:华兴银行` have already been converted
   // to their display label by institutionNameFromTenant above.

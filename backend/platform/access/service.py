@@ -116,7 +116,13 @@ class AccessControlService:
         roles_by_id = {role.role_id: role for role in self.policy_repository.list_roles()}
         assignments_by_user = self._assignments_by_user()
         users: list[dict[str, Any]] = []
-        for profile in self.user_store.list_profiles():
+        tenant_profile_lister = getattr(self.user_store, "list_profiles_for_tenant", None)
+        profiles = (
+            tenant_profile_lister(context.tenant_id)
+            if callable(tenant_profile_lister)
+            else self.user_store.list_profiles()
+        )
+        for profile in profiles:
             assignments = assignments_by_user.get(profile.user_id, [])
             visible_assignments = [
                 assignment
@@ -654,6 +660,7 @@ def _known_tenant_labels(roles: list[Role]) -> list[str]:
         _tenant_label(role.tenant_id)
         for role in roles
         if role.tenant_id and role.tenant_id.startswith("tenant:")
+        and _tenant_label(role.tenant_id) not in {"sda-internal", "SDA 内部环境"}
     }
     return sorted(labels)
 

@@ -74,11 +74,10 @@ class TenantRouteTest(unittest.TestCase):
         self.assertEqual(
             tenants,
             [
-                {"id": "tenant:sda-internal", "name": "SDA 内部环境", "status": "active"},
                 {"id": "tenant:华兴银行", "name": "华兴银行", "status": "active"},
             ],
         )
-        self.assertEqual(cursor.params, ("__global__",))
+        self.assertEqual(cursor.params, ("__global__", "tenant:sda-internal"))
 
     def test_relational_catalog_failure_does_not_fall_back_to_static_tenants(self) -> None:
         handler = SimpleNamespace(

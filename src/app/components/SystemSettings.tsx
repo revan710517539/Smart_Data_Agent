@@ -134,6 +134,7 @@ export function SystemSettings() {
     institutions: visibleInstitutions,
     isSuperAdmin,
     selectedInstitution,
+    setSelectedInstitution,
     tenantId,
     tenantIdForInstitution,
     userId,
@@ -160,6 +161,7 @@ export function SystemSettings() {
   const [speechForm, setSpeechForm] = useState(emptySpeechForm);
   const [users, setUsers] = useState<SystemUser[]>(isDemoFallbackEnabled() ? initialUserList : []);
   const [accessNotice, setAccessNotice] = useState("");
+  const [accessNoticeTargetInstitution, setAccessNoticeTargetInstitution] = useState("");
   const [auditRows, setAuditRows] = useState<ReturnType<typeof formatAuditLog>[]>([]);
   const [auditTotal, setAuditTotal] = useState(0);
   const [auditPage, setAuditPage] = useState(1);
@@ -625,12 +627,24 @@ export function SystemSettings() {
     try {
       const response = await saveAccessUser({ tenantId, user: draftUser });
       const savedUser = normalizeAccessUserTenantLabels(response.user, visibleInstitutions, tenantIdForInstitution);
-      setUsers((current) =>
-        editingUserId
-          ? current.map((user) => (user.id === editingUserId ? savedUser : user))
-          : [savedUser, ...current],
+      const assignedInstitutions = Array.from(new Set(savedUser.tenantRoles
+        .filter((role) => role.tenant !== "全部机构")
+        .map((role) => role.tenant)));
+      const visibleInCurrentInstitution = savedUser.tenantRoles.some(
+        (role) => role.tenant === "全部机构" || role.tenant === selectedInstitution,
       );
-      setAccessNotice("用户信息和角色授权已同步到后端。");
+      setUsers((current) => {
+        const withoutSavedUser = current.filter((user) => user.id !== savedUser.id);
+        return visibleInCurrentInstitution ? [savedUser, ...withoutSavedUser] : withoutSavedUser;
+      });
+      const targetDescription = assignedInstitutions.join("、") || selectedInstitution;
+      if (visibleInCurrentInstitution) {
+        setAccessNotice(`${savedUser.name}已保存到${targetDescription}。`);
+        setAccessNoticeTargetInstitution("");
+      } else {
+        setAccessNotice(`${savedUser.name}已保存到${targetDescription}；当前列表仅显示${selectedInstitution}用户。`);
+        setAccessNoticeTargetInstitution(assignedInstitutions.length === 1 ? assignedInstitutions[0] : "");
+      }
       setUserEditorError("");
       setUserEditorOpen(false);
       setEditingUserId(null);
@@ -757,6 +771,18 @@ export function SystemSettings() {
           <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">{pageHeading.title}</h2>
           {pageStatusNotice && (
             <span className={`text-[11px] ${pageStatusClassName}`}>{pageStatusNotice}</span>
+          )}
+          {activeTab === "users" && accessNoticeTargetInstitution && (
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedInstitution(accessNoticeTargetInstitution);
+                setAccessNoticeTargetInstitution("");
+              }}
+              className="text-[11px] text-[#0f8f5f] underline underline-offset-2"
+            >
+              切换到{accessNoticeTargetInstitution}查看
+            </button>
           )}
         </div>
         <p className="text-[13px] text-[#aeaeb2] mt-1">{pageHeading.description}</p>
@@ -2149,7 +2175,7 @@ function ModelAccessModal({
                         <>
                           <span className="truncate text-left text-[12px] text-[#1d1d1f]">{model.name}</span>
                           <span className="truncate text-[11px] text-[#3a3a3c]">{modelSourceLabel(model.modelName)}</span>
-                          <span className="truncate text-[11px] text-[#8a8a8e]" title={model.requiresCredential ? model.key : "点击编辑后查看和修改"}>{model.requiresCredential ? "系统预置地址" : "API地址已配置"}</span>
+                          <span className="truncate text-[11px] text-[#8a8a8e]" title={model.key || "未配置 API 地址"}>{model.key || "未配置 API 地址"}</span>
                           <span className="font-mono text-[11px] text-[#636366]" title={model.requiresCredential ? "需要管理员配置受保护密钥" : "API密钥已隐藏"}>{model.requiresCredential ? "待配置" : maskApiSecret(model.value)}</span>
                         </>
                       )}

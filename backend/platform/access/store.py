@@ -21,6 +21,9 @@ class UserDirectoryStore(Protocol):
     def list_profiles(self) -> list[UserProfile]:
         ...
 
+    def list_profiles_for_tenant(self, tenant_id: str) -> list[UserProfile]:
+        ...
+
     def get_profile(self, user_id: str) -> UserProfile | None:
         ...
 
@@ -40,6 +43,10 @@ class InMemoryUserDirectoryStore:
 
     def list_profiles(self) -> list[UserProfile]:
         return sorted(self._profiles.values(), key=lambda profile: profile.user_id)
+
+    def list_profiles_for_tenant(self, tenant_id: str) -> list[UserProfile]:
+        del tenant_id
+        return self.list_profiles()
 
     def get_profile(self, user_id: str) -> UserProfile | None:
         return self._profiles.get(user_id)
@@ -120,6 +127,10 @@ class SQLiteUserDirectoryStore:
             """
         ).fetchall()
         return [self._profile_from_row(row) for row in rows]
+
+    def list_profiles_for_tenant(self, tenant_id: str) -> list[UserProfile]:
+        del tenant_id
+        return self.list_profiles()
 
     def get_profile(self, user_id: str) -> UserProfile | None:
         row = self._conn.execute(

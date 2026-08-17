@@ -41,10 +41,10 @@ def _active_tenants(handler: Any) -> list[dict[str, str]]:
                 """
                 SELECT tenant_code, tenant_name, status
                 FROM platform_tenants
-                WHERE status = 'active' AND tenant_code <> %s
+                WHERE status = 'active' AND tenant_code NOT IN (%s, %s)
                 ORDER BY tenant_name, tenant_code
                 """,
-                ("__global__",),
+                ("__global__", "tenant:sda-internal"),
             )
             rows = cursor.fetchall()
     return [
@@ -54,6 +54,7 @@ def _active_tenants(handler: Any) -> list[dict[str, str]]:
             "status": str(_row_value(row, "status", 2)),
         }
         for row in rows
+        if str(_row_value(row, "tenant_code", 0)) != "tenant:sda-internal"
     ]
 
 

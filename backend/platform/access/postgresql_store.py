@@ -27,6 +27,15 @@ class PostgreSQLUserDirectoryStore(UserDirectoryStore):
             rows = cursor.fetchall()
         return [self._profile_from_row(row) for row in rows]
 
+    def list_profiles_for_tenant(self, tenant_id: str) -> list[UserProfile]:
+        with self.pool.connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                self._profile_select_for_tenant() + " ORDER BY u.external_subject",
+                (tenant_id,),
+            )
+            rows = cursor.fetchall()
+        return [self._profile_from_row(row) for row in rows]
+
     def get_profile(self, user_id: str) -> UserProfile | None:
         with self.pool.connection() as connection, connection.cursor() as cursor:
             cursor.execute(self._profile_select() + " WHERE u.external_subject = %s", (user_id,))
@@ -114,6 +123,27 @@ class PostgreSQLUserDirectoryStore(UserDirectoryStore):
                        FROM platform_user_tenant_memberships m
                        LEFT JOIN platform_org_units o ON o.org_unit_id = m.org_unit_id
                        WHERE m.user_id = u.user_id AND m.membership_status = 'active'
+                       ORDER BY (m.joined_at IS NULL), m.joined_at, m.created_at, m.membership_id
+                       LIMIT 1
+                   ), '未分配部门') AS department
+            FROM platform_user_profiles u
+        """
+
+    @staticmethod
+    def _profile_select_for_tenant() -> str:
+        return """
+            SELECT u.external_subject AS user_code, u.display_name, u.email, u.status,
+                   u.last_login_at,
+                   COALESCE((
+                       SELECT o.org_name
+                       FROM platform_user_tenant_memberships m
+                       JOIN platform_tenants t ON t.tenant_id = m.tenant_id
+                       LEFT JOIN platform_org_units o
+                         ON o.org_unit_id = m.org_unit_id AND o.status = 'active'
+                       WHERE m.user_id = u.user_id
+                         AND m.membership_status = 'active'
+                         AND t.status = 'active'
+                         AND t.tenant_code = %s
                        ORDER BY (m.joined_at IS NULL), m.joined_at, m.created_at, m.membership_id
                        LIMIT 1
                    ), '未分配部门') AS department

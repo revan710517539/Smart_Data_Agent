@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import unittest
 from threading import Event, Thread
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from backend.platform.bootstrap import build_local_platform
@@ -13,6 +12,7 @@ from backend.platform.api.routes.analysis import (
     handle_analysis_run_async,
     run_analysis,
 )
+from backend.platform.api.support import APIRequestContext
 from backend.platform.automation.runtime import _public_handler_failure
 from backend.platform.data_access.factory import UnconfiguredDataWarehouse
 from backend.platform.semantic import InMemorySupersonicClient
@@ -88,6 +88,29 @@ class AutomationRuntimeTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.services.close()
 
+    def _async_analysis_handler(self, *, idempotency_key: str, question: str):
+        services = self.services
+
+        class FakeHandler:
+            def __init__(inner_self) -> None:
+                inner_self.services = services
+                inner_self.headers = {"Idempotency-Key": idempotency_key}
+                inner_self.response = None
+
+            def _read_json(inner_self):
+                return {"question": question, "page_context": {}}
+
+            def _request_context(inner_self, payload):
+                return APIRequestContext(tenant_id="tenant_demo", user_id="u_super_admin")
+
+            def _write_audit(inner_self, *args, **kwargs):
+                return None
+
+            def _send_json(inner_self, payload, status=200, **kwargs):
+                inner_self.response = (payload, status)
+
+        return FakeHandler()
+
     def test_missing_production_table_has_stable_non_retryable_guidance(self) -> None:
         code, message, retryable = _public_handler_failure(ValueError("analysis_production_data_table_required"))
         self.assertEqual(code, "analysis_production_data_table_required")
@@ -160,24 +183,10 @@ class AutomationRuntimeTest(unittest.TestCase):
         )
         self.assertEqual(legacy["lock_version"], 0)
 
-        class FakeHandler:
-            services = self.services
-            headers = {"Idempotency-Key": "legacy-lock-version-request"}
-            response = None
-
-            def _read_json(inner_self):
-                return {"question": "本月各分行放款金额排名", "page_context": {}}
-
-            def _request_context(inner_self, payload):
-                return SimpleNamespace(tenant_id="tenant_demo", user_id="u_super_admin")
-
-            def _write_audit(inner_self, *args, **kwargs):
-                return None
-
-            def _send_json(inner_self, payload, status=200):
-                inner_self.response = (payload, status)
-
-        handler = FakeHandler()
+        handler = self._async_analysis_handler(
+            idempotency_key="legacy-lock-version-request",
+            question="本月各分行放款金额排名",
+        )
         handle_analysis_run_async(handler)
 
         refreshed = self.services.automation_store.get_task("tenant_demo", legacy["automation_task_id"])
@@ -209,24 +218,10 @@ class AutomationRuntimeTest(unittest.TestCase):
             task["lock_version"],
         )
 
-        class FakeHandler:
-            services = self.services
-            headers = {"Idempotency-Key": "resume-paused-analysis"}
-            response = None
-
-            def _read_json(inner_self):
-                return {"question": "分析这个数据", "page_context": {}}
-
-            def _request_context(inner_self, payload):
-                return SimpleNamespace(tenant_id="tenant_demo", user_id="u_super_admin")
-
-            def _write_audit(inner_self, *args, **kwargs):
-                return None
-
-            def _send_json(inner_self, payload, status=200, **kwargs):
-                inner_self.response = (payload, status)
-
-        handler = FakeHandler()
+        handler = self._async_analysis_handler(
+            idempotency_key="resume-paused-analysis",
+            question="分析这个数据",
+        )
         handle_analysis_run_async(handler)
 
         refreshed = self.services.automation_store.get_task("tenant_demo", task["automation_task_id"])
@@ -260,24 +255,10 @@ class AutomationRuntimeTest(unittest.TestCase):
             task["lock_version"],
         )
 
-        class FakeHandler:
-            services = self.services
-            headers = {"Idempotency-Key": "reject-disabled-analysis"}
-            response = None
-
-            def _read_json(inner_self):
-                return {"question": "分析这个数据", "page_context": {}}
-
-            def _request_context(inner_self, payload):
-                return SimpleNamespace(tenant_id="tenant_demo", user_id="u_super_admin")
-
-            def _write_audit(inner_self, *args, **kwargs):
-                return None
-
-            def _send_json(inner_self, payload, status=200, **kwargs):
-                inner_self.response = (payload, status)
-
-        handler = FakeHandler()
+        handler = self._async_analysis_handler(
+            idempotency_key="reject-disabled-analysis",
+            question="分析这个数据",
+        )
         handle_analysis_run_async(handler)
 
         refreshed = self.services.automation_store.get_task("tenant_demo", task["automation_task_id"])

@@ -34,8 +34,12 @@ import { modelApplicationModuleLabel } from "../data/modelApplicationModules";
 import { runApplicationAction } from "../services/applicationApi";
 import { fetchAnalysisRuntimeConfig, fetchSystemConfig, type FunAsrRuntimeIntegration, type ModelIntegration } from "../services/systemConfigApi";
 import { findConfiguredTextModel, persistTextModelSelection, readPersistedTextModelSelection, textModelSelectionEvent } from "../services/modelSelectionStore";
-import { ArrowUp, AudioLines, Sparkles, Clock, Star, ArrowUpRight, BarChart3, PieChartIcon, TrendingUp, Table2, Download, BookmarkPlus, History, Lightbulb, ChevronDown, Code2, Mic, Plus, Upload, X, ChevronsDown, ChevronsUp, Eye, Pencil, Trash2, Check, RotateCcw } from "lucide-react";
+import { ArrowUp, AudioLines, Sparkles, Clock, Star, ArrowUpRight, Table2, Download, BookmarkPlus, History, Lightbulb, Code2, Mic, Plus, Upload, X, ChevronsDown, ChevronsUp, Eye, Pencil, Trash2, Check, RotateCcw } from "lucide-react";
 import { AnalysisVisualCard, RawDataTable, type VisualizationCardConfig } from "./self-analysis/ResultViews";
+import { AnalysisModelSelector } from "./self-analysis/AnalysisModelSelector";
+import { AnalysisTopicShortcuts } from "./self-analysis/AnalysisTopicShortcuts";
+import { AnalysisScriptEditor } from "./self-analysis/AnalysisScriptEditor";
+import { defaultVisualizationCards, type VisualCardInstance } from "./self-analysis/visualCards";
 import { ResizableVisualizationGrid } from "./self-analysis/ResizableVisualizationGrid";
 import { visualDuplicateLayout } from "./self-analysis/visualGridLayout";
 import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
@@ -115,9 +119,7 @@ import {
   suggestedQuestions,
   analysisSkillOptions,
   fallbackAnalysisModels,
-  createSelectedAnalysisModel,
   firstSelectableAnalysisModel,
-  groupAnalysisModelOptions,
   hasSelectableAnalysisModel,
   autoReferenceSkillCategories,
   inferVisualTypes,
@@ -137,6 +139,7 @@ import {
   downloadCsv,
   csvCell,
   readKnowledgeAttachment,
+  detectedAnalysisInstitution,
 } from "./self-analysis/domain";
 import { DataTablePickerModal } from "./self-analysis/DataTablePickerModal";
 import {
@@ -152,190 +155,7 @@ import type { VisualReport } from "../services/visualReportApi";
 
 import { clearPendingAnalysisRun, isAnalysisNavigationAbort, loadPendingAnalysisRun, savePendingAnalysisRun } from "./self-analysis/pendingAnalysisRun";
 import { clearSelfAnalysisWorkbenchPersistence, useSelfAnalysisWorkbenchPersistence } from "./self-analysis/useSelfAnalysisWorkbenchPersistence";
-function AnalysisModelSelector({
-  models,
-  selectedModel,
-  onSelect,
-}: {
-  models: ModelIntegration[];
-  selectedModel: ModelIntegration | null;
-  onSelect: (model: ModelIntegration) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  const groups = groupAnalysisModelOptions(models);
-  useEffect(() => {
-    if (!open) return;
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (event.target instanceof Node && menuRef.current?.contains(event.target)) return;
-      setOpen(false);
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
-  }, [open]);
-  return (
-    <div ref={menuRef} className="relative shrink-0">
-      <button
-        type="button"
-        onClick={() => setOpen((current) => !current)}
-        disabled={!groups.length}
-        aria-label="选择分析模型"
-        aria-expanded={open}
-        className="flex h-7 max-w-[220px] items-center gap-1 rounded-md px-1.5 text-[11px] text-[#636366] transition-colors hover:bg-[#f2f2f7] disabled:cursor-not-allowed disabled:text-[#aeaeb2]"
-        title={groups.length ? "选择智能分析推理模型" : "智能分析推理分析模块暂无已鉴权模型"}
-      >
-        <span className="truncate">{selectedModel?.name || "未配置分析模型"}</span>
-        <ChevronDown className={`h-3 w-3 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
-      </button>
-      {open && groups.length > 0 && (
-        <div className="absolute left-0 top-full z-50 mt-2 max-h-[420px] w-[300px] overflow-y-auto rounded-xl border border-[#e5e5ea] bg-white py-2 shadow-xl shadow-black/10">
-          {groups.map((group) => (
-            <div key={group.id} data-model-group={group.category} className="border-b border-[#f2f2f7] pb-1.5 last:border-b-0 last:pb-0">
-              <div className="px-3 pb-1 pt-1.5 text-[10px] font-semibold text-[#8a8a8e]">{group.category}</div>
-              {group.options.map((option) => {
-                const selected = option.model.id === selectedModel?.id && option.value === selectedModel.selectedModelName;
-                return (
-                  <button
-                    key={option.id}
-                    data-model-option={option.value}
-                    type="button"
-                    onClick={() => {
-                      onSelect(createSelectedAnalysisModel(option));
-                      setOpen(false);
-                    }}
-                    className={`flex w-full items-center justify-between px-3 py-2 text-left text-[12px] transition-colors ${selected ? "bg-[#f2f2f7] font-medium text-[#1d1d1f]" : "text-[#3a3a3c] hover:bg-[#f7f7f9]"}`}
-                  >
-                    <span className="truncate">{option.label}</span>
-                    {selected && <span className="ml-3 h-1.5 w-1.5 shrink-0 rounded-full bg-[#1d1d1f]" />}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-function AnalysisTopicShortcuts({
-  topics,
-  expanded,
-  editingId,
-  menu,
-  onToggleExpanded,
-  onRunTopic,
-  onOpenMenu,
-  onRenameTopic,
-  onFinishEditing,
-  onStartEditing,
-  onDeleteTopic,
-}: {
-  topics: AnalysisTopicShortcut[];
-  expanded: boolean;
-  editingId: string | null;
-  menu: TopicShortcutMenuState;
-  onToggleExpanded: () => void;
-  onRunTopic: (topic: AnalysisTopicShortcut) => void;
-  onOpenMenu: (state: Exclude<TopicShortcutMenuState, null>) => void;
-  onRenameTopic: (topicId: string, title: string) => void;
-  onFinishEditing: (topicId: string) => void;
-  onStartEditing: (topicId: string) => void;
-  onDeleteTopic: (topicId: string) => void;
-}) {
-  const openTopic = menu ? topics.find((topic) => topic.id === menu.id) : null;
-  const canToggleExpanded = topics.length > 4;
-  if (!topics.length) return null;
-  return (
-    <div className="relative">
-      <div className={`flex flex-wrap gap-2 ${canToggleExpanded ? "pr-9" : ""} ${canToggleExpanded && !expanded ? "max-h-[62px] overflow-hidden" : ""}`}>
-        {topics.map((topic) => (
-          <div key={topic.id} className="relative">
-            {editingId === topic.id ? (
-              <input
-                autoFocus
-                value={topic.title}
-                onChange={(event) => onRenameTopic(topic.id, event.target.value)}
-                onBlur={() => onFinishEditing(topic.id)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    onFinishEditing(topic.id);
-                  }
-                  if (event.key === "Escape") {
-                    event.preventDefault();
-                    onFinishEditing(topic.id);
-                  }
-                }}
-                className="h-7 w-[220px] rounded-md border border-[#d1d1d6] bg-white px-2 text-[11px] font-semibold text-[#1d1d1f] outline-none focus:border-[#8e8e93]"
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={() => onRunTopic(topic)}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onOpenMenu({ id: topic.id, x: event.clientX, y: event.clientY });
-                }}
-                title={`分析方法：${topic.method}\nSQL：${topic.sql}\n结论生成方式：${topic.conclusionMode}`}
-                className="inline-flex h-7 max-w-[280px] items-center gap-1.5 rounded-md border border-[#d7efd9] bg-[#eef8f1] px-2.5 text-[11px] font-semibold text-[#258a3f] transition-colors hover:bg-[#e1f3e6]"
-              >
-                <Sparkles className="h-3 w-3 shrink-0" />
-                <span className="truncate">{topic.title}</span>
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
-      {canToggleExpanded && (
-        <button
-          type="button"
-          onClick={onToggleExpanded}
-          className="absolute bottom-0 right-0 flex h-7 w-7 items-center justify-center rounded-full border border-[#e5e5ea] bg-white text-[#8a8a8e] shadow-sm hover:bg-[#f2f2f7] hover:text-[#1d1d1f]"
-          aria-label={expanded ? "折叠分析主题" : "展开历史分析主题"}
-        >
-          {expanded ? <ChevronsUp className="h-3.5 w-3.5" /> : <ChevronsDown className="h-3.5 w-3.5" />}
-        </button>
-      )}
-      {menu && openTopic && (
-        <div
-          className="fixed z-[100] w-24 rounded-lg border border-[#e5e5ea] bg-white p-1 shadow-lg shadow-black/10"
-          style={{ left: menu.x, top: menu.y + 6 }}
-          onPointerDown={(event) => event.stopPropagation()}
-          onMouseDown={(event) => event.stopPropagation()}
-        >
-          <button
-            type="button"
-            onClick={() => onStartEditing(openTopic.id)}
-            className="w-full rounded-md px-2 py-1.5 text-left text-[12px] text-[#3a3a3c] hover:bg-[#f2f2f7]"
-          >
-            编辑
-          </button>
-          <button
-            type="button"
-            onClick={() => onDeleteTopic(openTopic.id)}
-            className="w-full rounded-md px-2 py-1.5 text-left text-[12px] text-[#d93025] hover:bg-[#f2f2f7]"
-          >
-            删除
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-type VisualCardInstance = {
-  id: string;
-  key?: ResultVisualKey;
-  title: string;
-  type: VisualizationType;
-  config?: VisualizationCardConfig;
-};
-function defaultVisualizationCards(types: Record<ResultVisualKey, VisualizationType>): VisualCardInstance[] {
-  return [
-    { id: "primary", key: "primary", title: `主分析视图 · ${visualizationLabel(types.primary)}`, type: types.primary },
-    { id: "secondary", key: "secondary", title: `补充分析视图 · ${visualizationLabel(types.secondary)}`, type: types.secondary },
-  ];
-}
+
 export function SelfAnalysis() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -3139,108 +2959,32 @@ export function SelfAnalysis() {
           onCancel={cancelVoiceInput}
         />
       )}
-      {scriptEditorOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4">
-          <div className="w-full max-w-[1040px] rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
-            <div className="flex items-center justify-between border-b border-[#f0f0f2] px-5 py-4">
-              <div>
-                <h3 className="text-[14px] text-[#1d1d1f]">脚本编辑</h3>
-                <p className="text-[11px] text-[#aeaeb2] mt-0.5">编辑分析思路、SQL、Python 可视化和 AI 总结后可保存或执行重跑</p>
-              </div>
-            </div>
-            <div className="grid gap-4 p-5 lg:grid-cols-[minmax(0,1.16fr)_minmax(300px,0.84fr)]">
-              <div className="flex h-[470px] min-h-0 flex-col overflow-hidden rounded-lg border border-[#24252a] bg-[#101114]">
-                <div className="flex gap-1 border-b border-white/10 bg-[#15161a] px-2 py-2">
-                  {[
-                    { key: "sql", label: "SQL" },
-                    { key: "python", label: "Python" },
-                    { key: "scenarios", label: "指标情景" },
-                    { key: "summary", label: "AI总结" },
-                  ].map((tab) => (
-                    <button
-                      key={tab.key}
-                      type="button"
-                      onClick={() => setActiveScriptTab(tab.key as ScriptTab)}
-                      className={`rounded-md px-3 py-1.5 text-[12px] transition-colors ${
-                        activeScriptTab === tab.key
-                          ? "bg-white text-[#1d1d1f]"
-                          : "text-[#c7c7cc] hover:bg-white/10 hover:text-white"
-                      }`}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
-                <textarea
-                  value={
-                    activeScriptTab === "sql"
-                      ? sqlScript
-                      : activeScriptTab === "python"
-                        ? pythonScript
-                        : activeScriptTab === "scenarios"
-                          ? analysisScenarios
-                          : analysisSummary
-                  }
-                  onChange={(event) => {
-                    if (activeScriptTab === "sql") setSqlScript(event.target.value);
-                    else if (activeScriptTab === "python") setPythonScript(event.target.value);
-                    else if (activeScriptTab === "scenarios") setAnalysisScenarios(event.target.value);
-                    else setAnalysisSummary(event.target.value);
-                  }}
-                  className="min-h-0 flex-1 resize-none !bg-[#101114] px-4 py-3 font-mono text-[12px] leading-[1.7] !text-[#f5f5f7] outline-none"
-                  style={{ colorScheme: "dark" }}
-                />
-              </div>
-              <div className="flex min-h-[470px] flex-col rounded-lg border border-[#e5e5ea] bg-[#fafbfc] p-4">
-                <label className="mb-3 block">
-                  <span className="mb-1 block text-[12px] text-[#1d1d1f]">分析思路名称</span>
-                  <input
-                    value={scriptPlanName}
-                    onChange={(event) => setScriptPlanName(event.target.value)}
-                    className="h-9 w-full rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
-                  />
-                </label>
-                <div className="mb-2 text-[12px] text-[#1d1d1f]">分析思路</div>
-                <textarea
-                  value={analysisPlan}
-                  onChange={(event) => setAnalysisPlan(event.target.value)}
-                  placeholder="写清楚分析目的、指标、维度、筛选条件、校验规则和输出口径。"
-                  className="min-h-[330px] flex-1 rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[13px] text-[#3a3a3c] leading-[1.7] outline-none focus:border-[#c7c7cc] resize-none"
-                />
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 border-t border-[#f0f0f2] px-5 py-4">
-              <button
-                type="button"
-                onClick={() => setScriptEditorOpen(false)}
-                className="rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[13px] text-[#636366] hover:bg-[#f2f2f7]"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setSaveMessage("修改已保留在当前编辑会话；点击“执行”后才会生成受治理的新 revision");
-                  setScriptEditorOpen(false);
-                }}
-                className="rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[13px] text-[#1d1d1f] hover:bg-[#f2f2f7]"
-              >
-                保存
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setScriptEditorOpen(false);
-                  void rerunAnalysis();
-                }}
-                className="rounded-lg bg-[#1d1d1f] px-4 py-2 text-[13px] text-white hover:bg-[#2c2c2e]"
-              >
-                执行
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <AnalysisScriptEditor
+        open={scriptEditorOpen}
+        sqlScript={sqlScript}
+        pythonScript={pythonScript}
+        analysisScenarios={analysisScenarios}
+        analysisSummary={analysisSummary}
+        analysisPlan={analysisPlan}
+        scriptPlanName={scriptPlanName}
+        activeScriptTab={activeScriptTab}
+        onSqlScriptChange={setSqlScript}
+        onPythonScriptChange={setPythonScript}
+        onAnalysisScenariosChange={setAnalysisScenarios}
+        onAnalysisSummaryChange={setAnalysisSummary}
+        onAnalysisPlanChange={setAnalysisPlan}
+        onScriptPlanNameChange={setScriptPlanName}
+        onActiveScriptTabChange={setActiveScriptTab}
+        onClose={() => setScriptEditorOpen(false)}
+        onSave={() => {
+          setSaveMessage("修改已保留在当前编辑会话；点击“执行”后才会生成受治理的新 revision");
+          setScriptEditorOpen(false);
+        }}
+        onExecute={() => {
+          setScriptEditorOpen(false);
+          void rerunAnalysis();
+        }}
+      />
       <ExecutionHistoryDrawer
         open={executionHistoryOpen}
         tasks={executionHistoryTasks}
@@ -3254,8 +2998,4 @@ export function SelfAnalysis() {
       />
     </div>
   );
-}
-function detectedAnalysisInstitution(files: KnowledgeFileAttachment[], currentInstitution: string) {
-  const detected = Array.from(new Set(files.flatMap((file) => file.detectedInstitutions || detectAttachmentInstitutions(file.name, file.contentPreview || ""))));
-  return detected.length === 1 ? detected[0] : currentInstitution;
 }

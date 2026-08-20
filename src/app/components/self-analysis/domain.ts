@@ -1301,3 +1301,8 @@ export function detectAttachmentInstitutions(fileName: string, contentPreview = 
   const source = `${fileName}\n${contentPreview}`.toLocaleLowerCase("zh-CN");
   return operatingTenantNames.filter((institution) => source.includes(institution.toLocaleLowerCase("zh-CN")));
 }
+
+export function detectedAnalysisInstitution(files: KnowledgeFileAttachment[], currentInstitution: string) {
+  const detected = Array.from(new Set(files.flatMap((file) => file.detectedInstitutions || detectAttachmentInstitutions(file.name, file.contentPreview || ""))));
+  return detected.length === 1 ? detected[0] : currentInstitution;
+}

@@ -100,16 +100,18 @@ class DataAssetTruthTest(unittest.TestCase):
     def test_default_skill_scenes_can_be_deleted_without_bootstrap_resurrection(self) -> None:
         store = InMemoryDataAssetStore(seed_defaults=False)
         store.seed_defaults("tenant_a")
-        scenes = {
-            item["id"]
-            for item in store.list_bundle("tenant_a")["analysis_skills"]
-            if item.get("category") == "场景"
-        }
-        self.assertEqual(scenes, {"scene-weekly-report", "scene-daily-operation", "scene-risk-strategy"})
+        self.assertIsNotNone(store.get_item("tenant_a", "analysis_skill", "scene-weekly-report"))
+        self.assertEqual(
+            {
+                item["id"]
+                for item in store.list_bundle("tenant_a")["analysis_skills"]
+                if item.get("category") == "场景"
+            },
+            set(),
+        )
         self.assertTrue(store.delete_item("tenant_a", "analysis_skill", "scene-weekly-report"))
         store.seed_missing_defaults("tenant_a")
-        remaining = {item["id"] for item in store.list_bundle("tenant_a")["analysis_skills"]}
-        self.assertNotIn("scene-weekly-report", remaining)
+        self.assertIsNone(store.get_item("tenant_a", "analysis_skill", "scene-weekly-report"))
 
     def test_sqlite_defaults_require_explicit_seed(self) -> None:
         with TemporaryDirectory() as tmpdir:

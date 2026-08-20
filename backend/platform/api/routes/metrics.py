@@ -114,8 +114,13 @@ def handle_metric_dictionary_import(handler: Any) -> None:
             created.append(normalized)
             used_ids.add(normalized["metricId"])
             next_number += 1
-        for metric in created:
-            handler.services.metric_dictionary_store.upsert(context.tenant_id, metric, updated_by=context.user_id)
+        store = handler.services.metric_dictionary_store
+        upsert_many = getattr(store, "upsert_many", None)
+        if created and callable(upsert_many):
+            upsert_many(context.tenant_id, created, updated_by=context.user_id)
+        else:
+            for metric in created:
+                store.upsert(context.tenant_id, metric, updated_by=context.user_id)
         handler._write_audit(
             context,
             "metric.dictionary.import",

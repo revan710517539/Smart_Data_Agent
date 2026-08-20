@@ -132,6 +132,22 @@ class MySQLCompatibilityTest(unittest.TestCase):
         self.assertIn("ORDER BY created_at LIMIT %s FOR UPDATE SKIP LOCKED", translated.sql)
         self.assertNotIn("OF jobs", translated.sql)
 
+    def test_coalesce_on_conflict_target_is_translated(self) -> None:
+        translated = translate_postgresql_sql(
+            """
+            INSERT INTO auth_role_assignments(tenant_id, user_id, role_id, granted_by)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (COALESCE(tenant_id, '00000000-0000-0000-0000-000000000000'::uuid), user_id, role_id)
+            DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = now(), expires_at = NULL
+            """,
+            ("tenant-key", "user-key", "role-key", "grantor-key"),
+        )
+        self.assertNotIn("ON CONFLICT", translated.sql)
+        self.assertIn("ON DUPLICATE KEY UPDATE", translated.sql)
+        self.assertIn("granted_by = VALUES(granted_by)", translated.sql)
+        self.assertIn("UTC_TIMESTAMP(6)", translated.sql)
+        self.assertEqual(translated.params, ("tenant-key", "user-key", "role-key", "grantor-key"))
+
     def test_unknown_postgresql_syntax_is_rejected(self) -> None:
         with self.assertRaisesRegex(MySQLSQLTranslationError, "mysql_sql_translation_unsupported"):
             translate_postgresql_sql("SELECT value::money FROM ledger")

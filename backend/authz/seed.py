@@ -52,7 +52,7 @@ MENU_TREE = (
             MenuResource("self-analysis.smart-analysis", "智能分析"),
             MenuResource("self-analysis.my-reports", "我的报表"),
             MenuResource("self-analysis.analysis-config", "分析配置"),
-            MenuResource("task-workbench.skills", "Skill插件"),
+            MenuResource("task-workbench.skills", "skill/插件"),
         ),
     ),
     MenuResource(

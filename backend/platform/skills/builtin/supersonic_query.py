@@ -230,7 +230,7 @@ def _query_selected_csv(csv_source: Any | None, request: SkillRequest) -> SkillR
             "dataset_id": dataset_id,
             "data_source": "governed_multi_institution_page_data" if page_data_selected else "tenant_selected_raw_csv",
             "execution_mode": "selected_multi_page_data" if page_data_selected else "selected_raw_csv",
-            "sql_executed": True,
+            "sql_executed": False,
             "policy_enforced_at_source": True,
             "publishable": bool(page_data_selected),
             "schema_mapping": {

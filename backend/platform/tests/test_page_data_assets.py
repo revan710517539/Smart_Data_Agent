@@ -14,6 +14,7 @@ from backend.platform.api.routes.assets import (
     _page_data_source_table,
     _project_page_data_rows,
     read_page_data_rows_payload,
+    read_page_data_workspace_payload,
 )
 from backend.platform.api.routes.application import handle_application_action_post
 from backend.platform.application import InMemoryApplicationStore
@@ -239,6 +240,58 @@ class PageDataAssetTest(unittest.TestCase):
             actor_user_id="u_admin",
         )
         self.assertEqual(response["module"]["state"]["pageDataLayout"], [saved["id"]])
+        noted = applications.run_action(
+            "tenant_a",
+            "weekly_report",
+            "set_page_data_layout",
+            {
+                "assetIds": [saved["id"]],
+                "notes": [{"id": "note_1", "sourceAssetId": saved["id"], "noteTitle": "结论", "noteBody": "放款金额上升", "config": {}}],
+            },
+            actor_user_id="u_admin",
+        )
+        self.assertEqual(noted["module"]["state"]["pageDataNotes"][0]["sourceAssetId"], saved["id"])
+        self.assertEqual(noted["module"]["state"]["pageDataNotes"][0]["noteTitle"], "结论")
+        sticky = applications.run_action(
+            "tenant_a",
+            "weekly_report",
+            "set_page_sticky_note",
+            {
+                "note": {
+                    "visible": True,
+                    "items": [
+                        {"id": "p1", "type": "paragraph", "text": "周报便签", "html": "<strong>周报便签</strong><script>alert(1)</script>"},
+                        {"id": "img1", "type": "image", "src": "/api/attachments/content?attachment_id=a1", "name": "截图", "attachmentId": "a1", "width": 320, "height": 180},
+                    ],
+                }
+            },
+            actor_user_id="u_admin",
+        )
+        self.assertTrue(sticky["module"]["state"]["pageStickyNote"]["visible"])
+        self.assertEqual(sticky["module"]["state"]["pageStickyNote"]["items"][0]["text"], "周报便签")
+        self.assertEqual(sticky["module"]["state"]["pageStickyNote"]["items"][0]["html"], "<strong>周报便签</strong>alert(1)")
+        self.assertEqual(sticky["module"]["state"]["pageStickyNote"]["items"][1]["type"], "image")
+        analysis_note = applications.run_action(
+            "tenant_a",
+            "self_analysis",
+            "set_page_sticky_note",
+            {
+                "surface": "visual_report:rpt_1",
+                "note": {"visible": True, "items": [{"id": "p1", "type": "paragraph", "text": "报表便签"}]},
+            },
+            actor_user_id="u_admin",
+        )
+        self.assertEqual(analysis_note["module"]["state"]["stickyNotes"]["visual_report:rpt_1"]["items"][0]["text"], "报表便签")
+        viewer_notes = applications.run_action(
+            "tenant_a",
+            "weekly_report",
+            "set_page_data_notes",
+            {
+                "notes": [{"id": "note_viewer", "sourceAssetId": saved["id"], "type": "text", "noteTitle": "查看即可写", "noteBody": "", "config": {}}],
+            },
+            actor_user_id="u_viewer",
+        )
+        self.assertEqual(viewer_notes["module"]["state"]["pageDataNotes"][-1]["noteTitle"], "查看即可写")
         with self.assertRaisesRegex(ValueError, "page_data_layout_invalid"):
             applications.run_action(
                 "tenant_a",
@@ -518,6 +571,34 @@ class PageDataAssetTest(unittest.TestCase):
                 page_data_id=str(single["id"]),
                 consumer="self_analysis",
             )
+
+    def test_page_data_workspace_returns_assets_layout_and_rows_together(self) -> None:
+        store = InMemoryDataAssetStore(seed_defaults=False)
+        bound = _bind_page_data_asset(self._handler(), SimpleNamespace(tenant_id="tenant_a"), self.asset)
+        saved = store.upsert_item("tenant_a", "page_data", bound, updated_by="u_admin", lifecycle_status="active")
+        applications = InMemoryApplicationStore()
+        applications.run_action(
+            "tenant_a",
+            "weekly_report",
+            "set_page_data_layout",
+            {"assetIds": [saved["id"]]},
+            actor_user_id="u_admin",
+        )
+        catalog = _Catalog([self.table], {self.table["relativePath"]: [{"日期": "2026-08-01", "放款金额": "125.5"}]})
+        payload = read_page_data_workspace_payload(
+            SimpleNamespace(
+                data_asset_store=store,
+                application_store=applications,
+                data_acquisition_service=SimpleNamespace(csv_source=_CsvSource(catalog)),
+            ),
+            tenant_id="tenant_a",
+            user_id="u_admin",
+            page_code="weekly_report",
+        )
+        self.assertEqual(payload["layout"], [saved["id"]])
+        self.assertEqual(payload["assets"][0]["id"], saved["id"])
+        self.assertEqual(payload["rows"][saved["id"]]["row_count"], 1)
+        self.assertEqual(payload["rows"][saved["id"]]["rows"][0]["loan_amount"], "125.5")
 
     def test_dashboard_layout_action_requires_super_admin(self) -> None:
         denied = _ApplicationHandler(super_admin=False)

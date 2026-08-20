@@ -305,6 +305,13 @@ def _public_handler_failure(exc: Exception) -> tuple[str, str, bool]:
             False,
         )
     if isinstance(exc, (TimeoutError, ConnectionError, OSError, sqlite3.OperationalError)):
+        lowered = message.lower()
+        if any(token in lowered for token in ("name or service not known", "nodename nor servname", "getaddrinfo", "temporary failure in name resolution", "dns")):
+            return (
+                "dns_resolution_failed",
+                "模型或数据服务地址无法解析。请检查左下角所选模型的 API 地址、企业 DNS/VPN 后重试。",
+                False,
+            )
         return "automation_transient_failure", "分析依赖服务暂时不可用，系统将按重试策略自动恢复。", True
     if isinstance(exc, RuntimeError):
         return "automation_handler_failed", "分析执行遇到可恢复异常，系统将按重试策略自动恢复。", True

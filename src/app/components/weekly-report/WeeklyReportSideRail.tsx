@@ -71,7 +71,7 @@ export function WeeklyReportSideRail({
       wide={railWide}
       onWideChange={setRailWide}
       comments={<CommentsPanel {...commentsProps} showHeader={false} />}
-      analysis={<div className="h-[calc(100vh-98px)]"><AnalysisWorkspacePanel revealedDataPoint={selectedDataPoint} wide={railWide} onWideChange={setRailWide} /></div>}
+      analysis={<div className="h-full min-h-0"><AnalysisWorkspacePanel revealedDataPoint={selectedDataPoint} wide={railWide} onWideChange={setRailWide} /></div>}
       messageBoard={<MessageBoardPanel tenantId={analysisProps.tenantId} userId={analysisProps.userId} pageKey={pageKey} pageTitle={pageTitle} target={selectedTarget} />}
     />
   );

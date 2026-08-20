@@ -28,6 +28,27 @@ export function visualGridSpanForWidth(containerWidth: number, gap: number, widt
   return Math.max(minimumSpan, Math.min(visualGridColumnCount, requested));
 }
 
+export function visualDuplicateLayout(sourceId: string) {
+  const size = readVisualGridItemSize(sourceId);
+  return {
+    layoutSpan: size?.span,
+    layoutHeight: size?.height,
+    maxLayoutSpan: size?.span,
+    maxLayoutHeight: size?.height,
+  };
+}
+
+export function readVisualGridItemSize(id: string) {
+  const item = document.querySelector<HTMLElement>(`[data-resizable-visual-item="${CSS.escape(id)}"]`);
+  if (!item) return null;
+  const span = Number(item.dataset.visualGridSpan);
+  return {
+    span: Number.isFinite(span) && span > 0 ? span : undefined,
+    height: item.offsetHeight || undefined,
+    width: item.offsetWidth || undefined,
+  };
+}
+
 export function packVisualGridItems(
   items: Array<{ id: string; span: number; height: number }>,
   containerWidth: number,

@@ -112,6 +112,21 @@ def system_config_storage_prefix(scope: str) -> str:
     return f"cfg_{digest}__"
 
 
+def system_config_storage_locations(scope: str) -> tuple[tuple[str, str], ...]:
+    """Return (storage_tenant, code_mode) pairs used to read a config scope.
+
+    Relational stores write new virtual-scope rows under ``__global__`` with a
+    digest prefix. Earlier migrations stored the same account-owned rows on a
+    tenant whose code equals the virtual scope, with unprefixed codes. Reads
+    must consult both so existing models and speech do not disappear.
+    """
+
+    normalized = str(scope or "").strip()
+    if _is_virtual_system_config_scope(normalized):
+        return ((GLOBAL_SYSTEM_CONFIG_TENANT, "prefixed"), (normalized, "raw"))
+    return ((normalized, "raw"),)
+
+
 def _is_virtual_system_config_scope(scope: str) -> bool:
     normalized = str(scope or "").strip()
     return normalized.startswith(ACCOUNT_CONFIG_SCOPE_PREFIX) or normalized.startswith(SYSTEM_CONFIG_SCOPE_PREFIX)
@@ -127,7 +142,7 @@ class InMemorySystemConfigStore:
     def list_models(self, tenant_id: str, reveal_secret: bool = False) -> list[dict[str, Any]]:
         models = self._models_by_tenant.get(tenant_id, {})
         items = sorted(models.values(), key=lambda item: item.get("id", ""))
-        return [dict(item) if reveal_secret else _mask_model_secret(item) for item in items]
+        return [dict(item) if reveal_secret else _mask_model_secret(item) for item in items if str(item.get("status") or "") != "disabled"]
 
     def list_models_owned_by(
         self,
@@ -137,7 +152,7 @@ class InMemorySystemConfigStore:
     ) -> list[dict[str, Any]]:
         scope = account_system_config_scope(user_id)
         items = sorted(self._models_by_tenant.get(scope, {}).values(), key=lambda item: item.get("id", ""))
-        return [dict(item) if reveal_secret else _mask_model_secret(item) for item in items]
+        return [dict(item) if reveal_secret else _mask_model_secret(item) for item in items if str(item.get("status") or "") != "disabled"]
 
     def get_model(self, tenant_id: str, model_id: str, reveal_secret: bool = False) -> dict[str, Any] | None:
         model = self._models_by_tenant.get(tenant_id, {}).get(model_id)
@@ -349,6 +364,7 @@ class SQLiteSystemConfigStore:
             (tenant_id,),
         ).fetchall()
         items = [_model_from_payload(json.loads(row["payload"]), reveal_secret=reveal_secret) for row in rows]
+        items = [item for item in items if str(item.get("status") or "") != "disabled"]
         return items if reveal_secret else [_mask_model_secret(item) for item in items]
 
     def list_models_owned_by(
@@ -372,7 +388,7 @@ class SQLiteSystemConfigStore:
             item = _model_from_payload(json.loads(row["payload"] or "{}"), reveal_secret=reveal_secret)
             if item["id"]:
                 collected.setdefault(item["id"], item)
-        items = list(collected.values())
+        items = [item for item in collected.values() if str(item.get("status") or "") != "disabled"]
         return items if reveal_secret else [_mask_model_secret(item) for item in items]
 
     def get_model(self, tenant_id: str, model_id: str, reveal_secret: bool = False) -> dict[str, Any] | None:
@@ -728,7 +744,7 @@ def _normalize_model(model: dict[str, Any]) -> dict[str, Any]:
     normalized["applicationModule"] = normalize_application_module(normalized.get("applicationModule"))
     if not normalized["id"] or not normalized["name"] or not normalized["modelName"] or not normalized["key"] or not normalized["value"]:
         raise ValueError("model id, name, model source, API address and API key are required.")
-    if normalized["status"] not in {"available", "draft"}:
+    if normalized["status"] not in {"available", "draft", "disabled", "testing", "degraded"}:
         normalized["status"] = "available"
     if normalized["testStatus"] not in {"untested", "connected", "failed", "mock"}:
         normalized["testStatus"] = "untested"
@@ -766,7 +782,7 @@ def _model_from_payload(model: dict[str, Any], reveal_secret: bool = False) -> d
         normalized["modelName"] = str(model.get("model_name") or model.get("model") or "").strip()
     if normalized["modelName"] not in {"中转站", "官方网站"}:
         normalized["modelName"] = "中转站" if not normalized["modelName"] else normalized["modelName"]
-    if normalized["status"] not in {"available", "draft"}:
+    if normalized["status"] not in {"available", "draft", "disabled", "testing", "degraded"}:
         normalized["status"] = "available"
     if normalized["testStatus"] not in {"untested", "connected", "failed", "mock"}:
         normalized["testStatus"] = "untested"
@@ -812,7 +828,7 @@ def _speech_from_payload(integration: dict[str, Any], reveal_secret: bool = Fals
         normalized["provider"] = "aliyun_fun_asr"
     if not normalized["source"]:
         normalized["source"] = "阿里云" if normalized["provider"] == "aliyun_fun_asr" else normalized["provider"]
-    if normalized["status"] not in {"available", "draft"}:
+    if normalized["status"] not in {"available", "draft", "disabled"}:
         normalized["status"] = "available"
     if reveal_secret and normalized["apiKey"] and normalized["apiKey"] != MASKED_SECRET:
         normalized["apiKey"] = decrypt_secret(normalized["apiKey"])

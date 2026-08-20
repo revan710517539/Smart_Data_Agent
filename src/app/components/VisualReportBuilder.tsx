@@ -9,6 +9,8 @@ import type { AnalysisRow, VisualizationType } from "./self-analysis/domain";
 import { AnalysisVisualCard } from "./self-analysis/ResultViews";
 import type { VisualizationCardConfig } from "./visualization/visualizationDataModel";
 import { VisualReportCards } from "./visual-report/VisualReportCards";
+import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
+import { useStickyNote } from "./notes/useStickyNote";
 import { isPageDataDataset, rowsFromPageVisualDataset, rowsFromRawVisualDataset, rowsFromTopicVisualDataset, visualReportDatasetReference, type VisualReportDataset } from "./visual-report/reportData";
 
 const emptyConfig: VisualizationCardConfig = {
@@ -49,6 +51,7 @@ export function VisualReportBuilder() {
   const hydratedRef = useRef(false);
   const catalogLoadedRef = useRef(false);
   const savedSignatureRef = useRef("");
+  const stickyNote = useStickyNote("self_analysis", `visual_report:${report.id}`);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,7 +110,7 @@ export function VisualReportBuilder() {
     setSaving(true);
     setError("");
     try {
-      const saved = await upsertVisualReport({ tenantId, userId, report: next });
+      const saved = await upsertVisualReport({ tenantId, userId, report: { ...next, stickyNote: stickyNote.note } });
       savedSignatureRef.current = reportSignature(saved);
       setReport(saved);
       setReports((current) => upsertReportList(current, saved));
@@ -264,6 +267,7 @@ export function VisualReportBuilder() {
           <DestinationButton label="存我的" icon={BookmarkPlus} done={report.destinations.includes("mine")} disabled={saving} onClick={() => void saveDestination("mine")} />
           <DestinationButton label="存经验" icon={Lightbulb} done={report.destinations.includes("experience")} disabled={saving} onClick={() => void saveDestination("experience")} />
           <DestinationButton label="存周报" icon={BookmarkPlus} done={report.destinations.includes("weekly")} disabled={saving} onClick={() => void saveDestination("weekly")} />
+          <StickyNoteButton onClick={stickyNote.show} className="h-8 text-[11px] text-[#53615a]" />
           <button type="button" onClick={() => void previewReport()} disabled={saving} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#dfe7e2] bg-white px-3 text-[11px] text-[#53615a] hover:bg-[#f4f8f5] disabled:cursor-wait disabled:opacity-60" data-visual-report-mode-toggle="true">
             {mode === "browse" ? <Pencil className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
             {mode === "browse" ? "编辑" : "保存"}
@@ -277,6 +281,7 @@ export function VisualReportBuilder() {
         <div className="rounded-xl border border-dashed border-[#dfe7e2] bg-white px-5 py-20 text-center text-[12px] text-[#9ba29e]">正在读取可视化报表…</div>
       ) : (
         <div className="min-h-[620px] rounded-xl border border-[#eef1ef] bg-white p-4 md:p-5" data-visual-report-canvas="true">
+          <StickyNotePanel className="mb-4" note={stickyNote.note} editing={stickyNote.editing} onChange={stickyNote.updateItems} onFinishEdit={stickyNote.finishEdit} onStartEdit={() => stickyNote.setEditing(true)} onHide={stickyNote.hide} uploadContext={stickyNote.uploadContext} />
           <VisualReportCards report={report} editable={mode === "edit"} onChange={setReport} railPageKey="visual-reports" />
           {mode === "edit" && (
             <button type="button" disabled={catalogLoading} onClick={() => setModalOpen(true)} className={`group flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#cfdad3] bg-[#fbfdfc] text-[12px] text-[#758079] transition-colors hover:border-[#8fc8a4] hover:bg-[#f5faf7] hover:text-[#178a53] disabled:cursor-wait disabled:opacity-60 ${report.cards.length ? "mt-4 min-h-[140px]" : "min-h-[560px]"}`} data-add-visual-report-chart="true">

@@ -49,7 +49,7 @@ class PostgreSQLUserDirectoryStore(UserDirectoryStore):
         return self._profile_from_row(row) if row else None
 
     def upsert_profile(self, profile: UserProfile) -> UserProfile:
-        status = profile.status if profile.status in {"invited", "active", "locked", "disabled"} else "active"
+        status = _storage_status(profile.status)
         logged_in = str(profile.last_login or "").strip() not in {"", "未登录"}
         with self._transaction() as connection:
             with connection.cursor() as cursor:
@@ -97,7 +97,7 @@ class PostgreSQLUserDirectoryStore(UserDirectoryStore):
             name=profile.name,
             department=profile.department,
             email=profile.email.lower(),
-            status=status,
+            status=_ui_status(status),
             last_login=profile.last_login,
         )
 
@@ -158,7 +158,7 @@ class PostgreSQLUserDirectoryStore(UserDirectoryStore):
             user_id=str(_value(row, "user_code", 0)),
             name=str(_value(row, "display_name", 1)),
             email=str(_value(row, "email", 2)),
-            status=str(_value(row, "status", 3)),
+            status=_ui_status(str(_value(row, "status", 3))),
             last_login=last_login_text,
             department=str(_value(row, "department", 5) or "未分配部门"),
         )
@@ -172,6 +172,23 @@ class PostgreSQLUserDirectoryStore(UserDirectoryStore):
             except BaseException:
                 connection.rollback()
                 raise
+
+
+_STORAGE_STATUS = {
+    "active": "active",
+    "invited": "invited",
+    "locked": "locked",
+    "disabled": "disabled",
+    "inactive": "disabled",
+}
+
+
+def _storage_status(value: str) -> str:
+    return _STORAGE_STATUS.get(str(value or "").strip(), "active")
+
+
+def _ui_status(value: str) -> str:
+    return "inactive" if str(value or "").strip() in {"disabled", "inactive", "locked"} else str(value or "active")
 
 
 def _value(row: Any, key: str, index: int) -> Any:

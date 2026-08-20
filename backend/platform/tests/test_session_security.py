@@ -73,7 +73,7 @@ class SessionSecurityTest(unittest.TestCase):
 
         self.assertEqual(response.status, 400)
         self.assertEqual(payload["error"], "invalid_request")
-        self.assertEqual(payload["message"], "邮箱或密码不正确，请确认后重试。")
+        self.assertEqual(payload["message"], "本地开发登录密码尚未配置，请在运行环境中设置 SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD 后重启服务。")
 
     def test_development_email_login_requires_the_configured_password(self) -> None:
         with TemporaryDirectory() as tmpdir:

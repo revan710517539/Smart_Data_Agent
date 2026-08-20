@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+from copy import deepcopy
+from time import monotonic
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs
@@ -30,6 +32,10 @@ MULTI_INSTITUTION_PAGE_DATA_SCOPE = "multi_institution"
 MULTI_INSTITUTION_DIMENSION = "__institution_name"
 MULTI_INSTITUTION_RELATIONSHIP_SCOPE = "multi_institution"
 SINGLE_INSTITUTION_RELATIONSHIP_SCOPE = "single_institution"
+_PAGE_DATA_PROJECTION_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+_PAGE_DATA_PROJECTION_CACHE_MAX = 48
+_PAGE_DATA_WORKSPACE_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+_PAGE_DATA_WORKSPACE_CACHE_TTL_SECONDS = 20.0
 
 
 def _authorized_raw_table_catalog(handler: Any, context: Any) -> tuple[dict[str, str], dict[tuple[str, str], dict[str, Any]]]:
@@ -965,6 +971,111 @@ def handle_page_data_rows_get(handler: Any, query: str) -> None:
         send_route_exception(handler, exc)
 
 
+def handle_page_data_workspace_get(handler: Any, query: str) -> None:
+    """Return layout, assigned page-data assets and their rows in one read."""
+
+    try:
+        params = parse_qs(query)
+        context = handler._request_context(params=params)
+        handler._require_asset_permission(context, "read")
+        page_code = first_query_value(params, "page_code")
+        if not page_code:
+            raise ValueError("page_code is required.")
+        handler._send_json(
+            read_page_data_workspace_payload(
+                handler.services,
+                tenant_id=context.tenant_id,
+                user_id=context.user_id,
+                page_code=page_code,
+            )
+        )
+    except Exception as exc:  # pragma: no cover - HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def read_page_data_workspace_payload(
+    services: Any,
+    *,
+    tenant_id: str,
+    user_id: str,
+    page_code: str,
+) -> dict[str, Any]:
+    page_consumers = {"dashboard", "weekly_report", "institution_supervision"}
+    if page_code not in page_consumers:
+        raise ValueError("page_data_page_code_invalid")
+    bundle = services.data_asset_store.list_published_bundle(tenant_id)
+    assets = [
+        item
+        for item in bundle.get("page_data", [])
+        if isinstance(item, dict) and _page_data_belongs_to_page(item, page_code)
+    ]
+    module = services.application_store.get_module(tenant_id, page_code, actor_user_id=user_id)
+    state = module.get("state") if isinstance(module, dict) else {}
+    if not isinstance(state, dict):
+        state = {}
+    saved_layout = [str(item or "").strip() for item in state.get("pageDataLayout") or [] if str(item or "").strip()]
+    available_ids = [str(item.get("id") or "") for item in assets if str(item.get("id") or "")]
+    layout = _resolve_page_data_layout(
+        saved_layout,
+        available_ids,
+        include_newly_assigned=page_code in {"weekly_report", "institution_supervision"},
+    )
+    workspace_key = (
+        tenant_id,
+        user_id,
+        page_code,
+        tuple(layout),
+        tuple(
+            (
+                str(item.get("id") or ""),
+                str(item.get("schemaFingerprint") or ""),
+                str(item.get("updatedAt") or ""),
+                str(item.get("lockVersion") or ""),
+                tuple(item.get("metricFields") or []),
+                tuple(item.get("dimensionFields") or []),
+            )
+            for item in assets
+            if str(item.get("id") or "") in set(layout)
+        ),
+    )
+    cached_workspace = _PAGE_DATA_WORKSPACE_CACHE.get(workspace_key)
+    if cached_workspace and cached_workspace[0] > monotonic():
+        return deepcopy(cached_workspace[1])
+    rows: dict[str, Any] = {}
+    row_errors: dict[str, str] = {}
+    for asset_id in layout:
+        page_data = next((item for item in assets if str(item.get("id") or "") == asset_id), None)
+        if page_data is None:
+            continue
+        try:
+            rows[asset_id] = read_page_data_rows_payload(
+                services,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                page_data_id=asset_id,
+                consumer=page_code,
+                bundle=bundle,
+                page_data=page_data,
+            )
+        except Exception as exc:
+            row_errors[asset_id] = str(exc) or "page_data_rows_unavailable"
+    payload = {
+        "tenant_id": tenant_id,
+        "page_code": page_code,
+        "assets": assets,
+        "layout": layout,
+        "notes": list(state.get("pageDataNotes") or []),
+        "rows": rows,
+        "row_errors": row_errors,
+    }
+    complete = bool(assets) and bool(layout) and all(asset_id in rows for asset_id in layout)
+    if complete:
+        if len(_PAGE_DATA_WORKSPACE_CACHE) >= 32:
+            _PAGE_DATA_WORKSPACE_CACHE.pop(next(iter(_PAGE_DATA_WORKSPACE_CACHE)))
+        _PAGE_DATA_WORKSPACE_CACHE[workspace_key] = (monotonic() + _PAGE_DATA_WORKSPACE_CACHE_TTL_SECONDS, deepcopy(payload))
+    return payload
+
+
 def read_page_data_rows_payload(
     services: Any,
     *,
@@ -972,6 +1083,8 @@ def read_page_data_rows_payload(
     user_id: str,
     page_data_id: str,
     consumer: str,
+    bundle: dict[str, Any] | None = None,
+    page_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve one page-data projection through its governed source chain.
 
@@ -987,11 +1100,13 @@ def read_page_data_rows_payload(
         raise ValueError("page_data_page_code_invalid")
     context = SimpleNamespace(tenant_id=tenant_id, user_id=user_id)
     handler = SimpleNamespace(services=services)
-    bundle = services.data_asset_store.list_published_bundle(tenant_id)
-    page_data = next(
-        (item for item in bundle.get("page_data", []) if str(item.get("id") or "") == page_data_id),
-        None,
-    )
+    if bundle is None:
+        bundle = services.data_asset_store.list_published_bundle(tenant_id)
+    if page_data is None:
+        page_data = next(
+            (item for item in bundle.get("page_data", []) if str(item.get("id") or "") == page_data_id),
+            None,
+        )
     if page_data is None:
         raise PermissionError("page_data_unavailable_for_page")
     scope = _page_data_scope(page_data)
@@ -1011,6 +1126,26 @@ def read_page_data_rows_payload(
         data_fields = [field for field in selected_fields if field != MULTI_INSTITUTION_DIMENSION]
         if not sources or not data_fields or MULTI_INSTITUTION_DIMENSION not in dimensions:
             raise PermissionError("page_data_selected_field_unavailable")
+        cache_key = (
+            "multi",
+            tenant_id,
+            page_data_id,
+            consumer,
+            str(page_data.get("schemaFingerprint") or ""),
+            tuple(selected_fields),
+            tuple(sorted(
+                (
+                    str(source.get("tenantId") or ""),
+                    str(source.get("sourceKey") or ""),
+                    str(source_table.get("contentHash") or ""),
+                    str(source_table.get("schemaFingerprint") or ""),
+                )
+                for source, source_table in sources
+            )),
+        )
+        cached = _page_data_projection_cache_get(cache_key)
+        if cached is not None:
+            return cached
         rows: list[dict[str, str]] = []
         by_tenant: dict[str, list[tuple[dict[str, Any], dict[str, Any], list[dict[str, str]]]]] = {}
         institution_count = len({str(source["tenantId"]) for source, _ in sources})
@@ -1047,6 +1182,18 @@ def read_page_data_rows_payload(
         available = {str(field.get("fieldNameEn") or "") for field in table.get("fields", [])}
         if not selected_fields or any(field not in available for field in selected_fields):
             raise PermissionError("page_data_selected_field_unavailable")
+        cache_key = (
+            "single",
+            tenant_id,
+            page_data_id,
+            consumer,
+            str(table.get("contentHash") or ""),
+            str(table.get("schemaFingerprint") or ""),
+            tuple(selected_fields),
+        )
+        cached = _page_data_projection_cache_get(cache_key)
+        if cached is not None:
+            return cached
         _, source_rows = services.data_acquisition_service.csv_source.for_tenant(tenant_id).read_rows(
             str(table.get("relativePath") or ""),
             max_rows=500,
@@ -1058,7 +1205,7 @@ def read_page_data_rows_payload(
         }
         rows = _project_page_data_rows(table, source_rows, selected_fields)
 
-    return {
+    payload = {
         "tenant_id": tenant_id,
         "page_code": consumer,
         "page_data_id": page_data_id,
@@ -1072,6 +1219,39 @@ def read_page_data_rows_payload(
         "rows": rows,
         "bounded": True,
     }
+    _page_data_projection_cache_put(cache_key, payload)
+    return payload
+
+
+def _page_data_projection_cache_get(key: tuple[Any, ...]) -> dict[str, Any] | None:
+    cached = _PAGE_DATA_PROJECTION_CACHE.get(key)
+    return deepcopy(cached) if cached is not None else None
+
+
+def _page_data_projection_cache_put(key: tuple[Any, ...], payload: dict[str, Any]) -> None:
+    if key not in _PAGE_DATA_PROJECTION_CACHE and len(_PAGE_DATA_PROJECTION_CACHE) >= _PAGE_DATA_PROJECTION_CACHE_MAX:
+        _PAGE_DATA_PROJECTION_CACHE.pop(next(iter(_PAGE_DATA_PROJECTION_CACHE)))
+    _PAGE_DATA_PROJECTION_CACHE[key] = deepcopy(payload)
+
+
+def _page_data_belongs_to_page(item: dict[str, Any], page_code: str) -> bool:
+    scope = _page_data_scope(item)
+    targets = [str(page) for page in item.get("targetPages", [])] if isinstance(item.get("targetPages"), list) else []
+    if page_code == "dashboard":
+        return scope == MULTI_INSTITUTION_PAGE_DATA_SCOPE and "dashboard" in targets
+    if page_code not in {"weekly_report", "institution_supervision"}:
+        return False
+    assigned = "institution_supervision" if "institution_supervision" in targets else "weekly_report"
+    return scope == SINGLE_INSTITUTION_PAGE_DATA_SCOPE and assigned == page_code
+
+
+def _resolve_page_data_layout(saved_layout: list[str], available_ids: list[str], *, include_newly_assigned: bool) -> list[str]:
+    available = set(available_ids)
+    kept = [asset_id for asset_id in saved_layout if asset_id in available]
+    extras = [asset_id for asset_id in available_ids if asset_id not in kept]
+    if include_newly_assigned:
+        return [*kept, *extras]
+    return kept or list(available_ids)
 
 
 def _bind_page_data_asset(handler: Any, context: Any, item: dict[str, Any]) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { MessageSquarePlus, MessageSquareText, PanelRightClose, PanelRightOpen, Sparkles } from "lucide-react";
 
 export type ContextRailTab = "comments" | "analysis" | "message-board";
@@ -39,6 +39,7 @@ export function ContextSideRail({
 }) {
   const [collapsed, setCollapsed] = useState(true);
   const [edgeVisible, setEdgeVisible] = useState(false);
+  const railRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     setCollapsed(true);
@@ -61,13 +62,38 @@ export function ContextSideRail({
     window.dispatchEvent(new CustomEvent(contextRailWideEvent, { detail: { pageKey, wide } }));
   }, [pageKey, wide]);
 
+  useLayoutEffect(() => {
+    if (collapsed) return;
+    const rail = railRef.current;
+    if (!rail) return;
+    const orbClearancePx = 104;
+    const apply = () => {
+      const top = rail.getBoundingClientRect().top;
+      const nextHeight = Math.max(280, Math.round(window.innerHeight - top - orbClearancePx));
+      rail.style.height = `${nextHeight}px`;
+    };
+    apply();
+    const main = document.querySelector("[data-agent-main-shell]");
+    window.addEventListener("resize", apply);
+    window.addEventListener("scroll", apply, true);
+    main?.addEventListener("scroll", apply, { passive: true });
+    return () => {
+      window.removeEventListener("resize", apply);
+      window.removeEventListener("scroll", apply, true);
+      main?.removeEventListener("scroll", apply);
+      rail.style.height = "";
+    };
+  }, [collapsed, pageKey, wide]);
+
   return (
     <>
       <aside
-        className={`weekly-report-print-hidden sticky top-4 h-[calc(100vh-32px)] shrink-0 overflow-hidden rounded-xl border border-[#e5e5ea] bg-white ${wide ? "w-[640px]" : "w-[320px]"} ${collapsed ? "hidden" : ""}`}
+        ref={railRef}
+        className={`weekly-report-print-hidden sticky top-4 mr-20 h-[calc(100vh-8rem)] shrink-0 overflow-hidden rounded-xl border border-[#e5e5ea] bg-white ${wide ? "w-[640px]" : "w-[320px]"} ${collapsed ? "hidden" : ""}`}
         data-context-rail={collapsed ? "collapsed" : "expanded"}
         data-context-page={pageKey}
         data-context-rail-wide={wide ? "true" : "false"}
+        data-context-rail-orb-clearance="true"
       >
         <div className="absolute inset-x-0 top-0 z-[75] border-b border-[#ececf0] bg-white p-2" data-context-rail-tabs="true">
           <div className="grid grid-cols-[32px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-1">
@@ -88,10 +114,10 @@ export function ContextSideRail({
             </button>
           </div>
         </div>
-        <div className="absolute inset-x-0 bottom-0 top-[57px] overflow-y-auto overscroll-contain bg-[#f7f8fa] px-2 pb-4" data-context-rail-scroll="true">
-          <div className={activeTab === "comments" ? "" : "hidden"}>{comments}</div>
-          <div className={activeTab === "analysis" ? "" : "hidden"}>{analysis}</div>
-          <div className={activeTab === "message-board" ? "" : "hidden"}>{messageBoard}</div>
+        <div className="absolute inset-x-0 bottom-0 top-[57px] flex min-h-0 flex-col overflow-y-auto overscroll-contain bg-[#f7f8fa] px-2 pb-3" data-context-rail-scroll="true">
+          <div className={activeTab === "comments" ? "min-h-0" : "hidden"}>{comments}</div>
+          <div className={activeTab === "analysis" ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}>{analysis}</div>
+          <div className={activeTab === "message-board" ? "min-h-0" : "hidden"}>{messageBoard}</div>
         </div>
       </aside>
 

@@ -113,10 +113,15 @@ class InMemoryMessageBoardStore:
             ]
         return sorted(rows, key=lambda item: (item["created_at"], item["message_id"]), reverse=True)
 
-    def list_all(self, *, query: str = "", offset: int = 0, limit: int = 50) -> tuple[list[dict[str, Any]], int]:
+    def list_all(self, *, tenant_id: str = "", query: str = "", offset: int = 0, limit: int = 50) -> tuple[list[dict[str, Any]], int]:
         needle = query.strip().lower()
+        scoped = str(tenant_id or "").strip()
         with self._guard:
-            rows = [dict(entry) for entry in self._entries.values()]
+            rows = [
+                dict(entry)
+                for entry in self._entries.values()
+                if not scoped or entry.get("tenant_id") == scoped
+            ]
         if needle:
             rows = [
                 entry for entry in rows
@@ -280,12 +285,17 @@ class SQLiteMessageBoardStore:
         ).fetchall()
         return [_row(row) for row in rows]
 
-    def list_all(self, *, query: str = "", offset: int = 0, limit: int = 50) -> tuple[list[dict[str, Any]], int]:
+    def list_all(self, *, tenant_id: str = "", query: str = "", offset: int = 0, limit: int = 50) -> tuple[list[dict[str, Any]], int]:
         pattern = f"%{query.strip().lower()}%"
-        where = "" if not query.strip() else """
-            WHERE lower(author_name || ' ' || author_user_id || ' ' || content || ' ' || page_title || ' ' || tenant_id) LIKE ?
-        """
-        params: tuple[Any, ...] = () if not where else (pattern,)
+        clauses: list[str] = []
+        params: list[Any] = []
+        if str(tenant_id or "").strip():
+            clauses.append("tenant_id = ?")
+            params.append(str(tenant_id).strip())
+        if query.strip():
+            clauses.append("lower(author_name || ' ' || author_user_id || ' ' || content || ' ' || page_title || ' ' || tenant_id) LIKE ?")
+            params.append(pattern)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         total = int(self._conn.execute(f"SELECT COUNT(*) FROM platform_message_board_entries {where}", params).fetchone()[0])
         rows = self._conn.execute(
             f"SELECT * FROM platform_message_board_entries {where} ORDER BY created_at DESC, message_id DESC LIMIT ? OFFSET ?",

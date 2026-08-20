@@ -5,7 +5,7 @@ import type { SelectedDataPoint } from "../../services/analysisWorkspaceApi";
 import { AnalysisWorkspacePanel, analysisWorkspaceRevealEvent } from "../analysis-workspace/AnalysisWorkspaceRail";
 import { MessageBoardPanel } from "../message-board/MessageBoardPanel";
 import { CommentsPanel } from "../weekly-report/CommentsPanel";
-import type { CommentTarget } from "../weekly-report/domain";
+import { commentTargetFromRailReveal, type CommentTarget } from "../weekly-report/domain";
 import { useInstitutionCommentThread } from "./useInstitutionCommentThread";
 import {
   ContextSideRail,
@@ -15,6 +15,7 @@ import {
 } from "./ContextSideRail";
 
 const pageDefinitions: Record<string, { pageKey: string; pageTitle: string }> = {
+  "/dashboard": { pageKey: "multi-institution-analysis", pageTitle: "多机构分析" },
   "/funnel": { pageKey: "funnel", pageTitle: "业务漏斗" },
   "/sandbox": { pageKey: "sandbox", pageTitle: "经营沙盘" },
   "/supervision": { pageKey: "supervision", pageTitle: "机构督导" },
@@ -77,7 +78,7 @@ export function GlobalContextRail() {
         values: detail.target.values,
       };
       setSelectedDataPoint(dataPoint);
-      const commentTarget = toCommentTarget(dataPoint);
+      const commentTarget = commentTargetFromRailReveal(detail.target);
       setSelectedTarget(commentTarget);
       if (detail.tab === "comments") {
         setDraftTargets((current) => current.some((item) => item.id === commentTarget.id) ? current : [commentTarget, ...current]);
@@ -95,7 +96,7 @@ export function GlobalContextRail() {
       const detail = (event as CustomEvent<{ selectedDataPoint?: SelectedDataPoint; surface?: string }>).detail;
       if (detail?.surface && detail.surface !== "context-rail") return;
       setSelectedDataPoint(detail?.selectedDataPoint);
-      if (detail?.selectedDataPoint) setSelectedTarget(toCommentTarget(detail.selectedDataPoint));
+      if (detail?.selectedDataPoint) setSelectedTarget(commentTargetFromRailReveal(detail.selectedDataPoint));
       setActiveTab("analysis");
     };
     window.addEventListener(analysisWorkspaceRevealEvent, revealWorkspace);
@@ -125,7 +126,7 @@ export function GlobalContextRail() {
   };
 
   return (
-    <div className="hidden shrink-0 bg-[#f8f8fa] py-4 pr-4 lg:block" data-global-context-rail="true">
+    <div className="hidden shrink-0 bg-[#f8f8fa] pb-24 pt-4 pr-4 lg:block" data-global-context-rail="true">
       <ContextSideRail
         pageKey={definition.pageKey}
         activeTab={activeTab}
@@ -157,29 +158,9 @@ export function GlobalContextRail() {
             onCommentRepliesToggle={(commentId, expanded) => setExpandedCommentReplies((current) => ({ ...current, [commentId]: expanded }))}
           />
         )}
-        analysis={<div className="h-[calc(100vh-98px)]"><AnalysisWorkspacePanel revealedDataPoint={selectedDataPoint} wide={wide} onWideChange={setWide} /></div>}
+        analysis={<div className="h-full min-h-0"><AnalysisWorkspacePanel revealedDataPoint={selectedDataPoint} wide={wide} onWideChange={setWide} /></div>}
         messageBoard={<MessageBoardPanel tenantId={tenantId} userId={userId} pageKey={definition.pageKey} pageTitle={definition.pageTitle} target={selectedTarget} />}
       />
     </div>
   );
-}
-
-function toCommentTarget(target: SelectedDataPoint): CommentTarget {
-  const selectedText = valuePreview(target.values);
-  return {
-    id: target.targetId,
-    contextTargetId: target.targetId,
-    label: target.label || target.targetId,
-    type: target.targetType === "chart" ? "图表" : target.targetType === "text" ? "文本" : "数据",
-    targetKind: target.targetType === "chart" ? "chart" : target.targetType === "text" ? "paragraph" : "table",
-    selectedText,
-    anchorTop: 12,
-  };
-}
-
-function valuePreview(values?: Record<string, unknown>) {
-  if (!values) return "当前页面整体";
-  const preferred = values.analysis_summary || values.question || values.metric_name || values.visualization_type;
-  if (preferred) return String(preferred).slice(0, 500);
-  try { return JSON.stringify(values).slice(0, 500); } catch { return "当前可视化"; }
 }

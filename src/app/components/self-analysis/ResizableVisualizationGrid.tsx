@@ -12,6 +12,7 @@ type VisualGridOverride = { span?: number; height?: number };
 const visualGridGap = 16;
 const defaultVisualGridHeight = 380;
 const minimumVisualGridHeight = 280;
+const minimumTextVisualGridHeight = 180;
 
 export function ResizableVisualizationGrid({ children, editable = true }: { children: ReactNode; editable?: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -20,10 +21,14 @@ export function ResizableVisualizationGrid({ children, editable = true }: { chil
   const [activeItemId, setActiveItemId] = useState("");
   const itemRefs = useRef(new Map<string, HTMLDivElement>());
   const frameRef = useRef<number | null>(null);
-  const entries = useMemo(() => Children.toArray(children).filter(isValidElement).map((child, index) => ({
-    id: child.key === null ? `visual-${index}` : String(child.key).replace(/^\.\$/, ""),
-    child,
-  })), [children]);
+  const entries = useMemo(() => Children.toArray(children).filter(isValidElement).map((child, index) => {
+    const hints = gridHintsFromChild(child.props);
+    return {
+      id: child.key === null ? `visual-${index}` : String(child.key).replace(/^\.\$/, ""),
+      child,
+      hints,
+    };
+  }), [children]);
   const defaultSpan = defaultVisualGridSpan(entries.length);
 
   useEffect(() => {
@@ -42,11 +47,17 @@ export function ResizableVisualizationGrid({ children, editable = true }: { chil
   }, [entries]);
 
   const effectiveWidth = Math.max(1, containerWidth);
-  const layout = useMemo(() => packVisualGridItems(entries.map((entry) => ({
-    id: entry.id,
-    span: overrides[entry.id]?.span ?? defaultSpan,
-    height: overrides[entry.id]?.height ?? defaultVisualGridHeight,
-  })), effectiveWidth, visualGridGap), [defaultSpan, effectiveWidth, entries, overrides]);
+  const layout = useMemo(() => packVisualGridItems(entries.map((entry) => {
+    const maxSpan = entry.hints.maxSpan;
+    const maxHeight = entry.hints.maxHeight;
+    const span = overrides[entry.id]?.span ?? entry.hints.span ?? defaultSpan;
+    const height = overrides[entry.id]?.height ?? entry.hints.height ?? defaultVisualGridHeight;
+    return {
+      id: entry.id,
+      span: maxSpan ? Math.min(span, maxSpan) : span,
+      height: maxHeight ? Math.min(height, maxHeight) : height,
+    };
+  }), effectiveWidth, visualGridGap), [defaultSpan, effectiveWidth, entries, overrides]);
   const positionById = useMemo(() => new Map(layout.positions.map((position) => [position.id, position])), [layout.positions]);
 
   const startResize = (id: string, direction: ResizeDirection, event: ReactPointerEvent<HTMLDivElement>) => {
@@ -60,6 +71,10 @@ export function ResizableVisualizationGrid({ children, editable = true }: { chil
     const startY = event.clientY;
     const startWidth = position.width;
     const startHeight = position.height;
+    const hints = entries.find((entry) => entry.id === id)?.hints;
+    const maxWidth = hints?.maxSpan ? visualGridWidthForSpan(effectiveWidth, visualGridGap, hints.maxSpan) : Number.POSITIVE_INFINITY;
+    const maxHeight = hints?.maxHeight ?? Number.POSITIVE_INFINITY;
+    const minHeight = hints?.maxHeight ? minimumTextVisualGridHeight : minimumVisualGridHeight;
     let nextWidth = startWidth;
     let nextHeight = startHeight;
     const previousCursor = document.body.style.cursor;
@@ -73,8 +88,8 @@ export function ResizableVisualizationGrid({ children, editable = true }: { chil
       const vertical = direction.includes("north") || direction.includes("south");
       const widthDelta = direction.includes("west") ? startX - pointerEvent.clientX : pointerEvent.clientX - startX;
       const heightDelta = direction.includes("north") ? startY - pointerEvent.clientY : pointerEvent.clientY - startY;
-      nextWidth = horizontal ? Math.max(visualGridWidthForSpan(effectiveWidth, visualGridGap, 1), startWidth + widthDelta) : startWidth;
-      nextHeight = vertical ? Math.max(minimumVisualGridHeight, startHeight + heightDelta) : startHeight;
+      nextWidth = horizontal ? Math.min(maxWidth, Math.max(visualGridWidthForSpan(effectiveWidth, visualGridGap, 1), startWidth + widthDelta)) : startWidth;
+      nextHeight = vertical ? Math.min(maxHeight, Math.max(minHeight, startHeight + heightDelta)) : startHeight;
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
       frameRef.current = requestAnimationFrame(() => {
         const item = itemRefs.current.get(id);
@@ -163,6 +178,21 @@ export function ResizableVisualizationGrid({ children, editable = true }: { chil
       })}
     </div>
   );
+}
+
+function gridHintsFromChild(props: unknown) {
+  const record = props && typeof props === "object" ? props as Record<string, unknown> : {};
+  return {
+    span: numberHint(record["data-visual-grid-span"] ?? record.visualGridSpan),
+    height: numberHint(record["data-visual-grid-height"] ?? record.visualGridHeight),
+    maxSpan: numberHint(record["data-visual-grid-max-span"] ?? record.visualGridMaxSpan),
+    maxHeight: numberHint(record["data-visual-grid-max-height"] ?? record.visualGridMaxHeight),
+  };
+}
+
+function numberHint(value: unknown) {
+  const next = Number(value);
+  return Number.isFinite(next) && next > 0 ? next : undefined;
 }
 
 function resizeCursor(direction: ResizeDirection) {

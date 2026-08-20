@@ -102,7 +102,7 @@ export async function fetchMessageBoardAdmin(
   const params = new URLSearchParams({ query, page: String(page), page_size: String(pageSize) });
   return apiRequest<{ messages: MessageBoardEntry[]; total: number; page: number; page_size: number }>(
     `/api/message-board/admin?${params}`,
-    { context },
+    { context, readCache: { ttlMs: 8_000, tags: ["message-board"] } },
   );
 }
 

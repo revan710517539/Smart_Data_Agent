@@ -20,6 +20,7 @@ import { TrustedArtifactPanel } from "./TrustedArtifactPanel";
 type PageDefinition = { pageKey: string; title: string; prompt: string };
 
 const pageDefinitions: Record<string, PageDefinition> = {
+  "/dashboard": { pageKey: "multi-institution-analysis", title: "多机构分析", prompt: "比较各机构消费贷与经营贷的规模、趋势、效率和风险，给出关键差异与行动建议。" },
   "/funnel": { pageKey: "funnel", title: "业务漏斗", prompt: "分析当前转化漏斗的主要断点与影响因素。" },
   "/sandbox": { pageKey: "sandbox", title: "经营沙盘", prompt: "分析当前经营策略、投入产出和情景变化。" },
   "/supervision": { pageKey: "supervision", title: "机构督导", prompt: "分析当前机构表现差异、风险和督导建议。" },
@@ -248,7 +249,8 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
                 </button>
               ))}
             </div>
-            <button type="button" onClick={() => onWideChange?.(!wide)} aria-label={wide ? "恢复右栏宽度" : "放大右栏"} title={wide ? "恢复右栏宽度" : "放大右栏"} className="ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#636366] outline-none hover:bg-white focus-visible:outline-none" data-global-analysis-wide-toggle="true">{wide ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}</button>
+            <button type="button" onClick={() => void createBranch()} disabled={!activeThread || busy} aria-label="新建分析分支" title="新建分支" className="ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#636366] outline-none hover:bg-white focus-visible:outline-none disabled:opacity-40" data-analysis-branch-create="true"><GitBranch className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={() => onWideChange?.(!wide)} aria-label={wide ? "恢复右栏宽度" : "放大右栏"} title={wide ? "恢复右栏宽度" : "放大右栏"} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#636366] outline-none hover:bg-white focus-visible:outline-none" data-global-analysis-wide-toggle="true">{wide ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}</button>
           </div>
           <div className="flex-1 overflow-y-auto bg-[#f8f8fa] p-2.5">
             {!activeThread?.turns.length ? <div className="rounded-lg border border-dashed border-[#d9d9de] bg-white px-4 py-8 text-center text-[11px] leading-5 text-[#8a8a8e]">{selectedDataPoint ? `基于“${analysisTitle}”继续追问、拆解或验证。` : definition.prompt}</div> : null}
@@ -257,14 +259,15 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
             </div>
             {notice ? <div className="mt-2 rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[10px] text-[#636366]">{notice}</div> : null}
           </div>
-          <div className="border-t border-[#ececf0] bg-white p-2.5">
-            <div className="mb-2 flex items-center gap-1.5">
-              <button type="button" onClick={() => void createBranch()} disabled={!activeThread || busy} className="flex h-7 items-center gap-1 rounded-md border border-[#e5e5ea] px-2 text-[10px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-40"><GitBranch className="h-3 w-3" />新建分支</button>
-              {threads.filter((thread) => thread.parent_thread_id && thread.status === "active" && thread.thread_id !== activeThread?.thread_id).map((thread) => <label key={thread.thread_id} className="flex h-7 items-center gap-1 rounded-md border border-[#e5e5ea] px-2 text-[9px] text-[#636366]"><input type="checkbox" checked={selectedMergeIds.includes(thread.thread_id)} onChange={(event) => setSelectedMergeIds((current) => event.target.checked ? [...current, thread.thread_id] : current.filter((id) => id !== thread.thread_id))} />{thread.title}</label>)}
-              {selectedMergeIds.length ? <button type="button" onClick={() => void mergeSelected()} disabled={busy} className="flex h-7 items-center gap-1 rounded-md bg-[#1d1d1f] px-2 text-[10px] text-white"><GitMerge className="h-3 w-3" />合并</button> : null}
-            </div>
-            <div className="flex items-end gap-2 rounded-lg border border-[#d9d9de] bg-white px-2.5 py-2 focus-within:border-[#8a8a8e]">
-              <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} rows={2} placeholder="基于当前页面继续追问…" className="min-h-[42px] flex-1 resize-none bg-transparent text-[11px] leading-5 text-[#1d1d1f] outline-none placeholder:text-[#aeaeb2]" />
+          <div className="shrink-0 border-t border-[#ececf0] bg-white p-2" data-analysis-workspace-composer="true">
+            {visibleThreads.some((thread) => thread.parent_thread_id && thread.status === "active" && thread.thread_id !== activeThread?.thread_id) ? (
+              <div className="mb-2 flex items-center gap-1.5">
+                {visibleThreads.filter((thread) => thread.parent_thread_id && thread.status === "active" && thread.thread_id !== activeThread?.thread_id).map((thread) => <label key={thread.thread_id} className="flex h-7 items-center gap-1 rounded-md border border-[#e5e5ea] px-2 text-[9px] text-[#636366]"><input type="checkbox" checked={selectedMergeIds.includes(thread.thread_id)} onChange={(event) => setSelectedMergeIds((current) => event.target.checked ? [...current, thread.thread_id] : current.filter((id) => id !== thread.thread_id))} />{thread.title}</label>)}
+                {selectedMergeIds.length ? <button type="button" onClick={() => void mergeSelected()} disabled={busy} className="flex h-7 items-center gap-1 rounded-md bg-[#1d1d1f] px-2 text-[10px] text-white"><GitMerge className="h-3 w-3" />合并</button> : null}
+              </div>
+            ) : null}
+            <div className="flex items-end gap-2 rounded-lg border border-[#d9d9de] bg-white px-2.5 py-1.5 focus-within:border-[#8a8a8e]">
+              <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} rows={2} placeholder="基于当前页面继续追问…" className="min-h-[36px] flex-1 resize-none bg-transparent text-[11px] leading-5 text-[#1d1d1f] outline-none placeholder:text-[#aeaeb2]" />
               <button type="button" onClick={() => void submit()} disabled={!question.trim() || busy || !activeThread} className="flex h-7 w-7 items-center justify-center rounded-full bg-[#1d1d1f] text-white disabled:bg-[#d1d1d6]" aria-label="提交追问">{busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}</button>
             </div>
           </div>

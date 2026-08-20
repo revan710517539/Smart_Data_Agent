@@ -63,6 +63,8 @@ assert.ok(!systemSettings.includes("系统预置地址"), "模型配置不得隐
 assert.match(platformContext, /normalized === "sda-internal" \|\| normalized === "SDA 内部环境"/, "机构选择器不得暴露内部技术租户");
 assert.match(accessService, /existing_by_email and not requested_user_id[\s\S]*?用户邮箱已存在/, "新增用户不得用已存在邮箱隐式覆盖已有账号");
 assert.match(selfAnalysis, /reportKindTab === "analysis" \? "新建智能分析" : "新建可视化报表"/);
+assert.match(selfAnalysis, />精选<\/button>/);
+assert.match(selfAnalysis, /reportKindTab !== "featured"/);
 assert.ok(!selfAnalysis.includes(">全部</button>"), "我的报表智能分析 Tab 不得保留全部按钮");
 
 assert.match(pagination, /pageSize = 20/);

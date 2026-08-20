@@ -96,8 +96,15 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
         )
         return
     if isinstance(exc, KeyError):
+        identity_messages = {
+            "tenant_not_provisioned": ("tenant_not_provisioned", "目标机构尚未开通，请先确认机构目录。"),
+            "user_not_provisioned": ("user_not_provisioned", "用户档案不存在或尚未生效，请检查用户状态后重试。"),
+            "role_not_provisioned": ("role_not_provisioned", "角色尚未开通，请检查机构角色后重试。"),
+        }
+        error_text = str(exc.args[0]) if exc.args else "not_found"
+        error_code, message = identity_messages.get(error_text, ("not_found", "The requested resource was not found."))
         handler._send_json(
-            {"error": "not_found", "message": "The requested resource was not found.", "request_id": request_id},
+            {"error": error_code, "message": message, "request_id": request_id},
             HTTPStatus.NOT_FOUND,
             headers={"X-Request-Id": request_id},
         )
@@ -107,10 +114,12 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             "duplicate_model_name": "模型名称已存在，请使用不同的模型名称。",
             "invalid_model_application_module": "应用模块不在系统登记的可选范围内。",
             "invalid_login_credentials": "邮箱或密码不正确，请确认后重试。",
+            "development_login_password_unconfigured": "本地开发登录密码尚未配置，请在运行环境中设置 SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD 后重启服务。",
             "analysis_selected_table_semantics_not_registered": "所选数据表尚未登记可执行的字段与指标映射，系统不会改用其他数据源。请在数据管理完成映射后重试，或选择已登记的数据表。",
             "analysis_production_data_table_required": "当前分析没有绑定可执行的数据表。请先在页面选择当前机构的数据表，再发起分析。",
             "analysis_automation_disabled": "智能分析任务已被管理员停用，请联系机构管理员启用后重试。",
             "automation_task_is_not_active": "智能分析任务当前不可运行，请刷新页面后重试；若仍失败，请联系机构管理员。",
+            "supervisor_question_required": "请先输入要发给 Agent 总管的问题。",
         }
         metric_workbook_messages = {
             "请上传 .xlsx 格式的指标文件。": ("metric_workbook_file_type", "仅支持 .xlsx 格式的指标文件，请重新选择。"),
@@ -144,6 +153,15 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
         if error_text.startswith("用户邮箱已存在"):
             error_code = "access_user_email_conflict"
             message = "该邮箱已绑定其他用户，请检查邮箱或编辑已有用户。"
+        if error_text.startswith("用户标识已存在"):
+            error_code = "access_user_identity_conflict"
+            message = "用户标识已存在，请检查用户账号后重试。"
+        if error_text.startswith("机构默认操作员角色不存在"):
+            error_code = "access_user_role_not_found"
+            message = error_text
+        if error_text.startswith("unknown role:"):
+            error_code = "access_user_role_not_found"
+            message = "角色不存在，请检查机构角色后重试。"
         if error_text.startswith("Unsupported metric:"):
             error_code = "analysis_metric_not_bound_to_selected_data"
             message = "当前问题中的指标没有绑定到已选数据表。请先选择包含该指标的当前机构数据表，再发起分析。"

@@ -79,6 +79,24 @@ class TenantRouteTest(unittest.TestCase):
         )
         self.assertEqual(cursor.params, ("__global__", "tenant:sda-internal"))
 
+    def test_relational_runtime_hides_virtual_account_and_system_scopes(self) -> None:
+        cursor = _Cursor(
+            [
+                ("account:u_super_admin", "u_super_admin", "active"),
+                ("system:default-model-template", "system:default-model-template", "active"),
+                ("tenant_demo", "tenant_demo", "active"),
+                ("tenant:兰州银行", "兰州银行", "active"),
+            ]
+        )
+        handler = SimpleNamespace(services=SimpleNamespace(primary_database_pool=_Pool(cursor)))
+
+        tenants = _active_tenants(handler)
+
+        self.assertEqual(
+            tenants,
+            [{"id": "tenant:兰州银行", "name": "兰州银行", "status": "active"}],
+        )
+
     def test_relational_catalog_failure_does_not_fall_back_to_static_tenants(self) -> None:
         handler = SimpleNamespace(
             services=SimpleNamespace(

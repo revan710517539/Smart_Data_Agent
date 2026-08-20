@@ -48,9 +48,10 @@ import {
   X,
   ChevronsDown,
   ChevronsUp,
+  Type,
 } from "lucide-react";
 
-export type VisualizationType = "kpi" | "line" | "area" | "column" | "bar" | "stacked_bar" | "combo" | "donut" | "scatter" | "funnel" | "treemap" | "radar" | "table" | "pivot";
+export type VisualizationType = "kpi" | "line" | "area" | "column" | "bar" | "stacked_bar" | "combo" | "donut" | "scatter" | "funnel" | "treemap" | "radar" | "table" | "pivot" | "text";
 export type ResultVisualKey = "primary" | "secondary";
 export type ResultMode = "thinking" | "visual" | "data" | "summary";
 export type SaveTarget = "mine" | "report" | "topic" | "experience";
@@ -942,6 +943,7 @@ export const visualizationOptions: { type: VisualizationType; label: string; ico
   { type: "radar", label: "雷达图", icon: BarChart3 },
   { type: "table", label: "多维表格", icon: Table2 },
   { type: "pivot", label: "交叉表", icon: Table2 },
+  { type: "text", label: "文本框", icon: Type },
 ];
 
 function normalizedVisualizationType(type?: string): VisualizationType | null {
@@ -960,6 +962,7 @@ function normalizedVisualizationType(type?: string): VisualizationType | null {
   if (normalized === "radar") return "radar";
   if (normalized === "table") return "table";
   if (normalized === "pivot" || normalized === "crosstab") return "pivot";
+  if (normalized === "text" || normalized === "note" || normalized === "textbox") return "text";
   return null;
 }
 
@@ -1018,6 +1021,7 @@ export function inferVisualTypes(
 }
 
 export function visualizationLabel(type: VisualizationType) {
+  if (type === "text") return "文本框";
   return visualizationOptions.find((option) => option.type === type)?.label ?? "图表";
 }
 

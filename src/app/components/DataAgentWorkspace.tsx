@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation } from "react-router";
 import {
   BrainCircuit,
@@ -7,8 +7,10 @@ import {
   CheckCircle2,
   AlertCircle,
   ArrowUpRight,
+  ChevronDown,
   Plus,
-  PencilLine,
+  Pencil,
+  Trash2,
   Zap,
   FileText,
   Bell,
@@ -127,6 +129,38 @@ const memoryOutputLabels: Record<MemoryOutputType, string> = {
 
 const DEFAULT_MEMORY_PROMPT = "从所选知识文件的当前版本中，提炼会改变后续判断、分析方法或运营动作的本质信息。删除背景复述、常识、套话、表层摘要和同义重复；没有足够证据时不要生成记忆。";
 const DEFAULT_AUTOMATIC_ANALYSIS_PROMPT = "当监控指标命中异动规则时，结合指标所在数据表、指标描述、统计口径、所选 Skill 和实际查询证据进行归因分析，说明异动表现、可能原因、证据边界、影响与建议动作。";
+const taskControlClass = "h-9 w-full rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#1d1d1f] outline-none focus:border-[#c7c7cc] disabled:cursor-not-allowed disabled:bg-[#fafbfc] disabled:text-[#636366]";
+const taskSelectClass = `${taskControlClass} appearance-none pr-8`;
+const taskAreaClass = "min-h-20 w-full resize-y rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[12px] leading-5 text-[#1d1d1f] outline-none focus:border-[#c7c7cc] disabled:cursor-not-allowed disabled:bg-[#fafbfc]";
+
+function TaskSelect({
+  "aria-label": ariaLabel,
+  value,
+  disabled,
+  onChange,
+  children,
+}: {
+  "aria-label": string;
+  value: string;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="relative">
+      <select
+        aria-label={ariaLabel}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        className={taskSelectClass}
+      >
+        {children}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#8a8a8e]" />
+    </div>
+  );
+}
 
 type AgentSection = "tasks" | "todos" | "skills";
 
@@ -155,7 +189,7 @@ export function DataAgentWorkspace() {
       action: "新建任务",
     },
     skills: {
-      title: "Skill插件",
+      title: "skill/插件",
       subtitle: "管理可应用于智能分析、市场洞察、经营分析和多机构分析的分析技能",
       action: "加载插件",
     },
@@ -170,6 +204,8 @@ export function DataAgentWorkspace() {
   const [taskModalMode, setTaskModalMode] = useState<"create" | "detail" | "edit">("create");
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [taskForm, setTaskForm] = useState<AgentTaskFormState>(() => emptyTaskForm());
+  const [pendingDeleteTask, setPendingDeleteTask] = useState<AgentTask | null>(null);
+  const [deletingTask, setDeletingTask] = useState(false);
   const [knowledgeFiles, setKnowledgeFiles] = useState<KnowledgeFileAsset[]>([]);
   const [topicTables, setTopicTables] = useState<TopicTableAsset[]>([]);
   const [analysisSkills, setAnalysisSkills] = useState<AnalysisSkillAsset[]>([]);
@@ -207,11 +243,11 @@ export function DataAgentWorkspace() {
         fetchMetricDictionary({ tenantId, userId }),
       ]);
       if (cancelled) return;
-      setKnowledgeFiles(assets.status === "fulfilled" ? assets.value.knowledge_files : []);
-      setTopicTables(assets.status === "fulfilled" ? assets.value.topic_tables : []);
-      setAnalysisSkills(assets.status === "fulfilled" ? assets.value.analysis_skills : []);
-      setAnalysisModels(settings.status === "fulfilled" ? settings.value.models : []);
-      setMetricDictionary(metrics.status === "fulfilled" ? metrics.value.metrics : []);
+      setKnowledgeFiles(assets.status === "fulfilled" ? assets.value.knowledge_files || [] : []);
+      setTopicTables(assets.status === "fulfilled" ? assets.value.topic_tables || [] : []);
+      setAnalysisSkills(assets.status === "fulfilled" ? assets.value.analysis_skills || [] : []);
+      setAnalysisModels(settings.status === "fulfilled" ? settings.value.models || [] : []);
+      setMetricDictionary(metrics.status === "fulfilled" ? metrics.value.metrics || [] : []);
     };
     void loadTasks();
     void loadAcquisitionContext();
@@ -413,6 +449,7 @@ export function DataAgentWorkspace() {
             onCreate={openTaskCreate}
             onDetail={openTaskDetail}
             onEdit={openTaskEdit}
+            onDelete={(task) => setPendingDeleteTask(task)}
             onTaskAction={(task, action) => void runTaskAction(task, action)}
           />
         </div>
@@ -423,7 +460,7 @@ export function DataAgentWorkspace() {
           <div className="rounded-xl border border-[#f0f0f2] bg-white p-5">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h3 className="text-[14px] text-[#1d1d1f]">Skill插件管理</h3>
+                <h3 className="text-[14px] text-[#1d1d1f]">skill/插件管理</h3>
                 <p className="mt-1 max-w-3xl text-[12px] leading-[1.7] text-[#8a8a8e]">
                   这些插件沉淀了主题分析方法、展示样式和提示词逻辑，可在智能分析、市场洞察、经营分析、多机构分析中被分析引擎调用。
                 </p>
@@ -459,6 +496,38 @@ export function DataAgentWorkspace() {
         </div>
       )}
 
+      {pendingDeleteTask && (
+        <TaskDeleteConfirm
+          task={pendingDeleteTask}
+          deleting={deletingTask}
+          onCancel={() => {
+            if (!deletingTask) setPendingDeleteTask(null);
+          }}
+          onConfirm={() => {
+            void (async () => {
+              if (!pendingDeleteTask) return;
+              setDeletingTask(true);
+              try {
+                await updateAutomationTask({
+                  tenantId,
+                  userId,
+                  taskId: pendingDeleteTask.id,
+                  expectedLockVersion: Number(pendingDeleteTask.lockVersion || 0),
+                  patch: { status: "disabled" },
+                });
+                setPendingDeleteTask(null);
+                await refreshWorkspace();
+                setWorkspaceNotice(`已终止任务「${pendingDeleteTask.name}」`);
+              } catch (error) {
+                setWorkspaceNotice(error instanceof Error ? `任务删除失败：${error.message}` : "任务删除失败");
+              } finally {
+                setDeletingTask(false);
+              }
+            })();
+          }}
+        />
+      )}
+
       {taskModalOpen && (
         <AgentTaskModal
           mode={taskModalMode}
@@ -485,6 +554,7 @@ type TaskSectionProps = {
   onCreate: () => void;
   onDetail: (task: AgentTask) => void;
   onEdit: (task: AgentTask) => void;
+  onDelete: (task: AgentTask) => void;
   onTaskAction: (task: AgentTask, action: string) => void;
 };
 
@@ -497,6 +567,7 @@ function TaskSection({
   onCreate,
   onDetail,
   onEdit,
+  onDelete,
   onTaskAction,
 }: TaskSectionProps) {
   const pagination = useClientPagination(tasks);
@@ -528,13 +599,14 @@ function TaskSection({
           {emptyText}
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           {pagination.items.map((task) => (
             <AgentTaskCard
               key={task.id}
               task={task}
               onDetail={() => onDetail(task)}
               onEdit={() => onEdit(task)}
+              onDelete={() => onDelete(task)}
               onTaskAction={(action) => onTaskAction(task, action)}
             />
           ))}
@@ -548,101 +620,133 @@ type AgentTaskCardProps = {
   task: AgentTask;
   onDetail: () => void;
   onEdit: () => void;
+  onDelete: () => void;
   onTaskAction: (action: string) => void;
 };
 
-function AgentTaskCard({ task, onDetail, onEdit, onTaskAction }: AgentTaskCardProps) {
+function AgentTaskCard({ task, onDetail, onEdit, onDelete, onTaskAction }: AgentTaskCardProps) {
   const sc = agentTaskStatusConfig[task.status];
+  const StatusIcon = task.status === "running"
+    ? RefreshCw
+    : task.status === "alert"
+      ? AlertCircle
+      : task.status === "paused" || task.status === "ready"
+        ? Clock
+        : CheckCircle2;
   return (
     <article
-      className="rounded-xl border border-[#f0f0f2] bg-white p-5 transition-colors hover:border-[#d1d1d6]"
+      className="overflow-hidden rounded-lg bg-[#fafbfc]"
       data-agent-task-card={task.id}
       data-agent-task-category="automation"
     >
-      <div className="flex items-start gap-4">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#f2f2f7]">
-          {task.status === "running" ? (
-            <RefreshCw className="h-4 w-4 animate-spin" style={{ color: sc.color }} />
-          ) : task.status === "alert" ? (
-            <AlertCircle className="h-4 w-4" style={{ color: sc.color }} />
-          ) : task.status === "paused" || task.status === "ready" ? (
-            <Clock className="h-4 w-4" style={{ color: sc.color }} />
-          ) : (
-            <CheckCircle2 className="h-4 w-4" style={{ color: sc.color }} />
-          )}
+      <div className="flex items-center gap-3 p-3 transition-colors hover:bg-[#f2f2f7]">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white">
+          <StatusIcon className={`h-3.5 w-3.5 ${task.status === "running" ? "animate-spin" : ""}`} style={{ color: sc.color }} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="mb-1 flex flex-wrap items-center gap-2">
-            <span className="text-[14px] text-gray-900">{task.name}</span>
-            <span
-              className="rounded-full px-2 py-0.5 text-[10px]"
-              style={{ color: sc.color, backgroundColor: `${sc.bg}10` }}
-            >
-              {sc.label}
-            </span>
-            <span className="rounded bg-[#f2f2f7] px-2 py-0.5 text-[10px] text-[#aeaeb2]">
-              {task.type}
-            </span>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-[12px] text-[#1d1d1f]">{task.name}</span>
+            <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px]" style={{ color: sc.color, backgroundColor: `${sc.bg}14` }}>{sc.label}</span>
+            <span className="hidden shrink-0 rounded bg-white px-1.5 py-0.5 text-[10px] text-[#8a8a8e] sm:inline">{task.type}</span>
           </div>
-          {task.description && <p className="mb-2 text-[12px] text-gray-500">{task.description}</p>}
-          <div className="flex flex-wrap items-center gap-4 text-[11px] text-gray-400">
-            <span className="flex items-center gap-1">
-              <Clock className="h-3 w-3" /> {task.schedule}
-            </span>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[#c7c7cc]">
+            <span className="inline-flex items-center gap-1"><Clock className="h-3 w-3" />{task.schedule}</span>
             <span>最近运行：{task.lastRun}</span>
-          </div>
-          <div className="mt-3">
-            <RecentRunStatus runs={task.recentRuns} />
-          </div>
-          {task.result && (
-            <div
-              className={`mt-2.5 rounded-lg p-2.5 text-[11px] ${
-                task.status === "alert" ? "bg-[#ea4335]/5 text-[#ea4335]" : "bg-[#fafbfc] text-[#636366]"
-              }`}
-            >
-              {task.result}
-            </div>
-          )}
-          <div className="mt-3 flex gap-3">
             <button
               type="button"
               onClick={() => onTaskAction("run_task")}
               disabled={task.definitionStatus !== "active"}
-              className="flex items-center gap-0.5 text-[11px] text-[#636366] hover:text-[#1d1d1f] disabled:cursor-not-allowed disabled:text-[#c7c7cc]"
+              className="inline-flex items-center gap-0.5 text-[#8a8a8e] hover:text-[#1d1d1f] disabled:cursor-not-allowed disabled:text-[#d1d1d6]"
             >
               立即运行 <ArrowUpRight className="h-3 w-3" />
             </button>
           </div>
         </div>
-        <div className="flex shrink-0 gap-1.5">
+        <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             aria-label={`查看任务详情：${task.name}`}
-            title="任务详情"
+            title="查看"
             onClick={onDetail}
-            className="rounded-lg bg-[#f2f2f7] p-2 transition-colors hover:bg-[#e5e5ea]"
+            className="rounded-md p-1.5 text-[#636366] hover:bg-white"
           >
-            <Eye className="h-3.5 w-3.5 text-[#8a8a8e]" />
+            <Eye className="h-3.5 w-3.5" />
           </button>
-          {!task.systemManaged && (
-            <button
-              type="button"
-              aria-label={`编辑任务：${task.name}`}
-              title="编辑任务"
-              onClick={onEdit}
-              className="rounded-lg bg-[#f2f2f7] p-2 transition-colors hover:bg-[#e5e5ea]"
-            >
-              <PencilLine className="h-3.5 w-3.5 text-[#8a8a8e]" />
-            </button>
-          )}
+          <button
+            type="button"
+            aria-label={task.systemManaged ? `系统任务不可编辑：${task.name}` : `编辑任务：${task.name}`}
+            title={task.systemManaged ? "系统任务不可编辑" : "编辑"}
+            onClick={onEdit}
+            disabled={task.systemManaged}
+            className="rounded-md p-1.5 text-[#636366] hover:bg-white disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label={task.systemManaged || task.definitionStatus === "disabled" ? `任务不可删除：${task.name}` : `删除任务：${task.name}`}
+            title={task.systemManaged ? "系统任务不可删除" : task.definitionStatus === "disabled" ? "任务已终止" : "删除"}
+            onClick={onDelete}
+            disabled={task.systemManaged || task.definitionStatus === "disabled"}
+            className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#fff0f0] hover:text-[#d93025] disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
         </div>
       </div>
     </article>
   );
 }
 
+function TaskDeleteConfirm({
+  task,
+  deleting,
+  onCancel,
+  onConfirm,
+}: {
+  task: AgentTask;
+  deleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-[180] flex items-center justify-center bg-black/20 px-4"
+      role="presentation"
+      data-agent-task-delete-overlay="true"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !deleting) onCancel();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="agent-task-delete-title"
+        data-agent-task-delete-dialog="true"
+        className="w-full max-w-[420px] rounded-xl border border-[#e5e5ea] bg-white p-5 shadow-2xl shadow-black/20"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#fff0f0] text-[#d93025]">
+            <Trash2 className="h-4 w-4" />
+          </div>
+          <div>
+            <h3 id="agent-task-delete-title" className="text-[14px] text-[#1d1d1f]">终止并删除这条自动化任务？</h3>
+            <p className="mt-1.5 text-[12px] leading-[1.7] text-[#636366]">{task.name}</p>
+            <p className="mt-1 text-[11px] leading-[1.6] text-[#aeaeb2]">确认后任务将停止调度，历史运行记录仍保留备查。</p>
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onCancel} disabled={deleting} className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-4 text-[12px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-40">取消</button>
+          <button type="button" onClick={onConfirm} disabled={deleting} className="h-9 rounded-lg bg-[#d93025] px-4 text-[12px] text-white hover:bg-[#c5221f] disabled:opacity-40">{deleting ? "处理中…" : "确认删除"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function RecentRunStatus({ runs }: { runs: AutomationRun[] }) {
-  const recent = runs.slice(0, 3);
+  const recent = (runs || []).slice(0, 3);
   return (
     <div className="flex flex-wrap items-center gap-2" aria-label="近三次运行情况">
       <span className="text-[11px] text-[#8a8a8e]">近三次运行情况</span>
@@ -703,62 +807,67 @@ function AgentTaskModal({
   };
   const toggle = <T extends string>(values: T[], value: T) =>
     values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
-  const selectableSkills = analysisSkills
+  const files = knowledgeFiles || [];
+  const skills = analysisSkills || [];
+  const metrics = metricOptions || [];
+  const sourceIds = form.sourceIds || [];
+  const outputTypes = form.outputTypes || [];
+  const selectedMetricIds = form.selectedMetricIds || [];
+  const selectableSkills = skills
     .filter((skill) => skill.enabled !== false && (!skill.lifecycleStatus || skill.lifecycleStatus === "active"))
     .sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0));
-  const modelChoices = buildAutomaticAnalysisModelChoices(analysisModels);
+  const modelChoices = buildAutomaticAnalysisModelChoices(analysisModels || []);
   const taskReady = form.automationKind === "memory"
-      ? Boolean(form.sourceIds.length && form.outputTypes.length && form.prompt.trim())
+      ? Boolean(sourceIds.length && outputTypes.length && String(form.prompt || "").trim())
       : Boolean(
-          form.selectedMetricIds.length
+          selectedMetricIds.length
           && form.skillId
           && form.modelIntegrationId
           && form.selectedModelName
-          && form.prompt.trim()
+          && String(form.prompt || "").trim()
           && isValidNonNegativeNumber(form.anomalyThreshold),
         );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4" data-task-modal onMouseDown={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={title} className="flex max-h-[90vh] w-full max-w-[920px] flex-col overflow-hidden rounded-2xl border border-[#e5e5ea] bg-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-[#f0f0f2] px-6 py-4">
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/20 px-4" data-task-modal onMouseDown={onClose}>
+      <div role="dialog" aria-modal="true" aria-label={title} className="flex max-h-[86vh] w-full max-w-[760px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-[#f0f0f2] bg-white px-6 py-4">
           <div>
             <h3 className="text-[16px] text-[#1d1d1f]">{title}</h3>
-            <p className="mt-1 text-[12px] text-[#8a8a8e]">配置记忆提取或指标异动分析流程；数据由配置的 CSV 文件夹提供。</p>
+            <p className="mt-1 text-[11px] text-[#8a8a8e]">配置记忆提取或指标异动分析流程；数据由配置的 CSV 文件夹提供。</p>
           </div>
           <button
             type="button"
             aria-label="关闭任务弹窗"
             onClick={onClose}
-            className="rounded-lg p-2 text-[#8a8a8e] hover:bg-[#f2f2f7]"
+            className="rounded-md p-2 text-[#8a8a8e] hover:bg-[#f2f2f7]"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
         <div className="grid min-h-0 gap-4 overflow-y-auto px-6 py-5 md:grid-cols-2">
-          <label className="space-y-1.5 text-[12px] text-[#636366]">
+          <label className="space-y-1.5 text-[11px] text-[#636366]">
             任务名称
-            <input aria-label="任务名称" value={form.name} disabled={readOnly} onChange={(event) => updateForm("name", event.target.value)} placeholder="请输入任务名称" className="w-full rounded-lg border border-[#e5e5ea] px-3 py-2 text-[13px] text-[#1d1d1f] outline-none focus:border-[#8a8a8e] disabled:bg-[#fafbfc]" />
+            <input aria-label="任务名称" value={form.name} disabled={readOnly} onChange={(event) => updateForm("name", event.target.value)} placeholder="请输入任务名称" className={taskControlClass} />
           </label>
-          <label className="space-y-1.5 text-[12px] text-[#636366]">
+          <label className="space-y-1.5 text-[11px] text-[#636366]">
             任务状态
-            <select
+            <TaskSelect
               aria-label="任务状态"
               value={form.status}
               disabled={readOnly}
-              onChange={(event) => updateForm("status", event.target.value as AgentTaskFormState["status"])}
-              className="w-full rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[13px] text-[#1d1d1f] outline-none focus:border-[#8a8a8e] disabled:bg-[#fafbfc]"
+              onChange={(value) => updateForm("status", value as AgentTaskFormState["status"])}
             >
               <option value="active">运行中</option>
               <option value="paused">暂停</option>
               <option value="disabled">终止</option>
-            </select>
+            </TaskSelect>
           </label>
-          <label className="space-y-1.5 text-[12px] text-[#636366]">
+          <label className="space-y-1.5 text-[11px] text-[#636366]">
             自动化类型
-            <select aria-label="自动化类型" value={form.automationKind} disabled={mode !== "create"} onChange={(event) => {
-              const kind = event.target.value as AutomationKind;
+            <TaskSelect aria-label="自动化类型" value={form.automationKind} disabled={mode !== "create"} onChange={(value) => {
+              const kind = value as AutomationKind;
               const firstModel = modelChoices[0];
               onChange({
                 ...form,
@@ -769,117 +878,117 @@ function AgentTaskModal({
                   : form.skillId,
                 modelIntegrationId: kind === "automatic_analysis" && !form.modelIntegrationId ? firstModel?.integrationId || "" : form.modelIntegrationId,
                 selectedModelName: kind === "automatic_analysis" && !form.selectedModelName ? firstModel?.selectedModelName || "" : form.selectedModelName,
-                prompt: kind === "automatic_analysis" && (!form.prompt.trim() || form.prompt === DEFAULT_MEMORY_PROMPT)
+                prompt: kind === "automatic_analysis" && (!String(form.prompt || "").trim() || form.prompt === DEFAULT_MEMORY_PROMPT)
                   ? DEFAULT_AUTOMATIC_ANALYSIS_PROMPT
                   : form.prompt,
               });
-            }} className="w-full rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[13px] text-[#1d1d1f] outline-none focus:border-[#8a8a8e] disabled:bg-[#fafbfc]">
+            }}>
               <option value="memory">记忆提取任务</option>
               <option value="automatic_analysis">自动分析任务</option>
-            </select>
+            </TaskSelect>
           </label>
-          <label className="space-y-1.5 text-[12px] text-[#636366]">
+          <label className="space-y-1.5 text-[11px] text-[#636366]">
             触发计划
-            <input aria-label="触发计划" value={form.schedule} disabled={readOnly} onChange={(event) => updateForm("schedule", event.target.value)} placeholder="例如：每日 09:00 或 0 9 * * *" className="w-full rounded-lg border border-[#e5e5ea] px-3 py-2 text-[13px] text-[#1d1d1f] outline-none focus:border-[#8a8a8e] disabled:bg-[#fafbfc]" />
+            <input aria-label="触发计划" value={form.schedule} disabled={readOnly} onChange={(event) => updateForm("schedule", event.target.value)} placeholder="例如：每日 09:00 或 0 9 * * *" className={taskControlClass} />
           </label>
           {form.automationKind === "memory" ? (
             <>
               <div className="md:col-span-2">
-                <div className="mb-2 flex items-center justify-between gap-3"><span className="text-[12px] text-[#636366]">知识文件输入</span><span className="text-[10px] text-[#aeaeb2]">仅处理选中文件尚未提炼的当前版本</span></div>
+                <div className="mb-2 flex items-center justify-between gap-3"><span className="text-[11px] text-[#636366]">知识文件输入</span><span className="text-[11px] text-[#aeaeb2]">仅处理选中文件尚未提炼的当前版本</span></div>
                 <div className="grid max-h-56 gap-2 overflow-y-auto pr-1 md:grid-cols-2" data-memory-source-grid>
-                  {knowledgeFiles.map((file) => {
-                    const selected = form.sourceIds.includes(file.id);
-                    return <label key={file.id} data-memory-source-card={file.id} data-selected={selected ? "true" : "false"} className={`flex items-start gap-2 rounded-lg border p-3 text-[11px] ${selected ? "border-[#cdebd5] bg-[#eef8f1] text-[#258a3f]" : "border-[#f0f0f2] bg-white text-[#3a3a3c]"}`}><input type="checkbox" disabled={readOnly} checked={selected} onChange={() => updateForm("sourceIds", toggle(form.sourceIds, file.id))} className="mt-0.5 accent-[#258a3f]" /><span className="min-w-0"><span className="block truncate text-[12px]">{file.title}</span><span className="mt-0.5 block truncate text-[10px] text-[#8a8a8e]">{file.tags || file.owner || "知识文件"} · 版本 {file.assetVersion || file.updated || "当前"}</span></span></label>;
+                  {files.map((file) => {
+                    const selected = sourceIds.includes(file.id);
+                    return <label key={file.id} data-memory-source-card={file.id} data-selected={selected ? "true" : "false"} className={`flex items-start gap-2 rounded-lg border p-3 text-[11px] ${selected ? "border-[#cdebd5] bg-[#eef8f1] text-[#258a3f]" : "border-[#f0f0f2] bg-white text-[#3a3a3c]"}`}><input type="checkbox" disabled={readOnly} checked={selected} onChange={() => updateForm("sourceIds", toggle(sourceIds, file.id))} className="mt-0.5 accent-[#258a3f]" /><span className="min-w-0"><span className="block truncate text-[12px]">{file.title}</span><span className="mt-0.5 block truncate text-[11px] text-[#8a8a8e]">{file.tags || file.owner || "知识文件"} · 版本 {file.assetVersion || file.updated || "当前"}</span></span></label>;
                   })}
                 </div>
-                {!knowledgeFiles.length && <div className="rounded-lg border border-dashed border-[#e5e5ea] px-3 py-5 text-center text-[11px] text-[#aeaeb2]">知识文件 Tab 暂无可选内容</div>}
+                {!files.length && <div className="rounded-lg border border-dashed border-[#e5e5ea] px-3 py-4 text-center text-[11px] text-[#aeaeb2]">知识文件 Tab 暂无可选内容</div>}
               </div>
               <div className="md:col-span-2">
-                <span className="mb-2 block text-[12px] text-[#636366]">输出到知识记忆</span>
+                <span className="mb-2 block text-[11px] text-[#636366]">输出到知识记忆</span>
                 <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3" data-memory-output-grid>
                   {(Object.keys(memoryOutputLabels) as MemoryOutputType[]).map((type) => {
-                    const selected = form.outputTypes.includes(type);
-                    return <label key={type} data-memory-output-card={type} data-selected={selected ? "true" : "false"} className={`flex items-center gap-2 rounded-lg border p-3 text-[11px] ${selected ? "border-[#cdebd5] bg-[#eef8f1] text-[#258a3f]" : "border-[#f0f0f2] text-[#636366]"}`}><input type="checkbox" disabled={readOnly} checked={selected} onChange={() => updateForm("outputTypes", toggle(form.outputTypes, type))} className="accent-[#258a3f]" />{memoryOutputLabels[type]}</label>;
+                    const selected = outputTypes.includes(type);
+                    return <label key={type} data-memory-output-card={type} data-selected={selected ? "true" : "false"} className={`flex items-center gap-2 rounded-lg border p-3 text-[11px] ${selected ? "border-[#cdebd5] bg-[#eef8f1] text-[#258a3f]" : "border-[#f0f0f2] text-[#3a3a3c]"}`}><input type="checkbox" disabled={readOnly} checked={selected} onChange={() => updateForm("outputTypes", toggle(outputTypes, type))} className="accent-[#258a3f]" />{memoryOutputLabels[type]}</label>;
                   })}
                 </div>
               </div>
-              <label className="space-y-1.5 text-[12px] text-[#636366] md:col-span-2" data-memory-prompt>
+              <label className="space-y-1.5 text-[11px] text-[#636366] md:col-span-2" data-memory-prompt>
                 知识提炼 Prompt
-                <textarea aria-label="知识提炼 Prompt" value={form.prompt} disabled={readOnly} onChange={(event) => updateForm("prompt", event.target.value)} rows={5} className="w-full resize-y rounded-lg border border-[#e5e5ea] px-3 py-2 text-[12px] leading-5 outline-none focus:border-[#8a8a8e] disabled:bg-[#fafbfc]" />
-                <span className="block text-[10px] text-[#aeaeb2]">统一使用模型接入管理中的“记忆模块”，一次执行只调用一次模型；没有本质新增信息时不生成记忆。</span>
+                <textarea aria-label="知识提炼 Prompt" value={form.prompt} disabled={readOnly} onChange={(event) => updateForm("prompt", event.target.value)} rows={5} className={taskAreaClass} />
+                <span className="block text-[11px] text-[#aeaeb2]">统一使用模型接入管理中的“记忆模块”，一次执行只调用一次模型；没有本质新增信息时不生成记忆。</span>
               </label>
             </>
           ) : (
             <div className="space-y-4 md:col-span-2" data-automatic-analysis-config>
               <div>
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="text-[12px] text-[#636366]">监控指标</span>
-                  <span className="text-[10px] text-[#aeaeb2]">仅展示已绑定语义数据集与指标编码的可执行指标</span>
+                  <span className="text-[11px] text-[#636366]">监控指标</span>
+                  <span className="text-[11px] text-[#aeaeb2]">仅展示已绑定语义数据集与指标编码的可执行指标</span>
                 </div>
                 <div className="grid max-h-64 gap-2 overflow-y-auto pr-1 md:grid-cols-2" data-automatic-analysis-metrics>
-                  {metricOptions.map((metric) => {
-                    const selected = form.selectedMetricIds.includes(metric.optionId);
+                  {metrics.map((metric) => {
+                    const selected = selectedMetricIds.includes(metric.optionId);
                     return (
-                      <label key={metric.optionId} data-selected={selected ? "true" : "false"} className={`rounded-lg border p-3 ${selected ? "border-[#cdebd5] bg-[#eef8f1]" : "border-[#f0f0f2] bg-white"}`}>
+                      <label key={metric.optionId} data-selected={selected ? "true" : "false"} className={`rounded-lg border p-3 text-[11px] ${selected ? "border-[#cdebd5] bg-[#eef8f1] text-[#258a3f]" : "border-[#f0f0f2] bg-white text-[#3a3a3c]"}`}>
                         <div className="flex items-start gap-2">
-                          <input type="checkbox" disabled={readOnly} checked={selected} onChange={() => updateForm("selectedMetricIds", toggle(form.selectedMetricIds, metric.optionId))} className="mt-0.5 accent-[#258a3f]" />
+                          <input type="checkbox" disabled={readOnly} checked={selected} onChange={() => updateForm("selectedMetricIds", toggle(selectedMetricIds, metric.optionId))} className="mt-0.5 accent-[#258a3f]" />
                           <span className="min-w-0">
-                            <span className="block text-[12px] text-[#1d1d1f]">{metric.metricName}</span>
-                            <span className="mt-0.5 block truncate text-[10px] text-[#8a8a8e]">{metric.sourceTable} · {metric.datasetId}</span>
+                            <span className="block truncate text-[12px] text-[#1d1d1f]">{metric.metricName}</span>
+                            <span className="mt-0.5 block truncate text-[11px] text-[#aeaeb2]">{metric.sourceTable} · {metric.datasetId}</span>
                           </span>
                         </div>
-                        <p className="mt-2 line-clamp-2 text-[10px] leading-4 text-[#636366]">描述：{metric.description || metric.definition}</p>
-                        <p className="mt-1 truncate text-[10px] text-[#8a8a8e]">口径：{metric.valueLogic || metric.metricCode}</p>
+                        <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-[#636366]">描述：{metric.description || metric.definition}</p>
+                        <p className="mt-1 truncate text-[11px] text-[#aeaeb2]">口径：{metric.valueLogic || metric.metricCode}</p>
                       </label>
                     );
                   })}
                 </div>
-                {!metricOptions.length && <div className="rounded-lg border border-dashed border-[#e5e5ea] px-3 py-5 text-center text-[11px] text-[#aeaeb2]">暂无已发布且可执行的主题表指标，请先在数据资产中补充数据集、指标编码和时间维度。</div>}
+                {!metrics.length && <div className="rounded-lg border border-dashed border-[#e5e5ea] px-3 py-4 text-center text-[11px] text-[#aeaeb2]">暂无已发布且可执行的主题表指标，请先在数据资产中补充数据集、指标编码和时间维度。</div>}
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <label className="space-y-1.5 text-[12px] text-[#636366]">
+                <label className="space-y-1.5 text-[11px] text-[#636366]">
                   分析 Skill
-                  <select aria-label="分析 Skill" value={form.skillId} disabled={readOnly} onChange={(event) => updateForm("skillId", event.target.value)} className="w-full rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[13px] text-[#1d1d1f] outline-none focus:border-[#8a8a8e] disabled:bg-[#fafbfc]">
+                  <TaskSelect aria-label="分析 Skill" value={form.skillId} disabled={readOnly} onChange={(value) => updateForm("skillId", value)}>
                     <option value="">请选择分析 Skill</option>
                     {selectableSkills.map((skill) => <option key={skill.id} value={skill.id}>{skill.name} · {skill.category}</option>)}
-                  </select>
+                  </TaskSelect>
                 </label>
-                <label className="space-y-1.5 text-[12px] text-[#636366]">
+                <label className="space-y-1.5 text-[11px] text-[#636366]">
                   Data_Agent 分析模型
-                  <select aria-label="Data_Agent 分析模型" value={modelChoiceValue(form.modelIntegrationId, form.selectedModelName)} disabled={readOnly} onChange={(event) => {
-                    const choice = modelChoices.find((item) => item.value === event.target.value);
+                  <TaskSelect aria-label="Data_Agent 分析模型" value={modelChoiceValue(form.modelIntegrationId, form.selectedModelName)} disabled={readOnly} onChange={(value) => {
+                    const choice = modelChoices.find((item) => item.value === value);
                     onChange({ ...form, modelIntegrationId: choice?.integrationId || "", selectedModelName: choice?.selectedModelName || "" });
-                  }} className="w-full rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[13px] text-[#1d1d1f] outline-none focus:border-[#8a8a8e] disabled:bg-[#fafbfc]">
+                  }}>
                     <option value="">请选择已测试连通的模型</option>
                     {modelChoices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
-                  </select>
+                  </TaskSelect>
                 </label>
               </div>
               {!modelChoices.length && <div className="rounded-lg border border-[#f1d6b8] bg-[#fff7ed] px-3 py-2.5 text-[11px] text-[#b45309]">请先在“模型接入管理”中将模型绑定到“自动分析任务”应用模块，并完成连通性测试。运行时只会通过该模块调用所选模型。</div>}
 
-              <div className="rounded-xl border border-[#e5e5ea] bg-[#fafbfc] p-4" data-anomaly-rule>
+              <div className="rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-4" data-anomaly-rule>
                 <div className="mb-3 flex items-start justify-between gap-3">
-                  <div><div className="text-[12px] text-[#1d1d1f]">异动硬触发规则</div><p className="mt-1 text-[10px] leading-4 text-[#8a8a8e]">调度先查询最近周期并判定规则；未命中时记录监控结果，不调用 Data_Agent。</p></div>
-                  <span className="rounded-full bg-[#fff0ee] px-2 py-1 text-[9px] text-[#d93025]">硬触发</span>
+                  <div><div className="text-[12px] text-[#1d1d1f]">异动硬触发规则</div><p className="mt-1 text-[11px] leading-4 text-[#8a8a8e]">调度先查询最近周期并判定规则；未命中时记录监控结果，不调用 Data_Agent。</p></div>
+                  <span className="rounded-full bg-[#fff0ee] px-2 py-1 text-[11px] text-[#d93025]">硬触发</span>
                 </div>
                 <div className="grid gap-3 md:grid-cols-5">
-                  <label className="space-y-1 text-[10px] text-[#636366] md:col-span-2">判断方式<select aria-label="异动判断方式" value={form.anomalyComparison} disabled={readOnly} onChange={(event) => updateForm("anomalyComparison", event.target.value as AgentTaskFormState["anomalyComparison"])} className="w-full rounded-lg border border-[#e5e5ea] bg-white px-2.5 py-2 text-[11px]"><option value="relative_change">环比变化率达到</option><option value="absolute_change">绝对变化量达到</option><option value="above">当前值高于</option><option value="below">当前值低于</option></select></label>
-                  <label className="space-y-1 text-[10px] text-[#636366]">阈值{form.anomalyComparison === "relative_change" ? "（%）" : ""}<input aria-label="异动阈值" type="number" min="0" value={form.anomalyThreshold} disabled={readOnly} onChange={(event) => updateForm("anomalyThreshold", event.target.value)} className="w-full rounded-lg border border-[#e5e5ea] bg-white px-2.5 py-2 text-[11px]" /></label>
-                  <label className="space-y-1 text-[10px] text-[#636366]">变化方向<select aria-label="异动方向" value={form.anomalyDirection} disabled={readOnly || ["above", "below"].includes(form.anomalyComparison)} onChange={(event) => updateForm("anomalyDirection", event.target.value as AgentTaskFormState["anomalyDirection"])} className="w-full rounded-lg border border-[#e5e5ea] bg-white px-2.5 py-2 text-[11px] disabled:bg-[#f2f2f7]"><option value="both">上涨或下降</option><option value="up">仅上涨</option><option value="down">仅下降</option></select></label>
-                  <label className="space-y-1 text-[10px] text-[#636366]">多指标触发<select aria-label="多指标触发方式" value={form.anomalyMatchMode} disabled={readOnly} onChange={(event) => updateForm("anomalyMatchMode", event.target.value as AgentTaskFormState["anomalyMatchMode"])} className="w-full rounded-lg border border-[#e5e5ea] bg-white px-2.5 py-2 text-[11px]"><option value="any">任一命中</option><option value="all">全部命中</option></select></label>
+                  <label className="space-y-1.5 text-[11px] text-[#636366] md:col-span-2">判断方式<TaskSelect aria-label="异动判断方式" value={form.anomalyComparison} disabled={readOnly} onChange={(value) => updateForm("anomalyComparison", value as AgentTaskFormState["anomalyComparison"])}><option value="relative_change">环比变化率达到</option><option value="absolute_change">绝对变化量达到</option><option value="above">当前值高于</option><option value="below">当前值低于</option></TaskSelect></label>
+                  <label className="space-y-1.5 text-[11px] text-[#636366]">阈值{form.anomalyComparison === "relative_change" ? "（%）" : ""}<input aria-label="异动阈值" type="number" min="0" value={form.anomalyThreshold} disabled={readOnly} onChange={(event) => updateForm("anomalyThreshold", event.target.value)} className={taskControlClass} /></label>
+                  <label className="space-y-1.5 text-[11px] text-[#636366]">变化方向<TaskSelect aria-label="异动方向" value={form.anomalyDirection} disabled={readOnly || ["above", "below"].includes(form.anomalyComparison)} onChange={(value) => updateForm("anomalyDirection", value as AgentTaskFormState["anomalyDirection"])}><option value="both">上涨或下降</option><option value="up">仅上涨</option><option value="down">仅下降</option></TaskSelect></label>
+                  <label className="space-y-1.5 text-[11px] text-[#636366]">多指标触发<TaskSelect aria-label="多指标触发方式" value={form.anomalyMatchMode} disabled={readOnly} onChange={(value) => updateForm("anomalyMatchMode", value as AgentTaskFormState["anomalyMatchMode"])}><option value="any">任一命中</option><option value="all">全部命中</option></TaskSelect></label>
                 </div>
               </div>
 
-              <label className="block space-y-1.5 text-[12px] text-[#636366]" data-automatic-analysis-prompt>
+              <label className="block space-y-1.5 text-[11px] text-[#636366]" data-automatic-analysis-prompt>
                 归因分析 Prompt
-                <textarea aria-label="归因分析 Prompt" value={form.prompt} disabled={readOnly} onChange={(event) => updateForm("prompt", event.target.value)} rows={5} className="w-full resize-y rounded-lg border border-[#e5e5ea] px-3 py-2 text-[12px] leading-5 outline-none focus:border-[#8a8a8e] disabled:bg-[#fafbfc]" />
-                <span className="block text-[10px] text-[#aeaeb2]">命中异动后，指标表、描述、口径、Skill、Prompt、规则和查询证据会一起送入所选模型。</span>
+                <textarea aria-label="归因分析 Prompt" value={form.prompt} disabled={readOnly} onChange={(event) => updateForm("prompt", event.target.value)} rows={5} className={taskAreaClass} />
+                <span className="block text-[11px] text-[#aeaeb2]">命中异动后，指标表、描述、口径、Skill、Prompt、规则和查询证据会一起送入所选模型。</span>
               </label>
             </div>
           )}
           <div className="rounded-lg bg-[#fafbfc] px-3 py-3 md:col-span-2"><RecentRunStatus runs={form.recentRuns} /></div>
-          <label className="space-y-1.5 text-[12px] text-[#636366] md:col-span-2">
+          <label className="space-y-1.5 text-[11px] text-[#636366] md:col-span-2">
             任务描述
             <textarea
               aria-label="任务描述"
@@ -887,27 +996,27 @@ function AgentTaskModal({
               disabled={readOnly}
               onChange={(event) => updateForm("description", event.target.value)}
               rows={3}
-              className="w-full resize-none rounded-lg border border-[#e5e5ea] px-3 py-2 text-[13px] leading-5 text-[#1d1d1f] outline-none focus:border-[#8a8a8e]"
+              className={taskAreaClass}
             />
           </label>
-          {form.result && <label className="space-y-1.5 text-[12px] text-[#636366] md:col-span-2">
+          {form.result && <label className="space-y-1.5 text-[11px] text-[#636366] md:col-span-2">
             任务结果
             <textarea
               aria-label="任务结果"
               value={form.result}
               readOnly
               rows={3}
-              className="w-full resize-none rounded-lg border border-[#e5e5ea] bg-[#fafbfc] px-3 py-2 text-[13px] leading-5 text-[#8a8a8e] outline-none"
+              className={`${taskAreaClass} text-[#8a8a8e]`}
             />
           </label>}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-[#f0f0f2] px-6 py-4">
-          <button type="button" onClick={onClose} className="rounded-lg border border-[#e5e5ea] px-4 py-2 text-[13px] text-[#636366] hover:bg-[#f2f2f7]">
+        <div className="flex justify-end gap-2 border-t border-[#f0f0f2] bg-white px-6 py-4">
+          <button type="button" onClick={onClose} className="h-9 rounded-lg border border-[#e5e5ea] px-4 text-[12px] text-[#636366] hover:bg-[#f2f2f7]">
             {mode === "detail" ? "关闭" : "取消"}
           </button>
           {mode !== "detail" && (
-            <button type="button" onClick={onSave} disabled={!form.name.trim() || !taskReady} className="rounded-lg bg-[#1d1d1f] px-4 py-2 text-[13px] text-white hover:bg-[#2c2c2e] disabled:cursor-not-allowed disabled:bg-[#c7c7cc]">
+            <button type="button" onClick={onSave} disabled={!String(form.name || "").trim() || !taskReady} className="h-9 rounded-lg bg-[#1d1d1f] px-5 text-[12px] text-white hover:bg-[#2c2c2e] disabled:cursor-not-allowed disabled:bg-[#c7c7cc]">
               {saveLabel}
             </button>
           )}
@@ -979,7 +1088,7 @@ function taskToForm(task: AgentTask): AgentTaskFormState {
     anomalyDirection: normalizeAnomalyDirection(anomalyRule.direction),
     anomalyMatchMode: anomalyRule.match_mode === "all" ? "all" : "any",
     lookbackPeriods: String(anomalyRule.lookback_periods ?? "2"),
-    recentRuns: task.recentRuns,
+    recentRuns: task.recentRuns || [],
   };
 }
 
@@ -994,7 +1103,7 @@ function taskFormToAutomationDefinition(
   const taskCode = existing?.taskCode || `ui_automation_${createClientUuid().replaceAll("-", "")}`;
   const isMemory = form.automationKind === "memory";
   const isAutomaticAnalysis = form.automationKind === "automatic_analysis";
-  const selectedMetrics = metricOptions.filter((metric) => form.selectedMetricIds.includes(metric.optionId));
+  const selectedMetrics = (metricOptions || []).filter((metric) => (form.selectedMetricIds || []).includes(metric.optionId));
   const selectedSkill = analysisSkills.find((skill) => skill.id === form.skillId);
   return {
     task_code: taskCode,

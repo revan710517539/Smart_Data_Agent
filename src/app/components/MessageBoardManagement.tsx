@@ -68,7 +68,7 @@ export function MessageBoardManagement() {
           </div>
           <div className="min-w-0">
             <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">留言板管理</h2>
-            <p className="mt-0.5 text-[13px] text-[#aeaeb2]">统一查看各机构、各账号从业务页面提交的产品意见和需求</p>
+            <p className="mt-0.5 text-[13px] text-[#aeaeb2]">查看当前机构各账号从业务页面提交的产品意见和需求</p>
             {notice && <p className="mt-1 text-[11px] text-[#b42318]">{notice}</p>}
           </div>
         </div>

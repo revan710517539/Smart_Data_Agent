@@ -77,6 +77,28 @@ def handle_application_action_post(handler: Any) -> None:
             if len(normalized_ids) != len(set(normalized_ids)) or any(asset_id not in allowed_ids for asset_id in normalized_ids):
                 raise PermissionError("page_data_layout_asset_unavailable")
             action_payload["assetIds"] = normalized_ids
+        if action == "set_page_data_notes" and module_key in {"dashboard", "weekly_report", "institution_supervision"}:
+            action_payload = dict(action_payload or {})
+            published = handler.services.data_asset_store.list_published_bundle(context.tenant_id)
+            allowed_ids = {
+                str(item.get("id") or "")
+                for item in published.get("page_data", [])
+                if module_key in item.get("targetPages", [])
+                and (
+                    (_page_data_scope(item) == MULTI_INSTITUTION_PAGE_DATA_SCOPE)
+                    if module_key == "dashboard"
+                    else (_page_data_scope(item) != MULTI_INSTITUTION_PAGE_DATA_SCOPE)
+                )
+            }
+            notes = action_payload.get("notes")
+            if notes is not None and not isinstance(notes, list):
+                raise ValueError("page_data_notes_invalid")
+            for note in notes or []:
+                if not isinstance(note, dict):
+                    raise ValueError("page_data_notes_invalid")
+                source_id = str(note.get("sourceAssetId") or "").strip()
+                if source_id and source_id not in allowed_ids:
+                    raise PermissionError("page_data_note_asset_unavailable")
         if module_key == "self_analysis" and action == "upsert_visual_report":
             action_payload = _bind_visual_report_payload(handler, context, action_payload or {})
         handler._require_application_permission(context, "execute")

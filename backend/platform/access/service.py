@@ -27,7 +27,7 @@ PERMISSION_MENU_LABELS = [
     "任务工作台",
     "待办任务",
     "自动化任务",
-    "Skill插件",
+    "skill/插件",
     "数据资产",
     "指标字典",
     "知识记忆",
@@ -73,7 +73,7 @@ _MENU_LABEL_TO_KEYS = {
     "任务工作台": {"task-workbench", "task-workbench.todos", "task-workbench.tasks"},
     "待办任务": {"task-workbench.todos"},
     "自动化任务": {"task-workbench.tasks"},
-    "Skill插件": {"task-workbench.skills"},
+    "skill/插件": {"task-workbench.skills"},
     "数据资产": {"data-assets", "data-assets.metrics", "data-assets.knowledge", "data-assets.data-management", "data-assets.quality"},
     "指标字典": {"data-assets.metrics"},
     "知识记忆": {"data-assets.knowledge"},
@@ -116,19 +116,24 @@ class AccessControlService:
         roles_by_id = {role.role_id: role for role in self.policy_repository.list_roles()}
         assignments_by_user = self._assignments_by_user()
         users: list[dict[str, Any]] = []
+        is_super_admin = self._is_super_admin(context.user_id)
         tenant_profile_lister = getattr(self.user_store, "list_profiles_for_tenant", None)
         profiles = (
-            tenant_profile_lister(context.tenant_id)
-            if callable(tenant_profile_lister)
-            else self.user_store.list_profiles()
+            self.user_store.list_profiles()
+            if is_super_admin or not callable(tenant_profile_lister)
+            else tenant_profile_lister(context.tenant_id)
         )
         for profile in profiles:
             assignments = assignments_by_user.get(profile.user_id, [])
             visible_assignments = [
                 assignment
                 for assignment in assignments
-                if assignment.tenant_id in (context.tenant_id, "*")
-                or (roles_by_id.get(assignment.role_id) and roles_by_id[assignment.role_id].level == RoleLevel.SUPER_ADMIN)
+                if roles_by_id.get(assignment.role_id)
+                and (
+                    is_super_admin
+                    or assignment.tenant_id in (context.tenant_id, "*")
+                    or roles_by_id[assignment.role_id].level == RoleLevel.SUPER_ADMIN
+                )
             ]
             if not visible_assignments:
                 continue
@@ -158,7 +163,7 @@ class AccessControlService:
             status=profile.status,
             last_login="刚刚",
         )
-        self.user_store.upsert_profile(profile)
+        self._upsert_profile(profile)
         return self._session_payload_for_profile(profile, tenant_hint=tenant_hint)
 
     def session_for_user(self, user_id: str, tenant_hint: str | None = None) -> dict[str, Any]:
@@ -185,14 +190,14 @@ class AccessControlService:
             raise ValueError(f"机构默认操作员角色不存在，请检查：{tenant_label}")
 
         profile = UserProfile(
-            user_id=_user_id_from_email(email),
+            user_id=_allocate_user_id(self.user_store, email),
             name=name,
             department=str(payload.get("department") or "").strip() or _tenant_label(tenant_id),
             email=email,
             status="active",
             last_login="刚刚",
         )
-        saved = self.user_store.upsert_profile(profile)
+        saved = self._upsert_profile(profile)
         self.policy_repository.replace_user_assignments(
             saved.user_id,
             [RoleAssignment(saved.user_id, tenant_id, operator_role.role_id, granted_by=saved.user_id)],
@@ -236,17 +241,20 @@ class AccessControlService:
             data_scopes = config["dataScopes"]
             self.policy_repository.replace_role_policies(
                 role.role_id,
-                _role_policies_from_ui(
-                    role.role_id,
-                    tenant_id,
-                    menus=config["menus"],
-                    data_scopes=data_scopes,
-                    can_manage_tenant=False,
-                    can_manage_system_config=False,
-                    can_manage_roles=is_admin_role,
-                    can_execute_analysis=bool(data_scopes),
-                    can_create_metric=bool(data_scopes),
-                    deny_role_manage=not is_admin_role,
+                _merge_preserved_role_policies(
+                    self.policy_repository.get_role_policies(role.role_id),
+                    _role_policies_from_ui(
+                        role.role_id,
+                        tenant_id,
+                        menus=config["menus"],
+                        data_scopes=data_scopes,
+                        can_manage_tenant=False,
+                        can_manage_system_config=False,
+                        can_manage_roles=is_admin_role,
+                        can_execute_analysis=bool(data_scopes),
+                        can_create_metric=bool(data_scopes),
+                        deny_role_manage=not is_admin_role,
+                    ),
                 ),
             )
             manageable_role_ids = {
@@ -295,18 +303,30 @@ class AccessControlService:
         if existing_by_email and existing_by_email.user_id != profile.user_id:
             raise ValueError("用户邮箱已存在，请检查……")
 
-        assignments = self._assignments_from_payload(context, profile.user_id, payload)
-        for assignment in assignments:
+        incoming = self._assignments_from_payload(context, profile.user_id, payload)
+        for assignment in incoming:
             role = self.policy_repository.get_role(assignment.role_id)
             if not role:
                 raise ValueError(f"unknown role: {assignment.role_id}")
             self._require_can_grant_role(context, assignment.tenant_id, role)
+        assignments = _merge_user_assignments(
+            self.policy_repository.list_user_assignments(profile.user_id),
+            incoming,
+        )
 
-        saved = self.user_store.upsert_profile(profile)
+        # Relational identity lookup requires an active row while grants are written.
+        grant_profile = profile if profile.status == "active" else UserProfile(
+            user_id=profile.user_id,
+            name=profile.name,
+            department=profile.department,
+            email=profile.email,
+            status="active",
+            last_login=profile.last_login,
+        )
+        saved = self._upsert_profile(grant_profile)
         self.policy_repository.replace_user_assignments(saved.user_id, assignments)
-        # Role grants create tenant memberships in the PostgreSQL adapter; this
-        # idempotent second write can bind the requested department to an org unit.
-        saved = self.user_store.upsert_profile(profile)
+        # Bind department after memberships exist, then persist the requested status.
+        saved = self._upsert_profile(profile)
         roles_by_id = {role.role_id: role for role in self.policy_repository.list_roles()}
         return self._serialize_user(saved, assignments, roles_by_id)
 
@@ -335,6 +355,12 @@ class AccessControlService:
             grouped[assignment.user_id].append(assignment)
         return grouped
 
+    def _upsert_profile(self, profile: UserProfile) -> UserProfile:
+        try:
+            return self.user_store.upsert_profile(profile)
+        except Exception as exc:
+            _raise_profile_constraint_error(exc)
+
     def _profile_from_payload(self, payload: dict[str, Any]) -> UserProfile:
         email = str(payload.get("email") or "").strip()
         name = str(payload.get("name") or "").strip()
@@ -343,7 +369,7 @@ class AccessControlService:
         user_id = str(payload.get("id") or payload.get("user_id") or "").strip()
         if not user_id:
             existing = self.user_store.get_profile_by_email(email)
-            user_id = existing.user_id if existing else _user_id_from_email(email)
+            user_id = existing.user_id if existing else _allocate_user_id(self.user_store, email)
         return UserProfile(
             user_id=user_id,
             name=name,
@@ -373,7 +399,7 @@ class AccessControlService:
                 assignments.append(RoleAssignment(user_id, "*", SUPER_ADMIN_ROLE_ID, granted_by=context.user_id))
                 continue
             tenant_code = str(item.get("tenantId") or item.get("tenant_id") or "").strip()
-            tenant_id = _tenant_id_from_label(tenant_code or tenant_value or _tenant_label(context.tenant_id))
+            tenant_id = self._resolve_assignment_tenant_id(tenant_code, tenant_value, context)
             role = self._find_role_by_name(tenant_id, role_name)
             if role is None:
                 raise ValueError(f"角色不存在，请检查：{tenant_value} · {role_name}")
@@ -385,6 +411,22 @@ class AccessControlService:
             if role.tenant_id == tenant_id and role.name == role_name:
                 return role
         return None
+
+    def _resolve_assignment_tenant_id(self, tenant_code: str, tenant_value: str, context: ExecutionContext) -> str:
+        raw = str(tenant_code or tenant_value or _tenant_label(context.tenant_id)).strip()
+        if raw in {"*", "全部机构"}:
+            return "*"
+        candidate = _tenant_id_from_label(raw)
+        if any(role.tenant_id == candidate for role in self.policy_repository.list_roles(candidate)):
+            return candidate
+        wanted = {item for item in (_tenant_label(candidate), tenant_value.strip(), raw) if item}
+        for role in self.policy_repository.list_roles():
+            tenant_id = str(role.tenant_id or "")
+            if not tenant_id or tenant_id == "*":
+                continue
+            if tenant_id in wanted or _tenant_label(tenant_id) in wanted:
+                return tenant_id
+        return candidate
 
     def _require_tenant_manager(self, context: ExecutionContext, tenant_id: str) -> None:
         if self._is_super_admin(context.user_id):
@@ -802,10 +844,79 @@ def _role_names_from_ids(policy_repository: PolicyRepository, role_ids: set[str]
     return names
 
 
+_UI_MANAGED_POLICY_PREFIXES = (
+    "menu:",
+    "metric:",
+    "role:",
+    "skill:supersonic.query",
+    "mcp:database.",
+    "mcp:knowledge.",
+    "report:",
+)
+
+
+def _is_ui_managed_policy(policy: PermissionPolicy) -> bool:
+    return any(policy.obj == prefix or policy.obj.startswith(prefix) for prefix in _UI_MANAGED_POLICY_PREFIXES)
+
+
+def _merge_preserved_role_policies(
+    existing: list[PermissionPolicy],
+    rewritten: list[PermissionPolicy],
+) -> list[PermissionPolicy]:
+    preserved = [policy for policy in existing if not _is_ui_managed_policy(policy)]
+    seen = {(policy.obj, policy.act, policy.effect) for policy in rewritten}
+    merged = list(rewritten)
+    for policy in preserved:
+        key = (policy.obj, policy.act, policy.effect)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(policy)
+    return merged
+
+
+def _merge_user_assignments(
+    existing: list[RoleAssignment],
+    incoming: list[RoleAssignment],
+) -> list[RoleAssignment]:
+    incoming_tenants = {assignment.tenant_id for assignment in incoming}
+    preserved = [assignment for assignment in existing if assignment.tenant_id not in incoming_tenants]
+    return _dedupe_assignments([*preserved, *incoming])
+
+
 def _user_id_from_email(email: str) -> str:
     local_part = email.split("@", 1)[0].lower()
     slug = re.sub(r"[^a-z0-9_]+", "_", local_part).strip("_")
     return f"u_{slug or 'user'}"
+
+
+def _allocate_user_id(user_store: UserDirectoryStore, email: str) -> str:
+    base = _user_id_from_email(email)
+    existing = user_store.get_profile(base)
+    if existing is None or existing.email.lower() == email.strip().lower():
+        return base
+    suffix = 2
+    while True:
+        candidate = f"{base}_{suffix}"
+        if user_store.get_profile(candidate) is None:
+            return candidate
+        suffix += 1
+
+
+def _is_unique_violation(exc: BaseException) -> bool:
+    if getattr(exc, "pgcode", None) == "23505" or getattr(exc, "errno", None) == 1062:
+        return True
+    text = str(exc).lower()
+    return "unique" in text or "duplicate" in text
+
+
+def _raise_profile_constraint_error(exc: BaseException) -> None:
+    if _is_unique_violation(exc):
+        text = str(exc).lower()
+        if "external_subject" in text:
+            raise ValueError("用户标识已存在，请检查……") from exc
+        raise ValueError("用户邮箱已存在，请检查……") from exc
+    raise exc
 
 
 def _normalize_status(value: Any) -> str:

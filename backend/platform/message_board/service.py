@@ -48,9 +48,15 @@ class MessageBoardService:
             _lock_version(payload),
         ))
 
-    def set_status(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def set_status(self, payload: dict[str, Any], *, tenant_id: str = "") -> dict[str, Any]:
+        message_id = _message_id(payload.get("message_id") or payload.get("messageId"))
+        getter = getattr(self.store, "_get", None)
+        if tenant_id and callable(getter):
+            current = getter(message_id)
+            if str(current.get("tenant_id") or "") != tenant_id:
+                raise PermissionError("message_board_tenant_scope_required")
         return self._with_author_name(self.store.set_status(
-            _message_id(payload.get("message_id") or payload.get("messageId")),
+            message_id,
             _status(payload.get("status")),
             _lock_version(payload),
         ))
@@ -58,10 +64,15 @@ class MessageBoardService:
     def list_owned(self, tenant_id: str, user_id: str, page_key: str = "") -> list[dict[str, Any]]:
         return [self._with_author_name(row) for row in self.store.list_owned(tenant_id, user_id, _text(page_key, "page_key", 160))]
 
-    def list_all(self, *, query: str = "", page: int = 1, page_size: int = 50) -> dict[str, Any]:
+    def list_all(self, *, tenant_id: str = "", query: str = "", page: int = 1, page_size: int = 50) -> dict[str, Any]:
         safe_page = max(1, min(int(page or 1), 100000))
         safe_size = max(1, min(int(page_size or 50), 100))
-        rows, total = self.store.list_all(query=str(query or "")[:200], offset=(safe_page - 1) * safe_size, limit=safe_size)
+        rows, total = self.store.list_all(
+            tenant_id=str(tenant_id or "").strip(),
+            query=str(query or "")[:200],
+            offset=(safe_page - 1) * safe_size,
+            limit=safe_size,
+        )
         return {"messages": [self._with_author_name(row) for row in rows], "total": total, "page": safe_page, "page_size": safe_size}
 
     def _with_author_name(self, entry: dict[str, Any]) -> dict[str, Any]:

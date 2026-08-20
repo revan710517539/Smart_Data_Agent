@@ -1,7 +1,14 @@
 import type { AnalysisSkillAsset } from "./dataAssetApi";
 
+const sampleAnalysisDatasets = new Set(["loan_operation_mart", "risk_operation_mart"]);
+
 function isGeneratedLearningSkill(skill: AnalysisSkillAsset) {
   return skill.learningOrigin === "smart_data_agent.hermes_learning";
+}
+
+function isSampleMartLearningSkill(skill: AnalysisSkillAsset) {
+  const datasetId = String(skill.learningTrigger?.datasetId || "").trim();
+  return sampleAnalysisDatasets.has(datasetId);
 }
 
 function canonicalSkillName(name: string) {
@@ -23,7 +30,12 @@ export function displayedAnalysisSkills(skills: AnalysisSkillAsset[]) {
   );
 
   return [...skills]
-    .filter((skill) => !isGeneratedLearningSkill(skill) || !canonicalNames.has(canonicalSkillName(skill.name)))
+    .filter((skill) => {
+      if (!isGeneratedLearningSkill(skill)) return true;
+      if (isSampleMartLearningSkill(skill)) return false;
+      if (skill.lifecycleStatus && skill.lifecycleStatus !== "active") return false;
+      return !canonicalNames.has(canonicalSkillName(skill.name));
+    })
     .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, "zh-CN"));
 }
 

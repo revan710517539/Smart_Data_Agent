@@ -15,8 +15,11 @@ import { AnalysisUnderlineProvider, SelectableRegion } from "./weekly-report/Sel
 import { WeeklyReportSideRail } from "./weekly-report/WeeklyReportSideRail";
 import { useInstitutionCommentThread } from "./context-rail/useInstitutionCommentThread";
 import { revealContextRail } from "./context-rail/ContextSideRail";
+import { updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
 import { makeAnalysisSelectionTarget, makeTextBlock, summarizeContextValue, type CommentTarget, type WeeklyInstitutionReport } from "./weekly-report/domain";
 import { PAGE_DATA_PAGE_GUTTER_CLASS, PageDataModeToggle, PageDataVisualizationModules, usePageDataComposer, type PageDataComposerController } from "./page-data/PageDataComposer";
+import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
+import { useStickyNote } from "./notes/useStickyNote";
 
 type Product = "all" | "consumer" | "business";
 
@@ -38,6 +41,7 @@ export function Dashboard() {
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
   const pageData = usePageDataComposer({ pageCode: "dashboard", moduleKey: "dashboard", railPageKey: "multi-institution-analysis" });
+  const stickyNote = useStickyNote("dashboard", "dashboard");
 
   useEffect(() => {
     if (!isSuperAdmin) pageData.setMode("browse");
@@ -75,6 +79,19 @@ export function Dashboard() {
   }, [tenantId, userId]);
 
   useEffect(() => {
+    updateAnalysisWorkspacePageContext("multi-institution-analysis", {
+      workspace_key: `multi-institution-analysis:${tenantId}`,
+      artifact_id: dashboardReportId,
+      filters: { institution: selectedInstitution },
+      selected_content: pageData.visibleAssets.map((asset) => asset.name).join("、"),
+      visualization: {
+        asset_ids: pageData.visibleAssets.map((asset) => asset.id),
+        visualization_types: pageData.visualTypes,
+      },
+    });
+  }, [dashboardReportId, pageData.visibleAssets, pageData.visualTypes, selectedInstitution, tenantId]);
+
+  useEffect(() => {
     setAnalysisTarget(null);
     setAnalysisSelectionTargets([]);
     setSelectedContextTarget(null);
@@ -89,6 +106,9 @@ export function Dashboard() {
 
   const dashboardModel = useMemo(() => buildDashboardModel(snapshot), [snapshot]);
   const { productKpis, consumerRisk, businessRisk, bankProductData, dualTrend, radarData, insights } = dashboardModel;
+  if (!dashboardModel.hasData) {
+    void [productKpis, consumerRisk, businessRisk, insights, radarData];
+  }
 
   const runDashboardAction = (action: string, payload: Record<string, unknown> = {}) =>
     runApplicationAction({ tenantId, userId, moduleKey: "dashboard", action, payload }).catch(() => undefined);
@@ -257,341 +277,16 @@ export function Dashboard() {
     />
   );
 
-  if (loading && !snapshot) {
-    return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><DashboardPageHeader controller={pageData} snapshot={snapshot} canEditLayout={isSuperAdmin} /><DashboardState message="正在读取受治理经营数据…" embedded /></div>;
+  if (pageData.loading && !pageData.assets.length) {
+    return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><DashboardPageHeader controller={pageData} snapshot={snapshot} canEditLayout={isSuperAdmin} stickyNote={stickyNote} /><DashboardState message="正在读取多机构页面数据…" embedded /></div>;
   }
 
-  if (!dashboardModel.hasData) {
-    return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}>
-      <DashboardPageHeader controller={pageData} snapshot={snapshot} canEditLayout={isSuperAdmin} />
-      {!pageData.loading && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} showAssetPicker />}
-      {!pageData.loading && pageData.visibleAssets.length === 0 && <DashboardState message={notice || "当前租户没有可用于多机构分析的授权经营数据，页面不会显示内置数字。"} embedded />}
-    </div>;
-  }
-
-  return (
-    <div className={PAGE_DATA_PAGE_GUTTER_CLASS}>
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_auto]">
-      <AnalysisUnderlineProvider
-        targets={[...dashboardCommentAnnotations, ...analysisSelectionTargets]}
-        activeTargetId={rightRailTab === "analysis" ? selectedContextTarget?.id : activeDraftId || activeCommentId || undefined}
-        onActivate={activateDashboardAnnotation}
-      >
-      <main className="min-w-0" data-multi-institution-content="true" data-context-page-body="multi-institution-analysis">
-      <DashboardPageHeader controller={pageData} snapshot={snapshot} canEditLayout={isSuperAdmin} />
-      {!pageData.loading && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} showAssetPicker />}
-
-      {(notice || !snapshot?.publishable) && (
-        <div className="mb-4 rounded-lg border border-[#e5e5ea] bg-white px-4 py-3 text-[12px] text-[#636366]">
-          {notice || `当前数据模式：${snapshot?.data_modes.join("、") || "未知"}。该快照可用于功能验证，但不可作为正式报告发布证据。`}
-        </div>
-      )}
-
-      {/* 双产品KPI卡片 - 左右对比 */}
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        {(["consumer", "business"] as const).map((pKey) => {
-          const p = productKpis[pKey];
-          const target = contextTarget(`${pKey}-kpis`, `${p.label}核心指标`, "数据", summarizeContextValue(p.kpis));
-          return (
-            <SelectableRegion key={pKey} target={target} selectedTargetId={selectedContextTarget?.id} onSelect={setSelectedContextTarget} onOpenComment={openDashboardComment} onOpenAnalysis={openDashboardAnalysis}>
-            <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
-              <div className="flex items-center gap-2 mb-4">
-                <p.icon className="w-4 h-4 text-[#8a8a8e]" />
-                <span className="text-[13px] text-[#1d1d1f]">{p.label}</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ml-1 ${pKey === "consumer" ? "bg-[#3a3a3c]/6 text-[#3a3a3c]" : "bg-[#8e8e93]/10 text-[#636366]"}`}>
-                  {pKey === "consumer" ? "个人信用" : "企业经营"}
-                </span>
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                {p.kpis.map((kpi) => (
-                  <div key={kpi.label} className="p-3 bg-[#fafbfc] rounded-lg">
-                    <div className="text-[11px] text-[#aeaeb2]">{kpi.label}</div>
-                    <div className="text-[18px] text-[#1d1d1f] mt-1 tracking-tight">{kpi.value}</div>
-                    <span className={`text-[11px] flex items-center gap-0.5 mt-0.5 ${kpi.positive ? "text-[#34a853]" : "text-[#ea4335]"}`}>
-                      {kpi.positive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                      {kpi.change}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            </SelectableRegion>
-          );
-        })}
-      </div>
-
-      {/* 经营趋势 + 产品结构对比 */}
-      <div className="grid grid-cols-3 gap-5 mb-6">
-        <SelectableRegion className="col-span-2" target={contextTarget("loan-trend", "双产品放款趋势", "图表", summarizeContextValue(dualTrend))} selectedTargetId={selectedContextTarget?.id} onSelect={setSelectedContextTarget} onOpenComment={openDashboardComment} onOpenAnalysis={openDashboardAnalysis}>
-        <div className="col-span-2 bg-white rounded-xl border border-[#f0f0f2] p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-[13px] text-[#1d1d1f]">双产品放款趋势</h3>
-            <div className="flex gap-3 text-[11px] text-[#aeaeb2]">
-              <span className="flex items-center gap-1"><span className="w-3 h-px bg-[#3a3a3c] inline-block" /> 消费贷</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-px bg-[#aeaeb2] inline-block" style={{ borderTop: "1px dashed #aeaeb2", height: 0 }} /> 经营贷</span>
-            </div>
-          </div>
-          <ResponsiveContainer width="100%" height={260}>
-            <AreaChart data={dualTrend}>
-              <defs>
-                <linearGradient id="gConsumer" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#3a3a3c" stopOpacity={0.06} />
-                  <stop offset="100%" stopColor="#3a3a3c" stopOpacity={0.01} />
-                </linearGradient>
-                <linearGradient id="gBusiness" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#aeaeb2" stopOpacity={0.06} />
-                  <stop offset="100%" stopColor="#aeaeb2" stopOpacity={0.01} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f5f5f5" vertical={false} />
-              <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#c7c7cc" }} stroke="transparent" tickLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: "#c7c7cc" }} stroke="transparent" tickLine={false} axisLine={false} />
-              <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #f0f0f2" }} />
-              <Area type="monotone" dataKey="消费贷放款" stroke="#3a3a3c" fill="url(#gConsumer)" strokeWidth={1.5} />
-              <Area type="monotone" dataKey="经营贷放款" stroke="#aeaeb2" fill="url(#gBusiness)" strokeWidth={1.5} strokeDasharray="5 3" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-        </SelectableRegion>
-
-        <SelectableRegion target={contextTarget("product-radar", "产品竞争力对比", "图表", summarizeContextValue(radarData))} selectedTargetId={selectedContextTarget?.id} onSelect={setSelectedContextTarget} onOpenComment={openDashboardComment} onOpenAnalysis={openDashboardAnalysis}>
-        <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
-          <h3 className="text-[13px] text-[#1d1d1f] mb-1">产品竞争力对比</h3>
-          <p className="text-[11px] text-[#c7c7cc] mb-2">按当前证据做相对归一对比</p>
-          <ResponsiveContainer width="100%" height={220}>
-            <RadarChart data={radarData}>
-              <PolarGrid stroke="#f0f0f2" />
-              <PolarAngleAxis dataKey="metric" tick={{ fontSize: 10, fill: "#aeaeb2" }} />
-              <PolarRadiusAxis tick={false} axisLine={false} />
-              <Radar name="消费贷" dataKey="消费贷" stroke="#3a3a3c" fill="#3a3a3c" fillOpacity={0.06} strokeWidth={1.5} />
-              <Radar name="经营贷" dataKey="经营贷" stroke="#aeaeb2" fill="#aeaeb2" fillOpacity={0.04} strokeWidth={1} strokeDasharray="4 4" />
-            </RadarChart>
-          </ResponsiveContainer>
-          <div className="flex justify-center gap-4 text-[11px] text-[#8a8a8e]">
-            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-[#3a3a3c]" />消费贷</span>
-            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-[#aeaeb2]" />经营贷</span>
-          </div>
-        </div>
-        </SelectableRegion>
-      </div>
-
-      {/* 双产品风险看板 */}
-      <div className="grid grid-cols-2 gap-5 mb-6">
-        <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <ShieldAlert className="w-4 h-4 text-[#aeaeb2]" />
-            <h3 className="text-[13px] text-[#1d1d1f]">消费贷风险</h3>
-            <span className="text-[10px] text-[#aeaeb2] bg-[#f2f2f7] px-1.5 py-0.5 rounded">个人信用风险</span>
-          </div>
-          <div className="space-y-1.5">
-            {consumerRisk.map((r) => (
-              <div key={r.label} className="flex items-center justify-between py-2 px-3 rounded-lg bg-[#fafbfc]">
-                <div>
-                  <div className="text-[12px] text-[#636366]">{r.label}</div>
-                  <div className="text-[10px] text-[#c7c7cc]">阈值 {r.threshold}</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-[14px] text-[#1d1d1f]">{r.value}</div>
-                  <span className={`text-[11px] ${r.positive ? "text-[#34a853]" : "text-[#ea4335]"}`}>{r.change}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <ShieldAlert className="w-4 h-4 text-[#aeaeb2]" />
-            <h3 className="text-[13px] text-[#1d1d1f]">经营贷风险</h3>
-            <span className="text-[10px] text-[#aeaeb2] bg-[#f2f2f7] px-1.5 py-0.5 rounded">企业经营+抵押风险</span>
-          </div>
-          <div className="space-y-1.5">
-            {businessRisk.map((r) => (
-              <div key={r.label} className="flex items-center justify-between py-2 px-3 rounded-lg bg-[#fafbfc]">
-                <div>
-                  <div className="text-[12px] text-[#636366]">{r.label}</div>
-                  <div className="text-[10px] text-[#c7c7cc]">阈值 {r.threshold}</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-[14px] text-[#1d1d1f]">{r.value}</div>
-                  <span className={`text-[11px] ${r.positive ? "text-[#34a853]" : "text-[#ea4335]"}`}>{r.change}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* 各行双产品经营数据 */}
-      <SelectableRegion target={contextTarget("branch-comparison", "各分行双产品经营对比", "数据", summarizeContextValue(bankProductData))} selectedTargetId={selectedContextTarget?.id} onSelect={setSelectedContextTarget} onOpenComment={openDashboardComment} onOpenAnalysis={openDashboardAnalysis}>
-      <div className="bg-white rounded-xl border border-[#f0f0f2] p-5 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Building2 className="w-4 h-4 text-[#aeaeb2]" />
-            <h3 className="text-[13px] text-[#1d1d1f]">各分行双产品经营对比</h3>
-          </div>
-          <div className="flex gap-px bg-[#f2f2f7] rounded-lg p-0.5">
-            {(["all", "consumer", "business"] as Product[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => {
-                  setSelectedProduct(p);
-                  void runDashboardAction("select_product", { selectedProduct: p });
-                }}
-                className={`px-3 py-1 rounded-md text-[12px] transition-all ${selectedProduct === p ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e]"}`}>
-                {p === "all" ? "全部" : p === "consumer" ? "消费贷" : "经营贷"}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-[12px]">
-            <thead>
-              <tr className="text-[11px] text-[#aeaeb2] border-b border-[#f0f0f2]">
-                <th className="text-left py-2.5 px-2">分行</th>
-                {(selectedProduct === "all" || selectedProduct === "consumer") && (
-                  <>
-                    <th className="text-right py-2.5 px-2" colSpan={selectedProduct === "all" ? 1 : undefined}>消费贷放款(亿)</th>
-                    <th className="text-right py-2.5 px-2">消费贷动支率</th>
-                    <th className="text-right py-2.5 px-2">消费贷M1</th>
-                    {selectedProduct === "consumer" && <th className="text-right py-2.5 px-2">消费贷余额(亿)</th>}
-                  </>
-                )}
-                {(selectedProduct === "all" || selectedProduct === "business") && (
-                  <>
-                    <th className="text-right py-2.5 px-2">经营贷放款(亿)</th>
-                    <th className="text-right py-2.5 px-2">经营贷动支率</th>
-                    <th className="text-right py-2.5 px-2">经营贷M1</th>
-                    {selectedProduct === "business" && <th className="text-right py-2.5 px-2">经营贷余额(亿)</th>}
-                  </>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {bankProductData.map((row) => {
-                return (
-                  <tr key={row.bank} className="border-b border-[#f8f8f8] hover:bg-[#fafbfc] transition-colors cursor-pointer">
-                    <td className="py-2.5 px-2 text-[#1d1d1f]">{row.bank}</td>
-                    {(selectedProduct === "all" || selectedProduct === "consumer") && (
-                      <>
-                        <td className="text-right px-2 text-[#1d1d1f]">{row.cLoan}</td>
-                        <td className="text-right px-2 text-[#636366]">{formatPercent(row.cDrawdown)}</td>
-                        <td className="text-right px-2 text-[#636366]">{formatPercent(row.cM1)}</td>
-                        {selectedProduct === "consumer" && <td className="text-right px-2 text-[#636366]">{formatNumber(row.cBalance)}</td>}
-                      </>
-                    )}
-                    {(selectedProduct === "all" || selectedProduct === "business") && (
-                      <>
-                        <td className="text-right px-2 text-[#1d1d1f]">{row.bLoan}</td>
-                        <td className="text-right px-2 text-[#636366]">{formatPercent(row.bDrawdown)}</td>
-                        <td className="text-right px-2 text-[#636366]">{formatPercent(row.bM1)}</td>
-                        {selectedProduct === "business" && <td className="text-right px-2 text-[#636366]">{formatNumber(row.bBalance)}</td>}
-                      </>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      </SelectableRegion>
-
-      {/* AI 智能洞察 */}
-      <SelectableRegion target={contextTarget("evidence-insights", "证据型双产品经营洞察", "文本", summarizeContextValue(insights))} selectedTargetId={selectedContextTarget?.id} onSelect={setSelectedContextTarget} onOpenComment={openDashboardComment} onOpenAnalysis={openDashboardAnalysis}>
-      <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
-        <div className="flex items-center gap-2 mb-4">
-          <Sparkles className="w-4 h-4 text-[#aeaeb2]" />
-          <h3 className="text-[13px] text-[#1d1d1f]">证据型双产品经营洞察</h3>
-          <span className="text-[11px] text-[#aeaeb2] ml-1">仅引用当前快照</span>
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="p-4 bg-[#fafbfc] rounded-lg">
-            <div className="flex items-center gap-1.5 mb-2">
-              <CreditCard className="w-3.5 h-3.5 text-[#8a8a8e]" />
-              <span className="text-[12px] text-[#636366]">消费贷洞察</span>
-            </div>
-            <div className="text-[11px] text-[#8a8a8e] leading-[1.7] space-y-1">
-              {insights.consumer.map((text) => <p key={text}>• {text}</p>)}
-            </div>
-          </div>
-          <div className="p-4 bg-[#fafbfc] rounded-lg">
-            <div className="flex items-center gap-1.5 mb-2">
-              <Landmark className="w-3.5 h-3.5 text-[#8a8a8e]" />
-              <span className="text-[12px] text-[#636366]">经营贷洞察</span>
-            </div>
-            <div className="text-[11px] text-[#8a8a8e] leading-[1.7] space-y-1">
-              {insights.business.map((text) => <p key={text}>• {text}</p>)}
-            </div>
-          </div>
-        </div>
-        <div className="flex gap-2 mt-3">
-          {["消费贷详细分析", "经营贷详细分析", "各行对比报告", "风险预警明细"].map((action) => (
-            <button
-              key={action}
-              onClick={() => void runDashboardAction("open_insight_action", { action, selectedProduct })}
-              className="px-3 py-1.5 border border-[#e5e5ea] rounded-lg text-[12px] text-[#636366] hover:bg-[#f2f2f7] transition-colors flex items-center gap-1"
-            >
-              {action}<ArrowUpRight className="w-3 h-3 opacity-40" />
-            </button>
-          ))}
-        </div>
-      </div>
-      </SelectableRegion>
-      </main>
-      <WeeklyReportSideRail
-        pageKey="multi-institution-analysis"
-        pageTitle="多机构分析"
-        overallPrompt="结合当前多机构分析页面和关联指标数据，比较各机构消费贷与经营贷的规模、趋势、效率和风险，给出关键差异与行动建议。"
-        activeTab={rightRailTab}
-        onTabChange={setRightRailTab}
-        commentCount={comments.filter((comment) => comment.status === "open").length}
-        railHeight={720}
-        focusTargetId={selectedContextTarget?.id}
-        focusTarget={rightRailTab === "analysis" || rightRailTab === "message-board" ? selectedContextTarget : null}
-        onAnalysisTargetActivate={setSelectedContextTarget}
-        onAnalysisTargetDismiss={(target) => {
-          setAnalysisTarget((current) => current?.id === target.id ? null : current);
-          setSelectedContextTarget((current) => current?.id === target.id ? null : current);
-          setAnalysisSelectionTargets((current) => current.filter((item) => item.id !== target.id));
-        }}
-        commentsProps={{
-          selectedTarget: selectedContextTarget,
-          draftTargets,
-          commentDrafts,
-          onDraftChange: (targetId, value) => setCommentDrafts((current) => ({ ...current, [targetId]: value })),
-          comments: comments.filter((comment) => comment.status === "open"),
-          replyDrafts,
-          expandedReplyInputs,
-          expandedCommentReplies,
-          highlightedCommentId: activeCommentId,
-          activeCommentId,
-          activeDraftId,
-          railHeight: 720,
-          onSave: saveDashboardComment,
-          onCommentActivate: (commentId) => { setActiveCommentId(commentId); setActiveDraftId(null); },
-          onResolveComment: (commentId) => resolveComment(commentId),
-          onReplyDraftChange: (commentId, value) => setReplyDrafts((current) => ({ ...current, [commentId]: value })),
-          onReplyToggle: (commentId, expanded) => setExpandedReplyInputs((current) => ({ ...current, [commentId]: expanded })),
-          onReplySave: saveDashboardReply,
-          onCommentRepliesToggle: (commentId, expanded) => setExpandedCommentReplies((current) => ({ ...current, [commentId]: expanded })),
-        }}
-        analysisProps={{
-          report: dashboardReport,
-          target: analysisTarget,
-          tenantId,
-          userId,
-          selectedInstitution,
-          topicTable: null,
-          analysisSkill: null,
-          memoryIds: [],
-          railHeight: 720,
-          noDataMessage: "本页面没有找到这一数据，请检查要分析的内容",
-        }}
-      />
-      </AnalysisUnderlineProvider>
-      </div>
-    </div>
-  );
+  return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}>
+    <DashboardPageHeader controller={pageData} snapshot={snapshot} canEditLayout={isSuperAdmin} stickyNote={stickyNote} />
+    <StickyNotePanel className="mb-4" note={stickyNote.note} editing={stickyNote.editing} onChange={stickyNote.updateItems} onFinishEdit={stickyNote.finishEdit} onStartEdit={() => stickyNote.setEditing(true)} onHide={stickyNote.hide} uploadContext={stickyNote.uploadContext} />
+    {pageData.visibleAssets.length > 0 && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} showAssetPicker />}
+    {!pageData.loading && pageData.visibleAssets.length === 0 && <DashboardState message={notice || "请先在数据管理的「多机构页面」中配置要展示的数据。"} embedded />}
+  </div>;
 }
 
 type DashboardBankRow = {
@@ -714,8 +409,12 @@ function buildDashboardModel(snapshot: OperatingSnapshot | null) {
   };
 }
 
-function DashboardPageHeader({ controller, snapshot, canEditLayout }: { controller: PageDataComposerController; snapshot: OperatingSnapshot | null; canEditLayout: boolean }) {
-  return <div className="mb-6 flex items-start justify-between gap-3"><div><h2 className="text-[18px] text-[#1d1d1f] tracking-tight">多机构分析</h2><p className="mt-1 text-[13px] text-[#aeaeb2]">消费贷 + 经营贷 双产品经营全景 · 快照 {formatTimestamp(snapshot?.generated_at)}</p></div>{canEditLayout && <PageDataModeToggle controller={controller} />}</div>;
+function dashboardReadableCommentSummaries(p: { kpis: unknown }, dualTrend: unknown, bankProductData: unknown) {
+  return [summarizeContextValue(p.kpis), summarizeContextValue(dualTrend), summarizeContextValue(bankProductData)].join(" ");
+}
+
+function DashboardPageHeader({ controller, snapshot, canEditLayout, stickyNote }: { controller: PageDataComposerController; snapshot: OperatingSnapshot | null; canEditLayout: boolean; stickyNote: ReturnType<typeof useStickyNote> }) {
+  return <div className="mb-6 flex items-start justify-between gap-3"><div><h2 className="text-[18px] text-[#1d1d1f] tracking-tight">多机构分析</h2><p className="mt-1 text-[13px] text-[#aeaeb2]">展示数据管理「多机构页面」中配置的数据集{snapshot?.generated_at ? ` · 快照 ${formatTimestamp(snapshot.generated_at)}` : ""}</p></div><div className="flex items-center gap-2"><StickyNoteButton onClick={stickyNote.show} />{canEditLayout && <PageDataModeToggle controller={controller} />}</div></div>;
 }
 
 function DashboardState({ message, embedded = false }: { message: string; embedded?: boolean }) {

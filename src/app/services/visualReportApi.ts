@@ -2,6 +2,7 @@ import type { RawField } from "./dataAssetApi";
 import { fetchApplicationModule, runApplicationAction } from "./applicationApi";
 import type { VisualizationType } from "../components/self-analysis/domain";
 import type { VisualizationCardConfig } from "../components/visualization/visualizationDataModel";
+import type { StickyNoteRecord } from "../components/notes/richNote";
 
 export type VisualReportDestination = "mine" | "topic" | "experience" | "weekly";
 
@@ -29,6 +30,7 @@ export type VisualReport = {
   title: string;
   cards: VisualReportCard[];
   destinations: VisualReportDestination[];
+  stickyNote?: StickyNoteRecord;
   ownerUserId?: string;
   createdAt: string;
   updatedAt: string;

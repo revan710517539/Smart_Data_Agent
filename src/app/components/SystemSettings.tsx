@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router";
 import {
   Settings,
@@ -35,7 +35,7 @@ import {
   type AccessRolePermission,
   type AccessUser,
 } from "../services/accessControlApi";
-import { fetchAuditLogs, type AuditLog } from "../services/auditApi";
+import { defaultAuditSince, fetchAuditLogs, type AuditLog } from "../services/auditApi";
 import {
   deleteModelIntegration,
   deleteSpeechIntegration,
@@ -53,7 +53,7 @@ import {
 } from "../services/systemConfigApi";
 import { ApiRequestError, apiErrorMessage } from "../services/apiClient";
 import { demoFallbackDisabledMessage, isDemoFallbackEnabled } from "../services/apiContext";
-import { DataPageSelector } from "./ui/DataPageSelector";
+import { DataPageSelector, useClientPagination } from "./ui/DataPageSelector";
 import {
   type UserFormKey,
   type AccessModal,
@@ -107,6 +107,25 @@ function hasDuplicateModelName(models: ModelIntegration[], name: string, current
   const target = normalizedModelName(name);
   if (!target) return false;
   return models.some((model) => model.id !== currentModelId && normalizedModelName(model.name) === target);
+}
+
+function mergeSavedModel(models: ModelIntegration[], saved: ModelIntegration, draftId = "") {
+  let replaced = false;
+  const next = models.flatMap((item) => {
+    if (item.id === saved.id || (draftId && item.id === draftId)) {
+      if (replaced) return [];
+      replaced = true;
+      return [saved];
+    }
+    return [item];
+  });
+  return replaced ? next : [...next, saved];
+}
+
+function modelsPreservingSaved(latest: ModelIntegration[], saved: ModelIntegration) {
+  if (!latest.length) return [saved];
+  if (latest.some((item) => item.id === saved.id)) return latest;
+  return [saved, ...latest];
 }
 
 function normalizeAccessUserTenantLabels(
@@ -174,15 +193,19 @@ export function SystemSettings() {
     useState<InstitutionPermission[]>(isDemoFallbackEnabled() ? initialPermissionInstitutions : []);
   const [editingPermissionId, setEditingPermissionId] = useState<string | null>(null);
   const [permissionRole, setPermissionRole] = useState<PermissionRole>("管理员");
+  const configMutationEpochRef = useRef(0);
   useEffect(() => {
     if (activeTab !== "config") return;
     let cancelled = false;
     let retryTimer: number | undefined;
 
+    let requestSeq = 0;
+    const syncEpoch = configMutationEpochRef.current;
     const syncSystemConfig = async (attempt = 0) => {
+      const currentRequest = ++requestSeq;
       try {
         const response = await fetchSystemConfig({ tenantId, userId });
-        if (cancelled) return;
+        if (cancelled || currentRequest !== requestSeq || syncEpoch !== configMutationEpochRef.current) return;
         setModelIntegrations(response.models);
         setSpeechIntegrations(response.speech_integrations || []);
         setSystemDataParams(response.system_params);
@@ -272,13 +295,15 @@ export function SystemSettings() {
       try {
         const response = await fetchAuditLogs({
           tenantId,
+          userId,
           limit: auditPageSize,
           offset: (auditPage - 1) * auditPageSize,
+          since: defaultAuditSince(),
         });
         if (cancelled) return;
         setAuditRows(response.logs.map(formatAuditLog));
         setAuditTotal(response.total);
-        setAuditNotice(`审计日志已连接后端：${selectedInstitution} · 共 ${response.total} 条`);
+        setAuditNotice(`审计日志已连接后端：${selectedInstitution} · 近 7 天 · 共 ${response.total} 条`);
       } catch (error) {
         if (cancelled) return;
         if (isTransientSettingsReadFailure(error) && attempt < settingsReadRetryDelays.length) {
@@ -304,7 +329,7 @@ export function SystemSettings() {
       cancelled = true;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [activeTab, auditPage, selectedInstitution, tenantId]);
+  }, [activeTab, auditPage, selectedInstitution, tenantId, userId]);
 
   useEffect(() => {
     setAuditPage(1);
@@ -335,10 +360,18 @@ export function SystemSettings() {
     };
     setModelIntegrations((current) => [...current, nextModel]);
     setModelForm(emptyModelForm);
+    const mutationEpoch = ++configMutationEpochRef.current;
     try {
       const response = await saveModelIntegration({ tenantId, userId, model: nextModel });
-      const latest = await fetchSystemConfig({ tenantId, userId, forceRefresh: true });
-      setModelIntegrations(latest.models.length ? latest.models : [response.model]);
+      setModelIntegrations((current) => mergeSavedModel(current, response.model, nextModel.id));
+      try {
+        const latest = await fetchSystemConfig({ tenantId, userId, forceRefresh: true });
+        if (mutationEpoch === configMutationEpochRef.current) {
+          setModelIntegrations(modelsPreservingSaved(latest.models, response.model));
+        }
+      } catch {
+        // Keep the saved row even if a later refresh is delayed or stale.
+      }
       setConfigNotice("模型接入已同步到账号，并应用于全部非语音模型模块。");
     } catch (error) {
       if (isDemoFallbackEnabled()) {
@@ -353,6 +386,7 @@ export function SystemSettings() {
   const removeModelIntegration = async (id: string) => {
     const previousModels = modelIntegrations;
     setModelIntegrations((current) => current.filter((item) => item.id !== id));
+    configMutationEpochRef.current += 1;
     try {
       await deleteModelIntegration({ tenantId, userId, modelId: id });
       setConfigNotice("模型接入已从后端删除。");
@@ -401,10 +435,18 @@ export function SystemSettings() {
     };
     if (!nextModel.key || !nextModel.value) return;
     setModelIntegrations((current) => current.map((item) => (item.id === model.id ? nextModel : item)));
+    const mutationEpoch = ++configMutationEpochRef.current;
     try {
       const response = await saveModelIntegration({ tenantId, userId, model: nextModel });
-      const latest = await fetchSystemConfig({ tenantId, userId, forceRefresh: true });
-      setModelIntegrations(latest.models.length ? latest.models : [response.model]);
+      setModelIntegrations((current) => mergeSavedModel(current, response.model, nextModel.id));
+      try {
+        const latest = await fetchSystemConfig({ tenantId, userId, forceRefresh: true });
+        if (mutationEpoch === configMutationEpochRef.current) {
+          setModelIntegrations(modelsPreservingSaved(latest.models, response.model));
+        }
+      } catch {
+        // Keep the saved row even if a later refresh is delayed or stale.
+      }
       setConfigNotice("模型接入已更新，并应用于全部非语音模型模块。");
     } catch (error) {
       if (isDemoFallbackEnabled()) {
@@ -420,10 +462,11 @@ export function SystemSettings() {
   const runModelIntegrationTest = async (model: ModelIntegration) => {
     setTestingModelId(model.id);
     setConfigNotice("正在测试模型接入...");
+    const mutationEpoch = ++configMutationEpochRef.current;
     try {
       const response = await testModelIntegration({ tenantId, userId, modelId: model.id });
       setModelTestResults((current) => ({ ...current, [model.id]: response.result }));
-      if (response.model) {
+      if (response.model && mutationEpoch === configMutationEpochRef.current) {
         setModelIntegrations((current) => current.map((item) => (item.id === model.id ? response.model! : item)));
       }
       setConfigNotice(response.result.message);
@@ -449,8 +492,9 @@ export function SystemSettings() {
   const addSpeechIntegration = async () => {
     if (!speechForm.name.trim() || !speechForm.provider.trim() || !speechForm.apiBase.trim() || !speechForm.apiKey.trim()) return;
     const previousIntegrations = speechIntegrations;
+    const existing = speechIntegrations.find((item) => item.provider === speechForm.provider.trim()) || speechIntegrations[0];
     const nextIntegration: SpeechIntegration = {
-      id: `speech_${Date.now()}`,
+      id: existing?.id || `speech_${Date.now()}`,
       name: speechForm.name.trim(),
       provider: speechForm.provider.trim(),
       source: speechForm.source.trim() || speechProviderLabel(speechForm.provider),
@@ -459,8 +503,9 @@ export function SystemSettings() {
       applicationModule: "global_voice_model",
       status: "available",
     };
-    setSpeechIntegrations((current) => [...current, nextIntegration]);
+    setSpeechIntegrations((current) => existing ? current.map((item) => (item.id === existing.id ? nextIntegration : item)) : [...current, nextIntegration]);
     setSpeechForm(emptySpeechForm);
+    configMutationEpochRef.current += 1;
     try {
       const response = await saveSpeechIntegration({ tenantId, speechIntegration: nextIntegration });
       setSpeechIntegrations((current) => current.map((item) => (item.id === nextIntegration.id ? response.speech_integration : item)));
@@ -516,6 +561,7 @@ export function SystemSettings() {
   const removeSpeechIntegration = async (id: string) => {
     const previousIntegrations = speechIntegrations;
     setSpeechIntegrations((current) => current.filter((item) => item.id !== id));
+    configMutationEpochRef.current += 1;
     try {
       await deleteSpeechIntegration({ tenantId, integrationId: id });
       setConfigNotice("语音转文字接入已从后端删除。");
@@ -547,6 +593,7 @@ export function SystemSettings() {
     };
     if (!nextIntegration.name || !nextIntegration.provider || !nextIntegration.apiBase || !nextIntegration.apiKey) return;
     setSpeechIntegrations((current) => current.map((item) => (item.id === integration.id ? nextIntegration : item)));
+    configMutationEpochRef.current += 1;
     try {
       const response = await saveSpeechIntegration({ tenantId, speechIntegration: nextIntegration });
       setSpeechIntegrations((current) => current.map((item) => (item.id === integration.id ? response.speech_integration : item)));
@@ -630,7 +677,7 @@ export function SystemSettings() {
       const assignedInstitutions = Array.from(new Set(savedUser.tenantRoles
         .filter((role) => role.tenant !== "全部机构")
         .map((role) => role.tenant)));
-      const visibleInCurrentInstitution = savedUser.tenantRoles.some(
+      const visibleInCurrentInstitution = isSuperAdmin || savedUser.tenantRoles.some(
         (role) => role.tenant === "全部机构" || role.tenant === selectedInstitution,
       );
       setUsers((current) => {
@@ -714,9 +761,9 @@ export function SystemSettings() {
 
   const editingPermission = permissionInstitutions.find((item) => item.id === editingPermissionId) ?? null;
   const pageHeading = {
-    users: { title: "用户管理", description: "管理当前机构用户、角色绑定与账号状态" },
+    users: { title: "用户管理", description: isSuperAdmin ? "管理全部授权用户、角色绑定与账号对应机构" : "管理当前机构用户、角色绑定与账号状态" },
     roles: { title: "角色权限", description: "按机构维护管理员、操作员和自定义角色权限" },
-    audit: { title: "审计日志", description: "查看当前机构的系统操作与安全审计记录" },
+    audit: { title: "审计日志", description: "查看当前账号有权访问的机构操作与安全审计记录" },
     config: { title: "系统配置", description: "维护模型接入与系统运行参数" },
   }[activeTab];
   const pageStatusNotice = activeTab === "audit"
@@ -751,11 +798,15 @@ export function SystemSettings() {
             { label: "涉及机构", value: String(new Set(displayedAuditRows.map((row) => row.institution)).size), icon: Database },
           ]
         : [];
+  const currentTenantParam = (paramId: string) =>
+    systemDataParams.find((param) => param.id === paramId && (param.tenantId || tenantId) === tenantId)?.value
+    || systemDataParams.find((param) => param.id === paramId)?.value
+    || "未配置";
   const configOverviewStats = [
-    { label: "数据刷新", value: systemDataParams.find((param) => param.id === "data_refresh_frequency")?.value || "未配置", icon: Database },
-    { label: "单次采集", value: systemDataParams.find((param) => param.id === "acquisition_max_rows")?.value || "未配置", icon: Database },
-    { label: "分析时限", value: systemDataParams.find((param) => param.id === "analysis_deadline_seconds")?.value || "未配置", icon: Clock },
-    { label: "AI分析并发", value: systemDataParams.find((param) => param.id === "analysis_user_concurrency_limit")?.value || "未配置", icon: Activity },
+    { label: "数据刷新", value: currentTenantParam("data_refresh_frequency"), icon: Database },
+    { label: "单次采集", value: currentTenantParam("acquisition_max_rows"), icon: Database },
+    { label: "分析时限", value: currentTenantParam("analysis_deadline_seconds"), icon: Clock },
+    { label: "AI分析并发", value: currentTenantParam("analysis_user_concurrency_limit"), icon: Activity },
   ];
   const upperModuleKind = {
     users: "user-overview",
@@ -826,7 +877,7 @@ export function SystemSettings() {
                 <div className="text-[13px] text-[#1d1d1f]">
                   {activeTab === "users" ? "用户与角色概览" : activeTab === "roles" ? "权限范围概览" : "审计数据概览"}
                 </div>
-                <span className="text-[11px] text-[#aeaeb2]">当前机构</span>
+                <span className="text-[11px] text-[#aeaeb2]">{activeTab === "audit" ? "授权机构" : "当前机构"}</span>
               </div>
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 {overviewStats.map((stat) => (
@@ -946,8 +997,14 @@ export function SystemSettings() {
 
       {activeTab === "audit" && (
         <div className="bg-white rounded-xl border border-[#f0f0f2] p-5" data-settings-route-body="audit">
-          <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-            <h3 className="text-[14px] text-gray-800">操作审计日志</h3>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-[14px] text-gray-800">操作审计日志</h3>
+              <p className="mt-1 text-[11px] text-[#aeaeb2]">默认展示近 7 天的操作记录。</p>
+            </div>
+            <div data-audit-pagination="true">
+              <DataPageSelector page={auditPage} totalPages={auditPageCount} shownCount={displayedAuditRows.length} totalCount={auditTotal} onChange={setAuditPage} ariaLabel="审计日志分页" />
+            </div>
           </div>
           <table className="w-full text-[12px]">
             <thead>
@@ -982,9 +1039,7 @@ export function SystemSettings() {
               )}
             </tbody>
           </table>
-          <div className="mt-4 flex justify-end border-t border-[#f0f0f2] pt-4" data-audit-pagination="true">
-            <DataPageSelector page={auditPage} totalPages={auditPageCount} shownCount={displayedAuditRows.length} totalCount={auditTotal} onChange={setAuditPage} ariaLabel="审计日志分页" />
-          </div>
+
         </div>
       )}
 
@@ -997,6 +1052,7 @@ export function SystemSettings() {
       {accessModal === "model" && (
         <ModelAccessModal
           models={modelIntegrations}
+          notice={configNotice}
           form={modelForm}
           speechIntegrations={speechIntegrations}
           speechForm={speechForm}
@@ -1914,6 +1970,7 @@ function SystemDataParamsPanel({
   onSave: (param: SystemDataParam, value: string) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const pagination = useClientPagination(params, 20);
 
   return (
     <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
@@ -1922,12 +1979,19 @@ function SystemDataParamsPanel({
           <h3 className="text-[14px] text-gray-800">系统数据参数</h3>
           <p className="mt-1 text-[11px] text-[#aeaeb2]">沉淀刷新频率、并发、留存等运行参数，供分析和周报链路复用。</p>
         </div>
-        <span className="rounded-full border border-[#e5e5ea] px-2 py-0.5 text-[11px] text-[#8a8a8e]">
-          {params.length} 项
-        </span>
+        <div data-system-params-pagination="true">
+          <DataPageSelector
+            page={pagination.page}
+            totalPages={pagination.totalPages}
+            shownCount={pagination.items.length}
+            totalCount={pagination.total}
+            onChange={pagination.setPage}
+            ariaLabel="系统数据参数分页"
+          />
+        </div>
       </div>
-      <div className="space-y-2">
-        {params.map((cfg) => {
+      <div className="space-y-2" data-system-params-list="true">
+        {pagination.items.map((cfg) => {
           const identity = `${cfg.tenantId || currentTenantId}:${cfg.id}`;
           const editable = !cfg.tenantId || cfg.tenantId === currentTenantId;
           const value = drafts[identity] ?? cfg.value;
@@ -1970,6 +2034,7 @@ function SystemDataParamsPanel({
 }
 function ModelAccessModal({
   models,
+  notice = "",
   form,
   speechIntegrations,
   speechForm,
@@ -1990,6 +2055,7 @@ function ModelAccessModal({
   onClose,
 }: {
   models: ModelIntegration[];
+  notice?: string;
   form: typeof emptyModelForm;
   speechIntegrations: SpeechIntegration[];
   speechForm: typeof emptySpeechForm;
@@ -2025,9 +2091,12 @@ function ModelAccessModal({
   }, [models]);
 
   const saveModelEdit = async (model: ModelIntegration) => {
-    if (!modelEditDraft.name.trim() || !modelEditDraft.key.trim() || (model.requiresCredential && !modelEditDraft.value.trim())) return;
+    const nextDraft = model.id === defaultRelayModelId
+      ? { ...modelEditDraft, name: "默认模型", modelName: "中转站" }
+      : modelEditDraft;
+    if (!nextDraft.name.trim() || !nextDraft.key.trim() || (model.requiresCredential && !modelEditDraft.value.trim())) return;
     try {
-      await onUpdate(model, modelEditDraft);
+      await onUpdate(model, nextDraft);
       setEditingModelId("");
       setModelEditDraft({ name: "", modelName: "中转站", applicationModule: "global_text_model", key: "", value: "" });
     } catch {
@@ -2073,9 +2142,14 @@ function ModelAccessModal({
   }, [editingSpeechId, speechEditDraft, speechIntegrations]);
 
   const startModelEdit = (model: ModelIntegration) => {
-    if (model.id === defaultRelayModelId && !model.requiresCredential) return;
     setEditingModelId(model.id);
-    setModelEditDraft({ name: model.name, modelName: modelSourceLabel(model.modelName), applicationModule: "global_text_model", key: model.key, value: "" });
+    setModelEditDraft({
+      name: model.id === defaultRelayModelId ? "默认模型" : model.name,
+      modelName: model.id === defaultRelayModelId ? "中转站" : modelSourceLabel(model.modelName),
+      applicationModule: "global_text_model",
+      key: model.key,
+      value: "",
+    });
   };
 
   const startSpeechEdit = (integration: SpeechIntegration) => {
@@ -2106,6 +2180,11 @@ function ModelAccessModal({
           desc="模型按账号统一保存，账号下所有机构共用；可选子模型以测试接口的实际返回为准。"
           onClose={onClose}
         />
+        {notice && (
+          <div className={`border-b border-[#f0f0f2] px-5 py-2 text-[11px] ${/失败|不可用|错误/.test(notice) ? "text-[#c83a3a]" : "text-[#258a3f]"}`} role="status">
+            {notice}
+          </div>
+        )}
         <div className="border-b border-[#f0f0f2] px-5 pt-4">
           <div className="inline-flex rounded-lg bg-[#f2f2f7] p-1">
             {[
@@ -2162,14 +2241,20 @@ function ModelAccessModal({
                             value={modelEditDraft.name}
                             autoComplete="off"
                             data-1p-ignore="true"
+                            readOnly={model.id === defaultRelayModelId}
                             onChange={(event) => setModelEditDraft((current) => ({ ...current, name: event.target.value }))}
-                            className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
+                            className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc] read-only:bg-[#fafbfc] read-only:text-[#8a8a8e]"
                           />
-                          <select value={modelEditDraft.modelName} onChange={(event) => setModelEditDraft((current) => ({ ...current, modelName: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]">
+                          <select
+                            value={modelEditDraft.modelName}
+                            disabled={model.id === defaultRelayModelId}
+                            onChange={(event) => setModelEditDraft((current) => ({ ...current, modelName: event.target.value }))}
+                            className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc] disabled:bg-[#fafbfc] disabled:text-[#8a8a8e]"
+                          >
                             {modelSourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}
                           </select>
                           <input value={modelEditDraft.key} autoComplete="off" data-1p-ignore="true" onChange={(event) => setModelEditDraft((current) => ({ ...current, key: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]" />
-                          <input value={modelEditDraft.value} type="password" autoComplete="new-password" data-1p-ignore="true" placeholder="留空保持原密钥" onChange={(event) => setModelEditDraft((current) => ({ ...current, value: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]" />
+                          <input value={modelEditDraft.value} type="password" autoComplete="new-password" data-1p-ignore="true" placeholder={model.requiresCredential ? "请输入 API 密钥" : "留空保持原密钥"} onChange={(event) => setModelEditDraft((current) => ({ ...current, value: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]" />
                         </>
                       ) : (
                         <>
@@ -2205,8 +2290,7 @@ function ModelAccessModal({
                             if (isEditing) void saveModelEdit(model);
                             else startModelEdit(model);
                           }}
-                          disabled={model.id === defaultRelayModelId && !model.requiresCredential}
-                          className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f] disabled:cursor-not-allowed disabled:opacity-30"
+                          className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f]"
                           aria-label={`修改${model.name}模型接入`}
                         >
                           {isEditing ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Edit3 className="h-3.5 w-3.5" />}
@@ -2335,9 +2419,9 @@ function ModelAccessModal({
                         </>
                       ) : (
                         <>
-                          <span className="text-[12px] text-[#8a8a8e]" title="点击编辑后查看和修改">模型名称已配置</span>
+                          <span className="truncate text-[12px] text-[#1d1d1f]" title={integration.name}>{integration.name || "未命名语音模型"}</span>
                           <span className="text-[12px] text-[#636366]">{integration.source || speechProviderLabel(integration.provider)}</span>
-                          <span className="truncate text-[11px] text-[#8a8a8e]" title="点击编辑后查看和修改">API地址已配置</span>
+                          <span className="truncate text-[11px] text-[#636366]" title={integration.apiBase}>{integration.apiBase || "未配置 API 地址"}</span>
                           <span className="font-mono text-[11px] text-[#636366]" title="API密钥已隐藏">{maskApiSecret(integration.apiKey)}</span>
                         </>
                       )}
@@ -2407,7 +2491,8 @@ function ModelAccessModal({
               {!speechIntegrations.length && <div className="px-3 py-8 text-center text-[12px] text-[#aeaeb2]">暂无语音转文字接入</div>}
             </div>
             <div className="rounded-lg bg-[#fafbfc] p-4">
-              <div className="mb-3 text-[13px] text-[#1d1d1f]">新增语音转文字接入</div>
+              <div className="mb-3 text-[13px] text-[#1d1d1f]">{speechIntegrations.length ? "更新系统语音接入" : "新增语音转文字接入"}</div>
+              <p className="mb-3 text-[11px] leading-relaxed text-[#8a8a8e]">此配置用于系统内全部语音应用：实时录入、弹窗录入、可视化语音和周报语音。保存后各页面直接复用，无需再按入口单独接入。</p>
               <ModelInput label="模型名称" value={speechForm.name} onChange={(value) => onSpeechFormChange("name", value)} />
               <ModelSelect label="模型来源" value={speechForm.provider} options={[{ label: "阿里云 Fun-ASR", value: "aliyun_fun_asr" }]} onChange={(value) => { onSpeechFormChange("provider", value); onSpeechFormChange("source", speechProviderLabel(value)); }} />
               <ModelInput label="API地址" value={speechForm.apiBase} placeholder="https://ws-xxx.cn-beijing.maas.aliyuncs.com/api/v1" onChange={(value) => onSpeechFormChange("apiBase", value)} />
@@ -2419,7 +2504,7 @@ function ModelAccessModal({
                 className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 py-2 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-40"
               >
                 <Plus className="h-3.5 w-3.5" />
-                新增语音接入
+                {speechIntegrations.length ? "保存系统语音接入" : "新增语音接入"}
               </button>
             </div>
           </div>

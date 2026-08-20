@@ -75,6 +75,17 @@ class PostgreSQLMetricDictionaryStore:
             self._upsert(connection, tenant_id, tenant_key, normalized, updated_by)
         return self.get(tenant_id, normalized["metricId"]) or normalized
 
+    def upsert_many(self, tenant_id: str, metrics: list[dict[str, Any]], updated_by: str | None = None) -> list[dict[str, Any]]:
+        if not metrics:
+            return []
+        normalized_list = [_normalize_metric(metric) for metric in metrics]
+        _assert_unique_metric_names(normalized_list)
+        with self._transaction() as connection:
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
+            for metric in normalized_list:
+                self._upsert(connection, tenant_id, tenant_key, metric, updated_by)
+        return normalized_list
+
     def delete(self, tenant_id: str, metric_id: str) -> bool:
         with self._transaction() as connection:
             tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)

@@ -47,6 +47,8 @@ class PostgreSQLApplicationStore:
             if _shared_page_layout_module(module_key):
                 shared_state = self._load_state(connection, tenant_key, module_key, None)
                 state["pageDataLayout"] = list(shared_state.get("pageDataLayout") or [])
+                state["pageDataNotes"] = list(shared_state.get("pageDataNotes") or [])
+                state["pageStickyNote"] = dict(shared_state.get("pageStickyNote") or {})
             if module_key == "agent_workspace":
                 state["todos"] = self._todos(connection, tenant_key, actor_key)
                 state["createdTasks"] = self._tasks(connection, tenant_key, actor_key)
@@ -74,6 +76,8 @@ class PostgreSQLApplicationStore:
             if _shared_page_layout_module(module_key):
                 shared_state = self._load_state(connection, tenant_key, module_key, None)
                 state["pageDataLayout"] = list(shared_state.get("pageDataLayout") or [])
+                state["pageDataNotes"] = list(shared_state.get("pageDataNotes") or [])
+                state["pageStickyNote"] = dict(shared_state.get("pageStickyNote") or {})
             if module_key == "agent_workspace":
                 state["todos"] = self._todos(connection, tenant_key, actor_key)
                 state["createdTasks"] = self._tasks(connection, tenant_key, actor_key)
@@ -94,9 +98,15 @@ class PostgreSQLApplicationStore:
                 handler_ref = "application.automation_draft"
                 self._persist_task_draft(connection, tenant_key, actor_key, action, result)
                 next_state["createdTasks"] = self._tasks(connection, tenant_key, actor_key)
-            if _shared_page_layout_module(module_key) and action == "set_page_data_layout":
+            if _shared_page_layout_module(module_key) and action in {"set_page_data_layout", "set_page_data_notes", "set_page_sticky_note"}:
                 shared_state = self._load_state(connection, tenant_key, module_key, None)
-                shared_state["pageDataLayout"] = list(next_state.get("pageDataLayout") or [])
+                if action == "set_page_data_layout":
+                    shared_state["pageDataLayout"] = list(next_state.get("pageDataLayout") or [])
+                    shared_state["pageDataNotes"] = list(next_state.get("pageDataNotes") or [])
+                if action == "set_page_data_notes":
+                    shared_state["pageDataNotes"] = list(next_state.get("pageDataNotes") or [])
+                if action == "set_page_sticky_note":
+                    shared_state["pageStickyNote"] = dict(next_state.get("pageStickyNote") or {})
                 self._save_non_core_state(
                     connection, tenant_key, module_key, None, shared_state,
                     created_by_key=actor_key,

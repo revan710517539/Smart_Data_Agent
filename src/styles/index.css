@@ -38,7 +38,8 @@
   }
 
   .weekly-report-print-root input,
-  .weekly-report-print-root textarea {
+  .weekly-report-print-root textarea,
+  .weekly-report-print-root [contenteditable] {
     border: 0 !important;
     background: transparent !important;
     color: #1d1d1f !important;

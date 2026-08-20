@@ -24,7 +24,14 @@ from websocket import (
 
 from backend.platform.api.support import first_query_value, send_route_exception
 from backend.platform.security import EgressPolicyError, validate_outbound_url
-from backend.platform.settings import list_models_for_application, normalize_application_module
+from backend.platform.settings import (
+    DEFAULT_RELAY_MODEL_ID,
+    default_relay_model_preset,
+    ensure_default_models_for_account,
+    list_models_for_application,
+    normalize_application_module,
+)
+from backend.platform.settings.model_modules import VOICE_APPLICATION_MODULES
 
 
 FUN_ASR_REALTIME_PATH = "/api/asr/fun-asr/realtime"
@@ -103,6 +110,8 @@ def handle_fun_asr_runtime_config_get(handler: Any, query: str) -> None:
 
 def _resolve_runtime_analysis_models(handler: Any, tenant_id: str, user_id: str) -> list[dict[str, Any]]:
     store = handler.services.system_config_store
+    if user_id:
+        ensure_default_models_for_account(store, user_id)
     models = list_models_for_application(
         store,
         tenant_id,
@@ -110,6 +119,8 @@ def _resolve_runtime_analysis_models(handler: Any, tenant_id: str, user_id: str)
         user_id=user_id,
         reveal_secret=False,
     )
+    if not any(str(model.get("id") or "") == DEFAULT_RELAY_MODEL_ID for model in models):
+        models = [default_relay_model_preset(), *models]
     deduplicated: dict[str, dict[str, Any]] = {}
     for model in models:
         model_id = str(model.get("id") or "").strip()
@@ -553,6 +564,8 @@ def _resolve_fun_asr_speech_integration(
     list_owned = getattr(handler.services.system_config_store, "list_speech_integrations_owned_by", None)
     if user_id and callable(list_owned):
         integrations = list_owned(user_id, tenant_id, reveal_secret=True)
+        if not integrations:
+            integrations = list_integrations(tenant_id, reveal_secret=True)
     else:
         integrations = list_integrations(tenant_id, reveal_secret=True)
     candidates = [
@@ -560,6 +573,7 @@ def _resolve_fun_asr_speech_integration(
         for integration in integrations
         if str(integration.get("provider") or "") == "aliyun_fun_asr"
         and str(integration.get("status") or "available") in {"available", "draft"}
+        and str(integration.get("testStatus") or "").strip().lower() != "failed"
         and (not requested_module or _speech_integration_supports_module(integration, requested_module))
     ]
     if requested_id:
@@ -570,6 +584,7 @@ def _resolve_fun_asr_speech_integration(
     candidates.sort(
         key=lambda integration: (
             1 if _is_demo_fun_asr_integration(integration) else 0,
+            0 if _speech_application_module(integration) in {requested_module, "global_voice_model"} else 1,
             str(integration.get("id") or ""),
         )
     )
@@ -585,10 +600,9 @@ def _speech_application_module(integration: dict[str, Any]) -> str:
 
 def _speech_integration_supports_module(integration: dict[str, Any], requested_module: str) -> bool:
     configured = _speech_application_module(integration)
-    return configured == requested_module or configured == "global_voice_model" and requested_module in {
-        "realtime_voice_input",
-        "popup_voice_input",
-    }
+    if requested_module in VOICE_APPLICATION_MODULES and configured in VOICE_APPLICATION_MODULES:
+        return True
+    return configured == requested_module
 
 
 def _is_demo_fun_asr_integration(integration: dict[str, Any]) -> bool:

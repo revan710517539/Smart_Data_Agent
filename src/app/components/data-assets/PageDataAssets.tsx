@@ -10,6 +10,7 @@ import type {
 } from "../../services/dataAssetApi";
 import { normalizeFieldSemantics } from "../../data/fieldSemantics";
 import { visualizationOptions, type VisualizationType } from "../self-analysis/domain";
+import { singleInstitutionAssignedPage } from "../page-data/assignment";
 
 const pageOptions: Array<{ code: PageDataPageCode; label: string }> = [
   { code: "weekly_report", label: "经营周报" },
@@ -50,7 +51,7 @@ export function PageDataAssetList({
               <span className="rounded-full bg-[#eef7f1] px-2 py-0.5 text-[10px] text-[#178a53]">{visualizationLabel(asset.visualizationType)}</span>
             </div>
             <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-[#8a8a8e]">
-              <span>页面：{scope === "multi_institution" ? "多机构分析" : pageLabel(singleInstitutionPage(asset))}</span>
+              <span>页面：{scope === "multi_institution" ? "多机构分析" : pageLabel(singleInstitutionAssignedPage(asset))}</span>
               <span>指标：{fieldLabels(asset.metricFields, asset.sourceFields).join("、")}</span>
               <span>维度：{fieldLabels(asset.dimensionFields, asset.sourceFields).join("、")}</span>
             </div>
@@ -59,7 +60,7 @@ export function PageDataAssetList({
             <span className="sr-only">{asset.name}放置页面</span>
             <select
               aria-label={`${asset.name}放置页面`}
-              value={singleInstitutionPage(asset)}
+              value={singleInstitutionAssignedPage(asset)}
               onChange={(event) => void onPageChange(asset, event.target.value as Extract<PageDataPageCode, "weekly_report" | "institution_supervision">).catch(() => undefined)}
               className="h-8 min-w-[112px] rounded-lg border border-[#dfe5e1] bg-white px-2.5 text-[11px] text-[#536159] outline-none focus:border-[#8fbfa4]"
             >
@@ -108,7 +109,7 @@ export const PageDataCreateModal = memo(function PageDataCreateModal({
   const selectedFields = selectedTable?.fields || selectedCandidate?.fields || initialAsset?.sourceFields.filter((field) => field.fieldNameEn !== "__institution_name") || [];
   const fieldGroups = useMemo(() => classifyFields(selectedFields), [selectedFields]);
   const [name, setName] = useState(initialAsset?.name || "");
-  const [targetPage, setTargetPage] = useState<Extract<PageDataPageCode, "weekly_report" | "institution_supervision">>(singleInstitutionPage(initialAsset));
+  const [targetPage, setTargetPage] = useState<Extract<PageDataPageCode, "weekly_report" | "institution_supervision">>(singleInstitutionAssignedPage(initialAsset));
   const [metrics, setMetrics] = useState<string[]>(initialAsset?.metricFields || []);
   const [dimensions, setDimensions] = useState<string[]>((initialAsset?.dimensionFields || []).filter((field) => field !== "__institution_name"));
   const [visualizationType, setVisualizationType] = useState<VisualizationType>((initialAsset?.visualizationType as VisualizationType) || "column");
@@ -223,9 +224,7 @@ function classifyFields(fields: RawField[]) {
 }
 
 function toggle<T extends string>(values: T[], value: T) { return values.includes(value) ? values.filter((item) => item !== value) : [...values, value]; }
-function singleInstitutionPage(asset?: PageDataAsset | null): Extract<PageDataPageCode, "weekly_report" | "institution_supervision"> {
-  return asset?.targetPages.includes("institution_supervision") ? "institution_supervision" : "weekly_report";
-}
+
 function pageLabel(pageCode: PageDataPageCode) { return pageOptions.find((page) => page.code === pageCode)?.label || pageCode; }
 function fieldLabels(fields: string[], sourceFields: RawField[]) { const labels = Object.fromEntries(sourceFields.map((field) => [field.fieldNameEn, field.fieldNameCn || field.fieldNameEn])); return fields.map((field) => labels[field] || field); }
 function visualizationLabel(type: string) { return visualizationOptions.find((option) => option.type === type)?.label || type; }

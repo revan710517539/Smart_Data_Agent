@@ -14,6 +14,12 @@ LEARNING_ORIGIN = "smart_data_agent.hermes_learning"
 MAX_SKILL_BYTES = 15 * 1024
 ANALYSIS_PATTERN_THRESHOLD = 2
 OPERATION_PATTERN_THRESHOLD = 3
+# Built-in semantic catalog ids used by default routing. They are not a
+# tenant's uploaded table and must not become a "learned" Skill source.
+_SAMPLE_ANALYSIS_DATASETS = frozenset({
+    "loan_operation_mart",
+    "risk_operation_mart",
+})
 
 _LEARNABLE_OPERATION_PREFIXES = (
     "application.",
@@ -552,6 +558,8 @@ class SkillLearningService:
                     "sourceMethodology": methodology,
                 },
             )
+        if not _has_real_analysis_source(pattern):
+            return None
         skill_id = f"learned-analysis-{fingerprint}"
         if self.data_asset_store.get_item(context.tenant_id, "analysis_skill", skill_id):
             return None
@@ -1083,6 +1091,18 @@ class SkillLearningService:
             detail=sanitize_audit_detail(detail),
             ip_address="",
         )
+
+
+def _has_real_analysis_source(pattern: dict[str, Any]) -> bool:
+    """Reject default semantic-mart ids that are not a tenant-owned table."""
+
+    dataset_id = str(pattern.get("dataset_id") or "").strip()
+    intent_rule_id = str(pattern.get("intent_rule_id") or "").strip()
+    if intent_rule_id.startswith("selected_asset:"):
+        return True
+    if not dataset_id or dataset_id in _SAMPLE_ANALYSIS_DATASETS:
+        return False
+    return True
 
 
 def _guardrails() -> dict[str, Any]:

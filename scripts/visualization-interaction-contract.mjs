@@ -50,7 +50,7 @@ assert.ok(visualCardSource.includes("{fieldLabels[field] || field}") && visualCa
 assert.ok(visualCardSource.includes('window.setTimeout(() => setVoiceNoticeVisible(false), 1_000)'), "语音提示必须在 1 秒后自动收起");
 assert.ok(voiceSource.includes('scheduleCommand()') && voiceSource.includes('}, 1_000)') && !voiceSource.includes('onCommand(next);\n            stop();'), "可视化语音必须在静默 1 秒后执行且不自动停止");
 assert.ok(visualCardSource.includes('document.addEventListener("pointerdown", dismissTransientControls, true)'), "操作浮层必须支持点击页面其他区域收起");
-assert.ok(visualCardSource.includes('onTypeChange(option.type); setActivePanel(null);') && !visualCardSource.includes('onTypeChange(option.type); setActivePanel(null); setOperationsOpen(false);'), "选择样式后操作托盘不得自动折叠");
+assert.ok(visualCardSource.includes('applyType(option.type); setActivePanel(null);') && !visualCardSource.includes('applyType(option.type); setActivePanel(null); setOperationsOpen(false);'), "选择样式后操作托盘不得自动折叠");
 assert.ok(visualCardSource.includes('长按 2 秒后拖动排序') && visualCardSource.includes('}, 2_000)') && visualCardSource.includes('data-table-long-press-reorder="true"'), "指标、维度、表头和首列必须使用两秒长按排序");
 assert.ok(visualCardSource.includes('onDoubleClick=') && visualCardSource.includes('data-visual-comment-action="true"') && visualCardSource.includes('<MessageSquareText'), "双击可视化必须显示周报同款评论图标");
 assert.ok(!visualCardSource.includes("右键可评论；操作中可配置样式、指标、维度与语音"), "可视化卡片不得保留冗余操作说明");

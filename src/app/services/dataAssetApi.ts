@@ -229,6 +229,7 @@ export type AnalysisSkillAsset = DataAssetGovernanceFields & {
   sortOrder: number;
   learningOrigin?: string;
   learningKind?: string;
+  learningTrigger?: { datasetId?: string; intentRuleId?: string };
   learningEvolution?: Record<string, unknown>;
 };
 
@@ -506,8 +507,47 @@ export async function fetchPageDataRows({
   return apiRequest<PageDataRows>(`/api/data-assets/page-data/rows?${params.toString()}`, {
     method: "GET",
     context: { tenantId, userId },
-    readCache: { ttlMs: 10_000, tags: ["page-data"] },
+    readCache: { ttlMs: 15_000, tags: ["page-data", `page-data:${pageDataId}`] },
   });
+}
+
+export type PageDataWorkspace = {
+  tenant_id: string;
+  page_code: PageDataPageCode;
+  assets: PageDataAsset[];
+  layout: string[];
+  notes: unknown[];
+  rows: Record<string, PageDataRows>;
+  row_errors: Record<string, string>;
+};
+
+const pageDataWorkspaceMemory = new Map<string, PageDataWorkspace>();
+
+export function pageDataWorkspaceMemoryKey(tenantId: string, pageCode: PageDataPageCode) {
+  return `${tenantId}:${pageCode}`;
+}
+
+export function readPageDataWorkspaceMemory(tenantId: string, pageCode: PageDataPageCode) {
+  return pageDataWorkspaceMemory.get(pageDataWorkspaceMemoryKey(tenantId, pageCode)) || null;
+}
+
+export function writePageDataWorkspaceMemory(tenantId: string, pageCode: PageDataPageCode, workspace: PageDataWorkspace) {
+  pageDataWorkspaceMemory.set(pageDataWorkspaceMemoryKey(tenantId, pageCode), workspace);
+}
+
+export async function fetchPageDataWorkspace({
+  tenantId,
+  userId = getDefaultUserId(),
+  pageCode,
+}: DataAssetParams & { pageCode: PageDataPageCode }) {
+  const params = new URLSearchParams({ page_code: pageCode });
+  const workspace = await apiRequest<PageDataWorkspace>(`/api/data-assets/page-data/workspace?${params.toString()}`, {
+    method: "GET",
+    context: { tenantId, userId },
+    readCache: { ttlMs: 8_000, tags: ["page-data", `page-data-workspace:${pageCode}`] },
+  });
+  writePageDataWorkspaceMemory(tenantId, pageCode, workspace);
+  return workspace;
 }
 
 export async function fetchMultiInstitutionPageDataCandidates({

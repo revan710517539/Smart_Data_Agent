@@ -338,7 +338,54 @@ class SkillLearningLoopTest(unittest.TestCase):
         self.assertEqual([item["skill_id"] for item in matched], [candidate["id"]])
         self.assertEqual(matched[0]["analysisAngles"][0], "先核对指标和时间口径")
 
+    def test_sample_mart_does_not_mint_a_standalone_learned_skill(self) -> None:
+        plan = {
+            "intent_rule_id": "risk_diagnostic",
+            "dataset_id": "risk_operation_mart",
+            "metrics": ["m1_overdue_rate"],
+            "dimensions": ["product_line"],
+            "chart_types": ["line"],
+        }
+        for index in range(2):
+            result = self.services.learning_service.observe_analysis_result(
+                self.context,
+                SimpleNamespace(
+                    task_id=f"sample_{index}",
+                    execution_id=f"sample_exec_{index}",
+                    analysis_plan=dict(plan),
+                    review={"status": "passed", "publication_gate": "allowed", "checks": {}},
+                ),
+            )
+            self.assertFalse(str(result.get("candidate_id") or "").startswith("learned-analysis-"))
+        generated = [
+            item
+            for item in self.services.data_asset_store.list_bundle("tenant_demo").get("analysis_skills", [])
+            if str(item.get("id") or "").startswith("learned-analysis-")
+            and (item.get("learningTrigger") or {}).get("datasetId") == "risk_operation_mart"
+        ]
+        self.assertEqual(generated, [])
+
     def test_failed_application_proposes_reviewed_improvement_without_replacing_active_version(self) -> None:
+        self.services.data_asset_store.upsert_item(
+            "tenant_demo",
+            "analysis_skill",
+            {
+                "id": "scene-risk-review",
+                "name": "风险诊断",
+                "category": "场景",
+                "description": "围绕逾期和风险指标组织口径与反证。",
+                "memoryRefs": [],
+                "toolRefs": [],
+                "analysisMethod": "先核对逾期口径，再拆解产品结构并保留反证。",
+                "documentAbstraction": "提取风险指标、产品维度和审核结果，不保存客户明细。",
+                "outputFormat": "风险事实 / 结构拆解 / 反证 / 治理提示",
+                "viewpointStrategy": "事实先于解释；不把相关性写成因果。",
+                "recommendedSkillIds": [],
+                "enabled": True,
+                "sortOrder": 40,
+            },
+            updated_by="u_super_admin",
+        )
         plan = {
             "intent_rule_id": "risk_diagnostic",
             "dataset_id": "risk_operation_mart",

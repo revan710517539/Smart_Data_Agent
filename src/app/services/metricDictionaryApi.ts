@@ -67,6 +67,8 @@ export async function importMetricDictionaryWorkbook({
     method: "POST",
     context: { tenantId, userId },
     body: { file_name: file.name, file_content_base64: fileContentBase64 },
+    // Workbooks can be several thousand rows and a single server transaction.
+    timeoutMs: 60_000,
   });
 }
 

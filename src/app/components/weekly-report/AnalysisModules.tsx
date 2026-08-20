@@ -40,7 +40,6 @@ export function buildWeeklyAnalysisModules({
   orderCustomized?: boolean;
 }): WeeklyAnalysisModule[] {
   const modulesById = new Map<string, WeeklyAnalysisModule>();
-  modulesById.set("core-metrics", { id: "core-metrics", kind: "core", title: "核心指标表现", analysisTime: coreMetricBlock?.updatedAt || "等待数据", visible: true });
   const moduleIdBySignature = new Map<string, string>();
   savedAnalysisResults.forEach((result) => {
     const contentSignature = `content:${[result.title, result.query].map((value) => String(value || "").trim().toLocaleLowerCase("zh-CN").replace(/\s+/g, "")).join("|") || result.id}`;
@@ -65,20 +64,17 @@ export function buildWeeklyAnalysisModules({
     signatures.forEach((signature) => moduleIdBySignature.set(signature, moduleId));
   });
   const preferenceById = new Map(preferences.map((item) => [item.id, item]));
-  const defaultSortedIds = [
-    "core-metrics",
-    ...[...modulesById.values()]
-      .filter((item) => item.kind === "saved")
-      .sort((left, right) => analysisTimestamp(right.analysisTime) - analysisTimestamp(left.analysisTime))
-      .map((item) => item.id),
-  ];
+  const defaultSortedIds = [...modulesById.values()]
+    .filter((item) => item.kind === "saved")
+    .sort((left, right) => analysisTimestamp(right.analysisTime) - analysisTimestamp(left.analysisTime))
+    .map((item) => item.id);
   const orderedIds = orderCustomized && preferences.length
     ? [...preferences.map((item) => item.id).filter((id) => modulesById.has(id)), ...defaultSortedIds.filter((id) => !preferenceById.has(id))]
     : defaultSortedIds;
   return orderedIds.map((id) => {
     const module = modulesById.get(id)!;
     const preference = preferenceById.get(id);
-    return { ...module, visible: preference ? preference.visible : module.kind === "core" };
+    return { ...module, visible: preference ? preference.visible : false };
   });
 }
 

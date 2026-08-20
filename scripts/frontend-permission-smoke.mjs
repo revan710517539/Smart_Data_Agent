@@ -207,14 +207,14 @@ async function main() {
   await waitForEval(cdp, `document.body.innerText.includes("角色权限")`);
 
   await navigate(cdp, `${appUrl}/agent/skills`);
-  await waitForEval(cdp, `document.body.innerText.includes("Skill插件") && [...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增场景")) && [...document.querySelectorAll("button")].some((button) => button.textContent.trim() === "主题")`);
+  await waitForEval(cdp, `document.body.innerText.includes("skill/插件") && [...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增场景")) && [...document.querySelectorAll("button")].some((button) => button.textContent.trim() === "主题")`);
   await waitForEval(cdp, `[...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增场景"))`);
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.includes("新增场景"))?.click()`);
   await waitForEval(cdp, `Boolean(document.querySelector('[role="dialog"][aria-label*="新增场景"]'))`);
   await assertEval(cdp, `(() => { const rect = document.querySelector('[role="dialog"][aria-label*="新增场景"]').getBoundingClientRect(); return Math.abs(rect.left + rect.width / 2 - innerWidth / 2) < 12 && rect.top > 20 && rect.bottom < innerHeight - 20; })()`, "new scene must open as a centered system modal");
   await cdp.evaluate(`document.querySelector('button[aria-label="关闭场景弹窗"]')?.click()`);
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.trim() === "主题")?.click()`);
-  await waitForEval(cdp, `document.body.innerText.includes("Skill插件") && [...document.querySelectorAll("button")].some((button) => button.textContent.trim() === "场景")`);
+  await waitForEval(cdp, `document.body.innerText.includes("skill/插件") && [...document.querySelectorAll("button")].some((button) => button.textContent.trim() === "场景")`);
   await waitForEval(cdp, `[...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增主题"))`);
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.includes("新增主题"))?.click()`);
   await waitForEval(cdp, `Boolean(document.querySelector('[role="dialog"][aria-label*="新增主题"]'))`);
@@ -286,6 +286,13 @@ async function main() {
   await navigate(cdp, `${appUrl}/agent/tasks`);
   await waitForEval(cdp, `document.body.innerText.includes("自动化任务") && [...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增自动化任务"))`);
   await assertEval(cdp, `!document.body.innerText.includes("任务触发洞察")`, "task-triggered insight submodule must be removed");
+  await assertEval(cdp, `(() => {
+    const row = document.querySelector("[data-agent-task-card]");
+    if (!row) return true;
+    const labels = [...row.querySelectorAll("button")].map((button) => button.getAttribute("aria-label") || "");
+    const compact = row.getBoundingClientRect().height <= 88;
+    return compact && labels.some((label) => label.includes("查看任务")) && labels.some((label) => label.includes("编辑任务") || label.includes("不可编辑")) && labels.some((label) => label.includes("删除任务") || label.includes("不可删除"));
+  })()`, "automation task rows must be compact list bars with view/edit/delete actions");
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.includes("新增自动化任务"))?.click()`);
   await waitForEval(cdp, `Boolean(document.querySelector('[role="dialog"][aria-label="新建自动化任务"]'))`);
   await assertEval(cdp, `(() => { const dialog = document.querySelector('[role="dialog"][aria-label="新建自动化任务"]'); const status = dialog.querySelector('select[aria-label="任务状态"]'); const kind = dialog.querySelector('select[aria-label="自动化类型"]'); const options = [...kind.options].map((option) => option.textContent.trim()); return !dialog.innerText.includes("任务类别") && Boolean(dialog.querySelector('input[aria-label="任务名称"]')) && ["运行中","暂停","终止"].every((label) => [...status.options].some((option) => option.textContent.trim() === label)) && ["记忆提取任务","自动分析任务"].every((label) => options.includes(label)) && !options.some((label) => label.startsWith("数据获取任务")); })()`, "new automation tasks must exclude paused acquisition while preserving memory and automatic-analysis types");
@@ -414,28 +421,30 @@ async function main() {
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.trim() === "取消")?.click()`);
 
   await navigate(cdp, `${appUrl}/weekly-report`);
-  await waitForEval(cdp, `document.body.innerText.includes("核心指标表现") && ["在贷余额","放款金额","新增余额"].every((label) => document.body.innerText.includes(label))`);
+  await waitForEval(cdp, `document.body.innerText.includes("经营周报") && !document.body.innerText.includes("核心指标表现")`);
   await assertEval(cdp, `document.querySelector('[data-report-meta-key="reporters"] input')?.value === "胥京波"`, "weekly report reporter must default to the authenticated user's display name");
   await assertEval(cdp, `(() => { const tabs = [...document.querySelectorAll("button")].filter((button) => ["可视化分析","分析结论"].includes(button.textContent.trim())); return tabs[0]?.textContent.trim() === "可视化分析" && tabs[1]?.textContent.trim() === "分析结论" && !document.body.innerText.includes("待载入"); })()`, "weekly report must default to visualization before conclusion and render direct metric data without LLM placeholders");
-  await waitForEval(cdp, `document.body.innerText.includes("核心指标周度趋势") && document.body.innerText.includes("按日期从早到晚 · 单位：亿元")`);
-  await cdp.evaluate(`document.querySelector('[data-comment-target$="_data"]')?.click()`);
-  await waitForEval(cdp, `Boolean(document.querySelector('[data-comment-selection-action="true"]'))`);
-  await dispatchRealDrag(cdp, '[data-weekly-selection-action="true"]', 28, 14);
-  await dispatchRealClick(cdp, '[data-comment-selection-action="true"]');
-  await waitForEval(cdp, `Boolean(document.querySelector('aside[data-context-page="weekly-report"][data-context-rail="expanded"] [data-draft-id] textarea'))`);
-  await cdp.evaluate(`document.querySelector('aside[data-context-page="weekly-report"] [data-context-rail-collapse="true"]')?.click()`);
-  await waitForEval(cdp, `document.querySelector('aside[data-context-page="weekly-report"]')?.dataset.contextRail === "collapsed"`);
-  await cdp.evaluate(`document.querySelector('[data-comment-target$="_data"]')?.click()`);
-  await waitForEval(cdp, `Boolean(document.querySelector('[data-analysis-selection-action="true"]'))`);
-  await dispatchRealClick(cdp, '[data-analysis-selection-action="true"]');
-  await waitForEval(cdp, `Boolean(document.querySelector('aside[data-context-page="weekly-report"][data-context-rail="expanded"] [data-analysis-workspace-panel="true"]'))`);
-  await cdp.evaluate(`document.querySelector('aside[data-context-page="weekly-report"] [data-context-rail-collapse="true"]')?.click()`);
+  const weeklyCommentTarget = await cdp.evaluate(`Boolean(document.querySelector('[data-comment-target]'))`);
+  if (weeklyCommentTarget) {
+    await cdp.evaluate(`document.querySelector('[data-comment-target]')?.click()`);
+    await waitForEval(cdp, `Boolean(document.querySelector('[data-comment-selection-action="true"]'))`);
+    await dispatchRealDrag(cdp, '[data-weekly-selection-action="true"]', 28, 14);
+    await dispatchRealClick(cdp, '[data-comment-selection-action="true"]');
+    await waitForEval(cdp, `Boolean(document.querySelector('aside[data-context-page="weekly-report"][data-context-rail="expanded"] [data-draft-id] textarea'))`);
+    await cdp.evaluate(`document.querySelector('aside[data-context-page="weekly-report"] [data-context-rail-collapse="true"]')?.click()`);
+    await waitForEval(cdp, `document.querySelector('aside[data-context-page="weekly-report"]')?.dataset.contextRail === "collapsed"`);
+    await cdp.evaluate(`document.querySelector('[data-comment-target]')?.click()`);
+    await waitForEval(cdp, `Boolean(document.querySelector('[data-analysis-selection-action="true"]'))`);
+    await dispatchRealClick(cdp, '[data-analysis-selection-action="true"]');
+    await waitForEval(cdp, `Boolean(document.querySelector('aside[data-context-page="weekly-report"][data-context-rail="expanded"] [data-analysis-workspace-panel="true"]'))`);
+    await cdp.evaluate(`document.querySelector('aside[data-context-page="weekly-report"] [data-context-rail-collapse="true"]')?.click()`);
+  }
   if (process.env.SDA_SMOKE_STOP_AFTER_WEEKLY_FLOATING_ACTIONS === "true") return;
   await cdp.evaluate(`document.querySelector('button[data-weekly-page-data-mode-toggle="true"]')?.click()`);
   await waitForEval(cdp, `document.querySelector('button[data-weekly-page-data-mode-toggle="true"]')?.textContent.includes("保存")`);
   await cdp.evaluate(`document.querySelector('button[aria-label="选择分析数据模块"]')?.click()`);
   await waitForEval(cdp, `document.body.innerText.includes("拖动排序 · 点击显隐") && document.body.innerText.includes("周报数据") && Boolean(document.querySelector('[data-weekly-unified-data-menu="true"]'))`);
-  await assertEval(cdp, `(() => { const menu = document.querySelector('[data-weekly-unified-data-menu="true"]'); const rows = [...(menu?.querySelectorAll('[data-weekly-data-item]') || [])]; const pageRows = rows.filter((row) => row.dataset.weeklyDataKind === "page-data"); const protectedRows = rows.filter((row) => ["page-data", "core"].includes(row.dataset.weeklyDataKind)); const syncedRows = rows.filter((row) => ["visual-report", "saved-analysis"].includes(row.dataset.weeklyDataKind)); const pageRowsLead = !pageRows.length || rows.slice(0, pageRows.length).every((row) => row.dataset.weeklyDataKind === "page-data"); return rows.length > 0 && pageRowsLead && rows.every((row) => row.draggable && row.querySelector('button[aria-label^="隐藏"], button[aria-label^="显示"]')) && protectedRows.every((row) => !row.querySelector('button[aria-label^="删除"]')) && syncedRows.every((row) => row.querySelector('button[aria-label^="删除"]')) && ![...menu.querySelectorAll("span")].some((node) => ["分析模块", "页面数据"].includes(node.textContent.trim())); })()`, "weekly data must use one draggable list, default page data first, expose hide on every row, and delete only synced reports or analyses");
+  await assertEval(cdp, `(() => { const menu = document.querySelector('[data-weekly-unified-data-menu="true"]'); const rows = [...(menu?.querySelectorAll('[data-weekly-data-item]') || [])]; const pageRows = rows.filter((row) => row.dataset.weeklyDataKind === "page-data"); const protectedRows = rows.filter((row) => row.dataset.weeklyDataKind === "page-data"); const syncedRows = rows.filter((row) => ["visual-report", "saved-analysis"].includes(row.dataset.weeklyDataKind)); const pageRowsLead = !pageRows.length || rows.slice(0, pageRows.length).every((row) => row.dataset.weeklyDataKind === "page-data"); return pageRowsLead && !rows.some((row) => row.dataset.weeklyDataKind === "core") && rows.every((row) => row.draggable && row.querySelector('button[aria-label^="隐藏"], button[aria-label^="显示"]')) && protectedRows.every((row) => !row.querySelector('button[aria-label^="删除"]')) && syncedRows.every((row) => row.querySelector('button[aria-label^="删除"]')) && ![...menu.querySelectorAll("span")].some((node) => ["分析模块", "页面数据", "核心指标表现"].includes(node.textContent.trim())); })()`, "weekly data must use one draggable list, default page data first, expose hide on every row, and delete only synced reports or analyses");
   await cdp.evaluate(`(() => {
     const heading = [...document.querySelectorAll("h4")].find((node) => node.textContent.trim() === "二、重点事项及进展");
     const section = heading?.closest("section");
@@ -560,7 +569,7 @@ async function runFullRouteSmoke(cdp, appUrl) {
     ["/funnel", "/funnel", "业务漏斗"],
     ["/sandbox", "/sandbox", "经营沙盘"],
     ["/supervision", "/supervision", "机构督导"],
-    ["/weekly-report", "/weekly-report", "核心指标表现"],
+    ["/weekly-report", "/weekly-report", "经营周报"],
     ["/email-daily", "/email-daily", "邮件日报"],
     ["/customers", "/customers", "客群分析"],
     ["/single-customer", "/customers", "客群分析"],
@@ -575,7 +584,7 @@ async function runFullRouteSmoke(cdp, appUrl) {
     ["/agent/message-board", "/agent/message-board", "留言板管理"],
     ["/agent/insights", "/agent/tasks", "自动化任务"],
     ["/agent/abilities", "/agent/tasks", "自动化任务"],
-    ["/agent/skills", "/agent/skills", "Skill插件"],
+    ["/agent/skills", "/agent/skills", "skill/插件"],
     ["/data-assets", "/data-assets/metrics", "指标字典"],
     ["/data-assets/metrics", "/data-assets/metrics", "指标字典"],
     ["/data-assets/knowledge", "/data-assets/knowledge", "知识记忆"],

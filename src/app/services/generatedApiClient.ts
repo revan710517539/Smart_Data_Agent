@@ -63,6 +63,7 @@ export const generatedApiRoutes = {
   "post_data_asset_item_review": { method: "POST", path: "/api/data-assets/item/review", authRequired: true },
   "get_multi_institution_page_data_candidates_get": { method: "GET", path: "/api/data-assets/page-data/multi-institution-candidates", authRequired: true },
   "get_page_data_rows_get": { method: "GET", path: "/api/data-assets/page-data/rows", authRequired: true },
+  "get_page_data_workspace_get": { method: "GET", path: "/api/data-assets/page-data/workspace", authRequired: true },
   "post_data_asset_raw_file_upload": { method: "POST", path: "/api/data-assets/raw-file", authRequired: true },
   "post_raw_table_external_reference_update": { method: "POST", path: "/api/data-assets/raw-table/external-reference", authRequired: true },
   "get_table_relationship_catalog_get": { method: "GET", path: "/api/data-assets/table-relationships/catalog", authRequired: true },

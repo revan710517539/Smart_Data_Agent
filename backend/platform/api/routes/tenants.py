@@ -49,13 +49,28 @@ def _active_tenants(handler: Any) -> list[dict[str, str]]:
             rows = cursor.fetchall()
     return [
         {
-            "id": str(_row_value(row, "tenant_code", 0)),
-            "name": str(_row_value(row, "tenant_name", 1)),
+            "id": tenant_code,
+            "name": tenant_name,
             "status": str(_row_value(row, "status", 2)),
         }
         for row in rows
-        if str(_row_value(row, "tenant_code", 0)) != "tenant:sda-internal"
+        if _is_login_catalog_tenant(
+            tenant_code := str(_row_value(row, "tenant_code", 0)),
+            tenant_name := str(_row_value(row, "tenant_name", 1)),
+        )
     ]
+
+
+def _is_login_catalog_tenant(tenant_code: str, tenant_name: str) -> bool:
+    code = tenant_code.strip()
+    name = tenant_name.strip()
+    if not code or code in {"__global__", "tenant:sda-internal", "tenant_demo"}:
+        return False
+    if code.startswith(("account:", "system:")):
+        return False
+    if name.startswith(("account:", "system:")):
+        return False
+    return True
 
 
 def _row_value(row: Any, key: str, index: int) -> Any:

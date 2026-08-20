@@ -64,7 +64,7 @@ const menuItems: MenuItem[] = [
       { key: "self-analysis.visual-reports", path: "/self-analysis/visual-reports", label: "可视化报表" },
       { key: "self-analysis.smart-analysis", path: "/self-analysis/query", label: "智能分析" },
       { key: "self-analysis.analysis-config", path: "/self-analysis/config", label: "分析配置" },
-      { key: "task-workbench.skills", path: "/agent/skills", label: "Skill插件" },
+      { key: "task-workbench.skills", path: "/agent/skills", label: "skill/插件" },
     ],
   },
   {
@@ -523,7 +523,7 @@ export function Layout() {
             页面权限加载失败，请确认登录状态后刷新页面。
           </div>
         ) : (
-          <Outlet />
+          <Outlet key={tenantId} />
         )}
       </main>
 

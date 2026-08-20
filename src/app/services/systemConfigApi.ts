@@ -52,11 +52,19 @@ export async function fetchAnalysisRuntimeConfig({
   };
   let response: RuntimeConfigResponse;
   try {
-    response = await apiRequest<RuntimeConfigResponse>(path, { method: "GET" });
+    response = await apiRequest<RuntimeConfigResponse>(path, {
+      method: "GET",
+      context: { tenantId, userId },
+      readCache: { ttlMs: 8_000, tags: ["analysis-runtime"] },
+    });
   } catch (error) {
     if (!isRetryableRuntimeConfigError(error)) throw error;
     await new Promise<void>((resolve) => window.setTimeout(resolve, 250));
-    response = await apiRequest<RuntimeConfigResponse>(path, { method: "GET" });
+    response = await apiRequest<RuntimeConfigResponse>(path, {
+      method: "GET",
+      context: { tenantId, userId },
+      readCache: { ttlMs: 8_000, tags: ["analysis-runtime"] },
+    });
   }
   return {
     speechIntegration: response.available ? response.integration : null,
@@ -131,15 +139,22 @@ type SystemConfigResponse = {
 const SYSTEM_CONFIG_CACHE_TTL_MS = 5_000;
 const systemConfigCache = new Map<string, { expiresAt: number; value: SystemConfigResponse }>();
 const systemConfigRequests = new Map<string, Promise<SystemConfigResponse>>();
+const systemConfigGenerations = new Map<string, number>();
 
 function systemConfigCacheKey(tenantId: string, userId: string) {
   return `${tenantId.trim()}::${userId.trim()}`;
+}
+
+function bumpSystemConfigGeneration(key: string) {
+  systemConfigGenerations.set(key, (systemConfigGenerations.get(key) || 0) + 1);
+  return systemConfigGenerations.get(key) || 0;
 }
 
 function invalidateSystemConfig(tenantId: string, userId: string) {
   const key = systemConfigCacheKey(tenantId, userId);
   systemConfigCache.delete(key);
   systemConfigRequests.delete(key);
+  bumpSystemConfigGeneration(key);
 }
 
 export async function fetchSystemConfig({
@@ -148,21 +163,32 @@ export async function fetchSystemConfig({
   forceRefresh = false,
 }: SystemConfigParams & { forceRefresh?: boolean }): Promise<SystemConfigResponse> {
   const cacheKey = systemConfigCacheKey(tenantId, userId);
-  const cached = systemConfigCache.get(cacheKey);
-  if (!forceRefresh && cached && cached.expiresAt > Date.now()) return cached.value;
-  const pending = systemConfigRequests.get(cacheKey);
-  if (pending) return pending;
+  if (!forceRefresh) {
+    const cached = systemConfigCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    const pending = systemConfigRequests.get(cacheKey);
+    if (pending) return pending;
+  } else {
+    systemConfigCache.delete(cacheKey);
+    systemConfigRequests.delete(cacheKey);
+    bumpSystemConfigGeneration(cacheKey);
+  }
 
+  const generation = systemConfigGenerations.get(cacheKey) || 0;
   const request = apiRequest<SystemConfigResponse>("/api/system-config", {
     method: "GET",
     context: { tenantId, userId },
     timeoutMs: 15_000,
   })
     .then((value) => {
-      systemConfigCache.set(cacheKey, { value, expiresAt: Date.now() + SYSTEM_CONFIG_CACHE_TTL_MS });
+      if ((systemConfigGenerations.get(cacheKey) || 0) === generation) {
+        systemConfigCache.set(cacheKey, { value, expiresAt: Date.now() + SYSTEM_CONFIG_CACHE_TTL_MS });
+      }
       return value;
     })
-    .finally(() => systemConfigRequests.delete(cacheKey));
+    .finally(() => {
+      if (systemConfigRequests.get(cacheKey) === request) systemConfigRequests.delete(cacheKey);
+    });
   systemConfigRequests.set(cacheKey, request);
   return request;
 }

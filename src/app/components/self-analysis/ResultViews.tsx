@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { createPortal } from "react-dom";
 import { trackInteraction } from "../../services/interactionTelemetry";
-import { AudioLines, Check, ChevronDown, Copy, Download, Ellipsis, Filter, MessageSquareText, Plus, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { AudioLines, Check, ChevronDown, Copy, Download, Ellipsis, Filter, MessageSquareText, Plus, SlidersHorizontal, Trash2, Type, X } from "lucide-react";
 import {
   Area,
   AreaChart,
@@ -43,6 +43,9 @@ import {
 import { useVisualizationVoiceCommand } from "../visualization/useVisualizationVoiceCommand";
 import { resolveVisualizationVoiceCommand } from "../visualization/visualizationCommand";
 import { formatFieldValue, type FieldDisplayMetadata } from "../../data/fieldSemantics";
+import { usePlatformContext } from "../../platform/PlatformContext";
+import { normalizeNoteItems, noteItemsFromText, type RichNoteItem } from "../notes/richNote";
+import { VisualNoteFields, VisualNoteTitle } from "../visualization/VisualNoteFields";
 import {
   buildVisualDataPoints,
   defaultComboLineFields,
@@ -88,17 +91,28 @@ type AnalysisVisualCardProps = {
   fillHeight?: boolean;
   showFollowUp?: boolean;
   initialConfig?: Partial<VisualizationCardConfig>;
-  onFollowUp: () => void;
-  onComment: () => void;
+  onFollowUp: (detail?: VisualSelectionDetail) => void;
+  onComment: (detail?: VisualSelectionDetail) => void;
   onTypeChange: (type: VisualizationType) => void;
   onTitleChange?: (title: string) => void;
   onConfigChange?: (config: VisualizationCardConfig) => void;
-  onDuplicate?: (config: VisualizationCardConfig) => void;
+  onDuplicate?: (config: VisualizationCardConfig, options?: VisualDuplicateOptions) => void;
+  onCreateText?: (config: VisualizationCardConfig) => void;
   onDelete?: () => void;
+  visualGridSpan?: number;
+  visualGridHeight?: number;
+  visualGridMaxSpan?: number;
+  visualGridMaxHeight?: number;
 };
 
-export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compact = false, fillHeight = false, showFollowUp = true, initialConfig, onFollowUp, onComment, onTypeChange, onTitleChange, onConfigChange, onDuplicate, onDelete }: AnalysisVisualCardProps) {
+export type VisualSelectionDetail = { selectedText?: string };
+export type VisualDuplicateOptions = { asText?: boolean };
+
+export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compact = false, fillHeight = false, showFollowUp = true, initialConfig, onFollowUp, onComment, onTypeChange, onTitleChange, onConfigChange, onDuplicate, onCreateText, onDelete, visualGridSpan, visualGridHeight, visualGridMaxSpan, visualGridMaxHeight }: AnalysisVisualCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const [moreMenuPos, setMoreMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const { tenantId, userId } = usePlatformContext();
   const fields = useMemo(() => analysisRawFields(rows), [rows]);
   const numericFields = useMemo(() => numericRawFields(rows), [rows]);
   const dimensionCandidates = useMemo(() => fields.filter((field) => !numericFields.includes(field)), [fields, numericFields]);
@@ -116,12 +130,31 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   const [operationsOpen, setOperationsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
+  const filterSnapshotRef = useRef<{ filterGroups: VisualizationFilterGroup[]; filters: VisualizationFilters; sumFilteredRows: boolean } | null>(null);
   const [activePanel, setActivePanel] = useState<"style" | "metric" | "dimension" | null>(null);
   const [commentPoint, setCommentPoint] = useState<{ left: number; top: number } | null>(null);
   const [commandNotice, setCommandNotice] = useState("");
   const [voiceNoticeVisible, setVoiceNoticeVisible] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState(title);
+  const [noteTitle, setNoteTitle] = useState(initialConfig?.noteTitle || "");
+  const [noteBody, setNoteBody] = useState(initialConfig?.noteBody || "");
+  const [noteItems, setNoteItems] = useState<RichNoteItem[]>(() => {
+    const savedItems = normalizeNoteItems(initialConfig?.noteItems);
+    return savedItems.length ? savedItems : noteItemsFromText(initialConfig?.noteBody || "", "visual_note");
+  });
+  const [noteTitleHidden, setNoteTitleHidden] = useState(Boolean(initialConfig?.noteTitleHidden));
+  const [cardType, setCardType] = useState<VisualizationType>(type);
+  useEffect(() => { setCardType(type); }, [type]);
+  const applyType = (next: VisualizationType) => {
+    setCardType(next);
+    if (next === "text") {
+      setOperationsOpen(false);
+      setActivePanel(null);
+      setMoreOpen(false);
+    }
+    onTypeChange(next);
+  };
   const cardStateHydratedRef = useRef("");
   const cardStateSkipSaveRef = useRef(false);
   const onConfigChangeRef = useRef(onConfigChange);
@@ -138,7 +171,22 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   };
   useEffect(() => { onConfigChangeRef.current = onConfigChange; }, [onConfigChange]);
 
-  const currentConfig = useMemo<VisualizationCardConfig>(() => ({ metricFields, dimensionFields, filters, filterGroups, sumFilteredRows, comboLineFields }), [comboLineFields, dimensionFields, filterGroups, filters, metricFields, sumFilteredRows]);
+  const currentConfig = useMemo<VisualizationCardConfig>(() => ({
+    metricFields,
+    dimensionFields,
+    filters,
+    filterGroups,
+    sumFilteredRows,
+    comboLineFields,
+    noteTitle,
+    noteBody,
+    noteItems,
+    noteTitleHidden,
+    layoutSpan: visualGridSpan,
+    layoutHeight: visualGridHeight,
+    maxLayoutSpan: visualGridMaxSpan,
+    maxLayoutHeight: visualGridMaxHeight,
+  }), [comboLineFields, dimensionFields, filterGroups, filters, metricFields, noteBody, noteItems, noteTitle, noteTitleHidden, sumFilteredRows, visualGridHeight, visualGridMaxHeight, visualGridMaxSpan, visualGridSpan]);
 
   useEffect(() => { if (!editingTitle) setDraftTitle(title); }, [editingTitle, title]);
 
@@ -162,6 +210,15 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
         setFilterGroups(source.filterGroups?.length ? normalizeVisualizationFilterGroups(source.filterGroups) : legacyFiltersToFilterGroups(source.filters || {}));
         setSumFilteredRows(Boolean(source.sumFilteredRows));
         if (Array.isArray(source.comboLineFields)) setComboLineFields(source.comboLineFields);
+        if (typeof source.noteTitle === "string") setNoteTitle(source.noteTitle);
+        if (typeof source.noteBody === "string") setNoteBody(source.noteBody);
+        const savedItems = normalizeNoteItems(source.noteItems);
+        if (savedItems.length) setNoteItems(savedItems);
+        else if (typeof source.noteBody === "string") setNoteItems(noteItemsFromText(source.noteBody, "visual_note"));
+        if (typeof source.noteTitleHidden === "boolean") setNoteTitleHidden(source.noteTitleHidden);
+        if (saved && typeof (saved as { type?: string }).type === "string" && (saved as { type?: string }).type !== type) {
+          applyType((saved as { type: VisualizationType }).type);
+        }
         if (saved) setShowData(Boolean(saved.showData));
         cardStateSkipSaveRef.current = true;
       }
@@ -170,10 +227,10 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   }, [initialConfig, stateKey]);
 
   useEffect(() => {
-    const normalized = normalizeVisualizationSelections(type, metricFields, dimensionFields, numericFields, dimensionCandidates, fieldLabels, fieldMetadata);
+    const normalized = normalizeVisualizationSelections(cardType, metricFields, dimensionFields, numericFields, dimensionCandidates, fieldLabels, fieldMetadata);
     if (!sameFields(metricFields, normalized.metrics)) setMetricFields(normalized.metrics);
     if (!sameFields(dimensionFields, normalized.dimensions)) setDimensionFields(normalized.dimensions);
-  }, [dimensionCandidates.join("\u0000"), dimensionFields, fieldLabels, metricFields, numericFields.join("\u0000"), type]);
+  }, [cardType, dimensionCandidates.join("\u0000"), dimensionFields, fieldLabels, metricFields, numericFields.join("\u0000")]);
 
   useEffect(() => {
     const next = defaultComboLineFields(metricFields, comboLineFields);
@@ -184,15 +241,15 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     const key = `sda:visual-card:v2:${window.location.pathname}:${stateKey}`;
     if (cardStateHydratedRef.current !== key) return;
     if (cardStateSkipSaveRef.current) { cardStateSkipSaveRef.current = false; return; }
-    try { sessionStorage.setItem(key, JSON.stringify({ ...currentConfig, showData })); } catch { /* session quota must not block charts */ }
+    try { sessionStorage.setItem(key, JSON.stringify({ ...currentConfig, showData, type: cardType })); } catch { /* session quota must not block charts */ }
     onConfigChangeRef.current?.(currentConfig);
-  }, [currentConfig, showData, stateKey]);
+  }, [cardType, currentConfig, showData, stateKey]);
 
   const applyVoiceCommand = (command: string) => {
     const resolution = resolveVisualizationVoiceCommand(command, numericFields, dimensionCandidates, fieldLabels);
-    if (resolution.visualizationType) onTypeChange(resolution.visualizationType);
-    if (resolution.metricField) setMetricFields((current) => toggleVisualizationField("metric", resolution.visualizationType || type, current.filter((field) => field !== resolution.metricField), resolution.metricField!));
-    if (resolution.dimensionField) setDimensionFields((current) => toggleVisualizationField("dimension", resolution.visualizationType || type, current.filter((field) => field !== resolution.dimensionField), resolution.dimensionField!));
+    if (resolution.visualizationType) applyType(resolution.visualizationType);
+    if (resolution.metricField) setMetricFields((current) => toggleVisualizationField("metric", resolution.visualizationType || cardType, current.filter((field) => field !== resolution.metricField), resolution.metricField!));
+    if (resolution.dimensionField) setDimensionFields((current) => toggleVisualizationField("dimension", resolution.visualizationType || cardType, current.filter((field) => field !== resolution.dimensionField), resolution.dimensionField!));
     if (resolution.dataVisibility) setShowData(resolution.dataVisibility === "shown");
     const parts = [resolution.visualizationType ? visualizationLabel(resolution.visualizationType) : "", resolution.metricField ? `指标 ${fieldLabels[resolution.metricField] || resolution.metricField}` : "", resolution.dimensionField ? `维度 ${fieldLabels[resolution.dimensionField] || resolution.dimensionField}` : ""].filter(Boolean);
     setCommandNotice(parts.length ? `已应用：${parts.join(" · ")}` : `已听到“${command}”，但没有匹配到样式、指标或维度，请换一种说法。`);
@@ -216,16 +273,40 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     const dismissTransientControls = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
+      if (target.closest('[data-visual-more-menu="true"]')) return;
       const interactiveRoot = target.closest('[data-visual-interactive="true"]');
       if (interactiveRoot && cardRef.current?.contains(interactiveRoot)) return;
       setActivePanel(null);
       setCommentPoint(null);
       setMoreOpen(false);
-      if (!target.closest('[data-visual-filter-panel="true"]')) setFilterOpen(false);
+      if (!target.closest('[data-visual-filter-panel="true"], [data-visual-filter-value-menu], [data-visual-filter-value-trigger]')) setFilterOpen(false);
     };
     document.addEventListener("pointerdown", dismissTransientControls, true);
     return () => document.removeEventListener("pointerdown", dismissTransientControls, true);
   }, [id]);
+
+  useEffect(() => {
+    if (!moreOpen) {
+      setMoreMenuPos(null);
+      return;
+    }
+    const update = () => {
+      const rect = moreButtonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = 112;
+      setMoreMenuPos({
+        top: rect.bottom + 4,
+        left: Math.min(Math.max(8, rect.left), window.innerWidth - width - 8),
+      });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [moreOpen]);
 
   const toggleOperations = () => {
     if (operationsOpen) {
@@ -238,43 +319,63 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     setActivePanel((current) => current === panel ? null : panel);
   };
 
+  const applyFilterState = (groups: VisualizationFilterGroup[], sum: boolean) => {
+    const normalized = normalizeVisualizationFilterGroups(groups);
+    setFilterGroups(normalized);
+    setFilters(visualizationFilterGroupsToLegacyFilters(normalized));
+    setSumFilteredRows(sum);
+  };
   const openFilters = () => {
+    filterSnapshotRef.current = { filterGroups, filters, sumFilteredRows };
     const source = filterGroups.length ? filterGroups : legacyFiltersToFilterGroups(filters);
-    setDraftFilterGroups(source.length ? structuredClone(source) : [createFilterGroup()]);
+    setDraftFilterGroups(source.length ? structuredClone(source) : [createFilterGroup(dimensionCandidates[0] || "")]);
     setDraftSumRows(sumFilteredRows);
     setMoreOpen(false);
     setFilterOpen(true);
   };
+  const activeFilterCount = filterGroups.reduce((count, group) => count + group.rules.filter((rule) => rule.field && rule.values.length).length, 0);
 
   const revealCommentAt = (clientX: number, clientY: number) => { const rect = cardRef.current?.getBoundingClientRect(); if (rect) setCommentPoint({ left: Math.min(clientX - rect.left, rect.width - 44), top: Math.max(8, clientY - rect.top) }); };
-  return <div ref={cardRef} data-visual-card={id} data-visual-values={showData ? "shown" : "hidden"} className={`relative rounded-xl border border-[#dce9e0] bg-[#fbfdfc] p-4 ${fillHeight ? "flex h-full min-h-0 flex-col" : ""}`} onDoubleClick={(event) => { if (!(event.target instanceof Element) || event.target.closest('[data-visual-interactive="true"]')) return; revealCommentAt(event.clientX, event.clientY); }} onContextMenu={(event) => { event.preventDefault(); revealCommentAt(event.clientX, event.clientY); }}>
-    <div className="mb-3 flex items-start justify-between gap-2.5">
-      <div className="min-w-0 flex-1 pr-1" data-visual-interactive="true">{editingTitle ? <input autoFocus value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} onBlur={commitTitle} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setDraftTitle(title); setEditingTitle(false); } }} className="h-7 w-full rounded-md border border-[#b7ddc3] bg-white px-2 text-[12px] text-[#1d1d1f] outline-none ring-2 ring-[#2ca66f]/15" aria-label="可视化标题" data-visual-title-input="true" /> : <button type="button" onDoubleClick={(event) => { event.stopPropagation(); if (onTitleChange) setEditingTitle(true); }} className={`max-w-full truncate text-left text-[12px] text-[#1d1d1f] ${onTitleChange ? "cursor-text rounded px-1 py-1 hover:bg-[#f5faf7]" : ""}`} title={onTitleChange ? "双击修改标题" : title} data-visual-title="true">{title}</button>}</div>
-      <div className="ml-auto flex shrink-0 flex-nowrap items-center justify-end gap-0 rounded-full bg-[#f0f6f2] p-0.5" data-visual-toolbar="true" data-visual-interactive="true">
-        <button type="button" onClick={() => { trackVisual("visual_more_click"); setMoreOpen((value) => !value); setFilterOpen(false); }} className={`inline-flex h-7 w-8 items-center justify-center rounded-full ${moreOpen ? "bg-white text-[#178a53] shadow-sm" : "text-[#4f685b] hover:bg-white/80"}`} aria-label="更多可视化操作" aria-expanded={moreOpen} data-visual-more="true"><Ellipsis className="h-4 w-4" /></button>
-        <button type="button" onClick={() => { trackVisual(showData ? "visual_hide_data_click" : "visual_show_data_click"); setShowData((value) => !value); }} disabled={!rows.length} className="h-7 whitespace-nowrap rounded-full px-2 text-[11px] text-[#4f685b] hover:bg-white/80 disabled:opacity-40" data-visual-data-toggle="true">{showData ? "隐藏数据" : "显示数据"}</button>
-        {showFollowUp && <button type="button" onClick={() => { trackVisual("visual_follow_up_click"); onFollowUp(); }} disabled={!rows.length} className="h-7 whitespace-nowrap rounded-full px-2 text-[11px] text-[#178a53] hover:bg-white/80 disabled:opacity-40" aria-label={`追问${title}`} data-visual-follow-up="true">追问</button>}
+  const isTextCard = cardType === "text";
+  const primaryToolsOpen = !isTextCard || operationsOpen;
+  return <div ref={cardRef} data-visual-card={id} data-visual-text-card={isTextCard ? "true" : "false"} data-visual-values={showData ? "shown" : "hidden"} data-visual-grid-span={visualGridSpan} data-visual-grid-height={visualGridHeight} data-visual-grid-max-span={visualGridMaxSpan} data-visual-grid-max-height={visualGridMaxHeight} className={`relative rounded-xl border border-[#dce9e0] bg-[#fbfdfc] p-4 ${fillHeight ? "flex h-full min-h-0 flex-col" : ""}`} onDoubleClick={(event) => { if (!(event.target instanceof Element) || event.target.closest('[data-visual-interactive="true"]')) return; revealCommentAt(event.clientX, event.clientY); }} onContextMenu={(event) => { if (event.target instanceof Element && event.target.closest("[data-rich-note-editor], [data-visual-note-selection], [data-visual-note-title-row]")) return; event.preventDefault(); revealCommentAt(event.clientX, event.clientY); }}>
+    <div className={isTextCard ? "mb-3 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-1" : "mb-3 flex items-start justify-between gap-2.5"}>
+      {!isTextCard && <div className="min-w-0 flex-1 pr-1" data-visual-interactive="true">{editingTitle ? <input autoFocus value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} onBlur={commitTitle} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setDraftTitle(title); setEditingTitle(false); } }} className="h-7 w-full rounded-md border border-[#b7ddc3] bg-white px-2 text-[12px] text-[#1d1d1f] outline-none ring-2 ring-[#2ca66f]/15" aria-label="可视化标题" data-visual-title-input="true" /> : <button type="button" onDoubleClick={(event) => { event.stopPropagation(); if (onTitleChange) setEditingTitle(true); }} className={`max-w-full truncate text-left text-[12px] text-[#1d1d1f] ${onTitleChange ? "cursor-text rounded px-1 py-1 hover:bg-[#f5faf7]" : ""}`} title={onTitleChange ? "双击修改标题" : title} data-visual-title="true">{title}</button>}</div>}
+      <div className={isTextCard ? `${operationsOpen ? "col-span-2 row-start-1 flex justify-end" : "hidden"}` : "ml-auto flex shrink-0 flex-nowrap items-center justify-end gap-0 rounded-full bg-[#f0f6f2] p-0.5"} data-visual-toolbar="true" data-visual-interactive="true" data-visual-text-ops-above={isTextCard && operationsOpen ? "true" : undefined}>
+        <div className={isTextCard ? "flex shrink-0 flex-nowrap items-center justify-end gap-0 rounded-full bg-[#f0f6f2] p-0.5" : "contents"}>
+        <div aria-hidden={!primaryToolsOpen} {...(!primaryToolsOpen ? ({ inert: "" } as Record<string, string>) : {})} className={`flex items-center gap-0 overflow-hidden transition-[max-width,opacity] duration-200 motion-reduce:transition-none ${primaryToolsOpen ? "max-w-[360px] opacity-100" : "pointer-events-none max-w-0 opacity-0"}`} data-visual-primary-tray={primaryToolsOpen ? "expanded" : "collapsed"}>
+          <div className="relative">
+            <button ref={moreButtonRef} type="button" onClick={(event) => { trackVisual("visual_more_click"); const rect = event.currentTarget.getBoundingClientRect(); setMoreMenuPos({ top: rect.bottom + 4, left: Math.min(Math.max(8, rect.left), window.innerWidth - 120) }); setMoreOpen((value) => !value); setFilterOpen(false); }} className={`inline-flex h-7 w-8 items-center justify-center rounded-full ${moreOpen || activeFilterCount ? "bg-white text-[#178a53] shadow-sm" : "text-[#4f685b] hover:bg-white/80"}`} aria-label="更多可视化操作" aria-expanded={moreOpen} data-visual-more="true"><Ellipsis className="h-4 w-4" /></button>
+            {moreOpen && moreMenuPos && createPortal(<div className="fixed z-[120] w-28 rounded-lg border border-[#dce7df] bg-white p-1 shadow-lg shadow-black/[0.08]" style={{ top: moreMenuPos.top, left: moreMenuPos.left }} data-visual-more-menu="true" data-visual-interactive="true">
+              <MoreMenuButton icon={Type} label="文本框" dataAttr="data-visual-more-text" onClick={() => { trackVisual("visual_text_card_click"); if (onCreateText) onCreateText(currentConfig); else onDuplicate?.(currentConfig, { asText: true }); setMoreOpen(false); }} disabled={!onCreateText && !onDuplicate} />
+              <MoreMenuButton icon={Filter} label={activeFilterCount ? `条件 ${activeFilterCount}` : "条件"} dataAttr="data-visual-filter-toggle" onClick={() => { trackVisual("visual_condition_click"); openFilters(); }} disabled={isTextCard} />
+              <MoreMenuButton icon={Copy} label="复制" disabled={!onDuplicate} onClick={() => { trackVisual("visual_copy_click"); onDuplicate?.(currentConfig); setMoreOpen(false); }} />
+              <MoreMenuButton icon={Trash2} label="删除" destructive disabled={!onDelete} onClick={() => { trackVisual("visual_delete_click"); onDelete?.(); setMoreOpen(false); }} />
+            </div>, document.body)}
+          </div>
+          <button type="button" onClick={() => { trackVisual(showData ? "visual_hide_data_click" : "visual_show_data_click"); setShowData((value) => !value); }} disabled={!rows.length} className="h-7 whitespace-nowrap rounded-full px-2 text-[11px] text-[#4f685b] hover:bg-white/80 disabled:opacity-40" data-visual-data-toggle="true">{showData ? "隐藏数据" : "显示数据"}</button>
+          {showFollowUp && <button type="button" onClick={() => { trackVisual("visual_follow_up_click"); onFollowUp(); }} className="h-7 whitespace-nowrap rounded-full px-2 text-[11px] text-[#178a53] hover:bg-white/80" aria-label={`追问${title}`} data-visual-follow-up="true">追问</button>}
+        </div>
         <div aria-hidden={!operationsOpen} {...(!operationsOpen ? ({ inert: "" } as Record<string, string>) : {})} className={`flex items-center gap-0.5 overflow-hidden transition-[max-width,opacity] duration-200 motion-reduce:transition-none ${operationsOpen ? "max-w-[260px] opacity-100" : "pointer-events-none max-w-0 opacity-0"}`} data-visual-operation-tray={operationsOpen ? "expanded" : "collapsed"}>
           <button tabIndex={operationsOpen ? 0 : -1} type="button" onClick={() => { trackVisual("visual_style_click"); togglePanel("style"); }} className={`h-7 whitespace-nowrap rounded-full px-2 text-[11px] outline-none focus-visible:outline-none ${activePanel === "style" ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`}>样式</button>
           <button tabIndex={operationsOpen ? 0 : -1} type="button" onClick={() => { trackVisual("visual_metric_click"); togglePanel("metric"); }} className={`h-7 whitespace-nowrap rounded-full px-2 text-[11px] outline-none focus-visible:outline-none ${activePanel === "metric" ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`}>指标</button>
           <button tabIndex={operationsOpen ? 0 : -1} type="button" onClick={() => { trackVisual("visual_dimension_click"); togglePanel("dimension"); }} className={`h-7 whitespace-nowrap rounded-full px-2 text-[11px] outline-none focus-visible:outline-none ${activePanel === "dimension" ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`}>维度</button>
           <button tabIndex={operationsOpen ? 0 : -1} type="button" onClick={() => { trackVisual("visual_voice_click"); voice.toggle(); }} className={`flex h-7 w-8 shrink-0 items-center justify-center rounded-full outline-none focus-visible:outline-none ${voice.listening ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`} aria-label={voice.listening ? "停止可视化语音配置" : "语音配置可视化"} title="实时语音配置"><AudioLines className={`h-3.5 w-3.5 ${voice.listening ? "animate-pulse" : ""}`} /></button>
         </div>
-        <button type="button" onClick={toggleOperations} className={`inline-flex h-7 w-8 shrink-0 items-center justify-center rounded-full outline-none focus-visible:outline-none ${operationsOpen ? "bg-white text-[#178a53] shadow-sm" : "text-[#4f685b] hover:bg-white/80"}`} aria-expanded={operationsOpen} aria-label={operationsOpen ? "收起可视化操作" : "展开可视化操作"} title="操作"><SlidersHorizontal className="h-3.5 w-3.5" /></button>
+        {!isTextCard && <button type="button" onClick={toggleOperations} className={`inline-flex h-7 w-8 shrink-0 items-center justify-center rounded-full outline-none focus-visible:outline-none ${operationsOpen ? "bg-white text-[#178a53] shadow-sm" : "text-[#4f685b] hover:bg-white/80"}`} aria-expanded={operationsOpen} aria-label={operationsOpen ? "收起可视化操作" : "展开可视化操作"} title="操作" data-visual-operation-toggle="true"><SlidersHorizontal className="h-3.5 w-3.5" /></button>}
+        </div>
       </div>
+      {isTextCard ? <div className={`col-start-1 min-w-0 ${operationsOpen ? "row-start-2" : "row-start-1"}`} data-visual-interactive="true"><span className="sr-only" data-visual-title="true">{noteTitle.trim() || title || "文本框"}</span>{!noteTitleHidden && <VisualNoteTitle title={noteTitle} onTitleChange={(value) => { setNoteTitle(value); onTitleChange?.(value || title); }} onHideTitle={() => setNoteTitleHidden(true)} />}</div> : null}
+      {isTextCard ? <div className={`col-start-2 flex justify-end ${operationsOpen ? "row-start-2" : "row-start-1"}`}><div className="flex h-8 shrink-0 items-center rounded-full bg-[#f0f6f2] p-0.5" data-visual-toolbar="true" data-visual-interactive="true"><button type="button" onClick={toggleOperations} className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full outline-none focus-visible:outline-none ${operationsOpen ? "bg-white text-[#178a53] shadow-sm" : "text-[#4f685b] hover:bg-white/80"}`} aria-expanded={operationsOpen} aria-label={operationsOpen ? "收起可视化操作" : "展开可视化操作"} title="操作" data-visual-operation-toggle="true"><SlidersHorizontal className="h-3.5 w-3.5" /></button></div></div> : null}
     </div>
-    {moreOpen && <div className="absolute right-[184px] top-12 z-40 w-28 rounded-lg border border-[#dce7df] bg-white p-1 shadow-lg shadow-black/[0.08]" data-visual-more-menu="true" data-visual-interactive="true">
-      <MoreMenuButton icon={Filter} label="条件" onClick={() => { trackVisual("visual_condition_click"); openFilters(); }} />
-      <MoreMenuButton icon={Copy} label="复制" disabled={!onDuplicate} onClick={() => { trackVisual("visual_copy_click"); onDuplicate?.(currentConfig); setMoreOpen(false); }} />
-      <MoreMenuButton icon={Trash2} label="删除" destructive disabled={!onDelete} onClick={() => { trackVisual("visual_delete_click"); onDelete?.(); setMoreOpen(false); }} />
-    </div>}
-    {filterOpen && <VisualizationFilterPanel rows={rows} dimensions={dimensionCandidates} labels={fieldLabels} value={draftFilterGroups} sumRows={draftSumRows} onChange={setDraftFilterGroups} onSumRowsChange={setDraftSumRows} onCancel={() => setFilterOpen(false)} onSave={() => { const normalized = normalizeVisualizationFilterGroups(draftFilterGroups); setFilterGroups(normalized); setFilters(visualizationFilterGroupsToLegacyFilters(normalized)); setSumFilteredRows(draftSumRows); setFilterOpen(false); }} />}
-    {operationsOpen && activePanel === "style" && <div className="absolute right-4 top-12 z-30 w-36 rounded-lg border border-[#dce7df] bg-white p-1 shadow-lg shadow-black/[0.08]" data-visual-style-menu="true" data-visual-interactive="true">{visualizationOptions.map((option) => <button key={option.type} type="button" onClick={() => { onTypeChange(option.type); setActivePanel(null); }} className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] ${option.type === type ? "bg-[#eaf7ef] text-[#178a53]" : "text-[#636366] hover:bg-[#f5faf7]"}`}><option.icon className="h-3.5 w-3.5" />{option.label}</button>)}</div>}
-    {operationsOpen && activePanel === "metric" && <FieldPanel title="指标" fields={metricFields} candidates={numericFields} labels={fieldLabels} reorder={metricReorder} onToggle={(field) => setMetricFields((current) => toggleVisualizationField("metric", type, current, field))} />}
-    {operationsOpen && activePanel === "dimension" && <FieldPanel title="维度" fields={dimensionFields} candidates={dimensionCandidates} labels={fieldLabels} reorder={dimensionReorder} onToggle={(field) => setDimensionFields((current) => toggleVisualizationField("dimension", type, current, field))} />}
+
+    {filterOpen && <VisualizationFilterPanel rows={rows} dimensions={dimensionCandidates} labels={fieldLabels} value={draftFilterGroups} sumRows={draftSumRows} onChange={(next) => { setDraftFilterGroups(next); applyFilterState(next, draftSumRows); }} onSumRowsChange={(next) => { setDraftSumRows(next); applyFilterState(draftFilterGroups, next); }} onCancel={() => { const snapshot = filterSnapshotRef.current; if (snapshot) { setFilterGroups(snapshot.filterGroups); setFilters(snapshot.filters); setSumFilteredRows(snapshot.sumFilteredRows); } setFilterOpen(false); }} onSave={() => { applyFilterState(draftFilterGroups, draftSumRows); setFilterOpen(false); }} />}
+    {operationsOpen && activePanel === "style" && <div className={`absolute right-4 z-30 w-36 rounded-lg border border-[#dce7df] bg-white p-1 shadow-lg shadow-black/[0.08] ${isTextCard ? "top-11" : "top-12"}`} data-visual-style-menu="true" data-visual-interactive="true">{visualizationOptions.map((option) => <button key={option.type} type="button" onClick={() => { applyType(option.type); setActivePanel(null); }} className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] ${option.type === cardType ? "bg-[#eaf7ef] text-[#178a53]" : "text-[#636366] hover:bg-[#f5faf7]"}`}><option.icon className="h-3.5 w-3.5" />{option.label}</button>)}</div>}
+    {operationsOpen && activePanel === "metric" && <FieldPanel title="指标" fields={metricFields} candidates={numericFields} labels={fieldLabels} reorder={metricReorder} onToggle={(field) => setMetricFields((current) => toggleVisualizationField("metric", cardType, current, field))} />}
+    {operationsOpen && activePanel === "dimension" && <FieldPanel title="维度" fields={dimensionFields} candidates={dimensionCandidates} labels={fieldLabels} reorder={dimensionReorder} onToggle={(field) => setDimensionFields((current) => toggleVisualizationField("dimension", cardType, current, field))} />}
     {voiceNoticeVisible && (voice.listening || voice.error || commandNotice || voice.transcript) && <div className="absolute right-4 top-12 z-40 max-w-[280px] rounded-lg border border-[#dce7df] bg-white px-3 py-2 text-[10px] leading-4 text-[#53615a] shadow-lg" role="status" data-visual-voice-notice="true" data-visual-interactive="true">{voice.listening ? "正在听取样式、指标或维度指令…" : voice.error || commandNotice || voice.transcript}</div>}
     {commentPoint && <button type="button" aria-label="评论可视化" onClick={() => { onComment(); setCommentPoint(null); }} className="absolute z-40 flex h-8 w-8 items-center justify-center rounded-full bg-[#1d1d1f] text-white shadow-lg shadow-black/20 outline-none hover:bg-[#2c2c2e] focus-visible:outline-none" style={commentPoint} data-visual-comment-action="true" data-visual-interactive="true"><MessageSquareText className="h-4 w-4" /></button>}
-    <div className={fillHeight ? "min-h-0 flex-1 overflow-auto" : ""} onWheelCapture={passWheelToPage} data-chart-wheel-passthrough="true"><VisualizationRenderer type={type} rows={rows} metricFields={metricFields} dimensionFields={dimensionFields} filters={filters} filterGroups={filterGroups} sumFilteredRows={sumFilteredRows} comboLineFields={comboLineFields} onComboLineFieldsChange={setComboLineFields} onMetricFieldsChange={setMetricFields} onDimensionFieldsChange={setDimensionFields} metricReorder={metricReorder} compact={compact} showData={showData} fillHeight={fillHeight} /></div>
+    <div className={fillHeight ? "min-h-0 flex-1 overflow-auto" : ""} onWheelCapture={isTextCard ? undefined : passWheelToPage} data-chart-wheel-passthrough={isTextCard ? undefined : "true"}>{isTextCard ? <VisualNoteFields title={noteTitle} body={noteBody} items={noteItems} titleHidden={true} fields={fields} metricFields={metricFields} dimensionFields={dimensionFields} labels={fieldLabels} uploadContext={{ tenantId, userId, reportId: `visual-note-${stateKey}`, blockId: String(id) }} onTitleChange={(value) => { setNoteTitle(value); onTitleChange?.(value || title); }} onBodyChange={setNoteBody} onItemsChange={setNoteItems} onHideTitle={() => setNoteTitleHidden(true)} onOpenComment={(selectedText) => onComment({ selectedText })} onOpenAnalysis={(selectedText) => onFollowUp({ selectedText })} /> : <VisualizationRenderer type={cardType} rows={rows} metricFields={metricFields} dimensionFields={dimensionFields} filters={filters} filterGroups={filterGroups} sumFilteredRows={sumFilteredRows} comboLineFields={comboLineFields} onComboLineFieldsChange={setComboLineFields} onMetricFieldsChange={setMetricFields} onDimensionFieldsChange={setDimensionFields} metricReorder={metricReorder} compact={compact} showData={showData} fillHeight={fillHeight} />}</div>
     <ReorderPreview reorder={metricReorder} /><ReorderPreview reorder={dimensionReorder} />
   </div>;
 }
@@ -369,14 +470,14 @@ function ReorderPreview({ reorder }: { reorder: ReorderController }) {
   return <div className="pointer-events-none fixed z-[120] max-w-[220px] rounded-lg border border-[#b7ddc3] bg-white px-3 py-2 text-[11px] text-[#178a53] shadow-xl shadow-black/10" style={{ left: reorder.position.x + 12, top: reorder.position.y + 12 }} data-reorder-preview="true"><span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-[#2ca66f]" />{reorder.label}</div>;
 }
 
-function MoreMenuButton({ icon: Icon, label, onClick, disabled = false, destructive = false }: { icon: typeof Filter; label: string; onClick: () => void; disabled?: boolean; destructive?: boolean }) {
-  return <button type="button" onClick={onClick} disabled={disabled} className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[11px] disabled:cursor-not-allowed disabled:opacity-35 ${destructive ? "text-[#d64b4b] hover:bg-[#fff4f4]" : "text-[#53615a] hover:bg-[#f5faf7]"}`}><Icon className="h-3.5 w-3.5" />{label}</button>;
+function MoreMenuButton({ icon: Icon, label, onClick, disabled = false, destructive = false, dataAttr }: { icon: typeof Filter; label: string; onClick: () => void; disabled?: boolean; destructive?: boolean; dataAttr?: string }) {
+  return <button type="button" onClick={onClick} disabled={disabled} {...(dataAttr ? { [dataAttr]: "true" } : {})} className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[11px] disabled:cursor-not-allowed disabled:opacity-35 ${destructive ? "text-[#d64b4b] hover:bg-[#fff4f4]" : "text-[#53615a] hover:bg-[#f5faf7]"}`}><Icon className="h-3.5 w-3.5" />{label}</button>;
 }
 
 let filterEditorSequence = 0;
 function nextFilterEditorId(prefix: "group" | "rule") { filterEditorSequence += 1; return `${prefix}-${Date.now()}-${filterEditorSequence}`; }
 function createFilterRule(field = ""): VisualizationFilterRule { return { id: nextFilterEditorId("rule"), field, operator: "in", values: [] }; }
-function createFilterGroup(): VisualizationFilterGroup { return { id: nextFilterEditorId("group"), rules: [createFilterRule()] }; }
+function createFilterGroup(field = ""): VisualizationFilterGroup { return { id: nextFilterEditorId("group"), rules: [createFilterRule(field)] }; }
 
 function VisualizationFilterPanel({ rows, dimensions, labels, value, sumRows, onChange, onSumRowsChange, onCancel, onSave }: { rows: AnalysisRow[]; dimensions: string[]; labels: Record<string, string>; value: VisualizationFilterGroup[]; sumRows: boolean; onChange: (value: VisualizationFilterGroup[]) => void; onSumRowsChange: (value: boolean) => void; onCancel: () => void; onSave: () => void }) {
   const [activeValuesRule, setActiveValuesRule] = useState<string | null>(null);
@@ -407,7 +508,7 @@ function VisualizationFilterPanel({ rows, dimensions, labels, value, sumRows, on
     if (!activeValuesRule) return;
     const dismissValueMenu = (event: PointerEvent) => {
       const target = event.target;
-      if (target instanceof Element && (target.closest("[data-visual-filter-value-menu]") || target.closest("[data-visual-filter-value-trigger]"))) return;
+      if (target instanceof Element && (target.closest("[data-visual-filter-value-menu]") || target.closest("[data-visual-filter-value-trigger]") || target.closest("[data-visual-filter-panel]"))) return;
       closeValueMenu();
     };
     const dismissOnViewportChange = () => closeValueMenu();
@@ -429,13 +530,13 @@ function VisualizationFilterPanel({ rows, dimensions, labels, value, sumRows, on
         <div className="grid grid-cols-[minmax(128px,1fr)_118px_minmax(180px,1.35fr)_auto_auto] items-start gap-2">
           <label className="relative"><span className="sr-only">维度</span><select value={rule.field} onChange={(event) => { setActiveValuesRule(null); updateRule(group.id, rule.id, (current) => ({ ...current, field: event.target.value, values: [] })); }} className="h-9 w-full appearance-none rounded-lg border border-[#dfe7e2] bg-white px-3 pr-7 text-[11px] text-[#34443c] outline-none focus:border-[#8fbaa2] focus:ring-2 focus:ring-[#2b7b5a]/10"><option value="">选择维度</option>{dimensions.map((field) => <option key={field} value={field}>{labels[field] || field}</option>)}</select><ChevronDown className="pointer-events-none absolute right-2.5 top-3 h-3 w-3 text-[#8a9690]" /></label>
           <label className="relative"><span className="sr-only">算子</span><select value={rule.operator} onChange={(event) => updateRule(group.id, rule.id, (current) => ({ ...current, operator: event.target.value as VisualizationFilterOperator }))} className="h-9 w-full appearance-none rounded-lg border border-[#dfe7e2] bg-white px-3 pr-7 text-[11px] text-[#34443c] outline-none focus:border-[#8fbaa2] focus:ring-2 focus:ring-[#2b7b5a]/10">{visualizationFilterOperators.map((operator) => <option key={operator.value} value={operator.value}>{operator.label}</option>)}</select><ChevronDown className="pointer-events-none absolute right-2.5 top-3 h-3 w-3 text-[#8a9690]" /></label>
-          <div className="relative"><button type="button" disabled={!rule.field} onClick={(event) => toggleValueMenu(rule.id, event.currentTarget)} className="flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-[#dfe7e2] bg-white px-3 text-left text-[11px] text-[#34443c] outline-none hover:border-[#bdd2c5] focus:border-[#8fbaa2] focus:ring-2 focus:ring-[#2b7b5a]/10 disabled:cursor-not-allowed disabled:bg-[#f7f8f8] disabled:text-[#b2b8b4]" aria-expanded={activeValuesRule === rule.id} data-visual-filter-value-trigger={rule.id}><span className="truncate">{rule.values.length ? (rule.values.length <= 2 ? rule.values.join("、") : `已选 ${rule.values.length} 项`) : "选择具体值"}</span><ChevronDown className="h-3 w-3 shrink-0 text-[#8a9690]" /></button>{activeValuesRule === rule.id && valueMenuPosition && createPortal(<div className="fixed z-[120] rounded-lg border border-[#dce7df] bg-white p-1.5 shadow-xl shadow-black/[0.12]" style={{ left: valueMenuPosition.left, top: valueMenuPosition.top, width: valueMenuPosition.width, transform: valueMenuPosition.openAbove ? "translateY(-100%)" : undefined }} data-visual-filter-value-menu="true"><div className="max-h-44 overflow-y-auto">{visualizationFilterValues(rows, rule.field).length ? visualizationFilterValues(rows, rule.field).map((option) => { const checked = rule.values.includes(option); return <button key={option} type="button" onClick={() => toggleValue(group.id, rule, option)} className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[10px] ${checked ? "bg-[#edf6f1] text-[#286e51]" : "text-[#53615a] hover:bg-[#f6f8f7]"}`}><span className={`inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${checked ? "border-[#5f9278] bg-[#5f9278] text-white" : "border-[#cfd9d3] bg-white"}`}>{checked && <Check className="h-2.5 w-2.5" />}</span><span className="truncate">{option}</span></button>; }) : <div className="px-2 py-5 text-center text-[10px] text-[#8a9690]">当前维度暂无可选值</div>}</div><button type="button" onClick={closeValueMenu} className="mt-1 h-7 w-full rounded-md bg-[#f4f7f5] text-[10px] text-[#4e675a] hover:bg-[#edf3ef]">完成</button></div>, document.body)}</div>
+          <div className="relative"><button type="button" disabled={!rule.field} onClick={(event) => toggleValueMenu(rule.id, event.currentTarget)} className="flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-[#dfe7e2] bg-white px-3 text-left text-[11px] text-[#34443c] outline-none hover:border-[#bdd2c5] focus:border-[#8fbaa2] focus:ring-2 focus:ring-[#2b7b5a]/10 disabled:cursor-not-allowed disabled:bg-[#f7f8f8] disabled:text-[#b2b8b4]" aria-expanded={activeValuesRule === rule.id} data-visual-filter-value-trigger={rule.id}><span className="truncate">{rule.values.length ? (rule.values.length <= 2 ? rule.values.join("、") : `已选 ${rule.values.length} 项`) : "选择具体值"}</span><ChevronDown className="h-3 w-3 shrink-0 text-[#8a9690]" /></button>{activeValuesRule === rule.id && valueMenuPosition && createPortal(<div className="fixed z-[120] rounded-lg border border-[#dce7df] bg-white p-1.5 shadow-xl shadow-black/[0.12]" style={{ left: valueMenuPosition.left, top: valueMenuPosition.top, width: valueMenuPosition.width, transform: valueMenuPosition.openAbove ? "translateY(-100%)" : undefined }} data-visual-filter-value-menu="true" data-visual-filter-panel="true" onPointerDown={(event) => event.stopPropagation()}><div className="max-h-44 overflow-y-auto">{visualizationFilterValues(rows, rule.field).length ? visualizationFilterValues(rows, rule.field).map((option) => { const checked = rule.values.includes(option); return <button key={option} type="button" onClick={() => toggleValue(group.id, rule, option)} className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[10px] ${checked ? "bg-[#edf6f1] text-[#286e51]" : "text-[#53615a] hover:bg-[#f6f8f7]"}`}><span className={`inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${checked ? "border-[#5f9278] bg-[#5f9278] text-white" : "border-[#cfd9d3] bg-white"}`}>{checked && <Check className="h-2.5 w-2.5" />}</span><span className="truncate">{option}</span></button>; }) : <div className="px-2 py-5 text-center text-[10px] text-[#8a9690]">当前维度暂无可选值</div>}</div><button type="button" onClick={closeValueMenu} className="mt-1 h-7 w-full rounded-md bg-[#f4f7f5] text-[10px] text-[#4e675a] hover:bg-[#edf3ef]">完成</button></div>, document.body)}</div>
           <button type="button" onClick={() => { setActiveValuesRule(null); addRule(group.id, rule.id); }} className="inline-flex h-9 items-center gap-1 whitespace-nowrap rounded-lg px-2 text-[10px] font-medium text-[#2c7053] hover:bg-[#edf6f1]"><Plus className="h-3.5 w-3.5" />添加筛选</button>
           <button type="button" onClick={() => removeRule(group.id, rule.id)} className="inline-flex h-9 w-8 items-center justify-center rounded-lg text-[#9aa49f] hover:bg-white hover:text-[#b14f4f]" aria-label="删除筛选"><Trash2 className="h-3.5 w-3.5" /></button>
         </div>
       </div>)}</div>
     </div>) : <div className="py-8 text-center text-[11px] text-[#8a8a8e]">当前数据没有可筛选维度</div>}</div>
-    {dimensions.length > 0 && <button type="button" onClick={() => { setActiveValuesRule(null); onChange([...value, createFilterGroup()]); }} className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-dashed border-[#cdded4] px-3 text-[10px] font-medium text-[#4f6f5f] hover:border-[#a9c7b5] hover:bg-[#f7faf8]" data-add-or-filter-group="true"><Plus className="h-3.5 w-3.5" />添加“或”条件组</button>}
+    {dimensions.length > 0 && <button type="button" onClick={() => { setActiveValuesRule(null); onChange([...value, createFilterGroup(dimensions[0] || "")]); }} className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-dashed border-[#cdded4] px-3 text-[10px] font-medium text-[#4f6f5f] hover:border-[#a9c7b5] hover:bg-[#f7faf8]" data-add-or-filter-group="true"><Plus className="h-3.5 w-3.5" />添加“或”条件组</button>}
     <div className="mt-3 flex items-center justify-end gap-2 border-t border-[#edf1ee] pt-3"><label className="mr-auto inline-flex cursor-pointer items-center gap-1.5 text-[10px] text-[#53615a]"><input type="checkbox" checked={sumRows} onChange={(event) => onSumRowsChange(event.target.checked)} className="accent-[#287557]" />求和</label><button type="button" onClick={onCancel} className="h-8 rounded-lg border border-[#e1e7e3] bg-white px-3 text-[11px] text-[#636366] hover:bg-[#f7f8f8]">取消</button><button type="button" onClick={onSave} className="h-8 rounded-lg bg-[#287557] px-3 text-[11px] text-white hover:bg-[#1f6549]">保存</button></div>
   </div>, document.body);
 }
@@ -491,6 +592,7 @@ function VisualizationRenderer({ type, rows, metricFields, dimensionFields, filt
   const label = (field: string) => fieldLabels[field] || field;
   const format = (field: string, value: unknown) => formatFieldValue(value, fieldMetadata[field]);
   const common = <><CartesianGrid stroke="#edf1ee" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="category" tick={tick} tickLine={false} axisLine={false} interval="preserveStartEnd" /><YAxis tick={tick} tickLine={false} axisLine={false} /><Tooltip content={<MetricTooltip definition={metricDefinition} fieldMetadata={fieldMetadata} />} /><Legend wrapperStyle={{ fontSize: 10, color: "#53615a" }} /></>;
+  if (type === "text") return null;
   if (!rows.length || !metricFields.length) return <div className={`flex items-center justify-center rounded-lg border border-dashed border-[#e5e5ea] bg-[#fafbfc] text-[12px] text-[#8a8a8e] ${fillHeight ? "h-full" : "h-[220px]"}`}>暂无可视化数据</div>;
 
   if (type === "kpi") {
@@ -539,8 +641,13 @@ function numericRawFields(rows: AnalysisRow[]) {
   return analysisRawFields(rows).filter((field) => {
     if (metadata[field]?.semanticRole === "metric") return true;
     if (metadata[field]?.semanticRole === "dimension" || metadata[field]?.semanticRole === "date") return false;
+    if (rows.some((row) => periodLikeValue(row.raw[field]))) return false;
     return rows.some((row) => numberValue(row.raw[field]) !== null);
   });
+}
+
+function periodLikeValue(value: unknown) {
+  return /^(?:19|20)\d{2}[-/.年](?:0?[1-9]|1[0-2])(?:[-/.日](?:0?[1-9]|[12]\d|3[01]))?$/.test(String(value ?? "").trim());
 }
 
 function numberValue(value: unknown) {

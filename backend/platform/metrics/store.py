@@ -84,14 +84,23 @@ class InMemoryMetricDictionaryStore:
         return self.list(tenant_id)
 
     def upsert(self, tenant_id: str, metric: dict[str, Any], updated_by: str | None = None) -> dict[str, Any]:
-        normalized = _normalize_metric(metric)
-        metrics = self._metrics_by_tenant.setdefault(tenant_id, {})
-        _assert_metric_name_available(metrics.values(), normalized["metricName"], normalized["metricId"])
-        existing = metrics.get(normalized["metricId"])
-        normalized["createdBy"] = existing.get("createdBy") if existing else str(updated_by or normalized.get("createdBy") or "")
-        normalized["tenantId"] = tenant_id
-        metrics[normalized["metricId"]] = normalized
-        return normalized
+        return self.upsert_many(tenant_id, [metric], updated_by=updated_by)[0]
+
+    def upsert_many(self, tenant_id: str, metrics: list[dict[str, Any]], updated_by: str | None = None) -> list[dict[str, Any]]:
+        if not metrics:
+            return []
+        working = dict(self._metrics_by_tenant.get(tenant_id, {}))
+        saved: list[dict[str, Any]] = []
+        for metric in metrics:
+            normalized = _normalize_metric(metric)
+            _assert_metric_name_available(working.values(), normalized["metricName"], normalized["metricId"])
+            existing = working.get(normalized["metricId"])
+            normalized["createdBy"] = existing.get("createdBy") if existing else str(updated_by or normalized.get("createdBy") or "")
+            normalized["tenantId"] = tenant_id
+            working[normalized["metricId"]] = normalized
+            saved.append(normalized)
+        self._metrics_by_tenant[tenant_id] = working
+        return saved
 
     def delete(self, tenant_id: str, metric_id: str) -> bool:
         metrics = self._metrics_by_tenant.setdefault(tenant_id, {})
@@ -248,44 +257,54 @@ class SQLiteMetricDictionaryStore:
         return self.list(tenant_id)
 
     def upsert(self, tenant_id: str, metric: dict[str, Any], updated_by: str | None = None) -> dict[str, Any]:
-        normalized = _normalize_metric(metric)
-        existing_metric = self.get(tenant_id, normalized["metricId"])
-        normalized["createdBy"] = existing_metric.get("createdBy") if existing_metric else str(updated_by or normalized.get("createdBy") or "")
-        normalized["tenantId"] = tenant_id
-        existing = self._conn.execute(
-            """
-            SELECT metric_id
-            FROM platform_metric_dictionary
-            WHERE tenant_id = ? AND metric_name = ? AND metric_id <> ?
-            """,
-            (tenant_id, normalized["metricName"], normalized["metricId"]),
-        ).fetchone()
-        if existing:
-            raise ValueError("指标已存在，请检查……")
-        with self._conn:
-            self._conn.execute(
+        return self.upsert_many(tenant_id, [metric], updated_by=updated_by)[0]
+
+    def upsert_many(self, tenant_id: str, metrics: list[dict[str, Any]], updated_by: str | None = None) -> list[dict[str, Any]]:
+        if not metrics:
+            return []
+        prepared: list[dict[str, Any]] = []
+        for metric in metrics:
+            normalized = _normalize_metric(metric)
+            existing_metric = self.get(tenant_id, normalized["metricId"])
+            normalized["createdBy"] = existing_metric.get("createdBy") if existing_metric else str(updated_by or normalized.get("createdBy") or "")
+            normalized["tenantId"] = tenant_id
+            existing = self._conn.execute(
                 """
-                INSERT INTO platform_metric_dictionary(
-                    tenant_id, metric_id, metric_name, payload, created_by, updated_by, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(tenant_id, metric_id) DO UPDATE SET
-                    metric_name = excluded.metric_name,
-                    payload = excluded.payload,
-                    updated_by = excluded.updated_by,
-                    updated_at = CURRENT_TIMESTAMP
+                SELECT metric_id
+                FROM platform_metric_dictionary
+                WHERE tenant_id = ? AND metric_name = ? AND metric_id <> ?
                 """,
-                (
-                    tenant_id,
-                    normalized["metricId"],
-                    normalized["metricName"],
-                    json.dumps(normalized, ensure_ascii=False, sort_keys=True),
-                    normalized["createdBy"] or updated_by,
-                    updated_by,
-                ),
-            )
-            self._replace_visibility_rows(tenant_id, [normalized], metric_ids={normalized["metricId"]})
-        return normalized
+                (tenant_id, normalized["metricName"], normalized["metricId"]),
+            ).fetchone()
+            if existing:
+                raise ValueError("指标已存在，请检查……")
+            prepared.append(normalized)
+        _assert_unique_metric_names(prepared)
+        with self._conn:
+            for normalized in prepared:
+                self._conn.execute(
+                    """
+                    INSERT INTO platform_metric_dictionary(
+                        tenant_id, metric_id, metric_name, payload, created_by, updated_by, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(tenant_id, metric_id) DO UPDATE SET
+                        metric_name = excluded.metric_name,
+                        payload = excluded.payload,
+                        updated_by = excluded.updated_by,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        tenant_id,
+                        normalized["metricId"],
+                        normalized["metricName"],
+                        json.dumps(normalized, ensure_ascii=False, sort_keys=True),
+                        normalized["createdBy"] or updated_by,
+                        updated_by,
+                    ),
+                )
+            self._replace_visibility_rows(tenant_id, prepared, metric_ids={item["metricId"] for item in prepared})
+        return prepared
 
     def delete(self, tenant_id: str, metric_id: str) -> bool:
         with self._conn:

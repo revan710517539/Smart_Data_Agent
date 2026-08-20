@@ -85,18 +85,10 @@ def ensure_default_models_for_account(system_config_store: Any, user_id: str, *,
     scope = account_system_config_scope(user_id)
     existing = system_config_store.get_model(scope, DEFAULT_RELAY_MODEL_ID, reveal_secret=True)
     if existing is not None:
-        # This relay is a system default, not an account-created integration.
-        # Replace an older empty/stale local shell with the authoritative
-        # template as a whole; otherwise the UI can retain a submodel name
-        # while the server sees no permitted submodels for that account.
-        canonical = _canonical_default_relay(template)
-        if any(
-            existing.get(key) != canonical.get(key)
-            for key in (
-                "name", "modelName", "key", "value", "applicationModule",
-                "availableModels", "enabledModels", "testStatus", "status",
-            )
-        ):
+        # Keep the display identity of the system default, but never clobber an
+        # account-edited API address, secret, or last successful probe result.
+        canonical = _canonical_default_relay(_account_owned_default_relay(existing, template))
+        if any(existing.get(key) != canonical.get(key) for key in ("name", "modelName", "applicationModule")):
             system_config_store.upsert_model(scope, canonical, updated_by=updated_by)
         return []
     system_config_store.upsert_model(scope, template, updated_by=updated_by)
@@ -134,12 +126,11 @@ def _configured_default_relay_model(system_config_store: Any) -> dict[str, Any] 
     if configured is None:
         return None
     canonical = _canonical_default_relay(configured)
-    # Keep the protected template's display label in sync too. Account rows
-    # are reconciled from this record on startup, so leaving an old label here
-    # would make a later account provision reintroduce it.
+    # Keep the protected template's display identity in sync. URL and secret
+    # stay on the stored template so an operator can change the install default.
     if isinstance(template, dict) and any(
         template.get(key) != canonical.get(key)
-        for key in ("name", "modelName", "key", "applicationModule")
+        for key in ("name", "modelName", "applicationModule")
     ):
         try:
             system_config_store.upsert_model(
@@ -153,7 +144,7 @@ def _configured_default_relay_model(system_config_store: Any) -> dict[str, Any] 
 
 
 def _canonical_default_relay(model: dict[str, Any]) -> dict[str, Any]:
-    """Normalize the protected relay while retaining its encrypted secret."""
+    """Normalize the protected relay while retaining its URL, secret, and probe state."""
 
     available_models = [str(item).strip() for item in model.get("availableModels") or [] if str(item).strip()]
     enabled_models = [str(item).strip() for item in model.get("enabledModels") or [] if str(item).strip()]
@@ -161,16 +152,31 @@ def _canonical_default_relay(model: dict[str, Any]) -> dict[str, Any]:
         available_models = list(DEFAULT_RELAY_SHARED_MODELS)
     if not enabled_models:
         enabled_models = [item for item in DEFAULT_RELAY_SHARED_MODELS if item in available_models]
+    api_base = str(model.get("key") or "").strip() or DEFAULT_RELAY_MODEL_API_BASE
     return {
         **model,
         "id": DEFAULT_RELAY_MODEL_ID,
         "name": "默认模型",
         "modelName": "中转站",
-        "key": DEFAULT_RELAY_MODEL_API_BASE,
+        "key": api_base,
         "applicationModule": "global_text_model",
         "availableModels": available_models,
         "enabledModels": enabled_models,
     }
+
+
+def _account_owned_default_relay(existing: dict[str, Any], template: dict[str, Any]) -> dict[str, Any]:
+    """Prefer account-edited credentials over the install-wide seed."""
+
+    merged = dict(template)
+    for field in ("key", "value"):
+        current = str(existing.get(field) or "").strip()
+        if current:
+            merged[field] = current
+    for field in ("availableModels", "enabledModels", "testStatus", "testMessage", "testResponse", "lastTestedAt", "status"):
+        if existing.get(field) not in (None, "", []):
+            merged[field] = existing.get(field)
+    return merged
 
 
 def _is_usable_default_relay(model: dict[str, Any] | None) -> bool:

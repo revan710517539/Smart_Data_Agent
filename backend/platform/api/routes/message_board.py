@@ -27,11 +27,12 @@ def handle_message_board_admin_get(handler: Any, query: str) -> None:
         context = handler._request_context(params=params)
         handler._require_message_board_admin(context)
         result = handler.services.message_board_service.list_all(
+            tenant_id=context.tenant_id,
             query=first_query_value(params, "query") or "",
             page=int(first_query_value(params, "page") or 1),
             page_size=int(first_query_value(params, "page_size") or 50),
         )
-        handler._send_json({"tenant_id": "*", **result})
+        handler._send_json({"tenant_id": context.tenant_id, **result})
     except Exception as exc:
         send_route_exception(handler, exc)
 
@@ -98,11 +99,11 @@ def handle_message_board_admin_status_update(handler: Any) -> None:
         payload = handler._read_json()
         context = handler._request_context(payload=payload)
         handler._require_message_board_admin(context)
-        message = handler.services.message_board_service.set_status(payload)
+        message = handler.services.message_board_service.set_status(payload, tenant_id=context.tenant_id)
         handler._write_audit(context, "message_board.status.update", "message_board_entry", message["message_id"], {
             "status": message["status"], "lock_version": message["lock_version"],
         })
-        handler._send_json({"tenant_id": "*", "message": message})
+        handler._send_json({"tenant_id": context.tenant_id, "message": message})
     except Exception as exc:
         send_route_exception(handler, exc)
 

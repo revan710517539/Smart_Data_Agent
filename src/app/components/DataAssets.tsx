@@ -83,6 +83,7 @@ import {
   uploadRawDataFile,
 } from "../services/dataAssetApi";
 import { PageDataAssetList, PageDataCreateButton, PageDataCreateModal } from "./data-assets/PageDataAssets";
+import { pageDataScope } from "./page-data/assignment";
 import { TableRelationshipWorkspace } from "./data-assets/TableRelationshipBuilder";
 import { DataPageSelector } from "./ui/DataPageSelector";
 
@@ -1437,12 +1438,10 @@ function DataManagement({ searchTerm, tenantId, userId }: { searchTerm: string; 
     <div className="space-y-5">
       <AssetNotice notice={notice} />
       <div className="rounded-xl border border-[#f0f0f2] bg-white p-5">
-        <div className="mb-4 grid gap-3 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-start">
-          <div>
-            <h3 className="text-[14px] text-[#1d1d1f]">数据管理</h3>
-          </div>
-          <div className="flex min-w-0 flex-col items-end gap-2">
-            <div className="flex max-w-full flex-nowrap items-center gap-2 overflow-x-auto pb-0.5 [&>*]:shrink-0" data-data-management-control-row="true">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h3 className="shrink-0 text-[14px] leading-8 text-[#1d1d1f]">数据管理</h3>
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+            <div className="flex max-w-full flex-nowrap items-center gap-2 overflow-x-auto [&>*]:shrink-0" data-data-management-control-row="true">
               {activeTab === "raw" && (
                 <button
                   type="button"
@@ -1692,10 +1691,7 @@ function sortAssetNewestFirst(
   return right.id.localeCompare(left.id);
 }
 
-function pageDataScope(asset: PageDataAsset): PageDataInstitutionScope {
-  if (asset.institutionScope) return asset.institutionScope;
-  return asset.targetPages.length === 1 && asset.targetPages[0] === "dashboard" ? "multi_institution" : "single_institution";
-}
+
 
 function emptyRawField(): RawField {
   return {

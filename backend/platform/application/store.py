@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -37,13 +38,13 @@ class ApplicationActionUnavailable(RuntimeError):
 
 
 REGISTERED_ACTIONS: dict[str, set[str]] = {
-    "dashboard": {"select_bank", "select_product", "open_insight_action", "set_page_data_layout"},
+    "dashboard": {"select_bank", "select_product", "open_insight_action", "set_page_data_layout", "set_page_data_notes", "set_page_sticky_note"},
     "business_funnel": {"select_bank", "select_product_view", "export"},
     "business_sandbox": {"select_product_view", "run_simulation", "reset_simulation", "export"},
     "customer_insight": {"select_bank", "select_product_view", "select_segment"},
     "single_customer_insight": set(),
     "competition_analysis": {"select_product_view"},
-    "institution_supervision": {"select_product_filter", "select_branch", "export", "set_page_data_layout"},
+    "institution_supervision": {"select_product_filter", "select_branch", "export", "set_page_data_layout", "set_page_data_notes", "set_page_sticky_note"},
     "email_daily": {"generate_daily", "send_daily"},
     "agent_workspace": {
         "open_task", "configure_task", "open_task_composer", "open_todo_composer",
@@ -54,13 +55,13 @@ REGISTERED_ACTIONS: dict[str, set[str]] = {
     "notifications": {"create_rule", "edit_rule", "toggle_rule", "manage_subscription", "mark_read", "acknowledge"},
     "weekly_report": {
         "save_version", "open_history", "open_export_dialog",
-        "start_realtime_voice", "analyze_selected_context", "set_page_data_layout",
+        "start_realtime_voice", "analyze_selected_context", "set_page_data_layout", "set_page_data_notes", "set_page_sticky_note",
     },
     "self_analysis": {
         "upload_knowledge_file", "remove_knowledge_file", "select_analysis_skill",
         "clear_analysis_skill", "select_analysis_model", "cancel_auto_reference",
         "download_csv", "start_voice_input_fun_asr", "start_realtime_voice",
-        "save_script", "run_script", "upsert_visual_report", "delete_visual_report",
+        "save_script", "run_script", "upsert_visual_report", "delete_visual_report", "set_page_sticky_note",
     },
     "platform_shell": {"select_institution", "select_quick_prompt", "ask_agent"},
 }
@@ -98,6 +99,8 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
         "exports": [],
         "actions": [],
         "pageDataLayout": [],
+        "pageDataNotes": [],
+        "pageStickyNote": {"visible": False, "items": [], "updatedAt": ""},
         "selectedProduct": "all",
         "selectedBank": "全部分行",
     },
@@ -127,6 +130,8 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
     "institution_supervision": {
         "exports": [],
         "pageDataLayout": [],
+        "pageDataNotes": [],
+        "pageStickyNote": {"visible": False, "items": [], "updatedAt": ""},
         "selectedBranch": None,
         "productFilter": "all",
     },
@@ -153,6 +158,8 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
         "drafts": [],
         "exports": [],
         "pageDataLayout": [],
+        "pageDataNotes": [],
+        "pageStickyNote": {"visible": False, "items": [], "updatedAt": ""},
         "historyOpenedAt": "",
     },
     "self_analysis": {
@@ -160,6 +167,7 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
         "downloads": [],
         "savedScripts": [],
         "visualReports": [],
+        "stickyNotes": {},
     },
     "platform_shell": {
         "selectedInstitution": "上海分行",
@@ -569,7 +577,36 @@ def _execute_action(
         if len(normalized) > 40 or any(not asset_id or len(asset_id) > 160 for asset_id in normalized) or len(normalized) != len(set(normalized)):
             raise ValueError("page_data_layout_invalid")
         next_state["pageDataLayout"] = normalized
-        return {"message": "页面数据布局已保存。", "assetIds": normalized}, next_state
+        next_state["pageDataNotes"] = _normalize_page_data_notes(payload.get("notes"), set(normalized))
+        return {"message": "页面数据布局已保存。", "assetIds": normalized, "notes": next_state["pageDataNotes"]}, next_state
+
+    if action == "set_page_data_notes" and module_key in {"dashboard", "weekly_report", "institution_supervision"}:
+        layout = {str(asset_id or "").strip() for asset_id in list(next_state.get("pageDataLayout") or []) if str(asset_id or "").strip()}
+        if not layout:
+            layout = {
+                str(item.get("sourceAssetId") or "").strip()
+                for item in payload.get("notes") or []
+                if isinstance(item, dict) and str(item.get("sourceAssetId") or "").strip()
+            }
+        next_state["pageDataNotes"] = _normalize_page_data_notes(payload.get("notes"), layout)
+        return {"message": "文本框已保存。", "notes": next_state["pageDataNotes"]}, next_state
+
+    if action == "set_page_sticky_note" and module_key in {"dashboard", "weekly_report", "institution_supervision", "self_analysis"}:
+        note = _normalize_sticky_note(payload.get("note"))
+        if module_key == "self_analysis":
+            surface = str(payload.get("surface") or "").strip()[:200]
+            if not surface:
+                raise ValueError("sticky_note_surface_required")
+            notes = {
+                str(key): _normalize_sticky_note(value)
+                for key, value in dict(next_state.get("stickyNotes") or {}).items()
+                if str(key or "").strip()
+            }
+            notes[surface] = note
+            next_state["stickyNotes"] = dict(list(notes.items())[:80])
+            return {"message": "便签已保存。", "surface": surface, "note": note}, next_state
+        next_state["pageStickyNote"] = note
+        return {"message": "便签已保存。", "note": note}, next_state
 
     if module_key == "self_analysis" and action == "upload_knowledge_file":
         file_id = str(payload.get("id") or "").strip()[:160]
@@ -884,7 +921,7 @@ def _module_payload(
 _VISUAL_REPORT_DESTINATIONS = frozenset({"mine", "topic", "experience", "weekly"})
 _VISUAL_REPORT_TYPES = frozenset({
     "kpi", "line", "area", "column", "bar", "stacked_bar", "combo", "donut",
-    "scatter", "funnel", "treemap", "radar", "table", "pivot",
+    "scatter", "funnel", "treemap", "radar", "table", "pivot", "text",
 })
 _VISUAL_REPORT_FILTER_OPERATORS = frozenset({"in", "not_in", "contains", "not_contains"})
 
@@ -913,6 +950,7 @@ def _normalize_visual_report(value: Any, now: str, actor_user_id: str | None) ->
         "title": title,
         "cards": cards,
         "destinations": destinations,
+        "stickyNote": _normalize_sticky_note(value.get("stickyNote")),
         "ownerUserId": str(actor_user_id or ""),
         "createdAt": str(value.get("createdAt") or now).strip()[:80] or now,
         "updatedAt": now,
@@ -1013,7 +1051,109 @@ def _normalize_visual_report_config(value: Any) -> dict[str, Any]:
         "filterGroups": filter_groups,
         "sumFilteredRows": bool(raw.get("sumFilteredRows")),
         "comboLineFields": string_list(raw.get("comboLineFields")),
+        "noteTitle": str(raw.get("noteTitle") or "")[:200],
+        "noteBody": str(raw.get("noteBody") or "")[:20000],
+        "noteTitleHidden": bool(raw.get("noteTitleHidden")),
+        "noteItems": _normalize_note_items(raw.get("noteItems")),
+        "layoutSpan": _bounded_optional_int(raw.get("layoutSpan"), 1, 12),
+        "layoutHeight": _bounded_optional_int(raw.get("layoutHeight"), 160, 1600),
+        "maxLayoutSpan": _bounded_optional_int(raw.get("maxLayoutSpan"), 1, 12),
+        "maxLayoutHeight": _bounded_optional_int(raw.get("maxLayoutHeight"), 160, 1600),
     }
+
+
+def _normalize_page_data_notes(value: Any, available_ids: set[str]) -> list[dict[str, Any]]:
+    notes: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in value[:40] if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        note_id = str(item.get("id") or "").strip()[:80]
+        source_id = str(item.get("sourceAssetId") or "").strip()[:160]
+        if not note_id or not source_id or source_id not in available_ids or note_id in seen:
+            continue
+        seen.add(note_id)
+        card_type = str(item.get("type") or "text").strip()
+        notes.append({
+            "id": note_id,
+            "sourceAssetId": source_id,
+            "type": card_type if card_type in _VISUAL_REPORT_TYPES else "text",
+            "noteTitle": str(item.get("noteTitle") or "")[:200],
+            "noteBody": str(item.get("noteBody") or "")[:20000],
+            "noteTitleHidden": bool(item.get("noteTitleHidden")),
+            "config": _normalize_visual_report_config(item.get("config")),
+        })
+    return notes
+
+
+def _normalize_sticky_note(value: Any) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "visible": bool(raw.get("visible")),
+        "items": _normalize_note_items(raw.get("items")),
+        "updatedAt": str(raw.get("updatedAt") or "")[:80],
+    }
+
+
+def _normalize_note_items(value: Any) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for item in value[:40] if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()[:80]
+        item_type = str(item.get("type") or "").strip()
+        if not item_id:
+            continue
+        if item_type == "image":
+            items.append({
+                "id": item_id,
+                "type": "image",
+                "src": str(item.get("src") or "")[:2000],
+                "name": str(item.get("name") or "粘贴图片")[:240],
+                "attachmentId": str(item.get("attachmentId") or "")[:160],
+                "artifactId": str(item.get("artifactId") or "")[:160],
+                "contentHash": str(item.get("contentHash") or "")[:160],
+                "width": _bounded_optional_int(item.get("width"), 80, 1600),
+                "height": _bounded_optional_int(item.get("height"), 80, 1200),
+            })
+            continue
+        if item_type == "paragraph":
+            items.append({
+                "id": item_id,
+                "type": "paragraph",
+                "text": str(item.get("text") or "")[:20000],
+                "html": _sanitize_note_html(item.get("html"))[:20000],
+            })
+    return items
+
+
+_NOTE_HTML_TAG_RE = re.compile(r"</?([a-zA-Z0-9]+)([^>]*)/?>", re.I)
+
+
+def _sanitize_note_html(value: Any) -> str:
+    raw = str(value or "")[:20000]
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1).lower()
+        token = match.group(0)
+        closing = token.startswith("</")
+        if name == "br":
+            return "<br>"
+        if name in {"b", "strong"}:
+            return "</strong>" if closing else "<strong>"
+        return ""
+
+    return _NOTE_HTML_TAG_RE.sub(replace, raw)
+
+
+def _bounded_optional_int(value: Any, minimum: int, maximum: int) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    if number < minimum or number > maximum:
+        return None
+    return number
 
 
 def _state_for_actor(module_key: str, state: dict[str, Any], actor_user_id: str | None) -> dict[str, Any]:

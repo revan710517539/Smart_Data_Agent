@@ -23,16 +23,16 @@ class AuditEventStore(Protocol):
     ) -> dict[str, Any]:
         ...
 
-    def list(self, tenant_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def list(self, tenant_id: str, limit: int = 50, offset: int = 0, since: str | None = None) -> list[dict[str, Any]]:
         ...
 
-    def count(self, tenant_id: str) -> int:
+    def count(self, tenant_id: str, since: str | None = None) -> int:
         ...
 
-    def list_for_tenants(self, tenant_ids: list[str], limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def list_for_tenants(self, tenant_ids: list[str], limit: int = 50, offset: int = 0, since: str | None = None) -> list[dict[str, Any]]:
         ...
 
-    def count_for_tenants(self, tenant_ids: list[str]) -> int:
+    def count_for_tenants(self, tenant_ids: list[str], since: str | None = None) -> int:
         ...
 
 
@@ -54,29 +54,29 @@ class InMemoryAuditEventStore:
         self._events.append(event)
         return dict(event)
 
-    def list(self, tenant_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def list(self, tenant_id: str, limit: int = 50, offset: int = 0, since: str | None = None) -> list[dict[str, Any]]:
         events = [
             dict(event)
             for event in reversed(self._events)
-            if event["tenant_id"] in (tenant_id, "*")
+            if event["tenant_id"] in (tenant_id, "*") and _matches_since(event.get("created_at"), since)
         ]
         return events[_bounded_offset(offset): _bounded_offset(offset) + _bounded_limit(limit)]
 
-    def count(self, tenant_id: str) -> int:
-        return sum(1 for event in self._events if event["tenant_id"] in (tenant_id, "*"))
+    def count(self, tenant_id: str, since: str | None = None) -> int:
+        return sum(1 for event in self._events if event["tenant_id"] in (tenant_id, "*") and _matches_since(event.get("created_at"), since))
 
-    def list_for_tenants(self, tenant_ids: list[str], limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def list_for_tenants(self, tenant_ids: list[str], limit: int = 50, offset: int = 0, since: str | None = None) -> list[dict[str, Any]]:
         allowed = set(tenant_ids)
         events = [
             dict(event)
             for event in reversed(self._events)
-            if event["tenant_id"] in allowed or event["tenant_id"] == "*"
+            if (event["tenant_id"] in allowed or event["tenant_id"] == "*") and _matches_since(event.get("created_at"), since)
         ]
         return events[_bounded_offset(offset): _bounded_offset(offset) + _bounded_limit(limit)]
 
-    def count_for_tenants(self, tenant_ids: list[str]) -> int:
+    def count_for_tenants(self, tenant_ids: list[str], since: str | None = None) -> int:
         allowed = set(tenant_ids)
-        return sum(1 for event in self._events if event["tenant_id"] in allowed or event["tenant_id"] == "*")
+        return sum(1 for event in self._events if (event["tenant_id"] in allowed or event["tenant_id"] == "*") and _matches_since(event.get("created_at"), since))
 
 
 class SQLiteAuditEventStore:
@@ -145,59 +145,75 @@ class SQLiteAuditEventStore:
             )
         return event
 
-    def list(self, tenant_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def list(self, tenant_id: str, limit: int = 50, offset: int = 0, since: str | None = None) -> list[dict[str, Any]]:
         bounded_limit = _bounded_limit(limit)
         bounded_offset = _bounded_offset(offset)
+        since_sql, since_params = _since_clause(since, "created_at", "?")
         rows = self._conn.execute(
-            """
+            f"""
             SELECT event_id, tenant_id, actor_user_id, action, target_type, target_id,
                    detail, ip_address, created_at
             FROM platform_audit_events
-            WHERE tenant_id IN (?, '*')
+            WHERE tenant_id IN (?, '*'){since_sql}
             ORDER BY created_at DESC, event_id DESC
             LIMIT ? OFFSET ?
             """,
-            (tenant_id, bounded_limit, bounded_offset),
+            (tenant_id, *since_params, bounded_limit, bounded_offset),
         ).fetchall()
         return [_sqlite_row_to_event(row) for row in rows]
 
-    def count(self, tenant_id: str) -> int:
+    def count(self, tenant_id: str, since: str | None = None) -> int:
+        since_sql, since_params = _since_clause(since, "created_at", "?")
         row = self._conn.execute(
-            "SELECT COUNT(*) AS count FROM platform_audit_events WHERE tenant_id IN (?, '*')",
-            (tenant_id,),
+            f"SELECT COUNT(*) AS count FROM platform_audit_events WHERE tenant_id IN (?, '*'){since_sql}",
+            (tenant_id, *since_params),
         ).fetchone()
         return int(row["count"] if row is not None else 0)
 
-    def list_for_tenants(self, tenant_ids: list[str], limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def list_for_tenants(self, tenant_ids: list[str], limit: int = 50, offset: int = 0, since: str | None = None) -> list[dict[str, Any]]:
         allowed = sorted({str(item).strip() for item in tenant_ids if str(item).strip()})
         if not allowed:
             return []
         bounded_limit = _bounded_limit(limit)
         bounded_offset = _bounded_offset(offset)
         placeholders = ", ".join("?" for _ in allowed)
+        since_sql, since_params = _since_clause(since, "created_at", "?")
         rows = self._conn.execute(
             f"""
             SELECT event_id, tenant_id, actor_user_id, action, target_type, target_id,
                    detail, ip_address, created_at
             FROM platform_audit_events
-            WHERE tenant_id IN ({placeholders}) OR tenant_id = '*'
+            WHERE (tenant_id IN ({placeholders}) OR tenant_id = '*'){since_sql}
             ORDER BY created_at DESC, event_id DESC
             LIMIT ? OFFSET ?
             """,
-            (*allowed, bounded_limit, bounded_offset),
+            (*allowed, *since_params, bounded_limit, bounded_offset),
         ).fetchall()
         return [_sqlite_row_to_event(row) for row in rows]
 
-    def count_for_tenants(self, tenant_ids: list[str]) -> int:
+    def count_for_tenants(self, tenant_ids: list[str], since: str | None = None) -> int:
         allowed = sorted({str(item).strip() for item in tenant_ids if str(item).strip()})
         if not allowed:
             return 0
         placeholders = ", ".join("?" for _ in allowed)
+        since_sql, since_params = _since_clause(since, "created_at", "?")
         row = self._conn.execute(
-            f"SELECT COUNT(*) AS count FROM platform_audit_events WHERE tenant_id IN ({placeholders}) OR tenant_id = '*'",
-            allowed,
+            f"SELECT COUNT(*) AS count FROM platform_audit_events WHERE (tenant_id IN ({placeholders}) OR tenant_id = '*'){since_sql}",
+            (*allowed, *since_params),
         ).fetchone()
         return int(row["count"] if row is not None else 0)
+
+
+def _matches_since(created_at: Any, since: str | None) -> bool:
+    if not since:
+        return True
+    return str(created_at or "") >= since
+
+
+def _since_clause(since: str | None, column: str, placeholder: str) -> tuple[str, tuple[str, ...]]:
+    if not since:
+        return "", ()
+    return f" AND {column} >= {placeholder}", (since,)
 
 
 def _bounded_limit(limit: int) -> int:

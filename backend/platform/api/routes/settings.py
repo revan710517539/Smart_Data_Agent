@@ -14,6 +14,7 @@ from backend.platform.settings import (
     test_model_integration,
     test_speech_integration,
 )
+from backend.platform.settings.store import MASKED_SECRET
 from backend.platform.tenancy import ExecutionContext
 
 
@@ -69,6 +70,10 @@ def handle_system_model_upsert(handler: Any) -> None:
             raise ValueError("model must be an object.")
         handler._require_system_config_permission(context, "manage")
         model = {**model, "applicationModule": "global_text_model"}
+        if str(model.get("value") or "") == MASKED_SECRET:
+            existing = _get_account_model(handler, context, str(model.get("id") or ""), reveal_secret=True)
+            if existing and existing.get("value"):
+                model = {**model, "value": existing["value"]}
         config_scope = _model_account_scope(context)
         saved = handler.services.system_config_store.upsert_model(
             config_scope,
@@ -92,10 +97,10 @@ def handle_system_model_delete(handler: Any, query: str) -> None:
         if model_id == DEFAULT_RELAY_MODEL_ID:
             raise ValueError("default_model_cannot_be_deleted")
         config_scope = _model_account_scope(context)
-        deleted = handler.services.system_config_store.delete_model(
-            config_scope,
-            model_id,
-        )
+        deleted = False
+        for scope in _model_scope_candidates(context):
+            if handler.services.system_config_store.delete_model(scope, model_id):
+                deleted = True
         handler._write_audit(context, "system.model.delete", "model", model_id, {"deleted": deleted})
         handler._send_json({"tenant_id": context.tenant_id, "config_scope": config_scope, "model_id": model_id, "deleted": deleted})
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
@@ -196,6 +201,12 @@ def handle_system_speech_integration_upsert(handler: Any) -> None:
             raise ValueError("speech_integration must be an object.")
         handler._require_system_config_permission(context, "manage")
         integration = {**integration, "applicationModule": "global_voice_model"}
+        if str(integration.get("apiKey") or "") == MASKED_SECRET:
+            existing = _get_account_speech_integration(
+                handler, context, str(integration.get("id") or ""), reveal_secret=True
+            )
+            if existing and existing.get("apiKey"):
+                integration = {**integration, "apiKey": existing["apiKey"]}
         config_scope = _account_config_scope(context)
         saved = handler.services.system_config_store.upsert_speech_integration(
             config_scope,
@@ -216,12 +227,7 @@ def handle_system_speech_integration_test(handler: Any) -> None:
         integration = payload.get("speech_integration")
         integration_id = str(payload.get("integration_id") or "").strip()
         if integration is None and integration_id:
-            getter = getattr(handler.services.system_config_store, "get_speech_integration", None)
-            if callable(getter):
-                integration = getter(_account_config_scope(context), integration_id, reveal_secret=True)
-            else:
-                integrations = handler.services.system_config_store.list_speech_integrations(_account_config_scope(context), reveal_secret=True)
-                integration = next((item for item in integrations if item.get("id") == integration_id), None)
+            integration = _get_account_speech_integration(handler, context, integration_id, reveal_secret=True)
             if integration is None:
                 raise ValueError("speech integration not found.")
         if not isinstance(integration, dict):
@@ -238,7 +244,7 @@ def handle_system_speech_integration_test(handler: Any) -> None:
                     "testMessage": result.get("message"),
                     "testResponse": result.get("response_preview") or result.get("endpoint"),
                     "lastTestedAt": result.get("tested_at"),
-                    "status": "available",
+                    "status": "available" if result.get("callable") or result.get("status") == "mock" else "draft",
                 },
                 updated_by=context.user_id,
             )
@@ -267,7 +273,10 @@ def handle_system_speech_integration_delete(handler: Any, query: str) -> None:
             raise ValueError("integration_id is required.")
         handler._require_system_config_permission(context, "manage")
         config_scope = _account_config_scope(context)
-        deleted = handler.services.system_config_store.delete_speech_integration(config_scope, integration_id)
+        deleted = False
+        for scope in _model_scope_candidates(context):
+            if handler.services.system_config_store.delete_speech_integration(scope, integration_id):
+                deleted = True
         handler._write_audit(context, "system.speech.delete", "speech_integration", integration_id, {"deleted": deleted})
         handler._send_json({"tenant_id": context.tenant_id, "config_scope": config_scope, "integration_id": integration_id, "deleted": deleted})
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
@@ -331,6 +340,8 @@ def _available_system_parameter_scopes(
 
 def _list_account_models(handler: Any, context: Any, config_scope: str) -> list[dict[str, Any]]:
     for model in handler.services.system_config_store.list_models(config_scope, reveal_secret=True):
+        if str(model.get("status") or "") == "disabled":
+            continue
         if str(model.get("applicationModule") or "") == "global_text_model":
             continue
         handler.services.system_config_store.upsert_model(
@@ -338,7 +349,14 @@ def _list_account_models(handler: Any, context: Any, config_scope: str) -> list[
             {**model, "applicationModule": "global_text_model"},
             updated_by=context.user_id,
         )
-    return handler.services.system_config_store.list_models(config_scope)
+    return _merge_legacy_tenant_integrations(
+        [
+            model
+            for model in handler.services.system_config_store.list_models(config_scope)
+            if str(model.get("status") or "") != "disabled"
+        ],
+        handler.services.system_config_store.list_models(context.tenant_id),
+    )
 
 
 def _get_account_model(handler: Any, context: Any, model_id: str, *, reveal_secret: bool) -> dict[str, Any] | None:
@@ -379,8 +397,29 @@ def _model_account_scope(context: Any) -> str:
     return account_system_config_scope(context.user_id)
 
 
+def _get_account_speech_integration(handler: Any, context: Any, integration_id: str, *, reveal_secret: bool) -> dict[str, Any] | None:
+    getter = getattr(handler.services.system_config_store, "get_speech_integration", None)
+    if callable(getter):
+        for scope in _model_scope_candidates(context):
+            try:
+                integration = getter(scope, integration_id, reveal_secret=reveal_secret)
+            except Exception:
+                continue
+            if integration is not None:
+                return integration
+        return None
+    for scope in _model_scope_candidates(context):
+        integrations = handler.services.system_config_store.list_speech_integrations(scope, reveal_secret=reveal_secret)
+        found = next((item for item in integrations if item.get("id") == integration_id), None)
+        if found is not None:
+            return found
+    return None
+
+
 def _list_account_speech_integrations(handler: Any, context: Any, config_scope: str) -> list[dict[str, Any]]:
     for integration in handler.services.system_config_store.list_speech_integrations(config_scope, reveal_secret=True):
+        if str(integration.get("status") or "") == "disabled":
+            continue
         if str(integration.get("applicationModule") or "") == "global_voice_model":
             continue
         handler.services.system_config_store.upsert_speech_integration(
@@ -388,7 +427,47 @@ def _list_account_speech_integrations(handler: Any, context: Any, config_scope: 
             {**integration, "applicationModule": "global_voice_model"},
             updated_by=context.user_id,
         )
-    return handler.services.system_config_store.list_speech_integrations(config_scope)
+    account_items = [
+        item
+        for item in handler.services.system_config_store.list_speech_integrations(config_scope)
+        if str(item.get("status") or "") != "disabled"
+    ]
+    # One account-owned Fun-ASR is the system speech model. Leftover institution
+    # rows stay in storage but must not appear beside it as a second接入.
+    if account_items:
+        return account_items
+    return [
+        item
+        for item in handler.services.system_config_store.list_speech_integrations(context.tenant_id)
+        if str(item.get("status") or "") != "disabled"
+        and str(item.get("modelName") or item.get("provider") or "") != "historical"
+    ]
+
+
+def _merge_legacy_tenant_integrations(
+    account_items: list[dict[str, Any]],
+    tenant_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep account-owned rows first, then leftover current-tenant rows.
+
+    Pre-account migrations stored some user-created models and speech on the
+    institution tenant. Those rows stay visible on that institution only and
+    never replace an account-scoped id.
+    """
+
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in [*account_items, *tenant_items]:
+        item_id = str(item.get("id") or "").strip()
+        if not item_id or item_id in seen:
+            continue
+        if str(item.get("status") or "") == "disabled":
+            continue
+        if str(item.get("modelName") or item.get("provider") or "") == "historical":
+            continue
+        seen.add(item_id)
+        merged.append(item)
+    return merged
 
 
 def handle_system_param_upsert(handler: Any) -> None:

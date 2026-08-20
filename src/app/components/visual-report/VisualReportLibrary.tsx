@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { BarChart3, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
+import { BarChart3, ChevronDown, ChevronRight, Star, Trash2 } from "lucide-react";
 import { usePlatformContext } from "../../platform/PlatformContext";
 import { apiErrorMessage } from "../../services/apiClient";
 import { deleteVisualReport, fetchVisualReports, upsertVisualReport, type VisualReport, type VisualReportDestination } from "../../services/visualReportApi";
+import { useFeaturedReports } from "../self-analysis/featuredReports";
 import { VisualReportCards } from "./VisualReportCards";
 
 export function VisualReportLibrary({
@@ -15,29 +16,100 @@ export function VisualReportLibrary({
   embedded?: boolean;
 }) {
   const { reports, loading, error, remove } = useVisualReportCollection(destination);
+  const { tenantId, userId } = usePlatformContext();
+  const featuredReports = useFeaturedReports(tenantId, userId);
   const [expandedId, setExpandedId] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<VisualReport | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const allowFeatured = destination === "mine";
 
   return <section className={embedded ? "rounded-xl border border-[#eef1ef] bg-white p-4" : ""} data-visual-report-library={destination}>
     {embedded && <div className="mb-3 flex items-center justify-between"><div><h3 className="text-[12px] text-[#1d1d1f]">可视化报表</h3><p className="mt-1 text-[10px] text-[#9ba19e]">从可视化报表工作台存入周报的报表</p></div><span className="rounded-md bg-[#f2f5f3] px-2 py-1 text-[10px] text-[#69736e]">{reports.length} 份</span></div>}
     {error && <div className="mb-3 rounded-lg border border-[#ffd0d0] bg-[#fff5f5] px-3 py-2 text-[11px] text-[#c84034]">{error}</div>}
     {loading ? <div className="rounded-lg border border-dashed border-[#e0e5e2] px-3 py-8 text-center text-[11px] text-[#9ba19e]">正在读取可视化报表…</div> : <div className="space-y-2">
-      {reports.map((report) => <div key={report.id} className="overflow-hidden rounded-lg border border-[#edf0ee] bg-[#fafcfb]">
-        <div className="flex items-center gap-2 px-3 py-2.5">
-          <button type="button" onClick={() => setExpandedId((current) => current === report.id ? "" : report.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-            {expandedId === report.id ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#87918b]" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[#87918b]" />}
-            <BarChart3 className="h-4 w-4 shrink-0 text-[#4f8a67]" />
-            <span className="min-w-0 flex-1"><span className="block truncate text-[12px] text-[#1d1d1f]">{report.title}</span><span className="mt-0.5 block text-[9px] text-[#a1a7a3]">{report.cards.length} 个图表 · {formatTime(report.updatedAt)}</span></span>
-          </button>
-          {destination === "mine" && <button type="button" onClick={() => { void remove(report); if (expandedId === report.id) setExpandedId(""); }} className="rounded-md p-1.5 text-[#8a8e8c] hover:bg-[#fff0f0] hover:text-[#c84034]" aria-label={`删除${report.title}`}><Trash2 className="h-3.5 w-3.5" /></button>}
-        </div>
-        {expandedId === report.id && <div className="border-t border-[#edf0ee] bg-white p-3"><VisualReportCards report={report} railPageKey={railPageKey} /></div>}
-      </div>)}
+      {reports.map((report) => <VisualReportRow
+        key={report.id}
+        report={report}
+        expanded={expandedId === report.id}
+        onToggleExpanded={() => setExpandedId((current) => current === report.id ? "" : report.id)}
+        railPageKey={railPageKey}
+        featured={allowFeatured ? featuredReports.isFeatured("visual", report.id) : undefined}
+        onToggleFeatured={allowFeatured ? () => featuredReports.toggle("visual", report.id) : undefined}
+        onRequestDelete={destination === "mine" ? () => setPendingDelete(report) : undefined}
+      />)}
       {!reports.length && <div className="rounded-lg border border-dashed border-[#e0e5e2] px-3 py-10 text-center text-[11px] text-[#9ba19e]">{destination === "mine" ? "暂无存入我的可视化报表" : "暂无存入周报的可视化报表"}</div>}
     </div>}
+    {pendingDelete && <VisualReportDeleteConfirm destination={destination} report={pendingDelete} deleting={deleting} onCancel={() => { if (!deleting) setPendingDelete(null); }} onConfirm={() => {
+      void (async () => {
+        setDeleting(true);
+        const removed = await remove(pendingDelete);
+        setDeleting(false);
+        if (removed) {
+          featuredReports.remove("visual", pendingDelete.id);
+          if (expandedId === pendingDelete.id) setExpandedId("");
+          setPendingDelete(null);
+        }
+      })();
+    }} />}
   </section>;
 }
 
-export function useVisualReportCollection(destination: Extract<VisualReportDestination, "mine" | "weekly">) {
+export function VisualReportRow({
+  report,
+  expanded,
+  onToggleExpanded,
+  railPageKey,
+  featured,
+  onToggleFeatured,
+  onRequestDelete,
+  kindBadge,
+}: {
+  report: VisualReport;
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  railPageKey: string;
+  featured?: boolean;
+  onToggleFeatured?: () => void;
+  onRequestDelete?: () => void;
+  kindBadge?: string;
+}) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-[#edf0ee] bg-[#fafcfb]" data-visual-report-row={report.id}>
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <button type="button" onClick={onToggleExpanded} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+          {expanded ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#87918b]" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[#87918b]" />}
+          <BarChart3 className="h-4 w-4 shrink-0 text-[#4f8a67]" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[12px] text-[#1d1d1f]">{report.title}</span>
+            <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[9px] text-[#a1a7a3]">
+              {kindBadge ? <span className="inline-flex items-center rounded bg-[#f2f2f7] px-1.5 py-0.5 text-[10px] text-[#636366]">{kindBadge}</span> : null}
+              <span>{report.cards.length} 个图表 · {formatTime(report.updatedAt)}</span>
+            </span>
+          </span>
+        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          {onToggleFeatured ? (
+            <button
+              type="button"
+              data-featured-report-star="visual"
+              aria-pressed={Boolean(featured)}
+              aria-label={featured ? `取消精选${report.title}` : `精选${report.title}`}
+              title={featured ? "取消精选" : "精选"}
+              onClick={onToggleFeatured}
+              className="rounded-md p-1.5 text-[#c7c7cc] hover:bg-white"
+            >
+              <Star className={`h-3.5 w-3.5 ${featured ? "fill-[#f5a524] text-[#f5a524]" : "text-[#c7c7cc]"}`} />
+            </button>
+          ) : null}
+          {onRequestDelete ? <button type="button" onClick={onRequestDelete} className="rounded-md p-1.5 text-[#8a8e8c] hover:bg-[#fff0f0] hover:text-[#c84034]" aria-label={`删除${report.title}`}><Trash2 className="h-3.5 w-3.5" /></button> : null}
+        </div>
+      </div>
+      {expanded ? <div className="border-t border-[#edf0ee] bg-white p-3"><VisualReportCards report={report} railPageKey={railPageKey} /></div> : null}
+    </div>
+  );
+}
+
+export function useVisualReportCollection(destination: Extract<VisualReportDestination, "mine" | "weekly">, enabled = true) {
   const { tenantId, userId } = usePlatformContext();
   const [reports, setReports] = useState<VisualReport[]>([]);
   const [loading, setLoading] = useState(true);
@@ -58,19 +130,21 @@ export function useVisualReportCollection(destination: Extract<VisualReportDesti
   };
 
   useEffect(() => {
+    if (!enabled) {
+      setReports([]);
+      setError("");
+      setLoading(false);
+      return;
+    }
     void refresh();
     const reload = () => void refresh();
     window.addEventListener("smart-data-agent-visual-report-saved", reload);
     return () => window.removeEventListener("smart-data-agent-visual-report-saved", reload);
     // refresh is intentionally scoped to the current tenant and user.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [destination, tenantId, userId]);
+  }, [destination, enabled, tenantId, userId]);
 
   const remove = async (report: VisualReport) => {
-    const message = destination === "weekly"
-      ? `确认从经营周报移除可视化报表“${report.title}”吗？源报表仍会保留。`
-      : `确认删除可视化报表“${report.title}”吗？`;
-    if (!window.confirm(message)) return false;
     try {
       if (destination === "weekly") {
         await upsertVisualReport({ tenantId, userId, report: { ...report, destinations: report.destinations.filter((item) => item !== "weekly") } });
@@ -87,6 +161,75 @@ export function useVisualReportCollection(destination: Extract<VisualReportDesti
   };
 
   return { reports, loading, error, refresh, remove };
+}
+
+export function VisualReportDeleteConfirm({
+  destination,
+  report,
+  deleting,
+  onCancel,
+  onConfirm,
+}: {
+  destination: Extract<VisualReportDestination, "mine" | "weekly">;
+  report: VisualReport;
+  deleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const weekly = destination === "weekly";
+  return (
+    <div
+      className="fixed inset-0 z-[180] flex items-center justify-center bg-black/20 px-4"
+      role="presentation"
+      data-visual-report-delete-overlay="true"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !deleting) onCancel();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="visual-report-delete-title"
+        aria-describedby="visual-report-delete-copy"
+        data-visual-report-delete-dialog="true"
+        className="w-full max-w-[420px] rounded-xl border border-[#e5e5ea] bg-white p-5 shadow-2xl shadow-black/20"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#fff0f0] text-[#d93025]">
+            <Trash2 className="h-4 w-4" />
+          </div>
+          <div>
+            <h3 id="visual-report-delete-title" className="text-[14px] text-[#1d1d1f]">
+              {weekly ? "从经营周报移除可视化报表？" : "删除这条可视化报表？"}
+            </h3>
+            <p className="mt-1.5 text-[12px] leading-[1.7] text-[#636366]">{report.title}</p>
+            <p id="visual-report-delete-copy" className="mt-1 text-[11px] leading-[1.6] text-[#aeaeb2]">
+              {weekly ? "源报表仍会保留，仅从本周报移除。" : "确认后将从当前账号的可视化报表中删除，操作不可撤销。"}
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={deleting}
+            className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-4 text-[12px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-40"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={deleting}
+            className="h-9 rounded-lg bg-[#d93025] px-4 text-[12px] text-white hover:bg-[#c5221f] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {deleting ? (weekly ? "移除中…" : "删除中…") : weekly ? "确认移除" : "确认删除"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function formatTime(value: string) {

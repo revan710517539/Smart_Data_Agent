@@ -301,15 +301,21 @@ def _translate_base_sql(sql: str) -> str:
 
 
 def _translate_on_conflict(sql: str) -> str:
-    match = re.search(
-        r"\s+ON\s+CONFLICT(?:\s*\((.*?)\))?\s+DO\s+(NOTHING|UPDATE\s+SET\s+.+)$",
-        sql,
-        flags=re.I | re.S,
-    )
+    match = re.search(r"\s+ON\s+CONFLICT\b", sql, flags=re.I)
     if not match:
         return sql
+    index = match.end()
+    while index < len(sql) and sql[index].isspace():
+        index += 1
+    if index < len(sql) and sql[index] == "(":
+        _, index = _parenthesized_at(sql, index)
+        while index < len(sql) and sql[index].isspace():
+            index += 1
+    action_match = re.match(r"DO\s+(NOTHING|UPDATE\s+SET\s+.+)$", sql[index:], flags=re.I | re.S)
+    if not action_match:
+        return sql
     prefix = sql[: match.start()].rstrip()
-    action = match.group(2).strip()
+    action = action_match.group(1).strip()
     insert = re.match(r"\s*INSERT\s+INTO\s+[A-Za-z_][\w]*\s*\((.*?)\)", prefix, flags=re.I | re.S)
     if not insert:
         raise MySQLSQLTranslationError("mysql_on_conflict_insert_shape_unsupported")

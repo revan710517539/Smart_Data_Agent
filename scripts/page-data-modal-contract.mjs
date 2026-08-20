@@ -38,8 +38,13 @@ assert.match(assetRouteSource, /def _multi_institution_candidates[\s\S]*?schemas
 assert.match(applicationRouteSource, /module_key in \{"dashboard", "institution_supervision"\}[\s\S]*?has_super_admin_role/, "多机构分析和机构督导布局保存必须由后端校验超级管理员");
 assert.match(dashboardSource, /isSuperAdmin[\s\S]*?canEditLayout=\{isSuperAdmin\}[\s\S]*?showEditorControls=\{isSuperAdmin\}/, "多机构分析页面级编辑控件必须仅对超级管理员显示");
 assert.match(supervisionSource, /isSuperAdmin[\s\S]*?canEditLayout=\{isSuperAdmin\}[\s\S]*?showEditorControls=\{isSuperAdmin\}/, "机构督导页面级编辑控件必须仅对超级管理员显示");
+assert.match(supervisionSource, /showAssetPicker/, "机构督导编辑态必须列出数据管理已指定的全部单机构数据");
+assert.match(composerSource, /includeNewlyAssigned: pageCode === "weekly_report" \|\| pageCode === "institution_supervision"/, "单机构页面必须把新指定数据集追加到已保存布局之后");
 assert.match(composerSource, /<AnalysisVisualCard[\s\S]*?onTypeChange=[\s\S]*?onConfigChange=/, "非超级管理员仍必须保留图表内部样式、指标和维度配置入口");
+assert.match(composerSource, /data-page-data-rows-loading[\s\S]*正在加载页面数据/, "页面数据行未返回前必须显示加载态，不得先渲染空图");
+assert.match(composerSource, /metricFields: asset\.metricFields, dimensionFields: asset\.dimensionFields/, "页面数据图表必须用资产上的指标和维度作为初始配置");
 assert.match(composerSource, /const commitLayout[\s\S]*?setLayoutIds\(nextIds\)[\s\S]*?const saveLayout[\s\S]*?runApplicationAction/, "编辑过程必须本地暂存并在点击保存后统一持久化");
+assert.match(composerSource, /pageDataBelongsToPage\(asset, pageCode\)/, "经营周报和机构督导只能读取放置到本页的单机构数据");
 assert.match(dashboardSource, /PAGE_DATA_PAGE_GUTTER_CLASS/, "多机构分析必须复用统一页面边距");
 assert.match(supervisionSource, /PAGE_DATA_PAGE_GUTTER_CLASS/, "机构督导必须复用统一页面边距");
 assert.match(dashboardSource, /!pageData\.loading && pageData\.visibleAssets\.length === 0 && <DashboardState/, "多机构分析已呈现页面数据时不得继续显示内置数据空态");

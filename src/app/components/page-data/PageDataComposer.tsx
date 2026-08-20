@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, GripVertical, LayoutDashboard, Pencil, Plus, Trash2 } from "lucide-react";
+import { createClientUuid } from "../../utils/clientUuid";
 import { usePlatformContext } from "../../platform/PlatformContext";
 import { apiErrorMessage } from "../../services/apiClient";
-import { fetchApplicationModule, runApplicationAction, type ApplicationModuleKey } from "../../services/applicationApi";
-import { fetchDataAssets, fetchPageDataRows, type PageDataAsset, type PageDataPageCode, type PageDataRows } from "../../services/dataAssetApi";
+import { runApplicationAction, type ApplicationModuleKey } from "../../services/applicationApi";
+import { fetchPageDataRows, fetchPageDataWorkspace, readPageDataWorkspaceMemory, type PageDataAsset, type PageDataPageCode, type PageDataRows } from "../../services/dataAssetApi";
+import { pageDataBelongsToPage, resolvePageDataLayout } from "./assignment";
 import { revealContextRail } from "../context-rail/ContextSideRail";
-import { AnalysisVisualCard } from "../self-analysis/ResultViews";
+import { AnalysisVisualCard, type VisualizationCardConfig } from "../self-analysis/ResultViews";
 import { ResizableVisualizationGrid } from "../self-analysis/ResizableVisualizationGrid";
+import { visualDuplicateLayout } from "../self-analysis/visualGridLayout";
 import type { AnalysisRow, VisualizationType } from "../self-analysis/domain";
 
 export type ComposerMode = "browse" | "edit";
@@ -18,45 +21,70 @@ type PageDataComposerOptions = {
   railPageKey: string;
 };
 
+type PageDataNote = {
+  id: string;
+  sourceAssetId: string;
+  type?: VisualizationType;
+  noteTitle: string;
+  noteBody: string;
+  noteTitleHidden?: boolean;
+  config: VisualizationCardConfig;
+};
+
 const pageLabels: Record<PageDataPageCode, string> = {
   dashboard: "多机构分析",
   weekly_report: "经营周报",
   institution_supervision: "机构督导",
 };
 
+function applyWorkspace(workspace: { assets?: PageDataAsset[]; layout?: string[]; notes?: unknown[]; rows?: Record<string, PageDataRows>; row_errors?: Record<string, string> }, pageCode: PageDataPageCode) {
+  const available = (workspace.assets || []).filter((asset) => pageDataBelongsToPage(asset, pageCode));
+  const availableIds = available.map((asset) => asset.id);
+  const resolvedLayout = resolvePageDataLayout(workspace.layout || [], availableIds, {
+    includeNewlyAssigned: pageCode === "weekly_report" || pageCode === "institution_supervision",
+  });
+  return {
+    assets: available,
+    layoutIds: resolvedLayout,
+    visualTypes: Object.fromEntries(available.map((asset) => [asset.id, asset.visualizationType as VisualizationType])),
+    notes: normalizePageDataNotes(workspace.notes, new Set(resolvedLayout)),
+    rowsById: workspace.rows || {},
+    rowsFailed: workspace.row_errors || {},
+  };
+}
+
 export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDataComposerOptions) {
   const { tenantId, userId } = usePlatformContext();
-  const [assets, setAssets] = useState<PageDataAsset[]>([]);
-  const [layoutIds, setLayoutIds] = useState<string[]>([]);
-  const [savedLayoutIds, setSavedLayoutIds] = useState<string[]>([]);
-  const [rowsById, setRowsById] = useState<Record<string, PageDataRows>>({});
-  const [visualTypes, setVisualTypes] = useState<Record<string, VisualizationType>>({});
+  const cached = readPageDataWorkspaceMemory(tenantId, pageCode);
+  const initial = cached ? applyWorkspace(cached, pageCode) : null;
+  const [assets, setAssets] = useState<PageDataAsset[]>(initial?.assets || []);
+  const [layoutIds, setLayoutIds] = useState<string[]>(initial?.layoutIds || []);
+  const [savedLayoutIds, setSavedLayoutIds] = useState<string[]>(initial?.layoutIds || []);
+  const [rowsById, setRowsById] = useState<Record<string, PageDataRows>>(initial?.rowsById || {});
+  const [rowsFailed, setRowsFailed] = useState<Record<string, string>>(initial?.rowsFailed || {});
+  const [visualTypes, setVisualTypes] = useState<Record<string, VisualizationType>>(initial?.visualTypes || {});
   const [mode, setMode] = useState<ComposerMode>("browse");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initial);
   const [notice, setNotice] = useState("");
   const [draggingId, setDraggingId] = useState("");
   const [savingLayout, setSavingLayout] = useState(false);
+  const [notes, setNotes] = useState<PageDataNote[]>(initial?.notes || []);
   const requestRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
     const requestId = ++requestRef.current;
-    setLoading(true);
-    Promise.all([
-      fetchDataAssets({ tenantId, userId, scope: "runtime" }),
-      fetchApplicationModule<{ pageDataLayout?: string[] }>({ tenantId, userId, moduleKey }),
-    ]).then(([bundle, module]) => {
+    if (!readPageDataWorkspaceMemory(tenantId, pageCode)) setLoading(true);
+    fetchPageDataWorkspace({ tenantId, userId, pageCode }).then((workspace) => {
       if (cancelled || requestRef.current !== requestId) return;
-      const available = (bundle.page_data || []).filter((asset) => asset.targetPages.includes(pageCode) && (
-        pageCode === "dashboard" ? pageDataScope(asset) === "multi_institution" : pageDataScope(asset) === "single_institution"
-      ));
-      const availableIds = new Set(available.map((asset) => asset.id));
-      const savedLayout = Array.isArray(module.state.pageDataLayout) ? module.state.pageDataLayout : [];
-      setAssets(available);
-      const resolvedLayout = savedLayout.filter((id) => availableIds.has(id));
-      setLayoutIds(resolvedLayout);
-      setSavedLayoutIds(resolvedLayout);
-      setVisualTypes(Object.fromEntries(available.map((asset) => [asset.id, asset.visualizationType as VisualizationType])));
+      const next = applyWorkspace(workspace, pageCode);
+      setAssets(next.assets);
+      setLayoutIds(next.layoutIds);
+      setSavedLayoutIds(next.layoutIds);
+      setVisualTypes(next.visualTypes);
+      setNotes(next.notes);
+      setRowsById(next.rowsById);
+      setRowsFailed(next.rowsFailed);
       setNotice("");
     }).catch((error) => {
       if (!cancelled) setNotice(apiErrorMessage(error, "页面数据配置加载失败。"));
@@ -64,29 +92,38 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
       if (!cancelled && requestRef.current === requestId) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [moduleKey, pageCode, tenantId, userId]);
+  }, [pageCode, tenantId, userId]);
 
   const assetById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
   const visibleAssets = useMemo(() => layoutIds.map((id) => assetById.get(id)).filter((asset): asset is PageDataAsset => Boolean(asset)), [assetById, layoutIds]);
 
   useEffect(() => {
-    const missing = visibleAssets.filter((asset) => !rowsById[asset.id]);
+    const missing = visibleAssets.filter((asset) => !rowsById[asset.id] && !rowsFailed[asset.id]);
     if (!missing.length) return;
     let cancelled = false;
     Promise.all(missing.map(async (asset) => {
       try {
         const rows = await fetchPageDataRows({ tenantId, userId, pageDataId: asset.id, pageCode });
-        return [asset.id, rows] as const;
+        return { id: asset.id, rows };
       } catch (error) {
-        if (!cancelled) setNotice(apiErrorMessage(error, `${asset.name} 数据加载失败。`));
-        return null;
+        const message = apiErrorMessage(error, `${asset.name} 数据加载失败。`);
+        return { id: asset.id, error: message };
       }
     })).then((results) => {
       if (cancelled) return;
-      setRowsById((current) => ({ ...current, ...Object.fromEntries(results.filter((item): item is readonly [string, PageDataRows] => Boolean(item))) }));
+      setRowsById((current) => ({
+        ...current,
+        ...Object.fromEntries(results.flatMap((item) => item.rows ? [[item.id, item.rows] as const] : [])),
+      }));
+      setRowsFailed((current) => ({
+        ...current,
+        ...Object.fromEntries(results.flatMap((item) => item.error ? [[item.id, item.error] as const] : [])),
+      }));
+      const failed = results.find((item) => item.error);
+      if (failed?.error) setNotice(failed.error);
     });
     return () => { cancelled = true; };
-  }, [pageCode, rowsById, tenantId, userId, visibleAssets]);
+  }, [pageCode, rowsById, rowsFailed, tenantId, userId, visibleAssets]);
 
   const commitLayout = async (nextIds: string[]) => {
     if (mode !== "edit") {
@@ -94,6 +131,7 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
       return;
     }
     setLayoutIds(nextIds);
+    setNotes((current) => current.filter((note) => nextIds.includes(note.sourceAssetId)));
     setNotice("");
   };
 
@@ -102,7 +140,7 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
     setSavingLayout(true);
     setNotice("");
     try {
-      await runApplicationAction({ tenantId, userId, moduleKey, action: "set_page_data_layout", payload: { assetIds: layoutIds } });
+      await runApplicationAction({ tenantId, userId, moduleKey, action: "set_page_data_layout", payload: { assetIds: layoutIds, notes } });
       setSavedLayoutIds(layoutIds);
       return true;
     } catch (error) {
@@ -116,7 +154,39 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
 
   const toggleAsset = (assetId: string) => {
     const next = layoutIds.includes(assetId) ? layoutIds.filter((id) => id !== assetId) : [...layoutIds, assetId];
+    if (!next.includes(assetId)) setNotes((current) => current.filter((note) => note.sourceAssetId !== assetId));
     void commitLayout(next);
+  };
+
+  const notesSaveTimer = useRef<number | null>(null);
+  const writeNotes = async (next: PageDataNote[]) => {
+    try {
+      await runApplicationAction({ tenantId, userId, moduleKey, action: "set_page_data_notes", payload: { notes: next } });
+    } catch (error) {
+      setNotice(apiErrorMessage(error, "文本框保存失败。"));
+    }
+  };
+  const scheduleWriteNotes = (next: PageDataNote[]) => {
+    if (notesSaveTimer.current !== null) window.clearTimeout(notesSaveTimer.current);
+    notesSaveTimer.current = window.setTimeout(() => { void writeNotes(next); }, 700);
+  };
+
+  const addTextCard = (sourceAssetId: string, config: VisualizationCardConfig, sourceCardId?: string) => {
+    const layout = sourceCardId ? visualDuplicateLayout(sourceCardId) : {};
+    setNotes((current) => {
+      const next = [...current, {
+        id: createClientUuid(),
+        sourceAssetId,
+        type: "text" as const,
+        noteTitle: "",
+        noteBody: "",
+        noteTitleHidden: false,
+        config: { ...config, noteTitle: "", noteBody: "", noteItems: [], noteTitleHidden: false, ...layout },
+      }];
+      void writeNotes(next);
+      return next;
+    });
+    setNotice("");
   };
 
   const moveAsset = (targetId: string) => {
@@ -128,12 +198,12 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
     void commitLayout(next);
   };
 
-  const openRail = (asset: PageDataAsset, tab: "analysis" | "comments") => {
+  const openRail = (asset: PageDataAsset, tab: "analysis" | "comments", detail?: { selectedText?: string; label?: string; targetId?: string }) => {
     const rows = rowsById[asset.id];
     revealContextRail(railPageKey, tab, {
-      targetId: `page-data:${asset.id}`,
+      targetId: detail?.targetId || `page-data:${asset.id}`,
       targetType: visualTypes[asset.id] === "table" || visualTypes[asset.id] === "pivot" ? "table" : "chart",
-      label: asset.name,
+      label: detail?.label || asset.name,
       values: {
         page_data_id: asset.id,
         source_table_name: asset.sourceTableName,
@@ -141,6 +211,9 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
         dimension_fields: asset.dimensionFields,
         visualization_type: visualTypes[asset.id] || asset.visualizationType,
         row_count: rows?.row_count || 0,
+        question: asset.name,
+        analysis_summary: `${asset.name}${asset.sourceTableName ? ` · ${asset.sourceTableName}` : ""}`,
+        selected_content: detail?.selectedText || "",
       },
     });
   };
@@ -151,6 +224,7 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
     layoutIds,
     visibleAssets,
     rowsById,
+    rowsFailed,
     visualTypes,
     setVisualTypes,
     mode,
@@ -164,8 +238,48 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
     commitLayout,
     saveLayout,
     savingLayout,
+    notes,
+    addTextCard,
+    updateNote: (noteId: string, patch: Partial<PageDataNote>) => {
+      setNotes((current) => {
+        const next = current.map((note) => note.id === noteId ? { ...note, ...patch } : note);
+        scheduleWriteNotes(next);
+        return next;
+      });
+    },
+    persistNoteChanges: () => { void writeNotes(notes); },
+    removeNote: (noteId: string) => {
+      setNotes((current) => {
+        const next = current.filter((note) => note.id !== noteId);
+        void writeNotes(next);
+        return next;
+      });
+    },
     openRail,
   };
+}
+
+function normalizePageDataNotes(value: unknown, availableIds: Set<string>): PageDataNote[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id.trim() : "";
+    const sourceAssetId = typeof record.sourceAssetId === "string" ? record.sourceAssetId.trim() : "";
+    if (!id || !sourceAssetId || !availableIds.has(sourceAssetId)) return [];
+    const config = record.config && typeof record.config === "object" && !Array.isArray(record.config)
+      ? record.config as VisualizationCardConfig
+      : { metricFields: [], dimensionFields: [], filters: {}, filterGroups: [], sumFilteredRows: false, comboLineFields: [] };
+    return [{
+      id,
+      sourceAssetId,
+      type: typeof record.type === "string" ? record.type as VisualizationType : "text",
+      noteTitle: typeof record.noteTitle === "string" ? record.noteTitle : "",
+      noteBody: typeof record.noteBody === "string" ? record.noteBody : "",
+      noteTitleHidden: Boolean(record.noteTitleHidden),
+      config,
+    }];
+  });
 }
 
 export type PageDataComposerController = ReturnType<typeof usePageDataComposer>;
@@ -203,6 +317,7 @@ export function PageDataVisualizationModules({
     pageCode,
     visibleAssets,
     rowsById,
+    rowsFailed,
     visualTypes,
     setVisualTypes,
     mode,
@@ -213,12 +328,18 @@ export function PageDataVisualizationModules({
     openRail,
     assets,
     toggleAsset,
+    notes,
+    addTextCard,
+    updateNote,
+    removeNote,
   } = controller;
   const [instanceTitles, setInstanceTitles] = useState<Record<string, string>>({});
   const [instanceConfigs, setInstanceConfigs] = useState<Record<string, import("../visualization/visualizationDataModel").VisualizationCardConfig>>({});
   const renderedAssets = assetIds?.length ? visibleAssets.filter((asset) => assetIds.includes(asset.id)) : visibleAssets;
 
-  const picker = showAssetPicker && showEditorControls && mode === "edit" ? <div className="mb-3 rounded-xl border border-dashed border-[#cfe0d6] bg-white p-3" data-page-data-inline-picker="true"><div className="mb-2 text-[10px] text-[#7c8781]">选择要展示在{pageLabels[pageCode]}中的多机构数据</div><div className="flex flex-wrap gap-2">{assets.map((asset) => { const selected = layoutIds.includes(asset.id); return <button key={asset.id} type="button" onClick={() => toggleAsset(asset.id)} className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[10px] ${selected ? "border-[#75b492] bg-[#edf8f1] text-[#147d4f]" : "border-[#dfe7e2] bg-white text-[#59645e] hover:bg-[#f7faf8]"}`}><span className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${selected ? "border-[#178a53] bg-[#178a53] text-white" : "border-[#cfd7d2] text-transparent"}`}><Check className="h-2.5 w-2.5" /></span>{asset.name}</button>; })}{!assets.length && <span className="text-[10px] text-[#a1a7a3]">暂无可用数据，请先在数据管理的“多机构页面”中新增。</span>}</div></div> : null;
+  const pickerKind = pageCode === "dashboard" ? "多机构数据" : "单机构数据";
+  const pickerSource = pageCode === "dashboard" ? "多机构页面" : "单机构页面";
+  const picker = showAssetPicker && showEditorControls && mode === "edit" ? <div className="mb-3 rounded-xl border border-dashed border-[#cfe0d6] bg-white p-3" data-page-data-inline-picker="true"><div className="mb-2 text-[10px] text-[#7c8781]">选择要展示在{pageLabels[pageCode]}中的{pickerKind}</div><div className="flex flex-wrap gap-2">{assets.map((asset) => { const selected = layoutIds.includes(asset.id); return <button key={asset.id} type="button" onClick={() => toggleAsset(asset.id)} className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[10px] ${selected ? "border-[#75b492] bg-[#edf8f1] text-[#147d4f]" : "border-[#dfe7e2] bg-white text-[#59645e] hover:bg-[#f7faf8]"}`}><span className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${selected ? "border-[#178a53] bg-[#178a53] text-white" : "border-[#cfd7d2] text-transparent"}`}><Check className="h-2.5 w-2.5" /></span>{asset.name}</button>; })}{!assets.length && <span className="text-[10px] text-[#a1a7a3]">暂无可用数据，请先在数据管理的“{pickerSource}”中新增。</span>}</div></div> : null;
 
   if (!renderedAssets.length) return picker;
 
@@ -226,10 +347,11 @@ export function PageDataVisualizationModules({
     <div className={className} data-page-data-visualization-modules={pageCode}>
       {picker}
       <ResizableVisualizationGrid editable={layoutEditable && mode === "edit"}>
-        {renderedAssets.map((asset, index) => {
+        {renderedAssets.flatMap((asset, index) => {
           const pageRows = rowsById[asset.id];
           const instanceKey = `${asset.id}:${index}`;
-          return <div
+          const analysisRows = pageRows ? toAnalysisRows(asset, pageRows) : [];
+          const sourceCard = <div
             key={instanceKey}
             className="flex h-full min-h-0 flex-col"
             draggable={showEditorControls && mode === "edit"}
@@ -244,25 +366,75 @@ export function PageDataVisualizationModules({
               <button type="button" onClick={() => void commitLayout(layoutIds.filter((id) => id !== asset.id))} className="inline-flex h-6 items-center gap-1 rounded-md px-2 hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3 w-3" />移除</button>
             </div>}
             <div className="min-h-0 flex-1">
-              <AnalysisVisualCard
+              {!pageRows && !rowsFailed[asset.id] ? (
+                <div className="flex h-full min-h-[220px] items-center justify-center rounded-xl border border-dashed border-[#e5e5ea] bg-[#fafbfc] text-[12px] text-[#8a8a8e]" data-page-data-rows-loading={asset.id}>正在加载页面数据…</div>
+              ) : rowsFailed[asset.id] ? (
+                <div className="flex h-full min-h-[220px] items-center justify-center rounded-xl border border-dashed border-[#ffd7d7] bg-[#fff5f5] px-4 text-center text-[12px] text-[#b42318]" data-page-data-rows-failed={asset.id}>{rowsFailed[asset.id]}</div>
+              ) : <AnalysisVisualCard
                 id={instanceKey}
                 stateKey={`page-data:${pageCode}:${instanceKey}`}
                 title={instanceTitles[instanceKey] || asset.name}
                 type={visualTypes[instanceKey] || visualTypes[asset.id] || asset.visualizationType as VisualizationType}
-                rows={pageRows ? toAnalysisRows(asset, pageRows) : []}
-                initialConfig={instanceConfigs[instanceKey]}
+                rows={analysisRows}
+                initialConfig={instanceConfigs[instanceKey] || { metricFields: asset.metricFields, dimensionFields: asset.dimensionFields }}
                 compact
                 fillHeight
-                onFollowUp={() => openRail(asset, "analysis")}
-                onComment={() => openRail(asset, "comments")}
+                onFollowUp={(detail) => openRail(asset, "analysis", detail)}
+                onComment={(detail) => openRail(asset, "comments", detail)}
                 onTypeChange={(type) => setVisualTypes((current) => ({ ...current, [instanceKey]: type }))}
                 onTitleChange={(title) => setInstanceTitles((current) => ({ ...current, [instanceKey]: title }))}
                 onConfigChange={(config) => setInstanceConfigs((current) => current[instanceKey] === config ? current : { ...current, [instanceKey]: config })}
-                onDuplicate={showEditorControls && mode === "edit" ? (config) => { const next = [...layoutIds]; next.splice(index + 1, 0, asset.id); setInstanceConfigs((current) => ({ ...current, [`${asset.id}:${index + 1}`]: config })); setInstanceTitles((current) => ({ ...current, [`${asset.id}:${index + 1}`]: `${instanceTitles[instanceKey] || asset.name} · 副本` })); void commitLayout(next); } : undefined}
+                onCreateText={(config) => addTextCard(asset.id, config, instanceKey)}
+                onDuplicate={showEditorControls && mode === "edit" ? (config, options) => {
+                  if (options?.asText) { addTextCard(asset.id, config, instanceKey); return; }
+                  const next = [...layoutIds];
+                  next.splice(index + 1, 0, asset.id);
+                  setInstanceConfigs((current) => ({ ...current, [`${asset.id}:${index + 1}`]: config }));
+                  setInstanceTitles((current) => ({ ...current, [`${asset.id}:${index + 1}`]: `${instanceTitles[instanceKey] || asset.name} · 副本` }));
+                  void commitLayout(next);
+                } : undefined}
                 onDelete={showEditorControls && mode === "edit" ? () => { const next = layoutIds.filter((_, layoutIndex) => layoutIndex !== index); void commitLayout(next); } : undefined}
-              />
+              />}
             </div>
           </div>;
+          const noteCards = notes.filter((note) => note.sourceAssetId === asset.id).map((note) => (
+            <div
+              key={note.id}
+              className="flex h-full min-h-0 flex-col"
+              data-page-data-note={note.id}
+              data-visual-grid-span={note.config.layoutSpan}
+              data-visual-grid-height={note.config.layoutHeight}
+              data-visual-grid-max-span={note.config.maxLayoutSpan}
+              data-visual-grid-max-height={note.config.maxLayoutHeight}
+            >
+              {showEditorControls && mode === "edit" && <div className="mb-1 flex h-7 shrink-0 items-center justify-end rounded-lg bg-[#f6f8f7] px-2 text-[10px] text-[#7c8781]"><button type="button" onClick={() => removeNote(note.id)} className="inline-flex h-6 items-center justify-center gap-1 rounded-md px-2 hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3 w-3" />移除</button></div>}
+              <div className="min-h-0 flex-1">
+                <AnalysisVisualCard
+                  id={note.id}
+                  stateKey={`page-data-note:${pageCode}:${note.id}`}
+                  title={note.noteTitle || `${asset.name} · 结论`}
+                  type={note.type || "text"}
+                  rows={analysisRows}
+                  initialConfig={{ ...note.config, noteTitle: note.noteTitle, noteBody: note.noteBody, noteTitleHidden: note.noteTitleHidden, metricFields: note.config.metricFields?.length ? note.config.metricFields : asset.metricFields, dimensionFields: note.config.dimensionFields?.length ? note.config.dimensionFields : asset.dimensionFields }}
+                  compact
+                  fillHeight
+                  visualGridSpan={note.config.layoutSpan}
+                  visualGridHeight={note.config.layoutHeight}
+                  visualGridMaxSpan={note.config.maxLayoutSpan}
+                  visualGridMaxHeight={note.config.maxLayoutHeight}
+                  onFollowUp={(detail) => openRail(asset, "analysis", { ...detail, label: note.noteTitle || `${asset.name} · 结论`, targetId: `page-data-note:${note.id}` })}
+                  onComment={(detail) => openRail(asset, "comments", { ...detail, label: note.noteTitle || `${asset.name} · 结论`, targetId: `page-data-note:${note.id}` })}
+                  onTypeChange={(type) => updateNote(note.id, { type })}
+                  onTitleChange={(title) => updateNote(note.id, { noteTitle: title })}
+                  onConfigChange={(config) => updateNote(note.id, { config, noteTitle: config.noteTitle ?? note.noteTitle, noteBody: config.noteBody ?? note.noteBody, noteTitleHidden: config.noteTitleHidden ?? note.noteTitleHidden })}
+                  onCreateText={(config) => addTextCard(asset.id, config, note.id)}
+                  onDuplicate={showEditorControls && mode === "edit" ? (config) => addTextCard(asset.id, config) : undefined}
+                  onDelete={() => removeNote(note.id)}
+                />
+              </div>
+            </div>
+          ));
+          return [sourceCard, ...noteCards];
         })}
       </ResizableVisualizationGrid>
     </div>
@@ -340,7 +512,4 @@ function finiteNumber(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function pageDataScope(asset: PageDataAsset) {
-  if (asset.institutionScope) return asset.institutionScope;
-  return asset.targetPages.length === 1 && asset.targetPages[0] === "dashboard" ? "multi_institution" : "single_institution";
-}
+export { pageDataScope } from "./assignment";

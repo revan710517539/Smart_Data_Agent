@@ -23,18 +23,24 @@ type AuditLogsResponse = {
   offset: number;
 };
 
+export function defaultAuditSince(now = new Date()) {
+  return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+}
+
 export async function fetchAuditLogs({
   tenantId,
   userId = getDefaultUserId(),
   limit = 20,
   offset = 0,
+  since = defaultAuditSince(),
 }: {
   tenantId: string;
   userId?: string;
   limit?: number;
   offset?: number;
+  since?: string;
 }): Promise<AuditLogsResponse> {
-  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset), since });
   return apiRequest<AuditLogsResponse>(`/api/audit-logs?${params.toString()}`, {
     method: "GET",
     context: { tenantId, userId },

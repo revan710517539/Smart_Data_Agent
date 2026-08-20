@@ -1,12 +1,13 @@
 import { fetchApplicationModule, type ApplicationModuleKey } from "./services/applicationApi";
 import { fetchAccessRolePolicies, fetchAccessUsers } from "./services/accessControlApi";
-import { fetchAuditLogs } from "./services/auditApi";
+import { defaultAuditSince, fetchAuditLogs } from "./services/auditApi";
 import { fetchAutomationWorkspace } from "./services/automationApi";
 import { fetchPlatformCapabilities } from "./services/capabilitiesApi";
-import { fetchDataAssets } from "./services/dataAssetApi";
+import { fetchDataAssets, fetchPageDataWorkspace } from "./services/dataAssetApi";
+import { fetchMessageBoardAdmin } from "./services/messageBoardApi";
 import { fetchMetricDictionary } from "./services/metricDictionaryApi";
 import { fetchSavedAnalysisResults } from "./services/reportApi";
-import { fetchSystemConfig } from "./services/systemConfigApi";
+import { fetchAnalysisRuntimeConfig, fetchSystemConfig } from "./services/systemConfigApi";
 import { fetchVisualReports } from "./services/visualReportApi";
 
 type RouteDataContext = { tenantId: string; userId: string };
@@ -47,6 +48,7 @@ function routeDataTasks(path: string, { tenantId, userId }: RouteDataContext): A
       fetchDataAssets({ tenantId, userId }),
       fetchDataAssets({ tenantId, userId, scope: "runtime" }),
       fetchMetricDictionary({ tenantId, userId }),
+      fetchAnalysisRuntimeConfig({ tenantId, userId, speechApplicationModule: "realtime_voice_input" }),
     ];
   }
   if (path.startsWith("/agent/skills")) {
@@ -56,16 +58,25 @@ function routeDataTasks(path: string, { tenantId, userId }: RouteDataContext): A
     return [
       fetchAutomationWorkspace({ tenantId, userId }),
       fetchPlatformCapabilities({ tenantId, userId }),
-      fetchDataAssets({ tenantId, userId }),
-      fetchMetricDictionary({ tenantId, userId }),
-      fetchSystemConfig({ tenantId, userId }),
     ];
+  }
+  if (path.startsWith("/agent/message-board")) {
+    return [fetchMessageBoardAdmin({ page: 1, pageSize: 20 }, { tenantId, userId })];
   }
   if (path.startsWith("/data-assets/tools")) {
     return [fetchDataAssets({ tenantId, userId })];
   }
+  if (path.startsWith("/data-assets/metrics")) {
+    return [fetchMetricDictionary({ tenantId, userId })];
+  }
+  if (path.startsWith("/data-assets/knowledge")) {
+    return [fetchDataAssets({ tenantId, userId, scope: "knowledge" })];
+  }
+  if (path.startsWith("/data-assets/quality")) {
+    return [];
+  }
   if (path.startsWith("/data-assets/")) {
-    return [fetchDataAssets({ tenantId, userId }), fetchMetricDictionary({ tenantId, userId })];
+    return [fetchDataAssets({ tenantId, userId })];
   }
   if (path.startsWith("/settings/config")) {
     return [fetchSystemConfig({ tenantId, userId })];
@@ -74,7 +85,20 @@ function routeDataTasks(path: string, { tenantId, userId }: RouteDataContext): A
     return [fetchAccessUsers({ tenantId }), fetchAccessRolePolicies({ tenantId })];
   }
   if (path.startsWith("/settings/audit")) {
-    return [fetchAuditLogs({ tenantId })];
+    return [fetchAuditLogs({ tenantId, since: defaultAuditSince() })];
+  }
+
+  if (path === "/dashboard") {
+    return [fetchPageDataWorkspace({ tenantId, userId, pageCode: "dashboard" })];
+  }
+  if (path.startsWith("/weekly-report")) {
+    return [
+      fetchPageDataWorkspace({ tenantId, userId, pageCode: "weekly_report" }),
+      fetchVisualReports({ tenantId, userId }),
+    ];
+  }
+  if (path.startsWith("/supervision")) {
+    return [fetchPageDataWorkspace({ tenantId, userId, pageCode: "institution_supervision" })];
   }
 
   const moduleKey = applicationModuleForPath(path);

@@ -6,7 +6,9 @@ import { fetchMetricDictionary } from "../../services/metricDictionaryApi";
 import { apiErrorMessage, apiRequest } from "../../services/apiClient";
 import { waitForSelfAnalysis, type BackendAnalysisResponse, type BackendSkillResult } from "../../services/analysisApi";
 import { runApplicationAction } from "../../services/applicationApi";
-import { fetchAnalysisRuntimeConfig, type FunAsrRuntimeIntegration } from "../../services/systemConfigApi";
+import { fetchAnalysisRuntimeConfig, fetchSystemConfig, type FunAsrRuntimeIntegration } from "../../services/systemConfigApi";
+import { chatWithAgentSupervisor } from "../../services/supervisorApi";
+import { findConfiguredTextModel, readPersistedTextModelSelection, textModelSelectionEvent } from "../../services/modelSelectionStore";
 import { usePlatformContext } from "../../platform/PlatformContext";
 import {
   appendRealtimeVoiceText,
@@ -90,6 +92,7 @@ export function AgentSupervisor() {
   const [voiceMode, setVoiceMode] = useState<SupervisorVoiceMode | null>(null);
   const [voiceNotice, setVoiceNotice] = useState("");
   const [pendingAction, setPendingAction] = useState<AgentActionDefinition | null>(null);
+  const [modelLabel, setModelLabel] = useState("");
   const [messages, setMessages] = useState<Message[]>(() => [welcomeMessage(selectedInstitution)]);
   const [history, setHistory] = useState<StoredConversation[]>(readHistory);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -113,6 +116,26 @@ export function AgentSupervisor() {
   const [, refreshActions] = useReducer((value) => value + 1, 0);
 
   useEffect(() => agentActionRegistry.subscribe(refreshActions), []);
+  useEffect(() => {
+    let cancelled = false;
+    const syncModelLabel = async () => {
+      try {
+        const response = await fetchSystemConfig({ tenantId, userId });
+        if (cancelled) return;
+        const selected = findConfiguredTextModel(response.models || [], readPersistedTextModelSelection(tenantId, userId));
+        setModelLabel(selected?.name || selected?.selectedModelName || "");
+      } catch {
+        if (!cancelled) setModelLabel("");
+      }
+    };
+    void syncModelLabel();
+    const onSelection = () => { void syncModelLabel(); };
+    window.addEventListener(textModelSelectionEvent, onSelection);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(textModelSelectionEvent, onSelection);
+    };
+  }, [open, tenantId, userId]);
   useEffect(() => {
     const cleanups = navigationActions.map((action) => agentActionRegistry.register({
       ...action,
@@ -428,7 +451,11 @@ export function AgentSupervisor() {
         appendMessage({ role: "agent", content: `当前机构中，你有权限读取的已激活记忆共 ${response.count} 条。\n${names.length ? names.map((name) => `• ${name}`).join("\n") : "暂无已激活记忆。"}\n\n这里只返回当前账号可见的记忆摘要，不显示未授权内容；需要维护时可让我打开“知识记忆”。` });
         return;
       }
-      await runAnalysis(question, { tenantId, userId, selectedInstitution, currentTenantRoles, appendMessage });
+      if (isExplicitAnalysisQuestion(question)) {
+        await runAnalysis(question, { tenantId, userId, selectedInstitution, currentTenantRoles, appendMessage });
+        return;
+      }
+      await replyWithSelectedModel(question, { tenantId, userId, selectedInstitution, pagePath: location.pathname, messages, appendMessage });
     } catch (error) {
       appendMessage({ role: "system", content: error instanceof Error ? error.message : "总管暂时无法完成此请求。" });
     } finally {
@@ -464,7 +491,7 @@ export function AgentSupervisor() {
           )}
           <section className="flex h-full min-w-0 flex-1 flex-col bg-white">
             <header className="flex items-start justify-between border-b border-[#ebebf0] px-4 py-3">
-              <div><div className="flex items-center gap-1.5 text-[10px] tracking-[0.12em] text-[#8a8a8e]"><Bot className="h-3.5 w-3.5" />AGENT WORKSPACE</div><div className="mt-1 flex items-center gap-2 text-[14px] text-[#1d1d1f]"><strong>系统 Agent 总管</strong><button type="button" onClick={() => setHistoryOpen((value) => !value)} title="历史对话" aria-label="历史对话"><History className="h-3.5 w-3.5 text-[#8a8a8e]" /></button></div><p className="mt-0.5 max-w-[270px] truncate text-[10px] text-[#aeaeb2]">{pageLabel}</p></div>
+              <div><div className="flex items-center gap-1.5 text-[10px] tracking-[0.12em] text-[#8a8a8e]"><Bot className="h-3.5 w-3.5" />AGENT WORKSPACE</div><div className="mt-1 flex items-center gap-2 text-[14px] text-[#1d1d1f]"><strong>系统 Agent 总管</strong><button type="button" onClick={() => setHistoryOpen((value) => !value)} title="历史对话" aria-label="历史对话"><History className="h-3.5 w-3.5 text-[#8a8a8e]" /></button></div><p className="mt-0.5 max-w-[270px] truncate text-[10px] text-[#aeaeb2]" data-supervisor-model={modelLabel || "unset"}>{pageLabel}{modelLabel ? ` · ${modelLabel}` : " · 未选择文本模型"}</p></div>
               <button type="button" onClick={() => { stopVoiceInput(); setOpen(false); }} aria-label="关闭 Agent 总管" className="rounded-md p-1 text-[#8a8a8e] hover:bg-[#f2f2f7]"><X className="h-4 w-4" /></button>
             </header>
             <div className="contents">
@@ -477,11 +504,12 @@ export function AgentSupervisor() {
             </div>
             <div ref={messagesPanelRef} className="flex-1 space-y-3 overflow-y-auto p-3">
               {messages.map((message) => <MessageCard key={message.id} message={message} />)}
+              {running && <div className="rounded-xl bg-[#f2f2f7] px-3 py-2 text-[12px] leading-6 text-[#636366]" data-supervisor-pending="true">正在调用当前模型…</div>}
             </div>
             {pendingAction && <div className="flex items-center gap-2 border-t border-[#f1d6b8] bg-[#fff7ed] px-3 py-2 text-[11px] text-[#9a5a09]"><ShieldCheck className="h-4 w-4 shrink-0" /><span className="min-w-0 flex-1">确认执行：{pendingAction.label}</span><button type="button" onClick={() => setPendingAction(null)} className="rounded px-2 py-1 hover:bg-white">取消</button><button type="button" onClick={() => void executeAction(pendingAction, true)} className="rounded bg-[#1d1d1f] px-2 py-1 text-white">确认</button></div>}
             <form className="border-t border-[#ebebf0] p-3" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
               <div className="flex gap-1.5"><input ref={inputRef} value={input} onChange={(event) => { const value = event.target.value; setInput(value); if (voiceActiveRef.current) resetVoiceTranscript(value); }} placeholder="问指标、记忆、Skill，或说“打开/点击/填写…”" className="min-w-0 flex-1 rounded-lg bg-[#f2f2f7] px-3 py-2 text-[12px] outline-none ring-0 focus:bg-white focus:ring-1 focus:ring-[#c7c7cc]" /><button type="button" onClick={() => { trackInteraction({ eventName: "assistant_voice_click", resourceType: "agent_supervisor" }); void startVoiceInput("manual"); }} className={`rounded-lg px-2.5 transition ${voiceMode === "manual" ? "bg-[#1d1d1f] text-white" : "bg-[#f2f2f7] text-[#636366] hover:bg-[#e5e5ea]"}`} aria-label={voiceMode === "manual" ? "停止语音录入" : "语音录入"} title="语音录入：转写后点击发送执行"><Mic className={`h-4 w-4 ${voiceMode === "manual" ? "animate-pulse" : ""}`} /></button><button type="button" onClick={() => { trackInteraction({ eventName: "assistant_realtime_voice_click", resourceType: "agent_supervisor" }); void startVoiceInput("realtime"); }} className={`rounded-lg px-2.5 transition ${voiceMode === "realtime" ? "bg-[#1d1d1f] text-white" : "bg-[#f2f2f7] text-[#636366] hover:bg-[#e5e5ea]"}`} aria-label={voiceMode === "realtime" ? "停止实时语音交互" : "实时语音交互"} title="实时语音：停顿 3 秒自动执行"><AudioLines className={`h-4 w-4 ${voiceMode === "realtime" ? "animate-pulse" : ""}`} /></button><button disabled={!input.trim() || running} className="rounded-lg bg-[#1d1d1f] px-3 text-white disabled:opacity-40" aria-label="发送指令">{running ? <ListChecks className="h-4 w-4 animate-pulse" /> : <Send className="h-4 w-4" />}</button></div>
-              <p className="mt-1.5 text-[10px] text-[#aeaeb2]" aria-live="polite">{voiceNotice || "会实时扫描当前页面的菜单、按钮、下拉框、输入框和弹窗。写入、删除、发布、启停均须确认；演练数据会明确标识为不可发布。"}</p>
+              <p className="mt-1.5 text-[10px] text-[#aeaeb2]" aria-live="polite">{voiceNotice || (modelLabel ? `当前模型：${modelLabel}。左下角切换后，这里会跟着用。` : "请先在左下角选择文本模型，总管才能回复。")}</p>
             </form>
             </div>
           </section>
@@ -663,6 +691,47 @@ function isMetricQuestion(question: string) { return /指标|口径|取值逻辑
 function isSkillQuestion(question: string) { return /skill|技能|能力|agent总管|智能体/.test(question.toLowerCase()); }
 function isMemoryQuestion(question: string) { return /记忆|知识库|知识文件|经验/.test(question); }
 function isPageQuestion(question: string) { return /当前页|当前页面|页面内容|页面有什么|可操作|动作目录|页面操作|有哪些按钮|有哪些菜单|有哪些下拉/.test(question); }
+function isExplicitAnalysisQuestion(question: string) {
+  if (/能干|做什么|干什么|你会什么|介绍一下你|你是谁/.test(question)) return false;
+  return /(趋势图|出图|查数|统计|排名|对比|同比|环比)/.test(question)
+    || (/(在贷|放款|余额|逾期)/.test(question) && /(帮我|给我|请生成|请画|查询一下|分析一下)/.test(question));
+}
+
+async function replyWithSelectedModel(
+  question: string,
+  context: {
+    tenantId: string;
+    userId: string;
+    selectedInstitution: string;
+    pagePath: string;
+    messages: Message[];
+    appendMessage: (message: Omit<Message, "id">) => void;
+  },
+) {
+  const config = await fetchSystemConfig({ tenantId: context.tenantId, userId: context.userId });
+  const persisted = readPersistedTextModelSelection(context.tenantId, context.userId);
+  const selected = findConfiguredTextModel(config.models || [], persisted);
+  const modelApplicationSelection = selected
+    ? { integrationId: selected.id, selectedModelName: selected.selectedModelName || selected.enabledModels?.[0] || "" }
+    : persisted;
+  const response = await chatWithAgentSupervisor({
+    tenantId: context.tenantId,
+    userId: context.userId,
+    question,
+    pagePath: context.pagePath,
+    institution: context.selectedInstitution,
+    conversation: context.messages.map((item) => ({ role: item.role, content: item.content })),
+    modelApplicationSelection: modelApplicationSelection?.integrationId && modelApplicationSelection.selectedModelName
+      ? { integrationId: modelApplicationSelection.integrationId, selectedModelName: modelApplicationSelection.selectedModelName }
+      : null,
+  });
+  const reply = response.reply.trim();
+  if (!reply) throw new Error("当前所选模型没有返回内容。请在左下角重新选择文本模型后再试。");
+  context.appendMessage({
+    role: response.status === "connected" ? "agent" : "system",
+    content: reply,
+  });
+}
 
 function metricAnswer(question: string, metrics: Array<Record<string, unknown>>) {
   const terms = question.replace(/指标|口径|取值逻辑|公式|有哪些|查询|查看|帮我|请|？|\?|的|和|与|全部/g, " ").split(/\s+/).map((item) => item.trim()).filter((item) => item.length >= 2);
@@ -676,6 +745,9 @@ function memoryLabel(memory: Record<string, unknown>) {
 }
 
 async function runAnalysis(question: string, context: { tenantId: string; userId: string; selectedInstitution: string; currentTenantRoles: Array<{ role: string }>; appendMessage: (message: Omit<Message, "id">) => void }) {
+  const config = await fetchSystemConfig({ tenantId: context.tenantId, userId: context.userId });
+  const persisted = readPersistedTextModelSelection(context.tenantId, context.userId);
+  const selected = findConfiguredTextModel(config.models || [], persisted);
   const response = await waitForSelfAnalysis({
     question,
     tenantId: context.tenantId,
@@ -686,6 +758,9 @@ async function runAnalysis(question: string, context: { tenantId: string; userId
       selected_institution: context.selectedInstitution,
       analysis_trigger: "agent_supervisor",
       model_application_module: "intelligent_analysis_reasoning",
+      model_application_selection: selected
+        ? { integrationId: selected.id, selectedModelName: selected.selectedModelName || selected.enabledModels?.[0] || "" }
+        : persisted,
       page_roles: context.currentTenantRoles.map((role) => role.role),
     },
   });

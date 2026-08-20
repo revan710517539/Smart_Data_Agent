@@ -21,6 +21,8 @@ import { runApplicationAction } from "../services/applicationApi";
 import { fetchOperatingSnapshot, type OperatingSnapshot } from "../services/operatingSnapshotApi";
 import { updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
 import { PAGE_DATA_PAGE_GUTTER_CLASS, PageDataModeToggle, PageDataVisualizationModules, usePageDataComposer, type PageDataComposerController } from "./page-data/PageDataComposer";
+import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
+import { useStickyNote } from "./notes/useStickyNote";
 
 type ProductFilter = "all" | "consumer" | "business";
 type ProductFacts = { loan?: number; drawdown?: number; balance?: number; m1?: number; month?: string };
@@ -34,6 +36,7 @@ export function InstitutionSupervision() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
   const pageData = usePageDataComposer({ pageCode: "institution_supervision", moduleKey: "institution_supervision", railPageKey: "supervision" });
+  const stickyNote = useStickyNote("institution_supervision", "institution_supervision");
 
   useEffect(() => {
     if (!isSuperAdmin) pageData.setMode("browse");
@@ -86,86 +89,10 @@ export function InstitutionSupervision() {
   const runSupervisionAction = (action: string, payload: Record<string, unknown> = {}) =>
     runApplicationAction({ tenantId, userId, moduleKey: "institution_supervision", action, payload }).catch(() => undefined);
 
-  if (loading && !snapshot) return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} /><SupervisionState message="正在读取受治理机构数据…" embedded /></div>;
-  if (!model.hasData) return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} />{!pageData.loading && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} />}{!pageData.loading && pageData.visibleAssets.length === 0 && <SupervisionState message={notice || "当前租户没有机构级经营事实，页面不会展示内置排名和督导结论。"} embedded />}</div>;
-
-  return (
-    <div className={PAGE_DATA_PAGE_GUTTER_CLASS}>
-      <SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} />
-      {!pageData.loading && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} />}
-
-      {(notice || !snapshot?.publishable) && <div className="mb-4 rounded-lg border border-[#e5e5ea] bg-white px-4 py-3 text-[12px] text-[#636366]">{notice || `当前数据模式：${snapshot?.data_modes.join("、") || "未知"}；不可作为正式督导报告发布。`}</div>}
-
-      <div className="flex items-center gap-3 mb-6">
-        <div className="flex gap-px bg-[#f2f2f7] rounded-lg p-0.5">
-          {([
-            { key: "all", label: "全部产品" },
-            { key: "consumer", label: "消费贷" },
-            { key: "business", label: "经营贷" },
-          ] as const).map((tab) => (
-            <button key={tab.key} onClick={() => { setProductFilter(tab.key); void runSupervisionAction("select_product_filter", { productFilter: tab.key, selectedBranch }); }} className={`px-4 py-[6px] rounded-md text-[13px] transition-all ${productFilter === tab.key ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e]"}`}>{tab.label}</button>
-          ))}
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl border border-[#f0f0f2] p-5 mb-6">
-        <h3 className="text-[13px] text-[#1d1d1f] mb-4">各分行双产品放款排名(亿)</h3>
-        <ResponsiveContainer width="100%" height={240}>
-          <BarChart data={model.chartData} barGap={2}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f5f5f5" vertical={false} />
-            <XAxis dataKey="name" tick={{ fontSize: 11, fill: "#636366" }} stroke="transparent" tickLine={false} />
-            <YAxis tick={{ fontSize: 10, fill: "#c7c7cc" }} stroke="transparent" tickLine={false} axisLine={false} />
-            <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #f0f0f2" }} />
-            <Legend wrapperStyle={{ fontSize: 11 }} />
-            {(productFilter === "all" || productFilter === "consumer") && <Bar dataKey="消费贷" fill="#3a3a3c" radius={[3, 3, 0, 0]} barSize={productFilter === "all" ? 18 : 28} />}
-            {(productFilter === "all" || productFilter === "business") && <Bar dataKey="经营贷" fill="#c7c7cc" radius={[3, 3, 0, 0]} barSize={productFilter === "all" ? 18 : 28} />}
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      <div className="bg-white rounded-xl border border-[#f0f0f2] p-5 mb-6">
-        <div className="flex items-center justify-between mb-4"><h3 className="text-[13px] text-[#1d1d1f]">分行经营明细</h3><span className="text-[11px] text-[#aeaeb2]">点击分行查看证据画像</span></div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-[12px]">
-            <thead><tr className="text-[11px] text-[#aeaeb2] border-b border-[#f0f0f2]"><th className="text-left py-2 px-2">分行</th>{(productFilter === "all" || productFilter === "consumer") && <><th className="text-right px-2">消费贷放款(亿)</th><th className="text-right px-2">动支率</th><th className="text-right px-2">M1</th><th className="text-right px-2">余额(亿)</th></>}{(productFilter === "all" || productFilter === "business") && <><th className="text-right px-2">经营贷放款(亿)</th><th className="text-right px-2">动支率</th><th className="text-right px-2">M1</th><th className="text-right px-2">余额(亿)</th></>}</tr></thead>
-            <tbody>
-              {model.branches.map((branch) => (
-                <tr key={branch.name} onClick={() => { const next = selectedBranch === branch.name ? null : branch.name; setSelectedBranch(next); void runSupervisionAction("select_branch", { selectedBranch: next, productFilter }); }} className={`border-b border-[#f8f8f8] hover:bg-[#fafbfc] cursor-pointer ${selectedBranch === branch.name ? "bg-[#fafbfc]" : ""}`}>
-                  <td className="py-2.5 px-2 text-[#1d1d1f]">{branch.name}</td>
-                  {(productFilter === "all" || productFilter === "consumer") && <ProductCells facts={branch.consumer} />}
-                  {(productFilter === "all" || productFilter === "business") && <ProductCells facts={branch.business} />}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {selected && (
-        <div className="grid grid-cols-2 gap-5">
-          <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
-            <div className="flex items-center gap-2 mb-3"><Building2 className="w-4 h-4 text-[#aeaeb2]" /><h3 className="text-[13px] text-[#1d1d1f]">{selected.name}相对画像</h3></div>
-            <ResponsiveContainer width="100%" height={250}>
-              <RadarChart data={relativeRadar(selected, model.branches)}>
-                <PolarGrid stroke="#f0f0f2" /><PolarAngleAxis dataKey="metric" tick={{ fontSize: 10, fill: "#aeaeb2" }} /><PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
-                <Radar name="消费贷" dataKey="消费贷" stroke="#3a3a3c" fill="#3a3a3c" fillOpacity={0.06} /><Radar name="经营贷" dataKey="经营贷" stroke="#aeaeb2" fill="none" strokeDasharray="4 4" />
-              </RadarChart>
-            </ResponsiveContainer>
-            <div className="text-[10px] text-[#c7c7cc]">相对分数仅在当前快照机构间归一，不是目标完成率或绩效评级。</div>
-          </div>
-          <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
-            <div className="flex items-center gap-2 mb-3"><Sparkles className="w-4 h-4 text-[#aeaeb2]" /><h3 className="text-[13px] text-[#1d1d1f]">证据型督导摘要</h3></div>
-            <div className="space-y-3 text-[11px] leading-[1.7] text-[#8a8a8e]">
-              <p>• 消费贷：放款 {formatNumber(selected.consumer.loan)} 亿元，动支率 {formatPercent(selected.consumer.drawdown)}，M1 {formatPercent(selected.consumer.m1)}。</p>
-              <p>• 经营贷：放款 {formatNumber(selected.business.loan)} 亿元，动支率 {formatPercent(selected.business.drawdown)}，M1 {formatPercent(selected.business.m1)}。</p>
-              <p>• 当前仅有规模、余额、动支与 M1 证据；目标、审批、抵押、续贷等字段未接入时不生成督导判断。</p>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+  if (pageData.loading && !pageData.assets.length) return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} stickyNote={stickyNote} /><SupervisionState message="正在读取机构督导页面数据…" embedded /></div>;
+  return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} stickyNote={stickyNote} /><StickyNotePanel className="mb-4" note={stickyNote.note} editing={stickyNote.editing} onChange={stickyNote.updateItems} onFinishEdit={stickyNote.finishEdit} onStartEdit={() => stickyNote.setEditing(true)} onHide={stickyNote.hide} uploadContext={stickyNote.uploadContext} />{pageData.visibleAssets.length > 0 && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} showAssetPicker />}{!pageData.loading && pageData.visibleAssets.length === 0 && <SupervisionState message={notice || "请先在数据管理的「单机构页面」中把数据集放到机构督导。"} embedded />}</div>;
 }
+
 
 function ProductCells({ facts }: { facts: ProductFacts }) {
   return <><td className="text-right px-2 text-[#1d1d1f]">{formatNumber(facts.loan)}</td><td className="text-right px-2 text-[#636366]">{formatPercent(facts.drawdown)}</td><td className="text-right px-2 text-[#636366]">{formatPercent(facts.m1)}</td><td className="text-right px-2 text-[#636366]">{formatNumber(facts.balance)}</td></>;
@@ -203,8 +130,8 @@ function relativeRadar(selected: BranchFacts, branches: BranchFacts[]) {
   });
 }
 
-function SupervisionHeader({ controller, canEditLayout }: { controller: PageDataComposerController; canEditLayout: boolean }) {
-  return <div className="mb-6 flex items-start justify-between gap-3"><div><h2 className="text-[18px] text-[#1d1d1f] tracking-tight">机构督导</h2><p className="mt-1 text-[13px] text-[#aeaeb2]">分行 × 产品矩阵分析 · 消费贷/经营贷分维度督导</p></div>{canEditLayout && <PageDataModeToggle controller={controller} />}</div>;
+function SupervisionHeader({ controller, canEditLayout, stickyNote }: { controller: PageDataComposerController; canEditLayout: boolean; stickyNote: ReturnType<typeof useStickyNote> }) {
+  return <div className="mb-6 flex items-start justify-between gap-3"><div><h2 className="text-[18px] text-[#1d1d1f] tracking-tight">机构督导</h2><p className="mt-1 text-[13px] text-[#aeaeb2]">展示数据管理「单机构页面」中放到机构督导的数据集</p></div><div className="flex items-center gap-2"><StickyNoteButton onClick={stickyNote.show} />{canEditLayout && <PageDataModeToggle controller={controller} />}</div></div>;
 }
 
 function SupervisionState({ message, embedded = false }: { message: string; embedded?: boolean }) {

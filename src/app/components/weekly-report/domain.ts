@@ -101,6 +101,7 @@ export type RichContentItem =
       id: string;
       type: "paragraph";
       text: string;
+      html?: string;
     }
   | {
       id: string;
@@ -180,6 +181,26 @@ export type CommentTarget = {
   anchorViewportTop?: number;
   annotationKind?: "comment" | "analysis";
 };
+
+export function commentTargetFromRailReveal(target: {
+  targetId: string;
+  targetType: "chart" | "table" | "metric" | "institution" | "text";
+  label?: string;
+  values?: Record<string, unknown>;
+}): CommentTarget {
+  const values = target.values || {};
+  const preferred = [values.analysis_summary, values.question, values.metric_name, target.label, values.visualization_type]
+    .find((item): item is string => typeof item === "string" && Boolean(item.trim()));
+  return {
+    id: target.targetId,
+    contextTargetId: target.targetId,
+    label: target.label || target.targetId,
+    type: target.targetType === "chart" ? "图表" : target.targetType === "text" ? "文本" : "数据",
+    targetKind: target.targetType === "chart" ? "chart" : target.targetType === "text" ? "paragraph" : "table",
+    selectedText: (preferred || "当前可视化").slice(0, 500),
+    anchorTop: 12,
+  };
+}
 
 export function makeAnalysisSelectionTarget(target: CommentTarget): CommentTarget {
   const hasTextRange = Boolean(target.selectedText?.trim())
@@ -687,6 +708,7 @@ export function normalizeContentItems(prefix: string, value: unknown[]): RichCon
         id: String(item.id || `${prefix}_line_${index}`),
         type: "paragraph" as const,
         text: String(item.text || ""),
+        html: typeof item.html === "string" ? item.html : undefined,
       };
     });
   return items.length ? items : createTextItems(prefix, "");

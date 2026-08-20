@@ -229,14 +229,14 @@ class FunAsrProxyContractTest(unittest.TestCase):
             handler, "tenant_demo", {"applicationModule": "popup_voice_input"}, {}, "u_admin",
         )
         self.assertEqual(selected["id"], "speech_popup")
-        rejected = _resolve_fun_asr_speech_integration(
+        shared = _resolve_fun_asr_speech_integration(
             handler,
             "tenant_demo",
             {"speechIntegrationId": "speech_realtime", "applicationModule": "popup_voice_input"},
             {},
             "u_admin",
         )
-        self.assertEqual(rejected, {})
+        self.assertEqual(shared["id"], "speech_realtime")
 
     def test_runtime_selects_saved_fun_asr_without_connectivity_test(self) -> None:
         untested = {

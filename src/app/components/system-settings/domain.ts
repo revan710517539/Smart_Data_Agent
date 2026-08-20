@@ -84,7 +84,7 @@ export const permissionMenuGroups = [
   { label: "多机构分析", children: ["多机构分析"] },
   { label: "经营分析", children: ["经营周报", "机构督导"] },
   { label: "市场洞察", children: ["客群分析", "竞品分析"] },
-  { label: "自助分析", children: ["智能分析", "我的报告", "分析配置", "Skill插件"] },
+  { label: "自助分析", children: ["智能分析", "我的报告", "分析配置", "skill/插件"] },
   { label: "任务工作台", children: ["待办任务", "自动化任务"] },
   { label: "数据资产", children: ["指标字典", "知识记忆", "数据管理", "质量监控"] },
   { label: "推送与订阅", children: ["预警规则", "订阅管理", "推送记录"] },

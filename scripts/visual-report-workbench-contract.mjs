@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [layout, routes, builder, library, cards, visualCard, contextRail, selfAnalysis, dataTablePicker, analysisRoute, reportsRoute, application, applicationRoute, productionAssetStore] = await Promise.all([
+const [layout, routes, builder, library, cards, visualCard, visualNote, contextRail, selfAnalysis, dataTablePicker, analysisRoute, reportsRoute, application, applicationRoute, productionAssetStore, featuredReports, domain, dashboard, supervision, weekly, richNote, noteModel, stickyNote, stickyHook] = await Promise.all([
   readFile("src/app/components/Layout.tsx", "utf8"),
   readFile("src/app/routes.ts", "utf8"),
   readFile("src/app/components/VisualReportBuilder.tsx", "utf8"),
   readFile("src/app/components/visual-report/VisualReportLibrary.tsx", "utf8"),
   readFile("src/app/components/visual-report/VisualReportCards.tsx", "utf8"),
   readFile("src/app/components/self-analysis/ResultViews.tsx", "utf8"),
+  readFile("src/app/components/visualization/VisualNoteFields.tsx", "utf8"),
   readFile("src/app/components/context-rail/ContextSideRail.tsx", "utf8"),
   readFile("src/app/components/SelfAnalysis.tsx", "utf8"),
   readFile("src/app/components/self-analysis/DataTablePickerModal.tsx", "utf8"),
@@ -16,6 +17,15 @@ const [layout, routes, builder, library, cards, visualCard, contextRail, selfAna
   readFile("backend/platform/application/store.py", "utf8"),
   readFile("backend/platform/api/routes/application.py", "utf8"),
   readFile("backend/platform/assets/postgresql_store.py", "utf8"),
+  readFile("src/app/components/self-analysis/featuredReports.ts", "utf8"),
+  readFile("src/app/components/self-analysis/domain.ts", "utf8"),
+  readFile("src/app/components/Dashboard.tsx", "utf8"),
+  readFile("src/app/components/InstitutionSupervision.tsx", "utf8"),
+  readFile("src/app/components/WeeklyReport.tsx", "utf8"),
+  readFile("src/app/components/notes/RichNoteEditor.tsx", "utf8"),
+  readFile("src/app/components/notes/richNote.ts", "utf8"),
+  readFile("src/app/components/notes/StickyNote.tsx", "utf8"),
+  readFile("src/app/components/notes/useStickyNote.ts", "utf8"),
 ]);
 
 assert.ok(layout.indexOf('label: "可视化报表"') < layout.indexOf('label: "智能分析"'), "可视化报表必须位于智能分析上方");
@@ -57,16 +67,67 @@ assert.match(cards, /revealVisualFollowUp/);
 assert.match(cards, /revealVisualComment/);
 assert.match(builder, /showFollowUp=\{false\}/, "新增图表弹窗预览必须隐藏追问");
 assert.match(visualCard, /showFollowUp = true/, "落地后的标准图表默认必须显示追问");
+assert.match(visualCard, /label="文本框"[\s\S]*data-visual-more-text[\s\S]*data-visual-filter-toggle/, "更多菜单必须在条件前提供文本框");
+assert.match(visualCard, /onCreateText/, "文本框必须从复制权限中拆出独立入口");
+assert.match(visualCard, /disabled=\{!onCreateText && !onDuplicate\}/, "能看见图表的用户只要有文本框入口即可点击，不得只绑在复制权限上");
+assert.match(cards, /onCreateText=\{\(config\) => createTextCard\(card, config\)\}/, "可视化报表浏览态也必须能创建文本框");
+assert.doesNotMatch(visualCard, /data-visual-toolbar[\s\S]{0,800}data-visual-filter-toggle/, "工具栏不得再单独放置条件按钮");
+assert.match(visualNote, /data-visual-note="true"/, "文本框图表必须复用统一可视化卡片并渲染标题与正文");
+assert.match(noteModel, /data-visual-note-term/, "命中数据源字段的文本必须加粗下划线标注");
+assert.match(visualNote, /data-visual-note-title-delete="true"/, "文本框标题右侧必须提供延迟显示的删除按钮");
+assert.match(visualCard, /data-visual-text-ops-above/, "文本框操作展开必须出现在填写名称上方");
+assert.match(visualCard, /VisualNoteTitle/, "填写名称必须与操作按钮同一行");
+assert.match(richNote, /contentEditable="true"/, "便签和文本框必须用可见的可编辑正文，不得再用透明 textarea");
+assert.doesNotMatch(richNote, /text-transparent/, "便签正文不得使用透明文字");
+assert.doesNotMatch(weekly, /WebkitTextFillColor: "transparent"/, "周报文本框不得把填入文字设为透明");
+assert.match(richNote, /data-note-bold-action="true"/, "选中文字工具条必须在评论和 AI 分析之间提供加粗");
+assert.doesNotMatch(richNote, /data-note-bold-menu/, "不得再用右键加粗下拉框");
+assert.match(stickyHook, /function hiddenOnLoad/, "各页面便签必须在进入页面时默认隐藏，点击后才显示");
+assert.match(visualCard, /createPortal\(<div className="fixed z-\[120\] w-28/, "更多菜单必须浮到卡片外，避免被工具条裁切");
+assert.match(noteModel, /text-\[16px\] leading-\[26px\] tracking-\[-0.31px\]/, "正文必须使用 16px / 26px / -0.31px 字距");
+assert.match(noteModel, /gap-\[10px\]/, "段落间距必须为 10px");
+assert.match(noteModel, /p-5/, "文本框内边距必须为 20px");
+assert.match(stickyNote, /data-sticky-note-delete="true"/, "便签右键必须提供删除");
+assert.match(stickyHook, /const hide = /, "便签删除必须把面板从页面上收起");
+assert.match(dashboard, /onHide=\{stickyNote.hide\}/, "多机构分析便签必须支持右键删除收起");
+assert.match(supervision, /onHide=\{stickyNote.hide\}/, "机构督导便签必须支持右键删除收起");
+assert.match(weekly, /onHide=\{stickyNote.hide\}/, "经营周报便签必须支持右键删除收起");
+assert.match(builder, /onHide=\{stickyNote.hide\}/, "可视化报表便签必须支持右键删除收起");
+assert.match(selfAnalysis, /onHide=\{analysisSticky.hide\}/, "智能分析便签必须支持右键删除收起");
+assert.match(application, /_sanitize_note_html/, "便签加粗 HTML 必须在保存时清洗");
+assert.match(domain, /type: "text", label: "文本框"/, "文本框必须作为标准可视化样式出现在样式菜单中");
+assert.match(visualCard, /disabled=\{isTextCard\}/, "文本框样式下条件必须灰显");
+assert.match(visualCard, /data-visual-operation-toggle="true"/, "文本框可视化必须提供可展开收起的操作按钮");
+assert.match(dashboard, /StickyNoteButton onClick=\{stickyNote.show\}/, "多机构分析必须在编辑按钮左侧提供便签");
+assert.match(supervision, /StickyNoteButton onClick=\{stickyNote.show\}/, "机构督导必须在编辑按钮左侧提供便签");
+assert.match(weekly, /StickyNoteButton onClick=\{stickyNote.show\}/, "经营周报必须在编辑按钮左侧提供便签");
+assert.match(weekly, /一、业绩与业务波动[\s\S]*StickyNotePanel/, "经营周报便签必须出现在业绩与业务波动标题下、可视化图表上方");
+assert.match(builder, /StickyNoteButton onClick=\{stickyNote.show\}/, "可视化报表必须在存周报和保存之间提供便签");
+assert.ok(builder.indexOf('<DestinationButton label="存周报"') < builder.indexOf("<StickyNoteButton onClick={stickyNote.show}") && builder.indexOf("<StickyNoteButton onClick={stickyNote.show}") < builder.indexOf("data-visual-report-mode-toggle"), "可视化报表便签必须位于存周报右侧、保存左侧");
+assert.match(selfAnalysis, /StickyNoteButton size="compact" onClick=\{analysisSticky.show\}/, "智能分析必须在存周报和导出之间提供便签");
+assert.ok(selfAnalysis.indexOf('<BookmarkPlus className="w-3 h-3" /> 存周报') < selfAnalysis.indexOf('StickyNoteButton size="compact"') && selfAnalysis.indexOf('StickyNoteButton size="compact"') < selfAnalysis.indexOf('<Download className="w-3 h-3" /> 导出'), "智能分析便签必须位于存周报右侧、导出左侧");
+assert.match(application, /set_page_sticky_note/, "应用模块必须提供统一便签保存动作");
 assert.match(visualCard, /\{showFollowUp && <button[\s\S]*data-visual-follow-up="true"/, "追问按钮显示应由标准图表契约控制");
 for (const label of ["评论", "AI 分析", "留言板"]) assert.ok(contextRail.includes(label), `追问右侧栏必须保留${label}`);
 assert.match(library, /destination: Extract<VisualReportDestination, "mine" \| "weekly">/);
+assert.ok(!library.includes("window.confirm"), "可视化报表删除不得使用浏览器原生确认框");
+assert.match(library, /data-visual-report-delete-dialog="true"/, "可视化报表删除必须使用系统风格确认弹窗");
+assert.match(selfAnalysis, />精选<\/button>/);
 assert.match(selfAnalysis, />智能分析<\/button>/);
 assert.match(selfAnalysis, />可视化报表<\/button>/);
+assert.match(selfAnalysis, /data-featured-report-star="analysis"/);
+assert.match(selfAnalysis, /defaultMyReportsTab\(live\.length > 0\)/);
+assert.match(library, /data-featured-report-star="visual"/);
+assert.match(library, /featuredReports\.toggle\("visual", report\.id\)/);
+assert.match(featuredReports, /export function defaultMyReportsTab/);
+assert.match(featuredReports, /hasFeatured \? "featured" : "analysis"/);
+assert.match(featuredReports, /smart_data_agent_featured_reports_v1/);
+assert.ok(!featuredReports.includes("sample_report"), "精选列表不得写入样例报表");
 assert.match(dataTablePicker, /label: `多机构页面 \$\{pageDataTables\.length\}`/, "智能分析的数据表选择器必须提供多机构页面");
 assert.match(analysisRoute, /consumer="self_analysis"/, "智能分析必须通过受治理的多机构页面读取接口取数");
 assert.match(builder, />多机构页面 \{pageDataTables\.length\}<\/button>/, "可视化报表弹窗必须提供多机构页面");
 assert.match(builder, /pageCode: "visual_report"/, "可视化报表编辑器必须按自身消费者身份读取多机构页面");
-assert.match(cards, /pageCode: railPageKey === "my-reports" \? "my_reports" : "visual_report"/, "我的报表回读可视化报表时必须重新校验多机构页面授权");
+assert.match(cards, /railPageKey === "my-reports" \? "my_reports" : "visual_report"/, "我的报表回读可视化报表时必须重新校验多机构页面授权");
 assert.match(reportsRoute, /topic_data_store\.read_reference/, "我的报表智能分析 Tab 必须从分析执行的受治理快照回读数据");
 
 assert.match(application, /"upsert_visual_report", "delete_visual_report"/);

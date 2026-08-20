@@ -129,16 +129,22 @@ import {
   normalizeSavedAnalysisRows,
   extractPublishableAnalysisMaterial,
   extractCoreWeeklyAnalysisMaterial,
+  commentTargetFromRailReveal,
 } from "./weekly-report/domain";
 import { AnalysisUnderlineProvider, FloatingSelectionActions, SelectableRegion } from "./weekly-report/SelectableRegion";
 import { renderAnnotatedSvgText, renderAnnotatedText } from "./weekly-report/AnnotationText";
 import { WeeklyReportSideRail } from "./weekly-report/WeeklyReportSideRail";
-import { revealContextRail } from "./context-rail/ContextSideRail";
+import { contextRailRevealEvent, revealContextRail, type ContextRailRevealTarget, type ContextRailTab } from "./context-rail/ContextSideRail";
 import { AnalysisProgressPanel } from "./self-analysis/AnalysisProgressPanel";
 import { applyWeeklyCoreMetricSnapshot, buildWeeklyCoreMetricRows } from "./weekly-report/CoreMetrics";
 import { downloadWeeklyExport, downloadWeeklyExportPdf, prepareWeeklyExportDocument, weeklyExportFilename, weeklyExportHtml, type WeeklyExportFormat } from "./weekly-report/exportReport";
 import { PageDataModeToggle, PageDataVisualizationModules, usePageDataComposer } from "./page-data/PageDataComposer";
-import { useVisualReportCollection } from "./visual-report/VisualReportLibrary";
+import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
+import { NoteParagraphField } from "./notes/RichNoteEditor";
+import { NOTE_TEXT_CLASS, NOTE_TEXT_STYLE, placeCaretAtStart, selectionOffsetsWithin } from "./notes/richNote";
+import { useStickyNote } from "./notes/useStickyNote";
+import { useVisualReportCollection, VisualReportDeleteConfirm } from "./visual-report/VisualReportLibrary";
+import type { VisualReport } from "../services/visualReportApi";
 import { VisualReportCards } from "./visual-report/VisualReportCards";
 
 const WEEKLY_CORE_ANALYSIS_PROMPT = "结合在贷余额、放款金额、新增余额三个指标在不同机构、日期甚至客户经理下的数据表现，融合调用的指标记忆、skill进行分析，最终形成分析结论";
@@ -150,6 +156,7 @@ export function WeeklyReport() {
   const autoAnalysisStartedRef = useRef<Set<string>>(new Set());
   const { selectedInstitution, tenantId, userId, userName } = usePlatformContext();
   const weeklyPageData = usePageDataComposer({ pageCode: "weekly_report", moduleKey: "weekly_report", railPageKey: "weekly-report" });
+  const stickyNote = useStickyNote("weekly_report", "weekly_report");
   const weeklyVisualReports = useVisualReportCollection("weekly");
   const [reports, setReports] = useState(() => createWeeklyReports(selectedInstitution, userName, userId));
   const [, setSavedAt] = useState(
@@ -173,6 +180,8 @@ export function WeeklyReport() {
   const [weeklyBehaviorMemoryIds, setWeeklyBehaviorMemoryIds] = useState<string[] | null>(null);
   const [weeklyCoreContext, setWeeklyCoreContext] = useState<{ table: TopicTableAsset | null; skill: AnalysisSkillAsset | null }>({ table: null, skill: null });
   const [weeklyCoreDataReady, setWeeklyCoreDataReady] = useState(false);
+  const [pendingVisualReportDelete, setPendingVisualReportDelete] = useState<VisualReport | null>(null);
+  const [visualReportDeleting, setVisualReportDeleting] = useState(false);
   const [analysisProgressByBlock, setAnalysisProgressByBlock] = useState<Record<string, AnalysisProgressStep[]>>({});
   const [analysisErrorByBlock, setAnalysisErrorByBlock] = useState<Record<string, string>>({});
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
@@ -264,15 +273,6 @@ export function WeeklyReport() {
         deletable: false,
         sourceId: asset.id,
       })),
-      ...analysisModules.filter((module) => module.kind === "core").map((module) => ({
-        id: module.id,
-        kind: "core" as const,
-        title: module.title,
-        subtitle: `页面数据 · 分析时间：${module.analysisTime}`,
-        visible: module.visible,
-        deletable: false,
-        sourceId: module.id,
-      })),
       ...weeklyVisualReports.reports.map((report) => ({
         id: `visual-report:${report.id}`,
         kind: "visual-report" as const,
@@ -336,7 +336,7 @@ export function WeeklyReport() {
         );
         setWeeklyCoreContext({
           table: (bundle.topic_tables || []).find((table) => table.id === "topic_core_weekly_metrics") || null,
-          skill: (bundle.analysis_skills || []).find((skill) => skill.id === "topic-descriptive" && skill.enabled !== false) || null,
+          skill: (bundle.analysis_skills || []).find((skill) => skill.enabled !== false) || null,
         });
       })
       .catch(() => {
@@ -375,7 +375,7 @@ export function WeeklyReport() {
 
 
   useEffect(() => {
-    if (!coreMetricBlock || !weeklyCoreDataReady || weeklyBehaviorMemoryIds === null || !weeklyCoreContext.table || !weeklyCoreContext.skill || viewingHistoryVersionId) return;
+    if (!coreMetricBlock || !weeklyCoreDataReady || weeklyBehaviorMemoryIds === null || !weeklyCoreContext.table || viewingHistoryVersionId) return;
     const key = `${tenantId}:${activeReport.id}`;
     if (autoAnalysisStartedRef.current.has(key)) return;
     autoAnalysisStartedRef.current.add(key);
@@ -536,7 +536,7 @@ export function WeeklyReport() {
     const handleDocumentMouseDown = (event: MouseEvent) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
-      if (target.closest("[data-draft-id]") || target.closest("[data-weekly-selection-action]")) return;
+      if (target.closest("[data-draft-id], [data-weekly-selection-action], [data-visual-comment-action], [data-visual-follow-up], [data-context-rail]")) return;
 
       if (pendingTextSelection) {
         setPendingTextSelection(null);
@@ -562,6 +562,34 @@ export function WeeklyReport() {
     document.addEventListener("mousedown", handleDocumentMouseDown);
     return () => document.removeEventListener("mousedown", handleDocumentMouseDown);
   }, [commentDrafts, draftTargets, pendingTextSelection]);
+
+  useEffect(() => {
+    const onReveal = (event: Event) => {
+      const detail = (event as CustomEvent<{ pageKey?: string; tab?: ContextRailTab; target?: ContextRailRevealTarget }>).detail;
+      if (detail?.pageKey !== "weekly-report" || !detail.target) return;
+      const nextTarget = commentTargetFromRailReveal(detail.target);
+      if (detail.tab === "comments") {
+        setRightRailTab("comments");
+        setDraftTargets((current) => current.some((item) => item.id === nextTarget.id) ? current : [nextTarget, ...current]);
+        setCommentDrafts((current) => ({ ...current, [nextTarget.id]: current[nextTarget.id] || "" }));
+        setSelectedCommentTarget(nextTarget);
+        setPendingTextSelection(null);
+        setActiveDraftId(nextTarget.id);
+        setActiveCommentId(null);
+        return;
+      }
+      if (detail.tab === "analysis") {
+        setRightRailTab("analysis");
+        setAnalysisTarget(nextTarget);
+        setSelectedCommentTarget(nextTarget);
+        setPendingTextSelection(null);
+        setActiveCommentId(null);
+        setActiveDraftId(null);
+      }
+    };
+    window.addEventListener(contextRailRevealEvent, onReveal);
+    return () => window.removeEventListener(contextRailRevealEvent, onReveal);
+  }, []);
 
   function focusDraft(targetId: string) {
     setActiveDraftId(targetId);
@@ -783,8 +811,7 @@ export function WeeklyReport() {
     if (item.kind === "visual-report") {
       const report = weeklyVisualReports.reports.find((candidate) => candidate.id === item.sourceId);
       if (!report) return;
-      const removed = await weeklyVisualReports.remove(report);
-      if (removed) setAnalysisModuleSettings((current) => ({ ...current, preferences: current.preferences.filter((preference) => preference.id !== item.id) }));
+      setPendingVisualReportDelete(report);
       return;
     }
     if (item.kind === "saved-analysis") {
@@ -864,12 +891,12 @@ export function WeeklyReport() {
           model_application_module: "weekly_report_conclusion_regeneration",
           parent_task_id: taskId || null,
           analysis_skill: isCoreMetricBlock ? {
-            id: weeklyCoreContext.skill?.id || "topic-descriptive",
-            category: weeklyCoreContext.skill?.category || "主题",
+            id: "page-weekly-core",
+            category: "场景",
           } : null,
           analysis_context_skills: isCoreMetricBlock ? [{
-            id: weeklyCoreContext.skill?.id || "topic-descriptive",
-            category: weeklyCoreContext.skill?.category || "主题",
+            id: "page-weekly-core",
+            category: "场景",
           }] : [],
           analysis_memory_ids: isCoreMetricBlock ? weeklyBehaviorMemoryIds || [] : [],
           selected_data_tables: isCoreMetricBlock
@@ -1427,6 +1454,7 @@ export function WeeklyReport() {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <StickyNoteButton onClick={stickyNote.show} className="weekly-report-sticky-note-toggle" />
           <PageDataModeToggle controller={weeklyPageData} onSave={saveReportVersion} className="weekly-report-page-data-mode-toggle" />
           <div className="relative" data-weekly-history-menu="true">
             <button
@@ -1550,11 +1578,12 @@ export function WeeklyReport() {
                   />
                 </div>
               </div>
+              <StickyNotePanel className="mb-4" note={stickyNote.note} editing={stickyNote.editing} onChange={stickyNote.updateItems} onFinishEdit={stickyNote.finishEdit} onStartEdit={() => stickyNote.setEditing(true)} onHide={stickyNote.hide} uploadContext={stickyNote.uploadContext} />
               <div className="space-y-4">
                 {weeklyDataItems.filter((item) => item.visible).map((item) => {
                   let content: ReactNode;
                   if (item.kind === "page-data") {
-                    content = weeklyPageData.loading ? null : <PageDataVisualizationModules controller={weeklyPageData} className="" assetIds={[item.sourceId]} showEditorControls={false} layoutEditable={weeklyPageData.mode === "edit"} />;
+                    content = <PageDataVisualizationModules controller={weeklyPageData} className="" assetIds={[item.sourceId]} showEditorControls={false} layoutEditable={weeklyPageData.mode === "edit"} />;
                   } else if (item.kind === "visual-report") {
                     const report = weeklyVisualReports.reports.find((candidate) => candidate.id === item.sourceId);
                     content = report ? <section className="rounded-xl border border-[#eef1ef] bg-white p-4" data-weekly-visual-report={report.id}>
@@ -1733,6 +1762,30 @@ export function WeeklyReport() {
         />
         </AnalysisUnderlineProvider>
       </div>
+      {pendingVisualReportDelete && (
+        <VisualReportDeleteConfirm
+          destination="weekly"
+          report={pendingVisualReportDelete}
+          deleting={visualReportDeleting}
+          onCancel={() => {
+            if (!visualReportDeleting) setPendingVisualReportDelete(null);
+          }}
+          onConfirm={() => {
+            void (async () => {
+              setVisualReportDeleting(true);
+              const removed = await weeklyVisualReports.remove(pendingVisualReportDelete);
+              setVisualReportDeleting(false);
+              if (removed) {
+                setAnalysisModuleSettings((current) => ({
+                  ...current,
+                  preferences: current.preferences.filter((preference) => preference.id !== `visual-report:${pendingVisualReportDelete.id}`),
+                }));
+                setPendingVisualReportDelete(null);
+              }
+            })();
+          }}
+        />
+      )}
       {isExportDialogOpen && (
         <div
           className="weekly-report-print-hidden fixed inset-0 z-[120] flex items-center justify-center bg-black/20 px-4"
@@ -2021,7 +2074,7 @@ function ReportTable({
               placeholder={block.analysis.status === "分析中" ? "正在分析中…上方展示可审计的执行阶段；你可以直接输入，开始编辑后会立即停止本次模型分析。" : "点击重新生成，或直接在这里输入/修改分析结论。"}
               showHeader={false}
               articleClassName="rounded-lg bg-[#fafbfc] border border-[#f0f0f2]"
-              editorClassName="min-h-[92px] rounded-lg px-3 py-2 focus-within:border-[#c7c7cc]"
+              editorClassName="min-h-[92px] rounded-lg flex flex-col gap-[10px] p-5 focus-within:border-[#c7c7cc]"
               targetKind="analysis"
               commentBlockId={block.id}
               imageUploadContext={imageUploadContext}
@@ -2455,47 +2508,14 @@ function CommentableSvgText({
   );
 }
 
-function getCaretOffsetFromPoint(container: Element, x: number, y: number) {
-  const documentWithCaret = document as Document & {
-    caretRangeFromPoint?: (x: number, y: number) => Range | null;
-    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
-  };
-  const range = documentWithCaret.caretRangeFromPoint?.(x, y);
-  const position = !range ? documentWithCaret.caretPositionFromPoint?.(x, y) : null;
-  const node = range?.startContainer ?? position?.offsetNode;
-  const offset = range?.startOffset ?? position?.offset;
-  if (!node || typeof offset !== "number" || !container.contains(node)) return null;
-
-  const beforeSelection = document.createRange();
-  beforeSelection.selectNodeContents(container);
-  beforeSelection.setEnd(node, offset);
-  return beforeSelection.toString().length;
-}
-
-function estimateTextareaSelectionRect(textarea: HTMLTextAreaElement, start: number) {
-  const rect = textarea.getBoundingClientRect();
-  const style = window.getComputedStyle(textarea);
-  const lineHeight = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.7 || 20;
-  const paddingTop = Number.parseFloat(style.paddingTop) || 0;
-  const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
-  const fontSize = Number.parseFloat(style.fontSize) || 13;
-  const beforeSelection = textarea.value.slice(0, start);
-  const lines = beforeSelection.split("\n");
-  const lineIndex = Math.max(0, lines.length - 1);
-  const column = lines[lines.length - 1]?.length ?? 0;
-  const left = Math.min(rect.left + paddingLeft + column * fontSize * 0.55, rect.right - 16);
-  const top = rect.top + paddingTop + lineIndex * lineHeight;
-  return new DOMRect(left, top, 1, lineHeight);
-}
-
 function CommentableText({
   value,
+  html,
   target,
   annotations,
   highlightedCommentId,
   placeholder,
   className = "",
-  editableClassName = "",
   onChange,
   onPaste,
   onRemoveEmpty,
@@ -2503,57 +2523,37 @@ function CommentableText({
   onAnnotationClick,
 }: {
   value: string;
+  html?: string;
   target: CommentTarget;
   annotations: CommentItem[];
   highlightedCommentId: string | null;
   placeholder?: string;
   className?: string;
-  editableClassName?: string;
-  onChange: (value: string) => void;
-  onPaste?: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
+  onChange: (next: { text: string; html: string }) => void;
+  onPaste?: (event: ClipboardEvent<HTMLElement>) => void;
   onRemoveEmpty?: () => void;
   onCreateTextComment: (target: CommentTarget, rect: DOMRect) => void;
   onAnnotationClick: (commentId: string, rect?: DOMRect) => void;
 }) {
   const staticRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(!value);
 
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    textarea.style.height = "auto";
-    textarea.style.height = `${textarea.scrollHeight}px`;
-  }, [value, editing]);
-
-  function openEditor(caretOffset?: number | null) {
+  function openEditor() {
     setEditing(true);
-    window.setTimeout(() => {
-      const textarea = textareaRef.current;
-      if (!textarea) return;
-      const offset = Math.min(Math.max(caretOffset ?? value.length, 0), value.length);
-      textarea.focus();
-      textarea.setSelectionRange(offset, offset);
-    }, 0);
   }
 
-  function handleTextSelection() {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    if (end <= start) return;
-    const selectedText = value.slice(start, end);
-    if (!selectedText.trim()) return;
-
+  function handleSelection(container: HTMLElement | null) {
+    if (!container) return;
+    const payload = getSelectionPayloadWithin(container);
+    if (!payload) return;
     onCreateTextComment(
       {
         ...target,
-        selectedText: selectedText.trim(),
-        rangeStart: start,
-        rangeEnd: end,
+        selectedText: payload.selectedText.trim(),
+        rangeStart: payload.start,
+        rangeEnd: payload.end,
       },
-      estimateTextareaSelectionRect(textarea, start),
+      payload.rect,
     );
   }
 
@@ -2573,7 +2573,8 @@ function CommentableText({
       );
       return;
     }
-    openEditor(getCaretOffsetFromPoint(staticElement, event.clientX, event.clientY));
+    openEditor();
+    event.preventDefault();
   }
 
   function handleStaticKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -2582,35 +2583,17 @@ function CommentableText({
     openEditor();
   }
 
-  function handleTextareaBlur() {
+  function handleEditorBlur(event: ReactMouseEvent<HTMLDivElement> | { relatedTarget?: EventTarget | null }) {
     window.setTimeout(() => {
       const active = document.activeElement;
-      if (active && active.closest("[data-weekly-selection-action]")) return;
+      if (active && (active.closest("[data-weekly-selection-action]") || active.closest("[data-note-bold-action]"))) return;
       setEditing(false);
     }, 120);
   }
 
-  function handleTextareaKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
-    if (!onRemoveEmpty || value) return;
-    if (event.key !== "Backspace" && event.key !== "Delete") return;
-    event.preventDefault();
-    onRemoveEmpty();
-  }
-
-  return (
-    <div className={`relative ${className}`}>
-      {!value && placeholder && (
-        <span className="pointer-events-none absolute left-3 top-2 text-[12px] text-[#c7c7cc]">
-          {placeholder}
-        </span>
-      )}
-      <div
-        aria-hidden
-        className={`pointer-events-none absolute inset-0 whitespace-pre-wrap break-words ${editableClassName}`}
-      >
-        {value ? renderAnnotatedText(value, annotations, highlightedCommentId, onAnnotationClick) : ""}
-      </div>
-      {!editing && (
+  if (!editing) {
+    return (
+      <div className={`relative ${className}`}>
         <div
           ref={staticRef}
           role="textbox"
@@ -2619,26 +2602,39 @@ function CommentableText({
           data-comment-editor-id={target.itemId}
           onMouseUp={handleStaticMouseUp}
           onKeyDown={handleStaticKeyDown}
-          className={`absolute inset-0 z-20 cursor-text whitespace-pre-wrap break-words ${editableClassName}`}
+          className={`min-h-full min-h-[26px] cursor-text whitespace-pre-wrap ${NOTE_TEXT_CLASS}`}
+          style={NOTE_TEXT_STYLE}
         >
-          {value ? renderAnnotatedText(value, annotations, highlightedCommentId, onAnnotationClick) : ""}
+          {value
+            ? renderAnnotatedText(value, annotations, highlightedCommentId, onAnnotationClick)
+            : <span className="text-[#c4c4c8]">{placeholder}</span>}
         </div>
-      )}
-      <textarea
-        ref={textareaRef}
-        rows={1}
-        value={value}
-        placeholder={placeholder}
-        data-comment-editor-id={target.itemId}
-        onFocus={() => setEditing(true)}
-        onBlur={handleTextareaBlur}
-        onPaste={onPaste}
-        onKeyDown={handleTextareaKeyDown}
-        onChange={(event) => onChange(event.currentTarget.value)}
-        onMouseUp={() => window.setTimeout(handleTextSelection)}
-        onKeyUp={() => window.setTimeout(handleTextSelection)}
-        className={`relative z-10 block resize-none overflow-hidden bg-transparent text-transparent caret-[#3a3a3c] outline-none selection:bg-[#dce9ff] ${editableClassName}`}
-        style={{ WebkitTextFillColor: "transparent" }}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`relative flex min-h-full flex-col ${className}`}
+      onBlur={() => handleEditorBlur({})}
+      onMouseUp={(event) => handleSelection(event.currentTarget)}
+      onKeyDown={(event) => {
+        if (!onRemoveEmpty || value) return;
+        if (event.key !== "Backspace" && event.key !== "Delete") return;
+        event.preventDefault();
+        onRemoveEmpty();
+      }}
+    >
+      <NoteParagraphField
+        item={{ id: target.itemId || "line", text: value, html }}
+        placeholder={placeholder || ""}
+        readOnly={false}
+        autoFocus
+        fillHeight
+        identityAttr="data-comment-editor-id"
+        editorId={target.itemId}
+        onChange={onChange}
+        onPasteImages={onPaste}
       />
     </div>
   );
@@ -2669,8 +2665,8 @@ function EditableParagraph({
   commentBlockId?: string;
   targetType?: CommentTarget["type"];
   targetLabel?: string;
-  onChange: (value: string) => void;
-  onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
+  onChange: (next: { text: string; html: string }) => void;
+  onPaste: (event: ClipboardEvent<HTMLElement>) => void;
   onRemoveEmpty?: () => void;
   onCreateTextComment: (target: CommentTarget, rect: DOMRect) => void;
   onAnnotationClick: (commentId: string, rect?: DOMRect) => void;
@@ -2678,6 +2674,7 @@ function EditableParagraph({
   return (
     <CommentableText
       value={item.text}
+      html={item.html}
       target={{
         id: `${block.id}_${item.id}_selection`,
         label: targetLabel || `${block.title} / 选中文本`,
@@ -2695,7 +2692,6 @@ function EditableParagraph({
       onCreateTextComment={onCreateTextComment}
       onAnnotationClick={onAnnotationClick}
       className=""
-      editableClassName="min-h-[28px] w-full whitespace-pre-wrap break-words bg-transparent px-0 py-1 text-[13px] text-[#3a3a3c] leading-[1.7] outline-none"
     />
   );
 }
@@ -2883,7 +2879,7 @@ function TextSection({
   onAnnotationClick,
   showHeader = true,
   articleClassName = "rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-4",
-  editorClassName = "bg-white rounded-lg border border-[#f0f0f2] px-3 py-2 focus-within:border-[#c7c7cc]",
+  editorClassName = "bg-white rounded-lg border border-[#f0f0f2] flex flex-col gap-[10px] p-5 focus-within:border-[#c7c7cc]",
   targetKind = "paragraph",
   commentBlockId,
   placeholder = "输入正文，或直接粘贴图片...",
@@ -2921,49 +2917,48 @@ function TextSection({
     onChange(nextItems.length ? nextItems : [{ id: makeId(`${block.id}_line`), type: "paragraph", text: "" }]);
   }
 
-  function updateParagraph(index: number, value: string) {
+  function updateParagraph(index: number, next: { text: string; html: string }) {
     const nextItems = [...items];
-    nextItems[index] = { ...nextItems[index], type: "paragraph", text: value } as RichContentItem;
+    const current = nextItems[index];
+    if (!current || current.type !== "paragraph") return;
+    nextItems[index] = { ...current, type: "paragraph", text: next.text, html: next.html };
     commit(nextItems);
   }
 
   async function pasteImagesAtCursor(
-    event: ClipboardEvent<HTMLTextAreaElement>,
+    event: ClipboardEvent<HTMLElement>,
     index: number,
     item: Extract<RichContentItem, { type: "paragraph" }>,
   ) {
     const files = Array.from(event.clipboardData.items)
-      .filter((item) => item.type.startsWith("image/"))
-      .map((item) => item.getAsFile())
+      .filter((entry) => entry.type.startsWith("image/"))
+      .map((entry) => entry.getAsFile())
       .filter((file): file is File => Boolean(file));
 
     if (!files.length) return;
     event.preventDefault();
-    const textarea = event.currentTarget;
-    const selectionStart = textarea.selectionStart ?? item.text.length;
-    const selectionEnd = textarea.selectionEnd ?? selectionStart;
-    const beforeText = item.text.slice(0, selectionStart);
-    const afterText = item.text.slice(selectionEnd);
+    const editor = event.currentTarget;
+    const offsets = selectionOffsetsWithin(editor, item.text.length);
+    const beforeText = item.text.slice(0, offsets.start);
+    const afterText = item.text.slice(offsets.end);
     const afterParagraphId = makeId(`${block.id}_line`);
-    const editorWidth = textarea.closest<HTMLElement>("[data-rich-text-editor]")?.clientWidth || textarea.clientWidth || 560;
+    const editorWidth = editor.closest<HTMLElement>("[data-rich-text-editor]")?.clientWidth || editor.clientWidth || 560;
     const maxImageWidth = Math.max(220, Math.min(editorWidth - 12, 680));
     const imageItems: RichContentItem[] = await Promise.all(
       files.map((file) => createRichImageItem(`${block.id}_image`, file, maxImageWidth, imageUploadContext)),
     );
     const replacementItems: RichContentItem[] = [
-      ...(beforeText.length ? [{ ...item, text: beforeText }] : []),
+      ...(beforeText.length ? [{ ...item, text: beforeText, html: beforeText }] : []),
       ...imageItems,
-      { id: afterParagraphId, type: "paragraph" as const, text: afterText },
+      { id: afterParagraphId, type: "paragraph" as const, text: afterText, html: afterText },
     ];
     const nextItems = [...items];
     nextItems.splice(index, 1, ...replacementItems);
     commit(nextItems);
     window.setTimeout(() => {
-      const nextEditor = document.querySelector(`textarea[data-comment-editor-id="${afterParagraphId}"]`) as HTMLTextAreaElement | null;
-      if (!nextEditor) return;
-      const offset = 0;
-      nextEditor.focus();
-      nextEditor.setSelectionRange(offset, offset);
+      const nextEditor = document.querySelector(`[data-comment-editor-id="${afterParagraphId}"]`) as HTMLElement | null;
+      nextEditor?.focus();
+      placeCaretAtStart(nextEditor);
     }, 0);
   }
 
@@ -3005,9 +3000,9 @@ function TextSection({
       commit(nextItems);
     }
     window.setTimeout(() => {
-      const editor = document.querySelector(`textarea[data-comment-editor-id="${paragraphId}"]`) as HTMLTextAreaElement | null;
+      const editor = document.querySelector(`[data-comment-editor-id="${paragraphId}"]`) as HTMLElement | null;
       editor?.focus();
-      editor?.setSelectionRange(0, 0);
+      placeCaretAtStart(editor);
     }, 0);
   }
 
@@ -3044,7 +3039,7 @@ function TextSection({
                   targetType="文本"
                   targetLabel={`${block.title} / 选中文本`}
                   onPaste={(event) => pasteImagesAtCursor(event, index, item)}
-                  onChange={(value) => updateParagraph(index, value)}
+                  onChange={(next) => updateParagraph(index, next)}
                   onRemoveEmpty={() => removeParagraph(index)}
                   onCreateTextComment={onCreateTextComment}
                   onAnnotationClick={onAnnotationClick}

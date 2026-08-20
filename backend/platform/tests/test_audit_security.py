@@ -45,6 +45,22 @@ class AuditSecurityTest(unittest.TestCase):
         self.assertLessEqual(len(payload["logs"]), 20)
         self.assertTrue(all(item["actor_user_id"] == "u_super_admin" for item in payload["logs"]))
         self.assertTrue(all(item["actor_name"] == "胥京波" for item in payload["logs"]))
+        self.assertIn("since", payload)
+
+    def test_audit_actor_name_survives_missing_user_profile(self):
+        from backend.platform.api.routes.audit import _with_actor_name
+
+        class _BrokenStore:
+            def get_profile(self, user_id):
+                raise KeyError(user_id)
+
+        handler = type("Handler", (), {
+            "services": type("Services", (), {
+                "access_service": type("Access", (), {"user_store": _BrokenStore()})(),
+            })(),
+        })()
+        named = _with_actor_name(handler, {"event_id": "e1", "actor_user_id": "u_missing"})
+        self.assertEqual(named["actor_name"], "未知用户")
 
     def test_audit_store_returns_stable_twenty_row_pages(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -68,6 +84,27 @@ class AuditSecurityTest(unittest.TestCase):
         self.assertEqual(len(first_page), 20)
         self.assertEqual(len(second_page), 5)
         self.assertFalse({item["event_id"] for item in first_page} & {item["event_id"] for item in second_page})
+
+    def test_audit_store_filters_events_older_than_seven_days(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "platform.sqlite"
+            audit = SQLiteAuditEventStore(db_path)
+            try:
+                recent = audit.write(tenant_id="tenant_demo", actor_user_id="u_admin", action="audit.recent", target_type="test")
+                stale = audit.write(tenant_id="tenant_demo", actor_user_id="u_admin", action="audit.stale", target_type="test")
+                audit._conn.execute(
+                    "UPDATE platform_audit_events SET created_at = ? WHERE event_id = ?",
+                    ("2020-01-01T00:00:00+00:00", stale["event_id"]),
+                )
+                audit._conn.commit()
+                since = "2026-08-12T00:00:00+00:00"
+                listed = audit.list_for_tenants(["tenant_demo"], since=since)
+                total = audit.count_for_tenants(["tenant_demo"], since=since)
+            finally:
+                audit.close()
+
+        self.assertEqual(total, 1)
+        self.assertEqual([item["event_id"] for item in listed], [recent["event_id"]])
 
     def test_audit_and_action_history_redact_secrets_and_large_business_content(self) -> None:
         with TemporaryDirectory() as tmpdir:

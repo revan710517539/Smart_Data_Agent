@@ -166,6 +166,84 @@ class MetricDictionaryImportTest(unittest.TestCase):
         self.assertIn("以下指标名称存在冲突：动支率", str(response["message"]))
         self.assertIn("指标库中已有的同名指标", str(response["message"]))
 
+    def test_import_endpoint_uses_single_batch_write_when_available(self) -> None:
+        class Store:
+            def __init__(self) -> None:
+                self.batch: list[dict[str, object]] = []
+                self.single = 0
+
+            def list(self, tenant_id: str) -> list[dict[str, object]]:
+                return []
+
+            def upsert(self, tenant_id: str, metric: dict[str, object], updated_by: str) -> dict[str, object]:
+                self.single += 1
+                return metric
+
+            def upsert_many(self, tenant_id: str, metrics: list[dict[str, object]], updated_by: str) -> list[dict[str, object]]:
+                self.batch.extend(metrics)
+                return metrics
+
+        store = Store()
+        repository = SimpleNamespace(get_user_roles=lambda user_id, tenant_id: [], get_role=lambda role_id: None)
+        handler = SimpleNamespace()
+        handler.services = SimpleNamespace(
+            metric_dictionary_store=store,
+            permission_broker=SimpleNamespace(enforcer=SimpleNamespace(repository=repository)),
+        )
+        handler._read_json = lambda max_bytes: {"file_name": "metrics.xlsx", "file_content_base64": "ignored"}
+        handler._request_context = lambda payload: SimpleNamespace(tenant_id="tenant:test", user_id="u_admin")
+        handler._require_metric_permission = lambda context, action: None
+        handler._write_audit = lambda *args, **kwargs: None
+        response: dict[str, object] = {}
+        handler._send_json = lambda payload: response.update(payload)
+
+        with patch(
+            "backend.platform.api.routes.metrics.parse_metric_workbook",
+            return_value=[
+                {"metricName": "新增余额", "definition": "余额"},
+                {"metricName": "动支率", "definition": "动支"},
+            ],
+        ):
+            handle_metric_dictionary_import(handler)
+
+        self.assertEqual(store.single, 0)
+        self.assertEqual(len(store.batch), 2)
+        self.assertEqual(response["created_count"], 2)
+
+    def test_memory_upsert_many_is_atomic_on_name_conflict(self) -> None:
+        from backend.platform.metrics.store import InMemoryMetricDictionaryStore
+
+        store = InMemoryMetricDictionaryStore()
+        store.upsert("tenant:test", {"metricId": "M00001", "metricName": "已有指标"}, updated_by="u_admin")
+        with self.assertRaises(ValueError):
+            store.upsert_many(
+                "tenant:test",
+                [
+                    {"metricId": "M00002", "metricName": "新指标"},
+                    {"metricId": "M00003", "metricName": "已有指标"},
+                ],
+                updated_by="u_admin",
+            )
+        self.assertEqual([item["metricId"] for item in store.list("tenant:test")], ["M00001"])
+
+    def test_sqlite_upsert_many_writes_the_batch_in_one_pass(self) -> None:
+        from backend.platform.metrics.store import SQLiteMetricDictionaryStore
+
+        store = SQLiteMetricDictionaryStore(":memory:")
+        try:
+            saved = store.upsert_many(
+                "tenant:test",
+                [
+                    {"metricId": "M00010", "metricName": "指标甲"},
+                    {"metricId": "M00011", "metricName": "指标乙"},
+                ],
+                updated_by="u_admin",
+            )
+            self.assertEqual([item["metricId"] for item in saved], ["M00010", "M00011"])
+            self.assertEqual([item["metricId"] for item in store.list("tenant:test")], ["M00010", "M00011"])
+        finally:
+            store.close()
+
 
 if __name__ == "__main__":
     unittest.main()

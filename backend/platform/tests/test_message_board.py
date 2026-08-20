@@ -182,6 +182,43 @@ class MessageBoardTest(unittest.TestCase):
         self.assertEqual(reviewer_status, 200)
         self.assertNotIn("task-workbench.message-board", reviewer_nav["menu_keys"])
 
+    def test_admin_list_and_status_stay_on_selected_tenant(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                demo_id = "mb_cccccccccccccccccccccccccccccccc"
+                other_id = "mb_dddddddddddddddddddddddddddddddd"
+                created_demo, _ = self._request(port, "POST", "/api/message-board", "u_reviewer", "tenant_demo", {
+                    "message_id": demo_id, "page_key": "weekly-report", "page_title": "经营周报",
+                    "page_url": "/weekly-report", "content": "演示机构留言", "quote_context": {}, "attachment_ids": [],
+                })
+                created_other, _ = self._request(port, "POST", "/api/message-board", "u_super_admin", "tenant_other", {
+                    "message_id": other_id, "page_key": "weekly-report", "page_title": "经营周报",
+                    "page_url": "/weekly-report", "content": "其他机构留言", "quote_context": {}, "attachment_ids": [],
+                })
+                demo_admin_status, demo_admin = self._request(port, "GET", "/api/message-board/admin", "u_super_admin", "tenant_demo")
+                other_admin_status, other_admin = self._request(port, "GET", "/api/message-board/admin", "u_super_admin", "tenant_other")
+                cross_status, _ = self._request(port, "PUT", "/api/message-board/admin/status", "u_super_admin", "tenant_demo", {
+                    "message_id": other_id, "status": "adopted", "expected_lock_version": 0,
+                })
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertEqual(created_demo, 200)
+        self.assertEqual(created_other, 200)
+        self.assertEqual(demo_admin_status, 200)
+        self.assertEqual(other_admin_status, 200)
+        self.assertEqual([item["message_id"] for item in demo_admin["messages"]], [demo_id])
+        self.assertEqual([item["message_id"] for item in other_admin["messages"]], [other_id])
+        self.assertEqual(demo_admin["tenant_id"], "tenant_demo")
+        self.assertEqual(other_admin["tenant_id"], "tenant_other")
+        self.assertEqual(cross_status, 403)
+
     @staticmethod
     def _request(port: int, method: str, path: str, user_id: str, tenant_id: str, payload: dict | None = None) -> tuple[int, dict]:
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)

@@ -22,6 +22,7 @@ from .store import (
     _sort_key,
     _raw_table_external_reference_record,
     _validate_asset_schema,
+    visible_items_for_tenant,
 )
 
 
@@ -424,7 +425,11 @@ class PostgreSQLDataAssetStore:
                     (tenant_key, item_type),
                     published=published,
                 )
-                result[output_key] = sorted((self._asset_from_row(item_type, row) for row in rows), key=_sort_key)
+                result[output_key] = visible_items_for_tenant(
+                    tenant_id,
+                    item_type,
+                    sorted((self._asset_from_row(item_type, row) for row in rows), key=_sort_key),
+                )
         return result
 
     @staticmethod

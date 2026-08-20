@@ -98,11 +98,13 @@ from .assets import (
     handle_data_assets_get,
     handle_multi_institution_page_data_candidates_get,
     handle_page_data_rows_get,
+    handle_page_data_workspace_get,
     handle_table_relationship_catalog_get,
     handle_raw_table_external_reference_update,
     handle_topic_data_get,
 )
 from .audit import handle_audit_logs_get
+from .supervisor import handle_supervisor_chat
 from .auth import (
     handle_auth_login,
     handle_auth_logout,
@@ -242,6 +244,7 @@ GET_ROUTE_HANDLERS = {
     "/api/data-assets/page-data/multi-institution-candidates": handle_multi_institution_page_data_candidates_get,
     "/api/data-assets/table-relationships/catalog": handle_table_relationship_catalog_get,
     "/api/data-assets/page-data/rows": handle_page_data_rows_get,
+    "/api/data-assets/page-data/workspace": handle_page_data_workspace_get,
     "/api/integrations/workbuddy/context": handle_workbuddy_context_get,
     "/api/integrations/codex/context": handle_codex_context_get,
     "/api/integrations/qwork/context": handle_qwork_context_get,
@@ -299,6 +302,7 @@ POST_ROUTE_HANDLERS = {
     "/api/analysis/threads/turns": handle_analysis_turn_append,
     "/api/analysis/threads/merge": handle_analysis_threads_merge,
     "/api/analysis/visualization-plan": handle_analysis_visualization_plan,
+    "/api/agent-supervisor/chat": handle_supervisor_chat,
     "/api/system-config/model": handle_system_model_upsert,
     "/api/system-config/model/test": handle_system_model_test,
     "/api/system-config/speech-integration": handle_system_speech_integration_upsert,

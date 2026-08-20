@@ -1,5 +1,6 @@
 import type { AnalysisRow, VisualizationType } from "../self-analysis/domain";
 import type { FieldDisplayMetadata } from "../../data/fieldSemantics";
+import type { RichNoteItem } from "../notes/richNote";
 
 export type VisualizationFilters = Record<string, string[]>;
 
@@ -31,6 +32,14 @@ export type VisualizationCardConfig = {
   filterGroups: VisualizationFilterGroup[];
   sumFilteredRows: boolean;
   comboLineFields: string[];
+  noteTitle?: string;
+  noteBody?: string;
+  noteTitleHidden?: boolean;
+  noteItems?: RichNoteItem[];
+  layoutSpan?: number;
+  layoutHeight?: number;
+  maxLayoutSpan?: number;
+  maxLayoutHeight?: number;
 };
 
 export type VisualDataPoint = {
@@ -54,6 +63,7 @@ const unlimited = Number.MAX_SAFE_INTEGER;
 export function visualizationFieldPolicy(type: VisualizationType): VisualizationFieldPolicy {
   if (type === "scatter") return { minimumMetrics: 2, maximumMetrics: 2, maximumDimensions: unlimited, defaultMetricCount: 2, defaultDimensionCount: 1, preferTimeDimension: false };
   if (type === "treemap") return { minimumMetrics: 1, maximumMetrics: 1, maximumDimensions: unlimited, defaultMetricCount: 1, defaultDimensionCount: 1, preferTimeDimension: false };
+  if (type === "text") return { minimumMetrics: 0, maximumMetrics: unlimited, maximumDimensions: unlimited, defaultMetricCount: 0, defaultDimensionCount: 0, preferTimeDimension: false };
   if (type === "kpi") return { minimumMetrics: 1, maximumMetrics: unlimited, maximumDimensions: 1, defaultMetricCount: 4, defaultDimensionCount: 0, preferTimeDimension: false };
   if (type === "table" || type === "pivot") return { minimumMetrics: 1, maximumMetrics: unlimited, maximumDimensions: unlimited, defaultMetricCount: 4, defaultDimensionCount: 2, preferTimeDimension: false };
   if (type === "line" || type === "area") return { minimumMetrics: 1, maximumMetrics: unlimited, maximumDimensions: unlimited, defaultMetricCount: 4, defaultDimensionCount: 1, preferTimeDimension: true };

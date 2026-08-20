@@ -28,7 +28,9 @@ def handle_auth_login(handler: Any) -> None:
         email = str(payload.get("email") or "").strip()
         password = str(payload.get("password") or "")
         expected_password = os.getenv("SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD", "")
-        if not expected_password or not hmac.compare_digest(password, expected_password):
+        if not expected_password:
+            raise ValueError("development_login_password_unconfigured")
+        if not hmac.compare_digest(password, expected_password):
             raise ValueError("invalid_login_credentials")
         tenant_hint = str(payload.get("tenant_id") or payload.get("institution") or "").strip() or None
         session = handler.services.access_service.login_by_email(email, tenant_hint=tenant_hint)

@@ -388,7 +388,10 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         for tenant_id in [normalize_tenant_id(tenant) for tenant in OPERATING_TENANTS] + [LEGACY_TENANT_ID]:
             bundle = data_asset_store.list_bundle(tenant_id)
             if not bundle.get("raw_tables"):
-                data_asset_store.seed_defaults(tenant_id)
+                if tenant_id == LEGACY_TENANT_ID:
+                    data_asset_store.seed_defaults(tenant_id)
+                else:
+                    data_asset_store.seed_missing_defaults(tenant_id)
             else:
                 data_asset_store.seed_missing_defaults(tenant_id)
             purge_retired_samples = getattr(data_asset_store, "purge_retired_sample_assets", None)

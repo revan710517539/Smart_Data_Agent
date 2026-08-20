@@ -24,9 +24,11 @@ from backend.platform.settings import (
 )
 from backend.platform.settings.model_modules import list_models_for_application
 from backend.platform.settings.store import (
+    GLOBAL_SYSTEM_CONFIG_TENANT,
     account_system_config_scope,
     system_config_external_code,
     system_config_storage_code,
+    system_config_storage_locations,
     system_config_storage_prefix,
     system_config_storage_tenant,
 )
@@ -112,6 +114,45 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
         self.assertEqual(preset["availableModels"], list(DEFAULT_RELAY_SHARED_MODELS))
         self.assertEqual(preset["enabledModels"], list(DEFAULT_RELAY_SHARED_MODELS))
 
+    def test_analysis_runtime_config_exposes_account_models_for_any_institution(self) -> None:
+        with TemporaryDirectory() as tmpdir, patch.dict(
+            "os.environ",
+            {"SMART_DATA_AGENT_DEFAULT_MODEL_API_KEY": ""},
+        ):
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+
+                def read(tenant_id: str) -> dict[str, object]:
+                    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                    conn.request(
+                        "GET",
+                        f"/api/asr/fun-asr/runtime-config?tenant_id={quote(tenant_id)}&user_id=u_super_admin&application_module=realtime_voice_input",
+                        headers={"X-User-Id": "u_super_admin", "X-Tenant-Id": quote(tenant_id)},
+                    )
+                    response = conn.getresponse()
+                    return {"status": response.status, **json.loads(response.read().decode("utf-8"))}
+
+                hankou = read(normalize_tenant_id("汉口银行"))
+                huaxing = read(normalize_tenant_id("华兴银行"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertEqual(hankou["status"], 200)
+        self.assertEqual(huaxing["status"], 200)
+        hankou_ids = {item["id"] for item in hankou["analysisModels"]}
+        huaxing_ids = {item["id"] for item in huaxing["analysisModels"]}
+        self.assertIn(DEFAULT_RELAY_MODEL_ID, hankou_ids)
+        self.assertEqual(hankou_ids, huaxing_ids)
+        relay = next(item for item in hankou["analysisModels"] if item["id"] == DEFAULT_RELAY_MODEL_ID)
+        self.assertEqual(relay["applicationModule"], "global_text_model")
+        self.assertEqual(relay["enabledModels"], list(DEFAULT_RELAY_SHARED_MODELS))
+        self.assertEqual(relay.get("value"), "")
+
     def test_system_config_skips_authorized_but_unprovisioned_parameter_scopes(self) -> None:
         class RelationalStoreStub:
             def get_model(self, tenant_id: str, model_id: str, reveal_secret: bool = False):
@@ -194,6 +235,123 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
         self.assertNotEqual(system_config_storage_prefix(first_scope), system_config_storage_prefix(second_scope))
         self.assertNotEqual(first_code, second_code)
         self.assertEqual(system_config_external_code(first_scope, first_code), "model_shared")
+        self.assertEqual(
+            system_config_storage_locations(first_scope),
+            ((GLOBAL_SYSTEM_CONFIG_TENANT, "prefixed"), (first_scope, "raw")),
+        )
+        self.assertEqual(system_config_storage_locations("tenant:华兴银行"), (("tenant:华兴银行", "raw"),))
+
+    def test_system_config_restores_leftover_tenant_models_and_speech_on_same_institution(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            store = server.services.system_config_store
+            huaxing = normalize_tenant_id("华兴银行")
+            zhengzhou = normalize_tenant_id("郑州银行")
+            store.upsert_model(
+                huaxing,
+                {
+                    "id": "model_1786295124248",
+                    "name": "GPT等",
+                    "modelName": "中转站",
+                    "key": "https://legacy.example/v1",
+                    "value": "legacy-gpt-secret",
+                    "status": "available",
+                },
+                updated_by="u_super_admin",
+            )
+            store.upsert_speech_integration(
+                huaxing,
+                {
+                    "id": "speech_1783531230043",
+                    "name": "Fun-ASR",
+                    "provider": "aliyun_fun_asr",
+                    "apiBase": "https://legacy-asr.example/api/v1",
+                    "apiKey": "legacy-asr-secret",
+                    "status": "available",
+                },
+                updated_by="u_super_admin",
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+
+                def read(tenant_id: str) -> dict[str, object]:
+                    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                    conn.request(
+                        "GET",
+                        f"/api/system-config?tenant_id={quote(tenant_id)}&user_id=u_super_admin",
+                    )
+                    response = conn.getresponse()
+                    return {"status": response.status, **json.loads(response.read().decode("utf-8"))}
+
+                same_institution = read(huaxing)
+                other_institution = read(zhengzhou)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertEqual(same_institution["status"], 200)
+        self.assertIn("model_1786295124248", {item["id"] for item in same_institution["models"]})
+        self.assertIn("speech_1783531230043", {item["id"] for item in same_institution["speech_integrations"]})
+        self.assertNotIn("legacy-gpt-secret", json.dumps(same_institution, ensure_ascii=False))
+        self.assertNotIn("legacy-asr-secret", json.dumps(same_institution, ensure_ascii=False))
+        self.assertNotIn("model_1786295124248", {item["id"] for item in other_institution["models"]})
+        self.assertNotIn("speech_1783531230043", {item["id"] for item in other_institution["speech_integrations"]})
+
+    def test_system_config_keeps_single_account_speech_when_leftover_exists(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            store = server.services.system_config_store
+            huaxing = normalize_tenant_id("华兴银行")
+            store.upsert_speech_integration(
+                account_system_config_scope("u_super_admin"),
+                {
+                    "id": "speech_account_global",
+                    "name": "Fun-ASR",
+                    "provider": "aliyun_fun_asr",
+                    "apiBase": "https://account-asr.example/api/v1",
+                    "apiKey": "account-asr-secret",
+                    "applicationModule": "global_voice_model",
+                    "status": "available",
+                },
+                updated_by="u_super_admin",
+            )
+            store.upsert_speech_integration(
+                huaxing,
+                {
+                    "id": "speech_tenant_leftover",
+                    "name": "阿里云 Fun-ASR",
+                    "provider": "aliyun_fun_asr",
+                    "apiBase": "https://legacy-asr.example/api/v1",
+                    "apiKey": "legacy-asr-secret",
+                    "applicationModule": "popup_voice_input",
+                    "status": "available",
+                },
+                updated_by="u_super_admin",
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                conn.request(
+                    "GET",
+                    f"/api/system-config?tenant_id={quote(huaxing)}&user_id=u_super_admin",
+                )
+                response = conn.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        speech_ids = [item["id"] for item in payload["speech_integrations"]]
+        self.assertEqual(response.status, 200)
+        self.assertEqual(speech_ids, ["speech_account_global"])
+        self.assertEqual(payload["speech_integrations"][0]["applicationModule"], "global_voice_model")
+        self.assertNotIn("legacy-asr-secret", json.dumps(payload, ensure_ascii=False))
 
     def test_analysis_direct_selection_resolves_account_model(self) -> None:
         services = build_local_platform()
@@ -266,7 +424,8 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
             preserved = services.system_config_store.get_model(
                 account_system_config_scope("u_lina"), DEFAULT_RELAY_MODEL_ID, reveal_secret=True
             )
-            self.assertEqual(preserved["key"], "https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net")
+            self.assertEqual(preserved["name"], "默认模型")
+            self.assertEqual(preserved["key"], "https://custom.example/v1")
             self.assertEqual(preserved["applicationModule"], "global_text_model")
         finally:
             services.close()
@@ -312,7 +471,7 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
         self.assertEqual(template["status"], "available")
         self.assertEqual(template["name"], "默认模型")
         self.assertEqual(template["enabledModels"], ["360/deepseek-v4-flash"])
-        self.assertEqual(restored["value"], "account-secret")
+        self.assertEqual(restored["value"], "stale-secret")
         self.assertEqual(restored["enabledModels"], ["360/deepseek-v4-flash"])
 
     def test_fresh_local_platform_has_no_synthetic_admin_account(self) -> None:
@@ -358,7 +517,7 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
                 rebuilt.close()
 
         self.assertEqual(saved["name"], "默认模型")
-        self.assertEqual(saved["key"], "https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net")
+        self.assertEqual(saved["key"], "https://stale.example/v1")
         self.assertEqual(saved["applicationModule"], "global_text_model")
 
     def test_new_model_saved_in_one_institution_is_visible_to_the_same_account_elsewhere(self) -> None:
@@ -510,6 +669,61 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
         self.assertIsNotNone(saved)
         self.assertEqual(saved["applicationModule"], "global_text_model")
         self.assertEqual(saved["key"], "https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net")
+
+    def test_account_can_change_default_relay_url_and_key_without_get_reverting(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            configure_default_relay_model(server.services.system_config_store, "test-default-secret")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                tenant_id = normalize_tenant_id("华兴银行")
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                conn.request(
+                    "POST",
+                    "/api/system-config/model",
+                    body=json.dumps(
+                        {
+                            "user_id": "u_super_admin",
+                            "tenant_id": tenant_id,
+                            "model": {
+                                "id": DEFAULT_RELAY_MODEL_ID,
+                                "name": "默认模型",
+                                "modelName": "中转站",
+                                "key": "https://custom-relay.example/v1",
+                                "value": "account-edited-secret",
+                                "applicationModule": "global_text_model",
+                                "status": "draft",
+                            },
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                save_response = conn.getresponse()
+                save_payload = json.loads(save_response.read().decode("utf-8"))
+                read_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                read_conn.request(
+                    "GET",
+                    f"/api/system-config?tenant_id={quote(tenant_id)}&user_id=u_super_admin",
+                )
+                read_response = read_conn.getresponse()
+                read_payload = json.loads(read_response.read().decode("utf-8"))
+                stored = server.services.system_config_store.get_model(
+                    account_system_config_scope("u_super_admin"), DEFAULT_RELAY_MODEL_ID, reveal_secret=True
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertEqual(save_response.status, 200)
+        self.assertEqual(save_payload["model"]["key"], "https://custom-relay.example/v1")
+        default = next(item for item in read_payload["models"] if item["id"] == DEFAULT_RELAY_MODEL_ID)
+        self.assertEqual(default["name"], "默认模型")
+        self.assertEqual(default["key"], "https://custom-relay.example/v1")
+        self.assertEqual(stored["value"], "account-edited-secret")
 
 
 if __name__ == "__main__":

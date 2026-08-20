@@ -25,6 +25,7 @@ from .store import (
     account_system_config_scope,
     system_config_external_code,
     system_config_storage_code,
+    system_config_storage_locations,
     system_config_storage_prefix,
     system_config_storage_tenant,
 )
@@ -43,32 +44,19 @@ class PostgreSQLSystemConfigStore:
 
     def list_models(self, tenant_id: str, reveal_secret: bool = False) -> list[dict[str, Any]]:
         with self.pool.connection() as connection:
-            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, system_config_storage_tenant(tenant_id))
-            prefix = system_config_storage_prefix(tenant_id)
-            with connection.cursor() as cursor:
-                if prefix:
-                    cursor.execute(
-                        self._model_select() + " WHERE m.tenant_id = %s AND m.integration_code LIKE %s ORDER BY m.integration_code",
-                        (tenant_key, f"{prefix}%"),
-                    )
-                else:
-                    cursor.execute(self._model_select() + " WHERE m.tenant_id = %s ORDER BY m.integration_code", (tenant_key,))
-                rows = cursor.fetchall()
-        return [self._model_from_row_for_scope(row, tenant_id, reveal_secret) for row in rows]
+            rows = self._integration_rows(connection, self._model_select(), "m", tenant_id)
+        return [
+            item
+            for item in (self._model_from_row_for_scope(row, tenant_id, reveal_secret) for row in rows)
+            if str(item.get("status") or "") != "disabled"
+        ]
 
     def list_models_owned_by(self, user_id: str, tenant_id: str, reveal_secret: bool = False) -> list[dict[str, Any]]:
         return _dedupe(self.list_models(account_system_config_scope(user_id), reveal_secret=reveal_secret))
 
     def get_model(self, tenant_id: str, model_id: str, reveal_secret: bool = False) -> dict[str, Any] | None:
         with self.pool.connection() as connection:
-            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, system_config_storage_tenant(tenant_id))
-            stored_model_id = system_config_storage_code(tenant_id, model_id)
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    self._model_select() + " WHERE m.tenant_id = %s AND m.integration_code = %s",
-                    (tenant_key, stored_model_id),
-                )
-                row = cursor.fetchone()
+            row = self._integration_row(connection, self._model_select(), "m", tenant_id, model_id)
         return self._model_from_row_for_scope(row, tenant_id, reveal_secret) if row else None
 
     def upsert_model(self, tenant_id: str, model: dict[str, Any], updated_by: str | None = None) -> dict[str, Any]:
@@ -79,6 +67,10 @@ class PostgreSQLSystemConfigStore:
             prefix = system_config_storage_prefix(tenant_id)
             actor_key = PostgreSQLIdentityResolver.user_id(connection, updated_by, required=False) if updated_by else None
             existing = self._credential(connection, "platform_model_integrations", "integration_code", tenant_key, stored_model_id)
+            if existing is None:
+                existing = self._legacy_credential(
+                    connection, "platform_model_integrations", tenant_id, normalized["id"]
+                )
             with connection.cursor() as cursor:
                 if prefix:
                     cursor.execute(
@@ -159,26 +151,11 @@ class PostgreSQLSystemConfigStore:
         return _mask_model_secret(normalized)
 
     def delete_model(self, tenant_id: str, model_id: str) -> bool:
-        return self._disable(
-            system_config_storage_tenant(tenant_id),
-            "platform_model_integrations",
-            "integration_code",
-            system_config_storage_code(tenant_id, model_id),
-        )
+        return self._disable_integration(tenant_id, "platform_model_integrations", model_id)
 
     def list_speech_integrations(self, tenant_id: str, reveal_secret: bool = False) -> list[dict[str, str]]:
         with self.pool.connection() as connection:
-            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, system_config_storage_tenant(tenant_id))
-            prefix = system_config_storage_prefix(tenant_id)
-            with connection.cursor() as cursor:
-                if prefix:
-                    cursor.execute(
-                        self._speech_select() + " WHERE s.tenant_id = %s AND s.integration_code LIKE %s ORDER BY s.integration_code",
-                        (tenant_key, f"{prefix}%"),
-                    )
-                else:
-                    cursor.execute(self._speech_select() + " WHERE s.tenant_id = %s ORDER BY s.integration_code", (tenant_key,))
-                rows = cursor.fetchall()
+            rows = self._integration_rows(connection, self._speech_select(), "s", tenant_id)
         return [self._speech_from_row_for_scope(row, tenant_id, reveal_secret) for row in rows]
 
     def list_speech_integrations_owned_by(self, user_id: str, tenant_id: str, reveal_secret: bool = False) -> list[dict[str, str]]:
@@ -186,14 +163,7 @@ class PostgreSQLSystemConfigStore:
 
     def get_speech_integration(self, tenant_id: str, integration_id: str, reveal_secret: bool = False) -> dict[str, str] | None:
         with self.pool.connection() as connection:
-            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, system_config_storage_tenant(tenant_id))
-            stored_integration_id = system_config_storage_code(tenant_id, integration_id)
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    self._speech_select() + " WHERE s.tenant_id = %s AND s.integration_code = %s",
-                    (tenant_key, stored_integration_id),
-                )
-                row = cursor.fetchone()
+            row = self._integration_row(connection, self._speech_select(), "s", tenant_id, integration_id)
         return self._speech_from_row_for_scope(row, tenant_id, reveal_secret) if row else None
 
     def upsert_speech_integration(self, tenant_id: str, integration: dict[str, Any], updated_by: str | None = None) -> dict[str, str]:
@@ -203,6 +173,10 @@ class PostgreSQLSystemConfigStore:
             stored_integration_id = system_config_storage_code(tenant_id, normalized["id"])
             actor_key = PostgreSQLIdentityResolver.user_id(connection, updated_by, required=False) if updated_by else None
             existing = self._credential(connection, "platform_speech_integrations", "integration_code", tenant_key, stored_integration_id)
+            if existing is None:
+                existing = self._legacy_credential(
+                    connection, "platform_speech_integrations", tenant_id, normalized["id"]
+                )
             if normalized["apiKey"] == MASKED_SECRET:
                 if existing is None:
                     raise ValueError("speech_secret_required")
@@ -244,12 +218,7 @@ class PostgreSQLSystemConfigStore:
         return _mask_speech_secret(normalized)
 
     def delete_speech_integration(self, tenant_id: str, integration_id: str) -> bool:
-        return self._disable(
-            system_config_storage_tenant(tenant_id),
-            "platform_speech_integrations",
-            "integration_code",
-            system_config_storage_code(tenant_id, integration_id),
-        )
+        return self._disable_integration(tenant_id, "platform_speech_integrations", integration_id)
 
     def list_data_connections(self, tenant_id: str, reveal_secret: bool = False) -> list[dict[str, Any]]:
         with self.pool.connection() as connection:
@@ -437,6 +406,81 @@ class PostgreSQLSystemConfigStore:
                     ),
                 )
         return normalized
+
+    def _integration_locations(self, connection: Any, scope: str) -> list[tuple[Any, str]]:
+        locations: list[tuple[Any, str]] = []
+        seen: set[tuple[Any, str]] = set()
+        for storage_tenant, mode in system_config_storage_locations(scope):
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, storage_tenant, required=False)
+            if tenant_key is None:
+                continue
+            stored_prefix = system_config_storage_prefix(scope) if mode == "prefixed" else ""
+            marker = (tenant_key, stored_prefix)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            locations.append(marker)
+        return locations
+
+    def _integration_rows(self, connection: Any, select_sql: str, alias: str, scope: str) -> list[Any]:
+        collected: list[Any] = []
+        seen_ids: set[str] = set()
+        for tenant_key, prefix in self._integration_locations(connection, scope):
+            with connection.cursor() as cursor:
+                if prefix:
+                    cursor.execute(
+                        select_sql + f" WHERE {alias}.tenant_id = %s AND {alias}.integration_code LIKE %s ORDER BY {alias}.integration_code",
+                        (tenant_key, f"{prefix}%"),
+                    )
+                else:
+                    cursor.execute(
+                        select_sql + f" WHERE {alias}.tenant_id = %s ORDER BY {alias}.integration_code",
+                        (tenant_key,),
+                    )
+                rows = cursor.fetchall()
+            for row in rows:
+                external_id = system_config_external_code(scope, str(_value(row, "integration_code", 0)))
+                if not external_id or external_id in seen_ids:
+                    continue
+                seen_ids.add(external_id)
+                collected.append(row)
+        return collected
+
+    def _integration_row(self, connection: Any, select_sql: str, alias: str, scope: str, integration_id: str) -> Any | None:
+        for tenant_key, prefix in self._integration_locations(connection, scope):
+            stored_id = f"{prefix}{integration_id}" if prefix else integration_id
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    select_sql + f" WHERE {alias}.tenant_id = %s AND {alias}.integration_code = %s",
+                    (tenant_key, stored_id),
+                )
+                row = cursor.fetchone()
+            if row:
+                return row
+        return None
+
+    def _legacy_credential(self, connection: Any, table: str, scope: str, integration_id: str) -> bytes | None:
+        for storage_tenant, mode in system_config_storage_locations(scope):
+            if mode == "prefixed":
+                continue
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, storage_tenant, required=False)
+            if tenant_key is None:
+                continue
+            credential = self._credential(connection, table, "integration_code", tenant_key, integration_id)
+            if credential:
+                return credential
+        return None
+
+    def _disable_integration(self, scope: str, table: str, integration_id: str) -> bool:
+        deleted = False
+        for storage_tenant, mode in system_config_storage_locations(scope):
+            stored_id = system_config_storage_code(scope, integration_id) if mode == "prefixed" else integration_id
+            try:
+                if self._disable(storage_tenant, table, "integration_code", stored_id):
+                    deleted = True
+            except KeyError:
+                continue
+        return deleted
 
     @staticmethod
     def _model_select() -> str:

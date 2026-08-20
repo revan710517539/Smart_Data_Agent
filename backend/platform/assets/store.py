@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from backend.authz.seed import OPERATING_TENANTS
 from backend.platform.storage import connect_sqlite
 from .mock_analysis_defaults import MOCK_RAW_TABLES, MOCK_TOPIC_TABLES
 
@@ -67,6 +68,74 @@ RETIRED_SAMPLE_ASSET_IDS = frozenset({
     ("analysis_shortcut", "shortcut-customer-profile"),
     ("analysis_shortcut", "shortcut-loan-funnel"),
 })
+
+TENANT_MAINTAINED_ASSET_TYPES = frozenset({
+    "analysis_skill",
+    "external_tool",
+    "analysis_shortcut",
+    "intent",
+    "analysis_experience",
+    "knowledge_file",
+    "user_behavior_habit",
+})
+SYSTEM_CATALOG_AUTHORS = frozenset({"system", "development_seed"})
+
+
+def _tenant_display_label(tenant_id: str) -> str:
+    return str(tenant_id or "").removeprefix("tenant:").strip()
+
+
+def _catalog_text(item: dict[str, Any]) -> str:
+    return " ".join(
+        str(item.get(key) or "")
+        for key in ("id", "name", "title", "description", "provider", "endpoint", "query", "owner")
+    )
+
+
+def _institution_aliases(label: str) -> tuple[str, ...]:
+    label = str(label or "").strip()
+    if not label:
+        return ()
+    aliases = [label]
+    for suffix in ("银行", "消金"):
+        if label.endswith(suffix) and len(label) > len(suffix) + 1:
+            aliases.append(label[: -len(suffix)])
+    return tuple(aliases)
+
+
+def _mentions_other_institution(item: dict[str, Any], tenant_id: str) -> bool:
+    current = _tenant_display_label(tenant_id)
+    blob = _catalog_text(item)
+    current_aliases = set(_institution_aliases(current))
+    for label in OPERATING_TENANTS:
+        if not label or label == current:
+            continue
+        if any(alias and alias not in current_aliases and alias in blob for alias in _institution_aliases(label)):
+            return True
+    return False
+
+
+def _is_cloned_system_catalog_item(item_type: str, item: dict[str, Any]) -> bool:
+    if str(item.get("updatedBy") or item.get("updated_by") or "") not in SYSTEM_CATALOG_AUTHORS:
+        return False
+    item_id = str(item.get("id") or "")
+    return any(str(row.get("id") or "") == item_id for row in DEFAULT_ASSET_ITEMS.get(item_type, []))
+
+
+def visible_items_for_tenant(tenant_id: str, item_type: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Hide cloned system catalogs and other institutions' named tools/skills."""
+
+    if item_type not in TENANT_MAINTAINED_ASSET_TYPES:
+        return items
+    keep_system_defaults = tenant_id in {"tenant_demo"} or _tenant_display_label(tenant_id) in {"演示机构"}
+    visible: list[dict[str, Any]] = []
+    for item in items:
+        if _mentions_other_institution(item, tenant_id):
+            continue
+        if not keep_system_defaults and _is_cloned_system_catalog_item(item_type, item):
+            continue
+        visible.append(item)
+    return visible
 
 
 def _runtime_default_items(item_type: str) -> list[dict[str, Any]]:
@@ -503,9 +572,9 @@ class InMemoryDataAssetStore:
     def seed_missing_defaults(self, tenant_id: str, updated_by: str = "development_seed") -> None:
         bundle = self.list_bundle(tenant_id)
         for item_type in DEFAULT_ASSET_ITEMS:
-            # Skills are user-maintained runtime configuration. A successful
-            # deletion must not be undone by the next local bootstrap.
-            if item_type == "analysis_skill":
+            # Tenant-maintained catalogs must not be re-cloned onto every
+            # institution after an operator deletes or never created them.
+            if item_type in TENANT_MAINTAINED_ASSET_TYPES:
                 continue
             existing = {
                 str(item.get("id") or ""): item
@@ -642,7 +711,11 @@ class InMemoryDataAssetStore:
 
     def _list(self, tenant_id: str, item_type: str) -> list[dict[str, Any]]:
         items = self._items_by_tenant_type.get((tenant_id, item_type), {})
-        return sorted((_normalize_asset_payload_for_read(item_type, item) for item in items.values()), key=_sort_key)
+        return visible_items_for_tenant(
+            tenant_id,
+            item_type,
+            sorted((_normalize_asset_payload_for_read(item_type, item) for item in items.values()), key=_sort_key),
+        )
 
     def _list_published(self, tenant_id: str, item_type: str) -> list[dict[str, Any]]:
         published = []
@@ -652,7 +725,7 @@ class InMemoryDataAssetStore:
             active = next((version for version in reversed(versions) if version["lifecycleStatus"] == "active"), None)
             if active:
                 published.append(_normalize_asset_payload_for_read(item_type, active))
-        return sorted(published, key=_sort_key)
+        return visible_items_for_tenant(tenant_id, item_type, sorted(published, key=_sort_key))
 
 
 class SQLiteDataAssetStore:
@@ -744,9 +817,9 @@ class SQLiteDataAssetStore:
     def seed_missing_defaults(self, tenant_id: str, updated_by: str = "development_seed") -> None:
         bundle = self.list_bundle(tenant_id)
         for item_type in DEFAULT_ASSET_ITEMS:
-            # Skills are user-maintained runtime configuration. A successful
-            # deletion must not be undone by the next local bootstrap.
-            if item_type == "analysis_skill":
+            # Tenant-maintained catalogs must not be re-cloned onto every
+            # institution after an operator deletes or never created them.
+            if item_type in TENANT_MAINTAINED_ASSET_TYPES:
                 continue
             existing = {
                 str(item.get("id") or ""): item
@@ -1049,7 +1122,11 @@ class SQLiteDataAssetStore:
             """,
             (tenant_id, item_type),
         ).fetchall()
-        return [_asset_from_row(item_type, row) for row in rows]
+        return visible_items_for_tenant(
+            tenant_id,
+            item_type,
+            [_asset_from_row(item_type, row) for row in rows],
+        )
 
     def _list_published(self, tenant_id: str, item_type: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
@@ -1065,7 +1142,11 @@ class SQLiteDataAssetStore:
             """,
             (tenant_id, item_type),
         ).fetchall()
-        return [_asset_from_row(item_type, row) for row in rows]
+        return visible_items_for_tenant(
+            tenant_id,
+            item_type,
+            [_asset_from_row(item_type, row) for row in rows],
+        )
 
 
 def _normalize_item(item_type: str, item: dict[str, Any], updated_by: str | None = None) -> dict[str, Any]:

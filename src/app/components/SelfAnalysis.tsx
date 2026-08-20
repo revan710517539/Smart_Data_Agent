@@ -32,11 +32,14 @@ import { apiErrorMessage, getApiBaseUrl } from "../services/apiClient";
 import { demoFallbackDisabledMessage, isDemoFallbackEnabled } from "../services/apiContext";
 import { modelApplicationModuleLabel } from "../data/modelApplicationModules";
 import { runApplicationAction } from "../services/applicationApi";
-import { fetchAnalysisRuntimeConfig, type FunAsrRuntimeIntegration, type ModelIntegration } from "../services/systemConfigApi";
-import { findConfiguredTextModel, persistTextModelSelection, readPersistedTextModelSelection } from "../services/modelSelectionStore";
+import { fetchAnalysisRuntimeConfig, fetchSystemConfig, type FunAsrRuntimeIntegration, type ModelIntegration } from "../services/systemConfigApi";
+import { findConfiguredTextModel, persistTextModelSelection, readPersistedTextModelSelection, textModelSelectionEvent } from "../services/modelSelectionStore";
 import { ArrowUp, AudioLines, Sparkles, Clock, Star, ArrowUpRight, BarChart3, PieChartIcon, TrendingUp, Table2, Download, BookmarkPlus, History, Lightbulb, ChevronDown, Code2, Mic, Plus, Upload, X, ChevronsDown, ChevronsUp, Eye, Pencil, Trash2, Check, RotateCcw } from "lucide-react";
 import { AnalysisVisualCard, RawDataTable, type VisualizationCardConfig } from "./self-analysis/ResultViews";
 import { ResizableVisualizationGrid } from "./self-analysis/ResizableVisualizationGrid";
+import { visualDuplicateLayout } from "./self-analysis/visualGridLayout";
+import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
+import { useStickyNote } from "./notes/useStickyNote";
 import { TrustedArtifactPanel } from "./analysis-workspace/TrustedArtifactPanel";
 import { syncSelfAnalysisWorkspaceContext } from "./self-analysis/workspaceContext";
 import { revealVisualComment, revealVisualFollowUp } from "./self-analysis/visualFollowUp";
@@ -136,7 +139,17 @@ import {
   readKnowledgeAttachment,
 } from "./self-analysis/domain";
 import { DataTablePickerModal } from "./self-analysis/DataTablePickerModal";
-import { VisualReportLibrary } from "./visual-report/VisualReportLibrary";
+import {
+  defaultMyReportsTab,
+  featuredReportKey,
+  loadFeaturedReports,
+  pruneFeaturedReports,
+  useFeaturedReports,
+  type ReportKindTab,
+} from "./self-analysis/featuredReports";
+import { useVisualReportCollection, VisualReportLibrary, VisualReportRow } from "./visual-report/VisualReportLibrary";
+import type { VisualReport } from "../services/visualReportApi";
+
 import { clearPendingAnalysisRun, isAnalysisNavigationAbort, loadPendingAnalysisRun, savePendingAnalysisRun } from "./self-analysis/pendingAnalysisRun";
 import { clearSelfAnalysisWorkbenchPersistence, useSelfAnalysisWorkbenchPersistence } from "./self-analysis/useSelfAnalysisWorkbenchPersistence";
 function AnalysisModelSelector({
@@ -382,6 +395,7 @@ export function SelfAnalysis() {
   const [analysisProgressSteps, setAnalysisProgressSteps] = useState<AnalysisProgressStep[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisTaskId, setAnalysisTaskId] = useState("");
+  const analysisSticky = useStickyNote("self_analysis", `self_analysis:${analysisTaskId || "current"}`);
   const [resultMode, setResultMode] = useState<ResultMode>("visual");
   const [saveMessage, setSaveMessage] = useState("");
   const [visualTypes, setVisualTypes] = useState<Record<ResultVisualKey, VisualizationType>>({
@@ -419,9 +433,15 @@ export function SelfAnalysis() {
   const [conversationTurns, setConversationTurns] = useState<AnalysisConversationTurn[]>([]);
   const [analysisTopicShortcuts, setAnalysisTopicShortcuts] = useState<AnalysisTopicShortcut[]>([]);
   const [savedAnalysisResults, setSavedAnalysisResults] = useState<SavedAnalysisResult[]>([]);
-  const [reportKindTab, setReportKindTab] = useState<"analysis" | "visual">("analysis");
+  const [reportKindTab, setReportKindTab] = useState<ReportKindTab>(() => defaultMyReportsTab(loadFeaturedReports(tenantId, userId).length > 0));
   const reportSourceFilter = "all";
   const [savedAnalysisLoadError, setSavedAnalysisLoadError] = useState("");
+  const [savedAnalysisLoaded, setSavedAnalysisLoaded] = useState(false);
+  const featuredReports = useFeaturedReports(tenantId, userId);
+  const visualMine = useVisualReportCollection("mine", activeView === "reports");
+  const userPickedReportTabRef = useRef(false);
+  const defaultReportTabAppliedRef = useRef(false);
+  const [expandedFeaturedVisualId, setExpandedFeaturedVisualId] = useState("");
   const [expandedReportId, setExpandedReportId] = useState("");
   const [editingReportId, setEditingReportId] = useState<string | null>(null);
   const [reportTitleDraft, setReportTitleDraft] = useState("");
@@ -632,6 +652,41 @@ export function SelfAnalysis() {
   }, [activeView, tenantId, userId]);
   const visibleSavedAnalysisResults = savedAnalysisResults;
   const savedReportPagination = useClientPagination(visibleSavedAnalysisResults);
+  const featuredEntries: Array<
+    | { key: string; kind: "analysis"; result: SavedAnalysisResult }
+    | { key: string; kind: "visual"; report: VisualReport }
+  > = [];
+  for (const ref of featuredReports.refs) {
+    if (ref.kind === "analysis") {
+      const result = savedAnalysisResults.find((item) => item.id === ref.id);
+      if (result) featuredEntries.push({ key: featuredReportKey(ref), kind: "analysis", result });
+      continue;
+    }
+    const report = visualMine.reports.find((item) => item.id === ref.id);
+    if (report) featuredEntries.push({ key: featuredReportKey(ref), kind: "visual", report });
+  }
+  const featuredReportPagination = useClientPagination(featuredEntries);
+  const selectReportKindTab = (tab: ReportKindTab) => {
+    userPickedReportTabRef.current = true;
+    setReportKindTab(tab);
+  };
+  useEffect(() => {
+    userPickedReportTabRef.current = false;
+    defaultReportTabAppliedRef.current = false;
+    setReportKindTab(defaultMyReportsTab(loadFeaturedReports(tenantId, userId).length > 0));
+  }, [tenantId, userId]);
+  useEffect(() => {
+    if (activeView !== "reports") return;
+    if (!savedAnalysisLoaded || visualMine.loading) return;
+    const live = pruneFeaturedReports(loadFeaturedReports(tenantId, userId), {
+      analysisIds: savedAnalysisResults.map((item) => item.id),
+      visualIds: visualMine.reports.map((item) => item.id),
+    });
+    featuredReports.replace(live);
+    if (userPickedReportTabRef.current || defaultReportTabAppliedRef.current) return;
+    defaultReportTabAppliedRef.current = true;
+    setReportKindTab(defaultMyReportsTab(live.length > 0));
+  }, [activeView, featuredReports.replace, savedAnalysisLoaded, savedAnalysisResults, tenantId, userId, visualMine.loading, visualMine.reports]);
   useEffect(() => {
     if (activeView !== "query" || !conversationSessionId) return;
     saveConversationState(tenantId, userId, {
@@ -689,7 +744,12 @@ export function SelfAnalysis() {
         if (cancelled) return;
         setFunAsrIntegration(runtime.speechIntegration);
         funAsrIntegrationByModuleRef.current.realtime_voice_input = runtime.speechIntegration;
-        const models = runtime.models.filter((model) => model.name && model.modelName);
+        let models = runtime.models.filter((model) => model.name);
+        if (!modelsForModule(models, "intelligent_analysis_reasoning").length) {
+          const config = await fetchSystemConfig({ tenantId, userId });
+          if (cancelled) return;
+          models = (config.models || []).filter((model) => model.name);
+        }
         const nextModels = models.length ? models : isDemoFallbackEnabled() ? fallbackAnalysisModels : [];
         setAvailableModels(nextModels);
         const analysisModels = modelsForModule(nextModels, "intelligent_analysis_reasoning");
@@ -702,18 +762,37 @@ export function SelfAnalysis() {
           : firstSelectableAnalysisModel(analysisModels));
       } catch {
         if (cancelled) return;
-        setFunAsrIntegration(null);
-        funAsrIntegrationByModuleRef.current.realtime_voice_input = null;
-        const demoModels = isDemoFallbackEnabled() ? fallbackAnalysisModels : [];
-        setAvailableModels(demoModels);
-        const analysisModels = modelsForModule(demoModels, "intelligent_analysis_reasoning");
-        const preferredModel = findConfiguredTextModel(
-          analysisModels,
-          readPersistedTextModelSelection(tenantId, userId),
-        );
-        setSelectedModel(preferredModel && hasSelectableAnalysisModel(analysisModels, preferredModel)
-          ? preferredModel
-          : firstSelectableAnalysisModel(analysisModels));
+        try {
+          const config = await fetchSystemConfig({ tenantId, userId });
+          if (cancelled) return;
+          const configModels = (config.models || []).filter((model) => model.name);
+          setFunAsrIntegration(null);
+          funAsrIntegrationByModuleRef.current.realtime_voice_input = null;
+          const nextModels = configModels.length ? configModels : isDemoFallbackEnabled() ? fallbackAnalysisModels : [];
+          setAvailableModels(nextModels);
+          const analysisModels = modelsForModule(nextModels, "intelligent_analysis_reasoning");
+          const preferredModel = findConfiguredTextModel(
+            analysisModels,
+            readPersistedTextModelSelection(tenantId, userId),
+          );
+          setSelectedModel(preferredModel && hasSelectableAnalysisModel(analysisModels, preferredModel)
+            ? preferredModel
+            : firstSelectableAnalysisModel(analysisModels));
+        } catch {
+          if (cancelled) return;
+          setFunAsrIntegration(null);
+          funAsrIntegrationByModuleRef.current.realtime_voice_input = null;
+          const demoModels = isDemoFallbackEnabled() ? fallbackAnalysisModels : [];
+          setAvailableModels(demoModels);
+          const analysisModels = modelsForModule(demoModels, "intelligent_analysis_reasoning");
+          const preferredModel = findConfiguredTextModel(
+            analysisModels,
+            readPersistedTextModelSelection(tenantId, userId),
+          );
+          setSelectedModel(preferredModel && hasSelectableAnalysisModel(analysisModels, preferredModel)
+            ? preferredModel
+            : firstSelectableAnalysisModel(analysisModels));
+        }
       }
     };
     void syncModels();
@@ -721,6 +800,20 @@ export function SelfAnalysis() {
       cancelled = true;
     };
   }, [activeView, tenantId, userId]);
+  useEffect(() => {
+    const applySharedSelection = () => {
+      const analysisModels = modelsForModule(availableModels, "intelligent_analysis_reasoning");
+      const preferredModel = findConfiguredTextModel(
+        analysisModels,
+        readPersistedTextModelSelection(tenantId, userId),
+      );
+      setSelectedModel(preferredModel && hasSelectableAnalysisModel(analysisModels, preferredModel)
+        ? preferredModel
+        : firstSelectableAnalysisModel(analysisModels));
+    };
+    window.addEventListener(textModelSelectionEvent, applySharedSelection);
+    return () => window.removeEventListener(textModelSelectionEvent, applySharedSelection);
+  }, [availableModels, tenantId, userId]);
   useEffect(() => {
     if (activeView !== "query") return;
     let cancelled = false;
@@ -805,6 +898,7 @@ export function SelfAnalysis() {
   useEffect(() => {
     if (activeView !== "query" && activeView !== "reports") return;
     let cancelled = false;
+    setSavedAnalysisLoaded(false);
     const syncSavedResults = async () => {
       try {
         const response = await fetchSavedAnalysisResults({ tenantId, userId });
@@ -821,6 +915,8 @@ export function SelfAnalysis() {
           setSavedAnalysisResults([]);
           setSavedAnalysisLoadError(apiErrorMessage(error, "已保存分析加载失败"));
         }
+      } finally {
+        if (!cancelled) setSavedAnalysisLoaded(true);
       }
     };
     void syncSavedResults();
@@ -1375,12 +1471,19 @@ export function SelfAnalysis() {
   const updateVisualCard = (id: string, patch: Partial<VisualCardInstance>) => {
     setVisualCards((current) => current.map((card) => card.id === id ? { ...card, ...patch } : card));
   };
-  const duplicateVisualCard = (id: string, config: VisualizationCardConfig) => {
+  const duplicateVisualCard = (id: string, config: VisualizationCardConfig, options?: { asText?: boolean }) => {
     setVisualCards((current) => {
       const index = current.findIndex((card) => card.id === id);
       if (index < 0) return current;
       const source = current[index];
-      const duplicate: VisualCardInstance = { ...source, id: `visual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, key: undefined, title: `${source.title} · 副本`, config };
+      const duplicate: VisualCardInstance = {
+        ...source,
+        id: `visual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        key: undefined,
+        type: options?.asText ? "text" : source.type,
+        title: options?.asText ? `${source.title} · 结论` : `${source.title} · 副本`,
+        config: options?.asText ? { ...config, noteTitle: "", noteBody: "", noteItems: [], noteTitleHidden: false, ...visualDuplicateLayout(source.id) } : config,
+      };
       return [...current.slice(0, index + 1), duplicate, ...current.slice(index + 1)];
     });
   };
@@ -1855,6 +1958,7 @@ export function SelfAnalysis() {
     try {
       await deleteSavedAnalysisResult({ tenantId, userId, resultId: result.id });
       setSavedAnalysisResults((current) => current.filter((item) => item.id !== result.id));
+      featuredReports.remove("analysis", result.id);
       if (expandedReportId === result.id) setExpandedReportId("");
       setReportActionError("");
     } catch (error) {
@@ -2350,7 +2454,7 @@ export function SelfAnalysis() {
       <div className="mb-7 flex items-start justify-between gap-4">
         <div>
           <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">{activeView === "reports" ? "我的报表" : "智能分析"}</h2>
-          <p className="text-[13px] text-[#aeaeb2] mt-1">{activeView === "reports" ? "智能分析报表 · 可视化报表" : "自然语言查询 · AI自动生成图表 · 智能归因分析"}</p>
+          <p className="text-[13px] text-[#aeaeb2] mt-1">{activeView === "reports" ? "精选报表 · 智能分析报表 · 可视化报表" : "自然语言查询 · AI自动生成图表 · 智能归因分析"}</p>
         </div>
         {activeView === "query" ? <div className="flex items-center gap-2"><button type="button" onClick={restoreInitialAnalysisWorkspace} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#636366] transition hover:bg-[#f2f2f7]" data-self-analysis-restore="true"><RotateCcw className="h-3.5 w-3.5" />恢复</button><button type="button" onClick={() => void toggleExecutionHistory()} className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[12px] transition ${executionHistoryOpen ? "border-[#d1d1d6] bg-[#f2f2f7] text-[#1d1d1f]" : "border-[#e5e5ea] bg-white text-[#636366] hover:bg-[#f2f2f7]"}`}><History className="h-3.5 w-3.5" />执行记录</button></div> : null}
       </div>
@@ -2716,6 +2820,7 @@ export function SelfAnalysis() {
                     >
                       <BookmarkPlus className="w-3 h-3" /> 存周报
                     </button>
+                    <StickyNoteButton size="compact" onClick={analysisSticky.show} />
                     <button
                       onClick={() => void downloadAnalysisRows()}
                       className="flex items-center gap-1 px-3 py-1.5 border border-[#e5e5ea] rounded-lg text-[11px] text-[#636366] hover:bg-[#f2f2f7]"
@@ -2754,22 +2859,33 @@ export function SelfAnalysis() {
                 ) : resultMode === "visual" && isAnalyzing && !analysisRows.length ? (
                   <AnalysisProgressPanel steps={analysisProgressSteps} running={isAnalyzing} error={analysisError} hasResult={analysisRows.length > 0} />
                 ) : resultMode === "visual" ? (
+                  <div className="space-y-3">
+                    <StickyNotePanel
+                      note={analysisSticky.note}
+                      editing={analysisSticky.editing}
+                      onChange={analysisSticky.updateItems}
+                      onFinishEdit={analysisSticky.finishEdit}
+                      onStartEdit={() => analysisSticky.setEditing(true)}
+                      onHide={analysisSticky.hide}
+                      uploadContext={analysisSticky.uploadContext}
+                    />
                   <ResizableVisualizationGrid>
                     {visualCards.map((card) => <AnalysisVisualCard
-                      key={card.id} id={card.id} stateKey={`current:${analysisTaskId || query}:${card.id}`} fillHeight
+                      key={card.id} id={card.id} stateKey={`current:${analysisTaskId || query}:${card.id}`} fillHeight visualGridSpan={card.config?.layoutSpan} visualGridHeight={card.config?.layoutHeight} visualGridMaxSpan={card.config?.maxLayoutSpan} visualGridMaxHeight={card.config?.maxLayoutHeight}
                       title={card.title}
                       type={card.type}
                       rows={analysisRows}
                       initialConfig={card.config}
-                      onFollowUp={() => revealVisualFollowUp({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: analysisTaskId, question: query, summary: analysisSummary, plan: analysisPlan, selectedDataTables })}
-                      onComment={() => revealVisualComment({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: analysisTaskId, question: query, summary: analysisSummary, plan: analysisPlan, selectedDataTables })}
+                      onFollowUp={(detail) => revealVisualFollowUp({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: analysisTaskId, question: query, summary: analysisSummary, plan: analysisPlan, selectedDataTables, selectedText: detail?.selectedText })}
+                      onComment={(detail) => revealVisualComment({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: analysisTaskId, question: query, summary: analysisSummary, plan: analysisPlan, selectedDataTables, selectedText: detail?.selectedText })}
                       onTypeChange={(nextType) => card.key ? updateVisualType(card.key, nextType) : updateVisualCard(card.id, { type: nextType })}
                       onTitleChange={(nextTitle) => updateVisualCard(card.id, { title: nextTitle })}
                       onConfigChange={(config) => updateVisualCard(card.id, { config })}
-                      onDuplicate={(config) => duplicateVisualCard(card.id, config)}
+                      onDuplicate={(config, options) => duplicateVisualCard(card.id, config, options)}
                       onDelete={() => deleteVisualCard(card.id)}
                     />)}
                   </ResizableVisualizationGrid>
+                  </div>
                 ) : (
                   <RawDataTable rows={analysisRows} onDownload={() => void downloadAnalysisRows()} />
                 )}
@@ -2787,20 +2903,106 @@ export function SelfAnalysis() {
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
               <h3 className="text-[13px] text-[#1d1d1f]">我的报表</h3>
-              <p className="mt-1 text-[11px] text-[#aeaeb2]">分别查看智能分析保存的数据报表与可视化报表工作台配置的报表。</p>
+              <p className="mt-1 text-[11px] text-[#aeaeb2]">精选常用报表，也可分别查看智能分析保存的数据报表与可视化报表工作台配置的报表。</p>
             </div>
+            {reportKindTab === "featured" && <span className="rounded-md bg-[#f2f2f7] px-2 py-1 text-[11px] text-[#636366]">{featuredEntries.length} 份</span>}
             {reportKindTab === "analysis" && <span className="rounded-md bg-[#f2f2f7] px-2 py-1 text-[11px] text-[#636366]">{visibleSavedAnalysisResults.length} 份</span>}
           </div>
           <div className="mb-4 flex items-center justify-between gap-3">
             <div className="inline-flex rounded-lg bg-[#f2f2f7] p-0.5" role="tablist" aria-label="我的报表分类">
-              <button type="button" role="tab" aria-selected={reportKindTab === "analysis"} onClick={() => setReportKindTab("analysis")} className={`h-8 rounded-md px-4 text-[11px] ${reportKindTab === "analysis" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#7b7b80]"}`}>智能分析</button>
-              <button type="button" role="tab" aria-selected={reportKindTab === "visual"} onClick={() => setReportKindTab("visual")} className={`h-8 rounded-md px-4 text-[11px] ${reportKindTab === "visual" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#7b7b80]"}`}>可视化报表</button>
+              <button type="button" role="tab" aria-selected={reportKindTab === "featured"} onClick={() => selectReportKindTab("featured")} className={`h-8 rounded-md px-4 text-[11px] ${reportKindTab === "featured" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#7b7b80]"}`}>精选</button>
+              <button type="button" role="tab" aria-selected={reportKindTab === "analysis"} onClick={() => selectReportKindTab("analysis")} className={`h-8 rounded-md px-4 text-[11px] ${reportKindTab === "analysis" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#7b7b80]"}`}>智能分析</button>
+              <button type="button" role="tab" aria-selected={reportKindTab === "visual"} onClick={() => selectReportKindTab("visual")} className={`h-8 rounded-md px-4 text-[11px] ${reportKindTab === "visual" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#7b7b80]"}`}>可视化报表</button>
             </div>
-            <button type="button" onClick={() => navigate(reportKindTab === "analysis" ? "/self-analysis/query" : "/self-analysis/visual-reports")} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#0f8f58] px-3 text-[11px] text-white hover:bg-[#0b7d4c]">
-              <Plus className="h-3.5 w-3.5" />{reportKindTab === "analysis" ? "新建智能分析" : "新建可视化报表"}
-            </button>
+            {reportKindTab !== "featured" && (
+              <button type="button" onClick={() => navigate(reportKindTab === "analysis" ? "/self-analysis/query" : "/self-analysis/visual-reports")} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#0f8f58] px-3 text-[11px] text-white hover:bg-[#0b7d4c]">
+                <Plus className="h-3.5 w-3.5" />{reportKindTab === "analysis" ? "新建智能分析" : "新建可视化报表"}
+              </button>
+            )}
           </div>
+          {reportKindTab === "featured" && featuredReportPagination.paginated && <div className="mb-3 flex justify-end"><DataPageSelector page={featuredReportPagination.page} totalPages={featuredReportPagination.totalPages} shownCount={featuredReportPagination.items.length} totalCount={featuredReportPagination.total} onChange={featuredReportPagination.setPage} ariaLabel="我的精选报表分页" /></div>}
           {reportKindTab === "analysis" && savedReportPagination.paginated && <div className="mb-3 flex justify-end"><DataPageSelector page={savedReportPagination.page} totalPages={savedReportPagination.totalPages} shownCount={savedReportPagination.items.length} totalCount={savedReportPagination.total} onChange={savedReportPagination.setPage} ariaLabel="我的智能分析报表分页" /></div>}
+          <div className={reportKindTab === "featured" ? "" : "hidden"} data-my-reports-featured-tab="true">
+            {reportActionError && <div className="mb-3 rounded-lg border border-[#ffd0d0] bg-[#fff5f5] px-3 py-2 text-[11px] text-[#d93025]">{reportActionError}</div>}
+            <div className="space-y-1.5">
+              {featuredReportPagination.items.map((entry) => entry.kind === "analysis" ? (
+                <div key={entry.key} className="overflow-hidden rounded-lg bg-[#fafbfc]" data-featured-report="analysis">
+                  <div
+                    className="flex cursor-pointer items-center gap-3 p-3 transition-colors hover:bg-[#f2f2f7]"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => { void openSavedReport(entry.result); }}
+                    onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void openSavedReport(entry.result); } }}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <span className="block max-w-full truncate text-left text-[12px] text-[#1d1d1f]">{entry.result.title || entry.result.query}</span>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-[#c7c7cc]">
+                        <span className="inline-flex items-center rounded bg-[#f2f2f7] px-1.5 py-0.5 text-[10px] text-[#636366]">智能分析</span>
+                        <span>{entry.result.savedAt || "时间未记录"}</span>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        data-featured-report-star="analysis"
+                        aria-pressed="true"
+                        aria-label={`取消精选${entry.result.title || entry.result.query}`}
+                        title="取消精选"
+                        onClick={(event) => { event.stopPropagation(); featuredReports.toggle("analysis", entry.result.id); }}
+                        className="rounded-md p-1.5 text-[#c7c7cc] hover:bg-white"
+                      >
+                        <Star className="h-3.5 w-3.5 fill-[#f5a524] text-[#f5a524]" />
+                      </button>
+                      <button type="button" aria-label="查看报告" title="查看" onClick={(event) => { event.stopPropagation(); void openSavedReport(entry.result); }} className="rounded-md p-1.5 text-[#636366] hover:bg-white"><Eye className="h-3.5 w-3.5" /></button>
+                    </div>
+                  </div>
+                  {expandedReportId === entry.result.id && (
+                    <div className="border-t border-[#ececf0] bg-white p-4">
+                      {reportLoadingId === entry.result.id ? (
+                        <div className="rounded-lg bg-[#fafbfc] px-3 py-8 text-center text-[12px] text-[#8a8a8e]">正在从 Topic_Data 读取该报告的最新数据…</div>
+                      ) : (
+                        <>
+                          <ResizableVisualizationGrid>
+                            {reportVisualizationsFor(entry.result).map((card, cardIndex, cards) => <AnalysisVisualCard
+                              key={card.id} id={card.id} stateKey={`featured:${entry.result.id}:${card.id}`} fillHeight
+                              title={card.title}
+                              type={card.type}
+                              rows={analysisRows}
+                              initialConfig={card.config}
+                              onFollowUp={() => revealVisualFollowUp({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: entry.result.analysisTaskId, reportId: entry.result.id, question: entry.result.query, summary: analysisSummary || entry.result.summary, plan: entry.result.plan, selectedDataTables })}
+                              onComment={() => revealVisualComment({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: entry.result.analysisTaskId, reportId: entry.result.id, question: entry.result.query, summary: analysisSummary || entry.result.summary, plan: entry.result.plan, selectedDataTables })}
+                              onTypeChange={(nextType) => void persistSavedReportVisualizations(entry.result, cards.map((item) => item.id === card.id ? { ...item, type: nextType } : item))}
+                              onTitleChange={(nextTitle) => void persistSavedReportVisualizations(entry.result, cards.map((item) => item.id === card.id ? { ...item, title: nextTitle } : item))}
+                              onConfigChange={(config) => setSavedAnalysisResults((current) => current.map((item) => item.id === entry.result.id ? { ...item, visualizations: cards.map((visual) => visual.id === card.id ? { ...visual, config } : visual) } : item))}
+                              onDuplicate={(config, options) => { const duplicate = { ...card, id: `visual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, key: undefined, type: options?.asText ? "text" as const : card.type, title: options?.asText ? `${card.title} · 结论` : `${card.title} · 副本`, config: options?.asText ? { ...config, noteTitle: "", noteBody: "", noteItems: [], noteTitleHidden: false, ...visualDuplicateLayout(card.id) } : config }; void persistSavedReportVisualizations(entry.result, [...cards.slice(0, cardIndex + 1), duplicate, ...cards.slice(cardIndex + 1)]); }}
+                              onDelete={() => void persistSavedReportVisualizations(entry.result, cards.filter((item) => item.id !== card.id))}
+                            />)}
+                          </ResizableVisualizationGrid>
+                          <div className="mt-4 rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-3 text-[12px] leading-[1.7] whitespace-pre-wrap text-[#3a3a3c]">{analysisSummary || entry.result.summary || "当前报告尚无可展示结论。"}</div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <VisualReportRow
+                  key={entry.key}
+                  report={entry.report}
+                  expanded={expandedFeaturedVisualId === entry.report.id}
+                  onToggleExpanded={() => setExpandedFeaturedVisualId((current) => current === entry.report.id ? "" : entry.report.id)}
+                  railPageKey="my-reports"
+                  featured
+                  onToggleFeatured={() => featuredReports.toggle("visual", entry.report.id)}
+                  kindBadge="可视化报表"
+                />
+              ))}
+              {!featuredEntries.length && (
+                <div className="rounded-lg bg-[#fafbfc] p-3 text-[11px] text-[#aeaeb2]">
+                  {visualMine.loading || !savedAnalysisLoaded ? "正在核对精选报表…" : "尚未精选报表，可在智能分析或可视化报表列表右侧点击星标加入。"}
+                </div>
+              )}
+            </div>
+          </div>
           <div className={reportKindTab === "analysis" ? "" : "hidden"} data-my-reports-analysis-tab="true">
           {reportActionError && <div className="mb-3 rounded-lg border border-[#ffd0d0] bg-[#fff5f5] px-3 py-2 text-[11px] text-[#d93025]">{reportActionError}</div>}
           {reportActionNotice && <div className="mb-3 rounded-lg border border-[#d7efd9] bg-[#eef8f1] px-3 py-2 text-[11px] text-[#258a3f]">{reportActionNotice}</div>}
@@ -2814,7 +3016,6 @@ export function SelfAnalysis() {
                   onClick={() => { if (editingReportId !== result.id) void openSavedReport(result); }}
                   onKeyDown={(event) => { if (editingReportId !== result.id && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); void openSavedReport(result); } }}
                 >
-                  <Star className="w-4 h-4 shrink-0 text-[#c7c7cc]" />
                   <div className="min-w-0 flex-1">
                     {editingReportId === result.id ? (
                       <input
@@ -2838,6 +3039,17 @@ export function SelfAnalysis() {
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      data-featured-report-star="analysis"
+                      aria-pressed={featuredReports.isFeatured("analysis", result.id)}
+                      aria-label={featuredReports.isFeatured("analysis", result.id) ? `取消精选${result.title || result.query}` : `精选${result.title || result.query}`}
+                      title={featuredReports.isFeatured("analysis", result.id) ? "取消精选" : "精选"}
+                      onClick={(event) => { event.stopPropagation(); featuredReports.toggle("analysis", result.id); }}
+                      className="rounded-md p-1.5 text-[#c7c7cc] hover:bg-white"
+                    >
+                      <Star className={`h-3.5 w-3.5 ${featuredReports.isFeatured("analysis", result.id) ? "fill-[#f5a524] text-[#f5a524]" : "text-[#c7c7cc]"}`} />
+                    </button>
                     {editingReportId === result.id ? (
                       <button type="button" aria-label="保存报告名称" title="保存" onClick={(event) => { event.stopPropagation(); void saveReportTitle(result); }} className="rounded-md p-1.5 text-[#636366] hover:bg-white"><Check className="h-3.5 w-3.5" /></button>
                     ) : (
@@ -2887,7 +3099,7 @@ export function SelfAnalysis() {
                         onTypeChange={(nextType) => void persistSavedReportVisualizations(result, cards.map((item) => item.id === card.id ? { ...item, type: nextType } : item))}
                         onTitleChange={(nextTitle) => void persistSavedReportVisualizations(result, cards.map((item) => item.id === card.id ? { ...item, title: nextTitle } : item))}
                         onConfigChange={(config) => setSavedAnalysisResults((current) => current.map((item) => item.id === result.id ? { ...item, visualizations: cards.map((visual) => visual.id === card.id ? { ...visual, config } : visual) } : item))}
-                        onDuplicate={(config) => { const duplicate = { ...card, id: `visual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, key: undefined, title: `${card.title} · 副本`, config }; void persistSavedReportVisualizations(result, [...cards.slice(0, cardIndex + 1), duplicate, ...cards.slice(cardIndex + 1)]); }}
+                        onDuplicate={(config, options) => { const duplicate = { ...card, id: `visual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, key: undefined, type: options?.asText ? "text" as const : card.type, title: options?.asText ? `${card.title} · 结论` : `${card.title} · 副本`, config: options?.asText ? { ...config, noteTitle: "", noteBody: "", noteItems: [], noteTitleHidden: false, ...visualDuplicateLayout(card.id) } : config }; void persistSavedReportVisualizations(result, [...cards.slice(0, cardIndex + 1), duplicate, ...cards.slice(cardIndex + 1)]); }}
                         onDelete={() => void persistSavedReportVisualizations(result, cards.filter((item) => item.id !== card.id))}
                       />)}
                     </ResizableVisualizationGrid>

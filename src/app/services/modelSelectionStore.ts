@@ -64,6 +64,8 @@ export function readPersistedTextModelSelection(tenantId: string, userId: string
   }
 }
 
+export const textModelSelectionEvent = "smart-data-agent:text-model-selection";
+
 export function persistTextModelSelection(
   tenantId: string,
   userId: string,
@@ -75,6 +77,7 @@ export function persistTextModelSelection(
     // Selection persistence is a UI preference: an unavailable browser store
     // must not block a configured model from being used in the current page.
   }
+  window.dispatchEvent(new CustomEvent(textModelSelectionEvent, { detail: { tenantId, userId, ...selection } }));
 }
 
 export function findConfiguredTextModel(

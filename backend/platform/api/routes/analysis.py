@@ -34,6 +34,7 @@ def handle_analysis_run(handler: Any) -> None:
             handler._send_json({"error": "question_required"}, status=400)
             return
         context = handler._request_context(payload=payload)
+        handler.services.permission_broker.require_skill(context.to_execution_context(), "supersonic.query")
         page_context = dict(payload.get("page_context") or {})
         request_id = str(handler.headers.get("Idempotency-Key") or payload.get("request_id") or "").strip()
         if request_id:
@@ -57,6 +58,7 @@ def handle_analysis_run_async(handler: Any) -> None:
         if not question:
             raise ValueError("question_required")
         context = handler._request_context(payload=payload)
+        handler.services.permission_broker.require_skill(context.to_execution_context(), "supersonic.query")
         page_context = payload.get("page_context") if isinstance(payload.get("page_context"), dict) else {}
         get_param = getattr(handler.services.system_config_store, "get_system_param_value", None)
         analysis_deadline = 900
@@ -762,6 +764,7 @@ def _resolve_analysis_extensions(
         "page-my-reports": ("我的报告页面追问", "基于当前报告快照和重新执行的证据继续分析。"),
         "page-metric-management": ("指标管理页面追问", "基于当前指标语义版本检查口径和影响范围。"),
         "page-data-management": ("数据管理页面追问", "基于当前数据资产版本检查 Schema、语义关系和影响范围。"),
+        "page-weekly-core": ("经营周报三指标结论", "基于当前机构已载入的周报三指标和重新执行的数据证据形成结论，不依赖其他机构的 Skill 目录。"),
     }
     for reference in requested[:12]:
         skill_id = str(reference.get("id") or "").strip()
@@ -982,7 +985,9 @@ def _build_asset_context(
         return {}
     try:
         bundle = store.list_published_bundle(tenant_id)
-    except Exception:
+    except KeyError as exc:
+        if exc.args != ("tenant_not_provisioned",):
+            raise
         return {}
 
     selected_topic = page_context.get("selected_topic") if isinstance(page_context, dict) else None

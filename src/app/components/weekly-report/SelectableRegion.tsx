@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
-import { MessageSquareText, Sparkles } from "lucide-react";
+import { Bold, MessageSquareText, Sparkles } from "lucide-react";
+import { toggleSelectionBold } from "../notes/richNote";
 import type { CommentTarget, PendingTextSelection } from "./domain";
 
 type AnalysisUnderlineContextValue = {
@@ -35,6 +36,7 @@ export function FloatingSelectionActions({
   return (
     <SelectionActionBar className="absolute z-[80]" style={{ top: selection.top, left: selection.left }}>
       <SelectionButton label="添加评论" kind="comment" onClick={() => onOpenComment(selection.target)} />
+      <SelectionButton label="加粗" kind="bold" onClick={() => toggleSelectionBold()} />
       <SelectionButton label="智能分析选中文本" kind="analysis" onClick={() => onOpenAnalysis(selection.target)} />
     </SelectionActionBar>
   );
@@ -371,21 +373,23 @@ function SelectionButton({
   onMouseDown,
 }: {
   label: string;
-  kind: "comment" | "analysis";
+  kind: "comment" | "analysis" | "bold";
   onClick?: () => void;
   onMouseDown?: () => void;
 }) {
   const analysis = kind === "analysis";
-  const Icon = analysis ? Sparkles : MessageSquareText;
+  const bold = kind === "bold";
+  const Icon = analysis ? Sparkles : bold ? Bold : MessageSquareText;
   return (
     <button
       type="button"
       aria-label={label}
-      data-comment-selection-action={analysis ? undefined : "true"}
+      data-comment-selection-action={analysis || bold ? undefined : "true"}
       data-analysis-selection-action={analysis ? "true" : undefined}
+      data-note-bold-action={bold ? "true" : undefined}
       onClick={(event) => { event.stopPropagation(); onClick?.(); }}
       onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); onMouseDown?.(); }}
-      className={`flex h-8 w-8 items-center justify-center rounded-full text-white transition-colors ${analysis ? "bg-[#0a66c2] hover:bg-[#07549f]" : "bg-[#1d1d1f] hover:bg-[#2c2c2e]"}`}
+      className={`flex h-8 w-8 items-center justify-center rounded-full text-white transition-colors ${analysis ? "bg-[#0a66c2] hover:bg-[#07549f]" : bold ? "bg-[#3a3a3c] hover:bg-[#2c2c2e]" : "bg-[#1d1d1f] hover:bg-[#2c2c2e]"}`}
     >
       <Icon className="h-4 w-4" />
     </button>

@@ -14,6 +14,7 @@ export function revealVisualFollowUp({
   plan,
   selectedDataTables,
   railPageKey,
+  selectedText,
 }: {
   key: ResultVisualKey;
   title: string;
@@ -26,8 +27,9 @@ export function revealVisualFollowUp({
   plan: string;
   selectedDataTables: AnalysisDataTableSelection[];
   railPageKey?: string;
+  selectedText?: string;
 }) {
-  const selectedDataPoint = buildVisualDataPoint({ key, title, type, rows, taskId, reportId, question, summary, plan, selectedDataTables });
+  const selectedDataPoint = buildVisualDataPoint({ key, title, type, rows, taskId, reportId, question, summary, plan, selectedDataTables, selectedText });
   revealContextRail(railPageKey || (reportId ? "my-reports" : "self-analysis"), "analysis", selectedDataPoint);
   revealAnalysisWorkspace(selectedDataPoint, "context-rail");
 }
@@ -37,11 +39,11 @@ export function revealVisualComment(input: Parameters<typeof revealVisualFollowU
   revealContextRail(input.railPageKey || (input.reportId ? "my-reports" : "self-analysis"), "comments", selectedDataPoint);
 }
 
-function buildVisualDataPoint({ key, title, type, rows, taskId, reportId, question, summary, plan, selectedDataTables }: Parameters<typeof revealVisualFollowUp>[0]) {
+function buildVisualDataPoint({ key, title, type, rows, taskId, reportId, question, summary, plan, selectedDataTables, selectedText }: Parameters<typeof revealVisualFollowUp>[0]) {
   const firstRow = rows[0];
   const artifactId = reportId || taskId || "current-analysis";
   return {
-    targetType: type === "table" || type === "pivot" ? "table" : "chart",
+    targetType: type === "table" || type === "pivot" ? "table" : type === "text" ? "text" : "chart",
     targetId: `${artifactId}:${key}`,
     label: title,
     values: {
@@ -67,6 +69,7 @@ function buildVisualDataPoint({ key, title, type, rows, taskId, reportId, questi
         dimension_codes: table.dimensionCodes || table.defaultDimensions || [],
       })),
       field_labels: firstRow?.fieldLabels || selectedDataTables[0]?.fieldLabels || {},
+      selected_content: selectedText || "",
     },
   } as const;
 }

@@ -155,12 +155,16 @@ class MySQLMessageBoardStore:
                 rows = list(cursor.fetchall())
         return [_row(row) for row in rows]
 
-    def list_all(self, *, query: str = "", offset: int = 0, limit: int = 50) -> tuple[list[dict[str, Any]], int]:
-        needle = f"%{query.strip().lower()}%"
-        where = "" if not query.strip() else """
-            WHERE LOWER(CONCAT(e.author_name, ' ', author.external_subject, ' ', e.content, ' ', e.page_title, ' ', tenant.tenant_code)) LIKE %s
-        """
-        params: tuple[Any, ...] = () if not where else (needle,)
+    def list_all(self, *, tenant_id: str = "", query: str = "", offset: int = 0, limit: int = 50) -> tuple[list[dict[str, Any]], int]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if str(tenant_id or "").strip():
+            clauses.append("tenant.tenant_code=%s")
+            params.append(str(tenant_id).strip())
+        if query.strip():
+            clauses.append("LOWER(CONCAT(e.author_name, ' ', author.external_subject, ' ', e.content, ' ', e.page_title, ' ', tenant.tenant_code)) LIKE %s")
+            params.append(f"%{query.strip().lower()}%")
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.pool.connection() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT COUNT(*) AS total FROM platform_message_board_entries e "

@@ -109,7 +109,7 @@ export function SkillPluginManager() {
       <div className="mx-auto max-w-[1260px]">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">Skill插件</h2>
+            <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">skill/插件</h2>
             <p className="mt-1 text-[13px] text-[#8a8a8e]">将提炼后的意图、分析经验、行为习惯与工具、分析方法组合为可复用解决方案；知识文件不会被 Skill 直接引用。</p>
           </div>
           <button type="button" onClick={() => setDraft(emptySkill(activeCategory))} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-4 text-[12px] text-white hover:bg-[#2c2c2e]">

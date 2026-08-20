@@ -1,6 +1,5 @@
 import { createElement, lazy, Suspense, type ComponentType } from "react";
 import { createBrowserRouter, Navigate } from "react-router";
-import { Layout } from "./components/Layout";
 import { PlaceholderPage } from "./components/PlaceholderPage";
 import { RouteErrorPage } from "./components/RouteErrorPage";
 import { routePreloaders } from "./routePreload";
@@ -20,6 +19,7 @@ const DataAssets = lazyNamed(() => import("./components/DataAssets"), "DataAsset
 const Notifications = lazyNamed(() => import("./components/Notifications"), "Notifications");
 const SystemSettings = lazyNamed(() => import("./components/SystemSettings"), "SystemSettings");
 const LoginPage = lazyNamed(() => import("./components/LoginPage"), "LoginPage");
+const Layout = lazyNamed(() => import("./components/Layout"), "Layout");
 const SkillPluginManager = lazyNamed(() => import("./components/SkillPluginManager"), "SkillPluginManager");
 const ExternalToolManager = lazyNamed(() => import("./components/ExternalToolManager"), "ExternalToolManager");
 const AnalysisConfigManager = lazyNamed(() => import("./components/AnalysisConfigManager"), "AnalysisConfigManager");
@@ -93,7 +93,7 @@ export const router = createBrowserRouter([
   { path: "/login", Component: withPageSuspense(LoginPage), errorElement: createElement(RouteErrorPage) },
   {
     path: "/",
-    Component: Layout,
+    Component: withPageSuspense(Layout),
     errorElement: createElement(RouteErrorPage),
     children: [
       { index: true, Component: () => createElement(Navigate, { to: "/self-analysis/query", replace: true }) },

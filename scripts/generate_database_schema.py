@@ -75,7 +75,10 @@ def _mysql_type(sql_type: str) -> str:
 def _mysql_constraints(constraints: str) -> str:
     value = constraints
     value = value.replace("DEFAULT gen_random_uuid()", "DEFAULT (UUID())")
-    value = value.replace("DEFAULT now()", "DEFAULT (UTC_TIMESTAMP(6))")
+    # MySQL 8.0.18 accepts CURRENT_TIMESTAMP(6) as a DATETIME default.
+    # Expression default DEFAULT (UTC_TIMESTAMP(6)) is rejected and caused
+    # checksum drift against the production mysql818 image.
+    value = value.replace("DEFAULT now()", "DEFAULT CURRENT_TIMESTAMP(6)")
     value = value.replace("DEFAULT '{}'::jsonb", "DEFAULT (JSON_OBJECT())")
     value = value.replace("DEFAULT '[]'::jsonb", "DEFAULT (JSON_ARRAY())")
     value = value.replace("::jsonb", "")
@@ -133,7 +136,7 @@ def generate_mysql_ddl() -> str:
             f"FOREIGN KEY ({column}) REFERENCES {reference} ON DELETE {on_delete};"
         )
     ddl = "\n\n".join(sections) + "\n"
-    forbidden = ("JSONB", "TIMESTAMPTZ", "gen_random_uuid", "::jsonb", "::uuid", "COMMENT ON")
+    forbidden = ("JSONB", "TIMESTAMPTZ", "gen_random_uuid", "::jsonb", "::uuid", "COMMENT ON", "DEFAULT (UTC_TIMESTAMP")
     leaked = [token for token in forbidden if token in ddl]
     if leaked:
         raise ValueError("MySQL DDL contains PostgreSQL-only tokens: " + ",".join(leaked))

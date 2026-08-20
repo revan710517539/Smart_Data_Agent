@@ -51,5 +51,6 @@ jobs:
       - run: python -m unittest discover backend -p 'test_*.py' -v
       - run: node scripts/frontend-permission-smoke.mjs
       - run: python scripts/generate_database_schema.py --check
+      - run: python scripts/check_mysql_sql_closure.py
       - run: python -m pip_audit -r requirements.lock
       - run: docker build -t smart-data-agent:${{ github.sha }} .

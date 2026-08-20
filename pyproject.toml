@@ -41,7 +41,7 @@ include = ["backend*", "configs*", "data*"]
 [tool.setuptools.package-data]
 configs = ["**/*.json"]
 data = ["**/*.json"]
-"backend.platform.database" = ["mysql/*.sql", "postgresql/*.sql"]
+"backend.platform.database" = ["mysql/*.sql", "mysql/migrations/*.sql", "postgresql/*.sql"]
 
 [tool.unittest]
 start-directory = "backend"

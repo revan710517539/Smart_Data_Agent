@@ -11,8 +11,8 @@ CREATE TABLE IF NOT EXISTS platform_message_board_entries (
   quote_context JSON NOT NULL DEFAULT (JSON_OBJECT()),
   attachment_ids JSON NOT NULL DEFAULT (JSON_ARRAY()),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户从各业务页面提交的产品意见与需求留言。';
 

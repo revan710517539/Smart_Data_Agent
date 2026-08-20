@@ -12,10 +12,10 @@ CREATE TABLE platform_user_interaction_events (
   resource_type VARCHAR(120),
   resource_id VARCHAR(200),
   extension JSON NOT NULL DEFAULT (JSON_OBJECT()),
-  occurred_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  occurred_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='产品页面和可视化控件的脱敏用户交互事件。';
 

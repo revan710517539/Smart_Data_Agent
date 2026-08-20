@@ -10,7 +10,7 @@ CREATE TABLE platform_schema_migrations (
   version VARCHAR(32) PRIMARY KEY,
   name VARCHAR(200) NOT NULL,
   checksum CHAR(64) NOT NULL,
-  applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   execution_ms INTEGER NOT NULL DEFAULT 0 CHECK (execution_ms >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='记录已执行数据库迁移及不可变校验和。';
 
@@ -21,8 +21,8 @@ CREATE TABLE platform_tenants (
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended','closed')),
   timezone VARCHAR(64) NOT NULL DEFAULT 'Asia/Shanghai',
   settings JSON NOT NULL DEFAULT (JSON_OBJECT()),
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='租户/机构隔离根实体。';
 CREATE INDEX idx_platform_tenants_status ON platform_tenants (status);
@@ -35,8 +35,8 @@ CREATE TABLE platform_user_profiles (
   phone VARCHAR(64),
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('invited','active','locked','disabled')),
   last_login_at DATETIME(6),
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='平台用户身份档案，不在此表保存密码。';
 CREATE UNIQUE INDEX uq_platform_user_profiles_email ON platform_user_profiles (((LOWER(email))));
@@ -51,8 +51,8 @@ CREATE TABLE platform_oidc_transactions (
   redirect_uri TEXT NOT NULL,
   expires_at DATETIME(6) NOT NULL,
   consumed_at DATETIME(6),
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='OIDC Authorization Code + PKCE 登录的一次性事务。';
 CREATE INDEX idx_platform_oidc_transactions_expiry ON platform_oidc_transactions (expires_at, consumed_at);
@@ -67,8 +67,8 @@ CREATE TABLE platform_org_units (
   path TEXT NOT NULL,
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='租户内组织机构树和数据权限范围。';
 CREATE INDEX idx_platform_org_units_tenant_updated ON platform_org_units (tenant_id, updated_at, org_unit_id);
@@ -90,13 +90,13 @@ CREATE TABLE platform_user_sessions (
   idle_expires_at DATETIME(6) NOT NULL,
   expires_at DATETIME(6) NOT NULL,
   idle_timeout_seconds INTEGER NOT NULL CHECK (idle_timeout_seconds >= 60),
-  last_seen_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  last_seen_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   revoked_at DATETIME(6),
   revoke_reason VARCHAR(200) NOT NULL DEFAULT '',
   rotated_at DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='可撤销的用户设备会话和刷新令牌摘要。';
 CREATE INDEX idx_platform_user_sessions_tenant_updated ON platform_user_sessions (tenant_id, updated_at, session_id);
@@ -112,8 +112,8 @@ CREATE TABLE auth_roles (
   is_system BOOLEAN NOT NULL DEFAULT false,
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='全局或租户级角色定义。';
 CREATE UNIQUE INDEX uq_auth_roles_scope_code ON auth_roles (((COALESCE(tenant_id, '00000000-0000-0000-0000-000000000000'))), role_code);
 
@@ -128,8 +128,8 @@ CREATE TABLE platform_idempotency_keys (
   state VARCHAR(16) NOT NULL DEFAULT 'processing' CHECK (state IN ('processing','completed','failed')),
   expires_at DATETIME(6) NOT NULL,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='写请求幂等、重复提交和结果重放。';
 CREATE INDEX idx_platform_idempotency_keys_tenant_updated ON platform_idempotency_keys (tenant_id, updated_at, idempotency_id);
@@ -146,7 +146,7 @@ CREATE TABLE platform_capability_approvals (
   input_hash CHAR(64) NOT NULL,
   reason VARCHAR(4096) NOT NULL DEFAULT '',
   requested_by CHAR(36) NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT,
-  requested_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  requested_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   status VARCHAR(16) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','expired','consumed')),
   reviewed_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT,
   reviewed_at DATETIME(6),
@@ -154,8 +154,8 @@ CREATE TABLE platform_capability_approvals (
   consumed_at DATETIME(6),
   review_comment VARCHAR(4096) NOT NULL DEFAULT '',
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='高风险 Skill 与 MCP 调用的一次性限时审批票据。';
 CREATE INDEX idx_platform_capability_approvals_tenant_updated ON platform_capability_approvals (tenant_id, updated_at, approval_id);
@@ -175,10 +175,10 @@ CREATE TABLE platform_audit_events (
   trace_id VARCHAR(100),
   metadata JSON NOT NULL DEFAULT (JSON_OBJECT()),
   event_hash CHAR(64) NOT NULL,
-  occurred_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  occurred_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='脱敏、追加写的安全与业务审计事件。';
 CREATE INDEX idx_platform_audit_events_tenant_updated ON platform_audit_events (tenant_id, updated_at, audit_event_id);
@@ -195,13 +195,13 @@ CREATE TABLE platform_outbox_events (
   payload JSON NOT NULL,
   event_version INTEGER NOT NULL DEFAULT 1 CHECK (event_version > 0),
   status VARCHAR(24) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','publishing','published','failed')),
-  available_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  available_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   published_at DATETIME(6),
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
   last_error TEXT,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='事务内登记待发布领域事件，支持可靠异步副作用。';
 CREATE INDEX idx_platform_outbox_events_tenant_updated ON platform_outbox_events (tenant_id, updated_at, outbox_event_id);
@@ -215,8 +215,8 @@ CREATE TABLE platform_user_preferences (
   preference_key VARCHAR(160) NOT NULL,
   preference_value JSON NOT NULL,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户在租户内的非安全偏好设置。';
 CREATE INDEX idx_platform_user_preferences_tenant_updated ON platform_user_preferences (tenant_id, updated_at, preference_id);
@@ -234,8 +234,8 @@ CREATE TABLE platform_agents (
   output_schema JSON NOT NULL DEFAULT (JSON_OBJECT()),
   runtime_config JSON NOT NULL DEFAULT (JSON_OBJECT()),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='可运行 Agent 定义和启用状态。';
 CREATE INDEX idx_platform_agents_tenant_updated ON platform_agents (tenant_id, updated_at, agent_id);
@@ -258,8 +258,8 @@ CREATE TABLE platform_skills (
   retry_policy JSON NOT NULL DEFAULT (JSON_OBJECT()),
   package_hash CHAR(64),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Skill 配置、实现、版本和运行策略。';
 CREATE INDEX idx_platform_skills_tenant_updated ON platform_skills (tenant_id, updated_at, skill_id);
@@ -277,8 +277,8 @@ CREATE TABLE platform_mcp_servers (
   status VARCHAR(24) NOT NULL DEFAULT 'configured' CHECK (status IN ('configured','healthy','degraded','disabled')),
   last_health_at DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='MCP Server 注册、认证和健康状态。';
 CREATE INDEX idx_platform_mcp_servers_tenant_updated ON platform_mcp_servers (tenant_id, updated_at, mcp_server_id);
@@ -300,8 +300,8 @@ CREATE TABLE platform_model_integrations (
   status VARCHAR(24) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','testing','available','degraded','disabled')),
   last_test_at DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='大模型提供商、模型路由和加密凭证版本。';
 CREATE INDEX idx_platform_model_integrations_tenant_updated ON platform_model_integrations (tenant_id, updated_at, model_integration_id);
@@ -323,8 +323,8 @@ CREATE TABLE platform_speech_integrations (
   status VARCHAR(24) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','testing','available','degraded','disabled')),
   last_test_at DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='ASR/TTS 提供商接入和凭证。';
 CREATE INDEX idx_platform_speech_integrations_tenant_updated ON platform_speech_integrations (tenant_id, updated_at, speech_integration_id);
@@ -341,8 +341,8 @@ CREATE TABLE platform_prompt_templates (
   published_at DATETIME(6),
   checksum CHAR(64) NOT NULL,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='版本化 Prompt 模板及发布状态。';
 CREATE INDEX idx_platform_prompt_templates_tenant_updated ON platform_prompt_templates (tenant_id, updated_at, prompt_template_id);
@@ -360,8 +360,8 @@ CREATE TABLE platform_data_connections (
   last_verified_at DATETIME(6),
   health_summary JSON NOT NULL DEFAULT (JSON_OBJECT()),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='租户数据连接的逻辑身份和当前验证版本。';
 CREATE INDEX idx_platform_data_connections_tenant_updated ON platform_data_connections (tenant_id, updated_at, connection_id);
@@ -381,8 +381,8 @@ CREATE TABLE platform_metric_dictionary (
   owner_user_id CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
   metadata JSON NOT NULL DEFAULT (JSON_OBJECT()),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='指标逻辑身份和当前发布版本。';
 CREATE INDEX idx_platform_metric_dictionary_tenant_updated ON platform_metric_dictionary (tenant_id, updated_at, metric_id);
@@ -403,8 +403,8 @@ CREATE TABLE platform_topic_tables (
   status VARCHAR(24) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','validating','published','degraded','archived')),
   validated_at DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='主题表逻辑身份、发布版本和新鲜度要求。';
 CREATE INDEX idx_platform_topic_tables_tenant_updated ON platform_topic_tables (tenant_id, updated_at, topic_table_id);
@@ -421,8 +421,8 @@ CREATE TABLE platform_acquisition_scripts (
   owner_user_id CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
   status VARCHAR(24) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','review','active','degraded','disabled')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='数据获取脚本逻辑身份和已发布版本。';
 CREATE INDEX idx_platform_acquisition_scripts_tenant_updated ON platform_acquisition_scripts (tenant_id, updated_at, acquisition_script_id);
@@ -442,8 +442,8 @@ CREATE TABLE platform_data_artifacts (
   retention_until DATETIME(6),
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('uploading','active','quarantined','expired','deleted')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='CSV/Parquet/JSON/图表/导出等不可变对象存储产物。';
 CREATE INDEX idx_platform_data_artifacts_tenant_updated ON platform_data_artifacts (tenant_id, updated_at, artifact_id);
@@ -464,11 +464,11 @@ CREATE TABLE platform_lineage_edges (
   expression_hash CHAR(64),
   confidence NUMERIC(7,4) NOT NULL DEFAULT 1 CHECK (confidence BETWEEN 0 AND 1),
   metadata JSON NOT NULL DEFAULT (JSON_OBJECT()),
-  valid_from DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  valid_from DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   valid_to DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='字段、指标、主题表、分析、报告之间的有向血缘。';
 CREATE INDEX idx_platform_lineage_edges_tenant_updated ON platform_lineage_edges (tenant_id, updated_at, lineage_edge_id);
@@ -487,8 +487,8 @@ CREATE TABLE platform_data_asset_items (
   payload JSON NOT NULL DEFAULT (JSON_OBJECT()),
   status VARCHAR(24) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','review','active','rejected','archived')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='兼容现有数据资产页面的版本化目录记录。';
 CREATE INDEX idx_platform_data_asset_items_tenant_updated ON platform_data_asset_items (tenant_id, updated_at, asset_item_id);
@@ -500,7 +500,7 @@ CREATE TABLE platform_raw_table_external_references (
   mode VARCHAR(16) NOT NULL CHECK (mode IN ('private','shared')),
   schema_fingerprint VARCHAR(128) NOT NULL,
   updated_by CHAR(36) NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT,
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   PRIMARY KEY (tenant_id, source_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='CSV 原始表在 SDA 中的外部引用授权；不写入或修改 CSV 文件。';
 
@@ -511,11 +511,11 @@ CREATE TABLE platform_system_data_params (
   value_type VARCHAR(16) NOT NULL CHECK (value_type IN ('string','number','boolean','duration','json')),
   param_value JSON NOT NULL,
   is_sensitive BOOLEAN NOT NULL DEFAULT false,
-  effective_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  effective_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   description VARCHAR(4096) NOT NULL DEFAULT '',
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='可审计且真正进入运行时的租户系统参数。';
 CREATE INDEX idx_platform_system_data_params_tenant_updated ON platform_system_data_params (tenant_id, updated_at, system_param_id);
@@ -532,8 +532,8 @@ CREATE TABLE platform_market_entities (
   attributes JSON NOT NULL DEFAULT (JSON_OBJECT()),
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('active','merged','inactive')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='竞品、机构、产品、行业等市场实体主数据。';
 CREATE INDEX idx_platform_market_entities_tenant_updated ON platform_market_entities (tenant_id, updated_at, market_entity_id);
@@ -553,8 +553,8 @@ CREATE TABLE platform_market_monitoring_rules (
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('draft','active','paused','disabled')),
   owner_user_id CHAR(36) NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='对市场实体和指标的阈值、变化和事件监控规则。';
 CREATE INDEX idx_platform_market_monitoring_rules_tenant_updated ON platform_market_monitoring_rules (tenant_id, updated_at, market_rule_id);
@@ -575,8 +575,8 @@ CREATE TABLE platform_knowledge_documents (
   current_version_no INTEGER NOT NULL DEFAULT 0 CHECK (current_version_no >= 0),
   status VARCHAR(24) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','processing','review','active','failed','archived')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='租户隔离的知识文档逻辑身份和处理状态。';
 CREATE INDEX idx_platform_knowledge_documents_tenant_updated ON platform_knowledge_documents (tenant_id, updated_at, document_id);
@@ -597,13 +597,13 @@ CREATE TABLE platform_memory_records (
   status VARCHAR(24) NOT NULL DEFAULT 'candidate' CHECK (status IN ('candidate','review','active','superseded','expired','rejected')),
   confidence NUMERIC(7,4) NOT NULL DEFAULT 0 CHECK (confidence BETWEEN 0 AND 1),
   weight NUMERIC(9,6) NOT NULL DEFAULT 1 CHECK (weight >= 0),
-  valid_from DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  valid_from DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   expires_at DATETIME(6),
   supersedes_memory_id CHAR(36) REFERENCES platform_memory_records(memory_id) ON DELETE SET NULL,
   source_trace_id VARCHAR(100),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='分析案例、用户习惯、业务经验等记忆候选和正式记录。';
 CREATE INDEX idx_platform_memory_records_tenant_updated ON platform_memory_records (tenant_id, updated_at, memory_id);
@@ -632,8 +632,8 @@ CREATE TABLE platform_analysis_tasks (
   error_code VARCHAR(100),
   error_summary TEXT,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='一次分析请求的聚合根和权威状态。';
 CREATE INDEX idx_platform_analysis_tasks_tenant_updated ON platform_analysis_tasks (tenant_id, updated_at, analysis_task_id);
@@ -656,8 +656,8 @@ CREATE TABLE platform_trace_spans (
   attributes JSON NOT NULL DEFAULT (JSON_OBJECT()),
   error_code VARCHAR(100),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='OpenTelemetry 兼容的父子 Span、耗时和资源属性。';
 CREATE INDEX idx_platform_trace_spans_tenant_updated ON platform_trace_spans (tenant_id, updated_at, span_id);
@@ -673,10 +673,10 @@ CREATE TABLE platform_runtime_events (
   latency_ms INTEGER CHECK (latency_ms >= 0),
   fallback_used BOOLEAN NOT NULL DEFAULT false,
   detail JSON NOT NULL DEFAULT (JSON_OBJECT()),
-  occurred_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  occurred_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='系统运行事件、状态和降级记录。';
 CREATE INDEX idx_platform_runtime_events_tenant_updated ON platform_runtime_events (tenant_id, updated_at, runtime_event_id);
@@ -701,8 +701,8 @@ CREATE TABLE platform_automation_tasks (
   next_run_at DATETIME(6),
   owner_user_id CHAR(36) NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='定时、事件和手动自动化任务定义。';
 CREATE INDEX idx_platform_automation_tasks_tenant_updated ON platform_automation_tasks (tenant_id, updated_at, automation_task_id);
@@ -722,8 +722,8 @@ CREATE TABLE platform_alert_rules (
   notification_policy JSON NOT NULL DEFAULT (JSON_OBJECT()),
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('draft','active','paused','disabled')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='数据、任务、指标和系统异常的统一告警规则。';
 CREATE INDEX idx_platform_alert_rules_tenant_updated ON platform_alert_rules (tenant_id, updated_at, alert_rule_id);
@@ -749,8 +749,8 @@ CREATE TABLE platform_subscriptions (
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused','disabled')),
   disabled_at DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户对报告、指标、告警和市场事件的推送订阅。';
 CREATE INDEX idx_platform_subscriptions_tenant_updated ON platform_subscriptions (tenant_id, updated_at, subscription_id);
@@ -771,8 +771,8 @@ CREATE TABLE platform_provider_callbacks (
   processed_at DATETIME(6),
   processing_status VARCHAR(24) NOT NULL DEFAULT 'pending' CHECK (processing_status IN ('pending','processed','ignored','failed')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='邮件、飞书、企微等渠道回调的幂等原始事件摘要。';
 CREATE INDEX idx_platform_provider_callbacks_tenant_updated ON platform_provider_callbacks (tenant_id, updated_at, callback_id);
@@ -788,8 +788,8 @@ CREATE TABLE platform_application_module_state (
   state_value JSON NOT NULL,
   state_schema_version INTEGER NOT NULL DEFAULT 1 CHECK (state_schema_version > 0),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='现有页面非核心 UI 状态的服务端持久化兼容层。';
 CREATE INDEX idx_platform_application_module_state_tenant_updated ON platform_application_module_state (tenant_id, updated_at, module_state_id);
@@ -810,8 +810,8 @@ CREATE TABLE platform_application_actions (
   error_code VARCHAR(100),
   finished_at DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='已注册页面动作的命令记录和真实 handler 结果。';
 CREATE INDEX idx_platform_application_actions_tenant_updated ON platform_application_actions (tenant_id, updated_at, application_action_id);
@@ -831,8 +831,8 @@ CREATE TABLE platform_bridge_bindings (
   device_name VARCHAR(160) NOT NULL,
   created_at_epoch BIGINT NOT NULL,
   revoked_at_epoch BIGINT,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='WorkBuddy、Codex、QWork 一次点击授权形成的可撤销 Bridge 设备绑定；只保存令牌哈希。';
 CREATE INDEX idx_platform_bridge_bindings_owner ON platform_bridge_bindings (tenant_id, user_id, channel, revoked_at_epoch);
@@ -847,8 +847,8 @@ CREATE TABLE platform_analysis_workspaces (
   context_snapshot JSON NOT NULL DEFAULT (JSON_OBJECT()),
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived','deleted')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='页面、报告或自主分析对应的持久化分析工作区。';
 CREATE INDEX idx_platform_analysis_workspaces_tenant_updated ON platform_analysis_workspaces (tenant_id, updated_at, workspace_id);
@@ -869,8 +869,8 @@ CREATE TABLE platform_analysis_result_cache (
   invalidated_at DATETIME(6),
   invalidation_reason VARCHAR(120) NOT NULL DEFAULT '',
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='权限、CSV、语义和执行版本绑定的安全结果缓存索引。';
 CREATE INDEX idx_platform_analysis_result_cache_tenant_updated ON platform_analysis_result_cache (tenant_id, updated_at, cache_id);
@@ -884,7 +884,7 @@ CREATE TABLE platform_user_tenant_memberships (
   org_unit_id CHAR(36) REFERENCES platform_org_units(org_unit_id) ON DELETE SET NULL,
   membership_status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (membership_status IN ('invited','active','suspended','left')),
   joined_at DATETIME(6),
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户与租户/组织的成员关系。';
 CREATE UNIQUE INDEX uq_platform_memberships_user_tenant ON platform_user_tenant_memberships (tenant_id, user_id);
 CREATE INDEX idx_platform_memberships_org ON platform_user_tenant_memberships (tenant_id, org_unit_id);
@@ -895,7 +895,7 @@ CREATE TABLE auth_role_assignments (
   user_id CHAR(36) NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE CASCADE,
   role_id CHAR(36) NOT NULL REFERENCES auth_roles(role_id) ON DELETE CASCADE,
   granted_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  granted_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  granted_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   expires_at DATETIME(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户在指定租户内的角色授权。';
 CREATE UNIQUE INDEX uq_auth_role_assignments ON auth_role_assignments (((COALESCE(tenant_id, '00000000-0000-0000-0000-000000000000'))), user_id, role_id);
@@ -913,14 +913,14 @@ CREATE TABLE auth_permission_policies (
   field_scope JSON NOT NULL DEFAULT (JSON_ARRAY()),
   metric_scope JSON NOT NULL DEFAULT (JSON_ARRAY()),
   priority INTEGER NOT NULL DEFAULT 100,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='角色的资源、动作、组织、行列和指标权限策略。';
 CREATE INDEX idx_auth_permission_policies_role ON auth_permission_policies (role_id, priority);
 
 CREATE TABLE auth_manageable_roles (
   role_id CHAR(36) NOT NULL REFERENCES auth_roles(role_id) ON DELETE CASCADE,
   manageable_role_id CHAR(36) NOT NULL REFERENCES auth_roles(role_id) ON DELETE CASCADE,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   PRIMARY KEY (role_id, manageable_role_id), CHECK (role_id <> manageable_role_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='定义某角色允许管理的下级角色。';
 
@@ -933,8 +933,8 @@ CREATE TABLE platform_agent_groups (
   state_machine JSON NOT NULL DEFAULT (JSON_OBJECT()),
   status VARCHAR(24) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','active','disabled')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='多 Agent 编排组及阶段门禁定义。';
 CREATE INDEX idx_platform_agent_groups_tenant_updated ON platform_agent_groups (tenant_id, updated_at, agent_group_id);
@@ -945,7 +945,7 @@ CREATE TABLE platform_agent_skill_grants (
   agent_id CHAR(36) NOT NULL REFERENCES platform_agents(agent_id) ON DELETE CASCADE,
   skill_id CHAR(36) NOT NULL REFERENCES platform_skills(skill_id) ON DELETE CASCADE,
   grant_config JSON NOT NULL DEFAULT (JSON_OBJECT()),
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   PRIMARY KEY (tenant_id, agent_id, skill_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Agent 被允许使用的 Skill 及版本范围。';
 
@@ -959,8 +959,8 @@ CREATE TABLE platform_mcp_tools (
   risk_level VARCHAR(16) NOT NULL DEFAULT 'medium' CHECK (risk_level IN ('low','medium','high','critical')),
   is_enabled BOOLEAN NOT NULL DEFAULT false,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='从 MCP Server 同步并授权的工具目录。';
 CREATE INDEX idx_platform_mcp_tools_tenant_updated ON platform_mcp_tools (tenant_id, updated_at, mcp_tool_id);
@@ -987,8 +987,8 @@ CREATE TABLE platform_model_calls (
   latency_ms INTEGER CHECK (latency_ms >= 0),
   error_code VARCHAR(100),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='模型调用的输入证据引用、用量、成本和结果状态。';
 CREATE INDEX idx_platform_model_calls_tenant_updated ON platform_model_calls (tenant_id, updated_at, model_call_id);
@@ -1009,8 +1009,8 @@ CREATE TABLE platform_connection_versions (
   verified_at DATETIME(6),
   published_at DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='不可变数据连接配置与加密凭证版本。';
 CREATE INDEX idx_platform_connection_versions_tenant_updated ON platform_connection_versions (tenant_id, updated_at, connection_version_id);
@@ -1029,8 +1029,8 @@ CREATE TABLE platform_datasets (
   status VARCHAR(24) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','active','degraded','deprecated','disabled')),
   schema_hash CHAR(64),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='真实数据集、库表、API 资源或文件集合的元数据。';
 CREATE INDEX idx_platform_datasets_tenant_updated ON platform_datasets (tenant_id, updated_at, dataset_id);
@@ -1045,7 +1045,7 @@ CREATE TABLE platform_metric_visibility (
   subject_id CHAR(36) NOT NULL,
   effect VARCHAR(16) NOT NULL DEFAULT 'allow' CHECK (effect IN ('allow','deny')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='按用户、角色或组织授予指标可见范围。';
 CREATE UNIQUE INDEX uq_platform_metric_visibility ON platform_metric_visibility (tenant_id, metric_id, subject_type, subject_id);
 CREATE INDEX idx_platform_metric_visibility_subject ON platform_metric_visibility (tenant_id, subject_type, subject_id);
@@ -1062,8 +1062,8 @@ CREATE TABLE platform_topic_table_fields (
   is_dimension BOOLEAN NOT NULL DEFAULT false,
   is_measure BOOLEAN NOT NULL DEFAULT false,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='主题表输出字段及其来源映射。';
 CREATE INDEX idx_platform_topic_table_fields_tenant_updated ON platform_topic_table_fields (tenant_id, updated_at, topic_field_id);
@@ -1084,8 +1084,8 @@ CREATE TABLE platform_acquisition_script_versions (
   reviewed_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
   reviewed_at DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='不可变获取脚本版本、签名和审批结果。';
 CREATE INDEX idx_platform_acquisition_script_versions_tenant_updated ON platform_acquisition_script_versions (tenant_id, updated_at, script_version_id);
@@ -1102,13 +1102,13 @@ CREATE TABLE platform_data_asset_versions (
   payload_hash CHAR(64) NOT NULL,
   status VARCHAR(24) NOT NULL CHECK (status IN ('draft','review','active','rejected','archived')),
   submitted_by CHAR(36) NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT,
-  submitted_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  submitted_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   reviewed_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT,
   reviewed_at DATETIME(6),
   review_comment VARCHAR(4096) NOT NULL DEFAULT '',
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='数据资产不可变版本、schema 校验结果与发布状态。';
 CREATE INDEX idx_platform_data_asset_versions_tenant_updated ON platform_data_asset_versions (tenant_id, updated_at, asset_version_id);
@@ -1130,8 +1130,8 @@ CREATE TABLE platform_file_attachments (
   processing_error VARCHAR(200) NOT NULL DEFAULT '',
   classification VARCHAR(24) NOT NULL DEFAULT 'internal',
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='业务对象与对象存储文件之间的授权引用。';
 CREATE INDEX idx_platform_file_attachments_tenant_updated ON platform_file_attachments (tenant_id, updated_at, attachment_id);
@@ -1149,8 +1149,8 @@ CREATE TABLE platform_source_systems (
   license_metadata JSON NOT NULL DEFAULT (JSON_OBJECT()),
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('active','degraded','disabled','retired')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='外部来源系统主数据，包括市场平台和毓数/智能运营系统。';
 CREATE INDEX idx_platform_source_systems_tenant_updated ON platform_source_systems (tenant_id, updated_at, source_system_id);
@@ -1166,8 +1166,8 @@ CREATE TABLE platform_memory_evidence (
   evidence_hash CHAR(64) NOT NULL,
   support_type VARCHAR(16) NOT NULL DEFAULT 'supports' CHECK (support_type IN ('supports','contradicts','context')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='记忆记录的分析、报告、任务或知识证据。';
 CREATE INDEX idx_platform_memory_evidence_tenant_updated ON platform_memory_evidence (tenant_id, updated_at, memory_evidence_id);
@@ -1182,10 +1182,10 @@ CREATE TABLE platform_memory_reviews (
   decision VARCHAR(24) NOT NULL CHECK (decision IN ('approve','reject','request_change','supersede','expire')),
   comments VARCHAR(4096) NOT NULL DEFAULT '',
   review_evidence JSON NOT NULL DEFAULT (JSON_OBJECT()),
-  reviewed_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  reviewed_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='记忆候选的人工或受控机器评审记录。';
 CREATE INDEX idx_platform_memory_reviews_tenant_updated ON platform_memory_reviews (tenant_id, updated_at, memory_review_id);
@@ -1204,8 +1204,8 @@ CREATE TABLE platform_analysis_experiences (
   success_count INTEGER NOT NULL DEFAULT 0 CHECK (success_count >= 0),
   failure_count INTEGER NOT NULL DEFAULT 0 CHECK (failure_count >= 0),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='可审核、可版本化、可在规划阶段召回的分析经验。';
 CREATE INDEX idx_platform_analysis_experiences_tenant_updated ON platform_analysis_experiences (tenant_id, updated_at, experience_id);
@@ -1229,8 +1229,8 @@ CREATE TABLE platform_analysis_steps (
   finished_at DATETIME(6),
   error_code VARCHAR(100),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='分析计划中每个 Agent/Skill/Review 步骤的可恢复执行记录。';
 CREATE INDEX idx_platform_analysis_steps_tenant_updated ON platform_analysis_steps (tenant_id, updated_at, analysis_step_id);
@@ -1249,10 +1249,10 @@ CREATE TABLE platform_evaluations (
   evaluator_type VARCHAR(16) NOT NULL CHECK (evaluator_type IN ('deterministic','model','human')),
   evaluator_version VARCHAR(160) NOT NULL,
   evaluated_artifact_hash CHAR(64) NOT NULL,
-  evaluated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  evaluated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='对最终 SQL、数据、图表、结论和权限的质量评审。';
 CREATE INDEX idx_platform_evaluations_tenant_updated ON platform_evaluations (tenant_id, updated_at, evaluation_id);
@@ -1271,8 +1271,8 @@ CREATE TABLE platform_saved_analysis_results (
   tags JSON NOT NULL DEFAULT (JSON_ARRAY()),
   archived_at DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户收藏的分析执行引用，不复制任务事实。';
 CREATE INDEX idx_platform_saved_analysis_results_tenant_updated ON platform_saved_analysis_results (tenant_id, updated_at, saved_result_id);
@@ -1290,8 +1290,8 @@ CREATE TABLE platform_analysis_feedback (
   correction JSON NOT NULL DEFAULT (JSON_OBJECT()),
   resolved_at DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户对分析结果的评分、纠错和采用结果。';
 CREATE INDEX idx_platform_analysis_feedback_tenant_updated ON platform_analysis_feedback (tenant_id, updated_at, feedback_id);
@@ -1311,8 +1311,8 @@ CREATE TABLE platform_reports (
   visibility VARCHAR(16) NOT NULL DEFAULT 'private' CHECK (visibility IN ('private','org','tenant')),
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived','deleted')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='报告逻辑身份、所有者、模板和当前版本。';
 CREATE INDEX idx_platform_reports_tenant_updated ON platform_reports (tenant_id, updated_at, report_id);
@@ -1339,8 +1339,8 @@ CREATE TABLE platform_automation_task_runs (
   error_code VARCHAR(100),
   error_summary TEXT,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='自动化任务每次运行、租约、重试和恢复状态。';
 CREATE INDEX idx_platform_automation_task_runs_tenant_updated ON platform_automation_task_runs (tenant_id, updated_at, automation_run_id);
@@ -1366,8 +1366,8 @@ CREATE TABLE platform_todos (
   result_summary JSON NOT NULL DEFAULT (JSON_OBJECT()),
   todo_metadata JSON NOT NULL DEFAULT (JSON_OBJECT()),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='可分配、提醒、关联证据和回收结果的待办任务。';
 CREATE INDEX idx_platform_todos_tenant_updated ON platform_todos (tenant_id, updated_at, todo_id);
@@ -1386,14 +1386,14 @@ CREATE TABLE platform_alert_events (
   resource_id CHAR(36),
   summary TEXT NOT NULL,
   evidence JSON NOT NULL,
-  first_seen_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  last_seen_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  first_seen_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  last_seen_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   occurrence_count INTEGER NOT NULL DEFAULT 1 CHECK (occurrence_count > 0),
   acknowledged_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
   resolved_at DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='告警规则命中、去重、确认、解决和证据。';
 CREATE INDEX idx_platform_alert_events_tenant_updated ON platform_alert_events (tenant_id, updated_at, alert_event_id);
@@ -1419,8 +1419,8 @@ CREATE TABLE platform_notification_deliveries (
   delivered_at DATETIME(6),
   error_code VARCHAR(100),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='每条通知的真实渠道投递、回执和重试。';
 CREATE INDEX idx_platform_notification_deliveries_tenant_updated ON platform_notification_deliveries (tenant_id, updated_at, delivery_id);
@@ -1445,8 +1445,8 @@ CREATE TABLE platform_bridge_enrollments (
   consumed_at_epoch BIGINT,
   binding_id CHAR(36) REFERENCES platform_bridge_bindings(binding_id) ON DELETE SET NULL,
   created_at_epoch BIGINT NOT NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='十分钟内有效、只能领取一次的 Bridge 设备授权事务。';
 CREATE INDEX idx_platform_bridge_enrollments_expiry ON platform_bridge_enrollments (status, expires_at_epoch);
@@ -1462,8 +1462,8 @@ CREATE TABLE platform_analysis_threads (
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('active','merged','archived')),
   merged_into_thread_id CHAR(36) REFERENCES platform_analysis_threads(thread_id) ON DELETE RESTRICT,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='总体分析及图表、指标、机构或数据点的分支线程。';
 CREATE INDEX idx_platform_analysis_threads_tenant_updated ON platform_analysis_threads (tenant_id, updated_at, thread_id);
@@ -1477,7 +1477,7 @@ CREATE TABLE platform_agent_group_members (
   sequence_no INTEGER NOT NULL CHECK (sequence_no >= 0),
   is_required BOOLEAN NOT NULL DEFAULT true,
   gate_config JSON NOT NULL DEFAULT (JSON_OBJECT()),
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   PRIMARY KEY (agent_group_id, agent_id, stage_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Agent 在编排组中的顺序、职责和门禁。';
 CREATE INDEX idx_platform_agent_group_members_order ON platform_agent_group_members (agent_group_id, sequence_no);
@@ -1498,8 +1498,8 @@ CREATE TABLE platform_dataset_fields (
   masking_policy JSON NOT NULL DEFAULT (JSON_OBJECT()),
   metadata JSON NOT NULL DEFAULT (JSON_OBJECT()),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='数据集字段、类型、语义、权限和敏感分类。';
 CREATE INDEX idx_platform_dataset_fields_tenant_updated ON platform_dataset_fields (tenant_id, updated_at, field_id);
@@ -1511,7 +1511,7 @@ CREATE TABLE platform_topic_table_sources (
   dataset_id CHAR(36) NOT NULL REFERENCES platform_datasets(dataset_id) ON DELETE RESTRICT,
   source_alias VARCHAR(160) NOT NULL,
   join_role VARCHAR(32) NOT NULL DEFAULT 'primary' CHECK (join_role IN ('primary','lookup','bridge')),
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   PRIMARY KEY (topic_table_id, dataset_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='主题表依赖的数据集及连接版本。';
 
@@ -1534,8 +1534,8 @@ CREATE TABLE platform_acquisition_jobs (
   next_run_at DATETIME(6),
   owner_user_id CHAR(36) NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='实时/离线/API/文件数据获取任务定义。';
 CREATE INDEX idx_platform_acquisition_jobs_tenant_updated ON platform_acquisition_jobs (tenant_id, updated_at, acquisition_job_id);
@@ -1555,8 +1555,8 @@ CREATE TABLE platform_data_quality_rules (
   blocking BOOLEAN NOT NULL DEFAULT false,
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('draft','active','disabled')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='数据完整性、准确性、一致性和新鲜度规则。';
 CREATE INDEX idx_platform_data_quality_rules_tenant_updated ON platform_data_quality_rules (tenant_id, updated_at, quality_rule_id);
@@ -1569,10 +1569,10 @@ CREATE TABLE platform_data_asset_reviews (
   decision VARCHAR(24) NOT NULL CHECK (decision IN ('approved','rejected','changes_required')),
   reviewer_user_id CHAR(36) NOT NULL REFERENCES platform_user_profiles(user_id) ON DELETE RESTRICT,
   comments VARCHAR(4096) NOT NULL DEFAULT '',
-  decided_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  decided_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='数据资产版本的追加式人工复核决策。';
 CREATE INDEX idx_platform_data_asset_reviews_tenant_updated ON platform_data_asset_reviews (tenant_id, updated_at, asset_review_id);
@@ -1590,8 +1590,8 @@ CREATE TABLE platform_market_sources (
   reliability_score NUMERIC(7,4) CHECK (reliability_score BETWEEN 0 AND 1),
   status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused','expired','disabled')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='市场数据来源、许可、抓取方式和可信度。';
 CREATE INDEX idx_platform_market_sources_tenant_updated ON platform_market_sources (tenant_id, updated_at, market_source_id);
@@ -1606,12 +1606,12 @@ CREATE TABLE platform_operating_system_mappings (
   external_code VARCHAR(300) NOT NULL,
   platform_entity_type VARCHAR(40) NOT NULL,
   platform_entity_id CHAR(36) NOT NULL,
-  effective_from DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  effective_from DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   effective_to DATETIME(6),
   mapping_status VARCHAR(24) NOT NULL DEFAULT 'active' CHECK (mapping_status IN ('pending','active','conflict','expired')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='毓数/智能运营系统与平台机构、客户、指标、主题表编码映射。';
 CREATE INDEX idx_platform_operating_system_mappings_tenant_updated ON platform_operating_system_mappings (tenant_id, updated_at, mapping_id);
@@ -1633,8 +1633,8 @@ CREATE TABLE platform_knowledge_versions (
   published_at DATETIME(6),
   reviewed_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='不可变知识正文版本及对象存储来源。';
 CREATE INDEX idx_platform_knowledge_versions_tenant_updated ON platform_knowledge_versions (tenant_id, updated_at, knowledge_version_id);
@@ -1661,8 +1661,8 @@ CREATE TABLE platform_analysis_queries (
   started_at DATETIME(6),
   finished_at DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='经权限编译并真实执行的 SQL/语义查询和结果摘要。';
 CREATE INDEX idx_platform_analysis_queries_tenant_updated ON platform_analysis_queries (tenant_id, updated_at, analysis_query_id);
@@ -1682,8 +1682,8 @@ CREATE TABLE platform_analysis_artifacts (
   content_hash CHAR(64) NOT NULL,
   parent_artifact_id CHAR(36) REFERENCES platform_analysis_artifacts(analysis_artifact_id) ON DELETE SET NULL,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='脚本、图表、表格、草稿和结论等分析产物。';
 CREATE INDEX idx_platform_analysis_artifacts_tenant_updated ON platform_analysis_artifacts (tenant_id, updated_at, analysis_artifact_id);
@@ -1707,10 +1707,10 @@ CREATE TABLE platform_weekly_report_versions (
   published_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
   document_metadata JSON NOT NULL DEFAULT (JSON_OBJECT()),
   evidence_summary JSON NOT NULL DEFAULT (JSON_OBJECT()),
-  saved_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  saved_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='不可变周报版本、发布状态、父版本和校验和。';
 CREATE INDEX idx_platform_weekly_report_versions_tenant_updated ON platform_weekly_report_versions (tenant_id, updated_at, report_version_id);
@@ -1726,8 +1726,8 @@ CREATE TABLE platform_report_comment_revisions (
   revision_no BIGINT NOT NULL CHECK (revision_no > 0),
   snapshot_hash CHAR(64) NOT NULL,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='逻辑报告评论集合的单调修订号与快照校验和。';
 CREATE INDEX idx_platform_report_comment_revisions_tenant_updated ON platform_report_comment_revisions (tenant_id, updated_at, comment_revision_id);
@@ -1749,8 +1749,8 @@ CREATE TABLE platform_job_steps (
   finished_at DATETIME(6),
   error_code VARCHAR(100),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='自动化运行中的步骤、检查点和补偿状态。';
 CREATE INDEX idx_platform_job_steps_tenant_updated ON platform_job_steps (tenant_id, updated_at, job_step_id);
@@ -1770,8 +1770,8 @@ CREATE TABLE platform_email_messages (
   attachment_ids JSON NOT NULL DEFAULT (JSON_ARRAY()),
   provider_response JSON NOT NULL DEFAULT (JSON_OBJECT()),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='邮件主题、正文产物、收件人和发送回执。';
 CREATE INDEX idx_platform_email_messages_tenant_updated ON platform_email_messages (tenant_id, updated_at, email_message_id);
@@ -1791,8 +1791,8 @@ CREATE TABLE platform_analysis_turns (
   evidence_refs JSON NOT NULL DEFAULT (JSON_ARRAY()),
   status VARCHAR(24) NOT NULL CHECK (status IN ('clarification','queued','running','completed','partial','failed','cancelled')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='线程内不可变问题、回答、规划和证据轮次。';
 CREATE INDEX idx_platform_analysis_turns_tenant_updated ON platform_analysis_turns (tenant_id, updated_at, turn_id);
@@ -1825,8 +1825,8 @@ CREATE TABLE platform_metric_versions (
   reviewed_at DATETIME(6),
   review_comment VARCHAR(4096) NOT NULL DEFAULT '',
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='不可变指标口径、公式、分子分母、粒度和来源版本。';
 CREATE INDEX idx_platform_metric_versions_tenant_updated ON platform_metric_versions (tenant_id, updated_at, metric_version_id);
@@ -1857,8 +1857,8 @@ CREATE TABLE platform_acquisition_job_runs (
   error_code VARCHAR(100),
   error_summary TEXT,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='每次数据获取执行、租约、游标、错误和产物。';
 CREATE INDEX idx_platform_acquisition_job_runs_tenant_updated ON platform_acquisition_job_runs (tenant_id, updated_at, acquisition_run_id);
@@ -1882,8 +1882,8 @@ CREATE TABLE platform_market_observations (
   source_record_id VARCHAR(300),
   confidence NUMERIC(7,4) CHECK (confidence BETWEEN 0 AND 1),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='带来源、时间、单位和证据的市场指标观测值。';
 CREATE INDEX idx_platform_market_observations_tenant_updated ON platform_market_observations (tenant_id, updated_at, market_observation_id);
@@ -1907,8 +1907,8 @@ CREATE TABLE platform_knowledge_chunks (
   embedding_model VARCHAR(200),
   embedding_ref VARCHAR(500),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='知识版本的可检索分块、关键词与向量引用。';
 CREATE INDEX idx_platform_knowledge_chunks_tenant_updated ON platform_knowledge_chunks (tenant_id, updated_at, chunk_id);
@@ -1930,8 +1930,8 @@ CREATE TABLE platform_analysis_evidence (
   evidence_hash CHAR(64) NOT NULL,
   freshness_status VARCHAR(24) NOT NULL DEFAULT 'unknown' CHECK (freshness_status IN ('fresh','stale','unknown','blocked')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='结论与查询、分区、数据值、知识引用之间的证据边。';
 CREATE INDEX idx_platform_analysis_evidence_tenant_updated ON platform_analysis_evidence (tenant_id, updated_at, analysis_evidence_id);
@@ -1953,8 +1953,8 @@ CREATE TABLE platform_report_blocks (
   content_hash CHAR(64) NOT NULL,
   generation_status VARCHAR(24) NOT NULL DEFAULT 'manual' CHECK (generation_status IN ('manual','generated','reviewed','rejected')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='报告版本中的表格、图表、文本、结论和图片块。';
 CREATE INDEX idx_platform_report_blocks_tenant_updated ON platform_report_blocks (tenant_id, updated_at, report_block_id);
@@ -1977,8 +1977,8 @@ CREATE TABLE platform_report_learning_candidates (
   applied_resource_type VARCHAR(40),
   applied_resource_id CHAR(36),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='从周报版本提炼的经验、习惯和待办候选。';
 CREATE INDEX idx_platform_report_learning_candidates_tenant_updated ON platform_report_learning_candidates (tenant_id, updated_at, learning_candidate_id);
@@ -2004,8 +2004,8 @@ CREATE TABLE weekly_report_ai_analysis_task (
   final_result JSON NOT NULL DEFAULT (JSON_OBJECT()),
   error_summary TEXT,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='兼容现有周报 AI 分析任务并关联正式报告/分析事实链。';
 CREATE INDEX idx_weekly_report_ai_analysis_task_tenant_updated ON weekly_report_ai_analysis_task (tenant_id, updated_at, weekly_ai_task_id);
@@ -2028,8 +2028,8 @@ CREATE TABLE platform_daily_report_runs (
   status VARCHAR(24) NOT NULL CHECK (status IN ('generated','queued','sending','delivered','failed')),
   outbox_event_id CHAR(36) REFERENCES platform_outbox_events(outbox_event_id) ON DELETE RESTRICT,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='从可发布报告证据生成的不可变日报邮件产物及投递汇总。';
 CREATE INDEX idx_platform_daily_report_runs_tenant_updated ON platform_daily_report_runs (tenant_id, updated_at, daily_report_run_id);
@@ -2053,8 +2053,8 @@ CREATE TABLE platform_acquisition_repair_proposals (
   reviewed_at DATETIME(6),
   applied_script_version_id CHAR(36) REFERENCES platform_acquisition_script_versions(script_version_id) ON DELETE SET NULL,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='采集失败后的受控诊断与脚本修复候选，必须评审后才能形成新版本。';
 CREATE INDEX idx_platform_acquisition_repair_proposals_tenant_updated ON platform_acquisition_repair_proposals (tenant_id, updated_at, repair_proposal_id);
@@ -2080,8 +2080,8 @@ CREATE TABLE platform_dataset_partitions (
   freshness_status VARCHAR(24) NOT NULL CHECK (freshness_status IN ('fresh','stale','unknown','blocked')),
   acquisition_run_id CHAR(36) NOT NULL REFERENCES platform_acquisition_job_runs(acquisition_run_id) ON DELETE RESTRICT,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='数据集分区、快照、新鲜度和对应 Artifact。';
 CREATE INDEX idx_platform_dataset_partitions_tenant_updated ON platform_dataset_partitions (tenant_id, updated_at, partition_id);
@@ -2100,12 +2100,12 @@ CREATE TABLE platform_market_monitoring_events (
   status VARCHAR(24) NOT NULL DEFAULT 'open' CHECK (status IN ('open','acknowledged','resolved','suppressed')),
   event_summary TEXT NOT NULL,
   evidence JSON NOT NULL,
-  detected_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  detected_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   resolved_at DATETIME(6),
   acknowledged_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='市场规则命中事件、证据和处置状态。';
 CREATE INDEX idx_platform_market_monitoring_events_tenant_updated ON platform_market_monitoring_events (tenant_id, updated_at, market_event_id);
@@ -2124,8 +2124,8 @@ CREATE TABLE platform_knowledge_citations (
   locator JSON NOT NULL DEFAULT (JSON_OBJECT()),
   relevance_score NUMERIC(7,4) CHECK (relevance_score BETWEEN 0 AND 1),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='分析结论、报告块对知识分块的可验证引用。';
 CREATE INDEX idx_platform_knowledge_citations_tenant_updated ON platform_knowledge_citations (tenant_id, updated_at, citation_id);
@@ -2137,7 +2137,7 @@ CREATE TABLE platform_report_block_sources (
   source_type VARCHAR(32) NOT NULL CHECK (source_type IN ('analysis_task','analysis_query','analysis_artifact','partition','knowledge','market_event')),
   source_id CHAR(36) NOT NULL,
   source_hash CHAR(64) NOT NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   PRIMARY KEY (report_block_id, source_type, source_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='报告块与分析、查询、数据分区和知识证据之间的来源关系。';
 CREATE INDEX idx_platform_report_block_sources_source ON platform_report_block_sources (source_type, source_id);
@@ -2157,8 +2157,8 @@ CREATE TABLE platform_report_comments (
   resolved_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
   resolved_at DATETIME(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='报告版本或块上的单条评论和解决状态。';
 CREATE INDEX idx_platform_report_comments_tenant_updated ON platform_report_comments (tenant_id, updated_at, comment_id);
@@ -2179,10 +2179,10 @@ CREATE TABLE platform_data_quality_results (
   observed_value JSON NOT NULL DEFAULT (JSON_OBJECT()),
   threshold JSON NOT NULL DEFAULT (JSON_OBJECT()),
   sample_artifact_id CHAR(36) REFERENCES platform_data_artifacts(artifact_id) ON DELETE SET NULL,
-  evaluated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  evaluated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='质量规则对指定分区/快照的执行结果。';
 CREATE INDEX idx_platform_data_quality_results_tenant_updated ON platform_data_quality_results (tenant_id, updated_at, quality_result_id);
@@ -2200,8 +2200,8 @@ CREATE TABLE platform_report_comment_replies (
   reply_body TEXT NOT NULL,
   status VARCHAR(16) NOT NULL DEFAULT 'active' CHECK (status IN ('active','deleted')),
   created_by CHAR(36) REFERENCES platform_user_profiles(user_id) ON DELETE SET NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
-  updated_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   lock_version BIGINT NOT NULL DEFAULT 0 CHECK (lock_version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='评论线程中的单条回复。';
 CREATE INDEX idx_platform_report_comment_replies_tenant_updated ON platform_report_comment_replies (tenant_id, updated_at, reply_id);

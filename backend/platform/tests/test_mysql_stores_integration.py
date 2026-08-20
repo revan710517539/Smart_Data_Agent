@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import pymysql
@@ -54,6 +56,21 @@ class MySQLStoresIntegrationTest(postgres_integration.PostgreSQLStoresIntegratio
 
     def test_postgresql_url_is_rejected_by_production_composition(self) -> None:
         del self
+
+    def test_mysql_schema_reapply_is_idempotent_and_checksum_stable(self) -> None:
+        first = apply_mysql_schema(DATABASE_URL)
+        second = apply_mysql_schema(DATABASE_URL)
+        self.assertFalse(first.applied)
+        self.assertFalse(second.applied)
+        self.assertEqual(first.checksum, second.checksum)
+        with self.raw_pool.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT version, checksum FROM platform_schema_migrations ORDER BY version")
+                rows = list(cursor.fetchall())
+        versions = [str(row["version"] if isinstance(row, dict) else row[0]) for row in rows]
+        self.assertEqual(versions, ["0001", "0029", "0030", "0031"])
+        schema_file = Path(__file__).resolve().parents[1] / "database" / "mysql" / "0001_production_schema.sql"
+        self.assertEqual(first.checksum, hashlib.sha256(schema_file.read_bytes()).hexdigest())
 
     def test_mysql_platform_composition_uses_mysql_primary(self) -> None:
         config = RuntimeConfig(

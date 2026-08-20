@@ -116,6 +116,8 @@ class SchemaContractsTest(unittest.TestCase):
         self.assertEqual(mysql_ddl.count("CREATE TABLE "), 106)
         self.assertNotIn("JSONB", mysql_ddl)
         self.assertNotIn("TIMESTAMPTZ", mysql_ddl)
+        self.assertNotIn("DEFAULT (UTC_TIMESTAMP(6))", mysql_ddl)
+        self.assertIn("DEFAULT CURRENT_TIMESTAMP(6)", mysql_ddl)
 
         subprocess.run(
             [sys.executable, "scripts/generate_database_schema.py", "--check"],

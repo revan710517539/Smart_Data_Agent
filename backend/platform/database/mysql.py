@@ -210,7 +210,7 @@ def apply_mysql_schema(
                     version VARCHAR(32) PRIMARY KEY,
                     name VARCHAR(200) NOT NULL,
                     checksum CHAR(64) NOT NULL,
-                    applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+                    applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
                     execution_ms INTEGER NOT NULL DEFAULT 0
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
                 """

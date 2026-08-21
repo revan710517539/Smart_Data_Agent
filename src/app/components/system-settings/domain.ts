@@ -48,8 +48,8 @@ import {
 import { apiErrorMessage } from "../../services/apiClient";
 import { demoFallbackDisabledMessage, isDemoFallbackEnabled } from "../../services/apiContext";
 
-export const customRoleOptions = ["客户经理分析岗", "周报分析岗", "指标维护岗"];
-export const userRoleOptions = ["管理员", "操作员", ...customRoleOptions];
+export const customRoleOptions: string[] = [];
+export const userRoleOptions = ["管理员", "操作员"];
 export const modelSourceOptions = ["中转站", "官方网站"];export const emptyUserForm = {
   name: "",
   department: "",
@@ -81,7 +81,7 @@ export const roles = [
 ];
 
 export const permissionMenuGroups = [
-  { label: "多机构分析", children: ["多机构分析"] },
+  { label: "多机构分析", children: ["多机构分析"], automatic: true, hint: "用户拥有两个及以上机构时自动显示，不随角色勾选。" },
   { label: "经营分析", children: ["经营周报", "机构督导"] },
   { label: "市场洞察", children: ["客群分析", "竞品分析"] },
   { label: "自助分析", children: ["智能分析", "我的报告", "分析配置", "skill/插件"] },
@@ -91,7 +91,7 @@ export const permissionMenuGroups = [
   { label: "系统管理", children: ["用户管理", "角色权限", "审计日志", "系统配置"] },
 ];
 
-export const permissionMenus = permissionMenuGroups.flatMap((group) => group.children);
+export const permissionMenus = permissionMenuGroups.flatMap((group) => group.automatic ? [] : group.children);
 
 export const permissionDataScopes = [
   "经营指标汇总",
@@ -238,7 +238,7 @@ export const initialUserList: SystemUser[] = [
     status: "active",
     lastLogin: "今日 09:30",
     email: "chenlei@bank.com",
-    tenantRoles: [{ tenant: "三峡银行", role: "周报分析岗" }],
+    tenantRoles: [{ tenant: "三峡银行", role: "操作员" }],
   },
 ];
 
@@ -246,14 +246,14 @@ export const initialPermissionInstitutions: InstitutionPermission[] = operatingT
   return {
     id: `tenant_${index + 1}`,
     institution: tenant,
-    adminMenus: allPermissionMenus,
+    adminMenus: ["经营周报", "机构督导", "智能分析", "我的报告", "分析配置", "skill/插件", "指标字典", "知识记忆", "数据管理", "质量监控", "用户管理", "角色权限", "审计日志", "系统配置"],
     adminDataScopes: allPermissionDataScopes,
     operatorSuperMenus: [],
     operatorSuperDataScopes: [],
-    operatorAdminMenus: ["多机构分析", "经营周报", "客群分析", "自助分析"],
+    operatorAdminMenus: ["经营周报", "智能分析", "分析配置", "skill/插件", "指标字典", "数据管理"],
     operatorAdminDataScopes: ["经营指标汇总", "机构周报数据", "业务漏斗数据", "客户画像数据"],
-    manageableRoles: ["操作员", "客户经理分析岗", "周报分析岗"],
-    customRoles: customRoleOptions,
+    manageableRoles: ["操作员"],
+    customRoles: [],
     updatedBy: index % 2 === 0 ? "胥京波" : "机构管理员",
     updatedAt: index % 2 === 0 ? "今天 09:20" : "昨日 17:30",
   };

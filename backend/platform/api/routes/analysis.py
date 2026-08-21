@@ -11,7 +11,12 @@ from typing import Any
 from uuid import uuid4
 
 from backend.platform.bootstrap import PlatformServices
-from backend.platform.analysis_workspace.service import build_trusted_manifest, safe_cache_key
+from backend.platform.analysis_workspace.service import (
+    build_trusted_manifest,
+    provenance_dataset_snapshot,
+    provenance_metric_versions,
+    safe_cache_key,
+)
 from backend.platform.analysis_workspace.visualization import VisualizationPlanner
 from backend.platform.api.support import send_route_exception
 from backend.platform.intelligent_analysis import IntelligentAnalysisEngine
@@ -289,39 +294,82 @@ def run_analysis(
                 raise PermissionError("Idempotency key belongs to another user.")
             return _decorate_analysis_payload(existing)
 
+    visual_scope = _visual_analysis_scope(requested_context)
+    requested_context["visual_analysis_scope"] = visual_scope
     parent: dict[str, Any] | None = None
-    parent_task_id = str(requested_context.get("parent_task_id") or "").strip()
-    if parent_task_id:
-        parent = services.task_repository.get_task(parent_task_id)
-        if not parent or parent.get("tenant_id") != tenant_id or parent.get("user_id") != user_id:
-            raise PermissionError("Parent analysis execution is unavailable.")
-        requested_context["parent_execution_id"] = str(parent.get("execution_id") or parent.get("task_id") or "")
-        requested_context["revision"] = int(parent.get("revision") or 1) + 1
+    if visual_scope == "page":
+        requested_context["chart_bound_source"] = False
+        requested_context.pop("parent_task_id", None)
+        requested_context.pop("parent_execution_id", None)
+        source_tables = _visual_analysis_source_tables(requested_context)
+        if source_tables:
+            requested_context["selected_data_tables"] = source_tables
+    else:
+        explicit_parent_task_id = str(requested_context.get("parent_task_id") or "").strip()
+        parent_task_id = _chart_follow_up_parent_task_id(requested_context)
+        if parent_task_id:
+            parent = services.task_repository.get_task(parent_task_id)
+            if not parent or parent.get("tenant_id") != tenant_id or parent.get("user_id") != user_id:
+                if explicit_parent_task_id:
+                    raise PermissionError("Parent analysis execution is unavailable.")
+                parent = None
+            else:
+                requested_context["parent_task_id"] = parent_task_id
+                requested_context["parent_execution_id"] = str(parent.get("execution_id") or parent.get("task_id") or "")
+                requested_context["revision"] = int(parent.get("revision") or 1) + 1
+        requested_context = _inherit_chart_follow_up_context(requested_context, parent)
+    planning_question = _visual_follow_up_planning_question(requested_context, question)
+    if planning_question != question:
+        requested_context["analysis_planning_question"] = planning_question
 
     trace_id = services.trace_recorder.start_trace()
     started_at = perf_counter()
+    reused_visual, reused_plan = _take_reused_visual(
+        services,
+        tenant_id,
+        user_id,
+        requested_context,
+        parent,
+        visual_scope,
+    )
+    catalog_failed: Exception | None = None
     try:
         asset_context = _build_asset_context(
             services,
             tenant_id,
-            question,
+            planning_question,
             requested_context,
             user_id=user_id,
         )
     except PermissionError as exc:
-        if str(exc) == "selected_data_asset_not_published_or_not_authorized":
-            progress(
-                "context_understanding",
-                10,
-                "failed",
-                "理解问题与装载上下文",
-                "所选数据表已更新、下线或不属于当前机构，请重新选择数据表后重试。",
-            )
-        raise
-    if _selected_table_requires_semantic_registration(asset_context):
-        raise ValueError("analysis_selected_table_semantics_not_registered")
-    if _requires_selected_production_source(services, requested_context, asset_context):
-        raise ValueError("analysis_production_data_table_required")
+        catalog_failed = exc
+        if reused_visual is None:
+            if str(exc) == "selected_data_asset_not_published_or_not_authorized":
+                progress(
+                    "context_understanding",
+                    10,
+                    "failed",
+                    "理解问题与装载上下文",
+                    "所选数据表已更新、下线或不属于当前机构，请重新选择数据表后重试。",
+                )
+            raise
+        asset_context = _reused_visual_asset_context(requested_context, parent)
+    catalog_tables = _list_of_dicts(asset_context.get("selected_data_tables") if isinstance(asset_context, dict) else [])
+    use_reused_visual = reused_visual is not None and (
+        visual_scope == "page"
+        or not catalog_tables
+        or catalog_failed is not None
+        or _selected_raw_tables_conflict(asset_context)
+    )
+    if not use_reused_visual:
+        if _selected_table_requires_semantic_registration(asset_context):
+            if reused_visual is not None:
+                use_reused_visual = True
+                asset_context = _reused_visual_asset_context(requested_context, parent)
+            else:
+                raise ValueError("analysis_selected_table_semantics_not_registered")
+        elif _requires_selected_production_source(services, requested_context, asset_context):
+            raise ValueError("analysis_production_data_table_required")
     context = ExecutionContext(
         user_id=user_id,
         tenant_id=tenant_id,
@@ -441,30 +489,54 @@ def run_analysis(
             progress("data_query", 30, "running", "查询业务数据", "正在执行受权限控制的语义查询并获取明细数据。")
             return planning_result
 
-        if selected_model and not use_skill_solution_plan and not data_first_mode:
+        if selected_model and not use_skill_solution_plan and not data_first_mode and not use_reused_visual:
             progress("model_planning", 20, "running", "生成分析方案", "正在将问题转换为指标、维度、查询和可视化方案。")
         else:
-            planning_source = "服务端快速语义方案" if data_first_mode else "治理后的 Skill 与服务端语义方案"
-            progress("model_planning", 20, "skipped", "生成分析方案", f"已使用{planning_source}，先查询数据并减少一次模型等待。")
-            progress("data_query", 30, "running", "查询业务数据", "正在执行受权限控制的语义查询并获取明细数据。")
-        task = services.workflow.run(
-            context,
-            question,
-            task=task,
-            planning_hook=selected_model_planning_hook if selected_model and not use_skill_solution_plan and not data_first_mode else None,
-        )
+            planning_source = "当前页面可视化数据" if visual_scope == "page" else "当前图表已查询数据"
+            progress("model_planning", 20, "skipped", "生成分析方案", f"已使用{planning_source}，先查询数据并减少一次模型等待。" if not use_reused_visual else "已复用当前可视化绑定的查询结果，不再重新选表。")
+            progress("data_query", 30, "running", "查询业务数据", "正在执行受权限控制的语义查询并获取明细数据。" if not use_reused_visual else "正在装载当前可视化已绑定的数据。")
+        if use_reused_visual and reused_visual is not None:
+            if reused_plan:
+                task.analysis_plan = dict(reused_plan)
+            query_result = dict(reused_visual)
+            query_result.pop("intelligent_analysis", None)
+            query_result.pop("_analysis_plan", None)
+            task.skill_results = [query_result]
+        else:
+            task = services.workflow.run(
+                context,
+                question,
+                task=task,
+                planning_hook=selected_model_planning_hook if selected_model and not use_skill_solution_plan and not data_first_mode else None,
+            )
+            query_result = dict(task.skill_results[0]) if task.skill_results else {}
         _raise_if_cancelled(cancellation_check)
         task.trace_id = services.trace_recorder.trace_id
-        query_result = dict(task.skill_results[0]) if task.skill_results else {}
+        if not query_result and task.skill_results:
+            query_result = dict(task.skill_results[0])
         if query_result:
+            query_result["semantic_info"] = _enrich_query_provenance(
+                query_result.get("semantic_info"),
+                requested_context=requested_context,
+                asset_context=asset_context if isinstance(asset_context, dict) else {},
+                parent=parent,
+                result_rows=_list_of_dicts(query_result.get("data")),
+            )
             query_result["evidence"] = _build_execution_evidence(query_result)
             analysis_plan = task.analysis_plan if isinstance(task.analysis_plan, dict) else {}
             chart_spec = query_result.get("chart_spec") if isinstance(query_result.get("chart_spec"), dict) else {}
+            chart_rows = _list_of_dicts(query_result.get("data"))
+            chart_metrics = _string_list(analysis_plan.get("metrics"))
+            chart_dimensions = _string_list(analysis_plan.get("dimensions"))
+            if not chart_metrics or not chart_dimensions:
+                inferred_metrics, inferred_dimensions = _infer_chart_fields(chart_rows)
+                chart_metrics = chart_metrics or inferred_metrics
+                chart_dimensions = chart_dimensions or inferred_dimensions
             query_result["visualization_spec"] = VisualizationPlanner().plan(
                 question=question,
-                rows=_list_of_dicts(query_result.get("data")),
-                dimensions=_string_list(analysis_plan.get("dimensions")),
-                metrics=_string_list(analysis_plan.get("metrics")),
+                rows=chart_rows,
+                dimensions=chart_dimensions,
+                metrics=chart_metrics,
                 intent=analysis_plan,
                 proposed_chart_types=_string_list([chart_spec.get("type")]),
                 requested_chart_types=_string_list(_dict_or_empty(requested_context.get("visualization_preferences")).get("chart_types")),
@@ -528,8 +600,11 @@ def run_analysis(
                     ),
                     "prompt_template_id": "data_first.server_plan.v1" if data_first_mode else "skill_solution.server_plan.v1",
                 }
+        brief_follow_up = _is_rail_brief_context(requested_context)
         if row_count == 0:
             progress("model_conclusion", 50, "skipped", "生成分析结论", "实际查询返回 0 行，跳过无数据情况下的模型结论调用。")
+        elif brief_follow_up:
+            progress("model_conclusion", 50, "running", "归纳数据结论", "正在用两三句话概括当前图表数据。")
         else:
             progress("model_conclusion", 50, "running", "生成分析结论", "正在基于已执行的数据证据归纳发现、原因边界与建议。")
         intelligent_analysis = intelligent_engine.analyze(
@@ -541,8 +616,8 @@ def run_analysis(
                 "model_conclusion",
                 50,
                 "succeeded",
-                "生成分析结论",
-                "已生成基于实际查询证据的分析摘要与关键发现。",
+                "归纳数据结论" if brief_follow_up else "生成分析结论",
+                "已生成短结论并配一张聚焦图表。" if brief_follow_up else "已生成基于实际查询证据的分析摘要与关键发现。",
                 {"finding_count": len(intelligent_analysis.get("metric_findings") or [])},
             )
         _raise_if_cancelled(cancellation_check)
@@ -565,11 +640,25 @@ def run_analysis(
                 for item in _list_of_dicts(requested_context.get("analysis_context_skills"))
                 if str(item.get("id") or "")
             ]
+            follow_up_values = _visual_follow_up_values(requested_context)
             first_result["trusted_manifest"] = build_trusted_manifest(
                 tenant_id=tenant_id,
                 artifact_id=str(task.execution_id or task.task_id),
-                dataset_snapshot=_dict_or_empty(semantic.get("source_snapshot")) or _dict_or_empty(evidence.get("source_snapshot")),
-                metric_versions=_list_of_dicts(semantic.get("metric_versions")),
+                dataset_snapshot=provenance_dataset_snapshot(
+                    semantic.get("source_snapshot"),
+                    evidence.get("source_snapshot"),
+                    requested_context.get("dataset_snapshot"),
+                    follow_up_values.get("dataset_snapshot"),
+                    *(_list_of_dicts(asset_context.get("selected_data_tables")) if isinstance(asset_context, dict) else []),
+                    *_list_of_dicts(follow_up_values.get("selected_data_tables")),
+                    schema_material=[semantic.get("schema_mapping"), first_result.get("data")],
+                    content_material=first_result.get("data") or [],
+                ),
+                metric_versions=provenance_metric_versions(
+                    semantic.get("metric_versions"),
+                    evidence.get("metric_versions"),
+                    asset_context.get("metric_dictionary_definitions") if isinstance(asset_context, dict) else [],
+                ),
                 sql=str(evidence.get("executed_sql") or first_result.get("sql") or ""),
                 result=first_result.get("data") or [],
                 visualization=visualization,
@@ -970,6 +1059,352 @@ def _build_execution_evidence(result: dict[str, Any]) -> dict[str, Any]:
         else {},
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _chart_follow_up_parent_task_id(requested_context: dict[str, Any]) -> str:
+    parent_task_id = str(requested_context.get("parent_task_id") or "").strip()
+    if parent_task_id:
+        return parent_task_id
+    point = _dict_or_empty(requested_context.get("selected_data_point"))
+    values = _dict_or_empty(point.get("values"))
+    return str(values.get("analysis_task_id") or "").strip()
+
+
+def _parent_visual_query_result(parent: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(parent, dict):
+        return None
+    results = parent.get("skill_results") if isinstance(parent.get("skill_results"), list) else []
+    first = results[0] if results and isinstance(results[0], dict) else {}
+    data = first.get("data")
+    if isinstance(data, list) and data:
+        return dict(first)
+    return None
+
+
+def _parent_asset_context(parent: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(parent, dict):
+        return {}
+    if isinstance(parent.get("asset_context"), dict) and parent.get("asset_context"):
+        return dict(parent["asset_context"])
+    results = parent.get("skill_results") if isinstance(parent.get("skill_results"), list) else []
+    first = results[0] if results and isinstance(results[0], dict) else {}
+    intelligent = first.get("intelligent_analysis") if isinstance(first.get("intelligent_analysis"), dict) else {}
+    ctx = intelligent.get("context") if isinstance(intelligent.get("context"), dict) else {}
+    asset = ctx.get("asset_context") if isinstance(ctx.get("asset_context"), dict) else {}
+    return dict(asset) if isinstance(asset, dict) else {}
+
+
+def _visual_follow_up_values(requested_context: dict[str, Any]) -> dict[str, Any]:
+    point = _dict_or_empty(requested_context.get("selected_data_point"))
+    return _dict_or_empty(point.get("values"))
+
+
+def _is_visual_follow_up(requested_context: dict[str, Any]) -> bool:
+    if str(requested_context.get("visual_analysis_scope") or "").strip() == "page":
+        return False
+    if requested_context.get("chart_bound_source"):
+        return True
+    point = _dict_or_empty(requested_context.get("selected_data_point"))
+    values = _visual_follow_up_values(requested_context)
+    if values.get("chart_bound_source"):
+        return True
+    return str(point.get("targetType") or "") in {"chart", "table", "text"}
+
+
+def _visual_analysis_scope(requested_context: dict[str, Any]) -> str:
+    requested = str(requested_context.get("visual_analysis_scope") or "").strip()
+    if requested in {"chart", "page"}:
+        return requested
+    return "chart" if _is_visual_follow_up(requested_context) else "page"
+
+
+def _is_rail_brief_context(requested_context: dict[str, Any]) -> bool:
+    policy = _dict_or_empty(requested_context.get("analysis_policy"))
+    if str(policy.get("resultFormat") or policy.get("result_format") or "").strip() == "brief_visual":
+        return True
+    return str(requested_context.get("visual_analysis_scope") or "").strip() in {"chart", "page"}
+
+
+def _infer_chart_fields(rows: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+    if not rows:
+        return [], []
+    skip = {"_visual_source", "fieldLabels", "field_labels", "raw"}
+    keys = [str(key) for key in rows[0].keys() if str(key) not in skip and not str(key).startswith("_")]
+    metrics: list[str] = []
+    dimensions: list[str] = []
+    for key in keys:
+        numeric = 0
+        for row in rows:
+            try:
+                number = float(row.get(key))
+            except (TypeError, ValueError):
+                continue
+            if number == number and number not in {float("inf"), float("-inf")}:
+                numeric += 1
+        if numeric >= max(1, (len(rows) + 1) // 2):
+            metrics.append(key)
+        else:
+            dimensions.append(key)
+    time_dims = [
+        item
+        for item in dimensions
+        if any(token in item.lower() for token in ("month", "date", "week", "year", "day", "time", "月份", "日期"))
+    ]
+    dimensions = time_dims + [item for item in dimensions if item not in time_dims]
+    return metrics, dimensions
+
+
+def _visual_analysis_source_tables(requested_context: dict[str, Any]) -> list[dict[str, Any]]:
+    tables: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for source in _list_of_dicts(requested_context.get("visual_analysis_sources")):
+        for table in _list_of_dicts(source.get("tables")):
+            table_id = str(table.get("id") or table.get("code") or "").strip()
+            if not table_id or table_id in seen:
+                continue
+            seen.add(table_id)
+            tables.append(table)
+    return tables
+
+
+def _visual_source_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    for key in ("rows", "visual_rows"):
+        rows = payload.get(key)
+        if not isinstance(rows, list):
+            continue
+        parsed: list[dict[str, Any]] = []
+        for item in rows[:200]:
+            if not isinstance(item, dict):
+                continue
+            raw = item.get("raw") if isinstance(item.get("raw"), dict) else item
+            if isinstance(raw, dict):
+                parsed.append(dict(raw))
+        if parsed:
+            return parsed
+    return []
+
+
+def _embedded_visual_query_result(requested_context: dict[str, Any]) -> dict[str, Any] | None:
+    rows = _visual_source_rows(_visual_follow_up_values(requested_context))
+    if not rows:
+        return None
+    return {"data": rows, "semantic_info": {"visual_rows_reused": True, "visual_scope": "chart"}}
+
+
+def _enrich_query_provenance(
+    semantic: Any,
+    *,
+    requested_context: dict[str, Any],
+    asset_context: dict[str, Any],
+    parent: dict[str, Any] | None,
+    result_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    payload = dict(semantic) if isinstance(semantic, dict) else {}
+    parent_results = parent.get("skill_results") if isinstance(parent, dict) and isinstance(parent.get("skill_results"), list) else []
+    parent_result = parent_results[0] if parent_results and isinstance(parent_results[0], dict) else {}
+    parent_semantic = parent_result.get("semantic_info") if isinstance(parent_result.get("semantic_info"), dict) else {}
+    parent_evidence = parent_result.get("evidence") if isinstance(parent_result.get("evidence"), dict) else {}
+    values = _visual_follow_up_values(requested_context)
+    tables = (
+        _list_of_dicts(asset_context.get("selected_data_tables"))
+        or _list_of_dicts(requested_context.get("selected_data_tables"))
+        or _list_of_dicts(values.get("selected_data_tables"))
+    )
+    rows = result_rows if isinstance(result_rows, list) else []
+    snapshot = provenance_dataset_snapshot(
+        payload.get("source_snapshot"),
+        parent_semantic.get("source_snapshot"),
+        parent_evidence.get("source_snapshot"),
+        requested_context.get("dataset_snapshot"),
+        values.get("dataset_snapshot"),
+        *tables,
+        schema_material=[
+            payload.get("schema_mapping"),
+            parent_semantic.get("schema_mapping"),
+            tables,
+            rows,
+        ],
+        content_material=rows,
+    )
+    versions = provenance_metric_versions(
+        payload.get("metric_versions"),
+        parent_semantic.get("metric_versions"),
+        parent_evidence.get("metric_versions"),
+        asset_context.get("metric_dictionary_definitions"),
+    )
+    if snapshot.get("version") or snapshot.get("schema_fingerprint") or snapshot.get("id"):
+        payload["source_snapshot"] = snapshot
+    if versions:
+        payload["metric_versions"] = versions
+    return payload
+
+
+def _page_visual_query_result(
+    services: Any,
+    tenant_id: str,
+    user_id: str,
+    requested_context: dict[str, Any],
+) -> dict[str, Any] | None:
+    combined: list[dict[str, Any]] = []
+    labels: list[str] = []
+    plan: dict[str, Any] | None = None
+    repository = getattr(services, "task_repository", None)
+    getter = getattr(repository, "get_task", None)
+    for source in _list_of_dicts(requested_context.get("visual_analysis_sources")):
+        result: dict[str, Any] | None = None
+        task_id = str(source.get("analysis_task_id") or "").strip()
+        if task_id and callable(getter):
+            task = getter(task_id)
+            if task and task.get("tenant_id") == tenant_id and task.get("user_id") == user_id:
+                result = _parent_visual_query_result(task)
+                if plan is None and isinstance(task.get("analysis_plan"), dict):
+                    plan = dict(task["analysis_plan"])
+        if result is None:
+            rows = _visual_source_rows(source)
+            if rows:
+                result = {"data": rows}
+        if result is None:
+            continue
+        label = str(source.get("label") or source.get("id") or task_id)[:160]
+        for row in result.get("data") or []:
+            if isinstance(row, dict):
+                combined.append({**row, "_visual_source": label})
+        labels.append(label)
+    if not combined:
+        return None
+    return {
+        "data": combined,
+        "semantic_info": {"page_visual_union": True, "visual_sources": labels},
+        "_analysis_plan": plan,
+    }
+
+
+def _take_reused_visual(
+    services: Any,
+    tenant_id: str,
+    user_id: str,
+    requested_context: dict[str, Any],
+    parent: dict[str, Any] | None,
+    visual_scope: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if visual_scope == "page":
+        page_visual = _page_visual_query_result(services, tenant_id, user_id, requested_context)
+        if page_visual is None:
+            return None, None
+        plan = page_visual.get("_analysis_plan") if isinstance(page_visual.get("_analysis_plan"), dict) else None
+        reused = {key: value for key, value in page_visual.items() if key != "_analysis_plan"}
+        return reused, plan if isinstance(plan, dict) else None
+    if not _is_visual_follow_up(requested_context):
+        return None, None
+    parent_result = _parent_visual_query_result(parent)
+    if parent_result is not None:
+        plan = parent.get("analysis_plan") if isinstance(parent, dict) and isinstance(parent.get("analysis_plan"), dict) else None
+        return parent_result, plan
+    return _embedded_visual_query_result(requested_context), None
+
+
+def _reused_visual_asset_context(
+    requested_context: dict[str, Any],
+    parent: dict[str, Any] | None,
+) -> dict[str, Any]:
+    parent_asset = _parent_asset_context(parent)
+    selected = _list_of_dicts(requested_context.get("selected_data_tables"))
+    if not selected:
+        selected = _list_of_dicts(parent_asset.get("selected_data_tables"))
+    return {
+        **parent_asset,
+        "selected_data_tables": selected,
+        "visual_rows_reused": True,
+    }
+
+
+def _selected_raw_tables_conflict(asset_context: dict[str, Any]) -> bool:
+    selected = _list_of_dicts(asset_context.get("selected_data_tables"))
+    raw_tables = [
+        table
+        for table in selected
+        if not str(table.get("datasetId") or "").strip()
+        and str(table.get("relativePath") or "").strip()
+    ]
+    return bool(raw_tables) and (len(raw_tables) != 1 or len(selected) != 1)
+
+
+def _visual_follow_up_planning_question(requested_context: dict[str, Any], question: str) -> str:
+    if _is_visual_follow_up(requested_context):
+        values = _visual_follow_up_values(requested_context)
+        source = str(requested_context.get("follow_up_source_question") or values.get("question") or "").strip()
+        if source and source != question:
+            return f"{source}\n{question}"
+        return question
+    labels: list[str] = []
+    for source in _list_of_dicts(requested_context.get("visual_analysis_sources")):
+        label = str(source.get("question") or source.get("label") or "").strip()
+        if label and label not in labels:
+            labels.append(label)
+        if len(labels) >= 12:
+            break
+    if labels:
+        header = "当前页面可视化：" + "；".join(labels)
+        if header != question:
+            return f"{header}\n{question}"
+    return question
+
+
+def _inherit_chart_follow_up_context(
+    requested_context: dict[str, Any],
+    parent: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Bind every visualization follow-up to the chart's dataset and executed plan."""
+
+    context = dict(requested_context)
+    values = _visual_follow_up_values(context)
+    selected = _list_of_dicts(context.get("selected_data_tables"))
+    if not selected:
+        selected = _list_of_dicts(values.get("selected_data_tables"))
+        if not selected:
+            selected = _list_of_dicts(_parent_asset_context(parent).get("selected_data_tables"))
+        if selected:
+            context["selected_data_tables"] = selected
+    visual_follow_up = _is_visual_follow_up(context)
+    if visual_follow_up:
+        context["chart_bound_source"] = True
+        if not str(context.get("follow_up_source_question") or "").strip():
+            source_question = str(values.get("question") or "").strip()
+            if source_question:
+                context["follow_up_source_question"] = source_question
+    raw_bound = any(
+        isinstance(table, dict)
+        and not str(table.get("datasetId") or "").strip()
+        and str(table.get("relativePath") or table.get("id") or table.get("code") or "").strip()
+        for table in selected
+    )
+    should_hint = not raw_bound and (visual_follow_up or not _selected_tables_have_query_semantics(selected))
+    if not _dict_or_empty(context.get("analysis_plan_hint")) and should_hint:
+        parent_plan = parent.get("analysis_plan") if isinstance(parent, dict) and isinstance(parent.get("analysis_plan"), dict) else {}
+        dataset_id = str(parent_plan.get("dataset_id") or "").strip()
+        metrics = _string_list(parent_plan.get("metrics"))
+        dimensions = _string_list(parent_plan.get("dimensions"))
+        ephemeral_csv = dataset_id.startswith("csv_")
+        if dataset_id and metrics and dimensions and not ephemeral_csv:
+            context["analysis_plan_hint"] = {
+                "dataset_id": dataset_id,
+                "metrics": metrics,
+                "dimensions": dimensions,
+                "chart_types": _string_list(parent_plan.get("chart_types")),
+                "analysis_angles": _string_list(parent_plan.get("analysis_angles")),
+            }
+    return context
+
+
+def _selected_tables_have_query_semantics(tables: list[dict[str, Any]]) -> bool:
+    for table in tables:
+        metric_codes = _string_list(table.get("metricCodes")) or _string_list(table.get("metric_codes"))
+        dimension_codes = _string_list(table.get("dimensionCodes")) or _string_list(table.get("dimension_codes"))
+        if str(table.get("datasetId") or "").strip() and metric_codes and dimension_codes:
+            return True
+        if not str(table.get("datasetId") or "").strip() and str(table.get("relativePath") or "").strip():
+            return True
+    return False
 
 
 def _build_asset_context(
@@ -1808,14 +2243,22 @@ def _append_workspace_analysis_turn(
     if not answer:
         answer = "\n".join(str(item).strip() for item in payload.get("conclusions") or [] if str(item).strip())
     results = _list_of_dicts(payload.get("skill_results"))
-    artifact_refs = [
-        {
-            "type": "visualization" if isinstance(result.get("visualization_artifact"), dict) else "analysis_result",
-            "task_id": str(payload.get("task_id") or ""),
-            "execution_id": str(payload.get("execution_id") or payload.get("task_id") or ""),
-        }
-        for result in results
-    ]
+    artifact_refs = []
+    for result in results:
+        spec = result.get("visualization_spec") if isinstance(result.get("visualization_spec"), dict) else {}
+        rows = result.get("data") if isinstance(result.get("data"), list) else []
+        semantic = result.get("semantic_info") if isinstance(result.get("semantic_info"), dict) else {}
+        field_labels = semantic.get("field_labels") if isinstance(semantic.get("field_labels"), dict) else {}
+        artifact_refs.append(
+            {
+                "type": "follow_up_visual" if spec or rows else ("visualization" if isinstance(result.get("visualization_artifact"), dict) else "analysis_result"),
+                "task_id": str(payload.get("task_id") or ""),
+                "execution_id": str(payload.get("execution_id") or payload.get("task_id") or ""),
+                "visualization_spec": spec,
+                "rows": [row for row in rows[:24] if isinstance(row, dict)],
+                "field_labels": field_labels,
+            }
+        )
     evidence_refs = [
         dict(result["evidence"])
         for result in results

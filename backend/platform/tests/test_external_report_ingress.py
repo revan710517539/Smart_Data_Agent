@@ -283,6 +283,7 @@ class ExternalReportIngressTest(unittest.TestCase):
                 self.assertEqual(weekly_status, 200)
                 self.assertTrue(weekly["result"]["weeklyReportEligible"])
                 self.assertTrue(weekly["result"]["weeklyReportSavedAt"])
+                self.assertEqual(weekly["result"]["visibility"], "tenant")
 
                 experience_status, experience = _request(
                     server.server_address[1],

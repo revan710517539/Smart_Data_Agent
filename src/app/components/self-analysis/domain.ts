@@ -145,6 +145,11 @@ export type AnalysisDataTableSelection = {
   dimensionCodes?: string[];
   defaultDimensions?: string[];
   chartTypes?: string[];
+  contentHash?: string;
+  schemaFingerprint?: string;
+  assetVersion?: string;
+  relativePath?: string;
+  sourceKey?: string;
 };
 export type AnalysisRow = {
   branch: string;
@@ -381,6 +386,11 @@ export function rawTableToSelection(table: RawTableAsset): AnalysisDataTableSele
     fieldLabels: Object.fromEntries(table.fields.map((field) => [field.fieldNameEn, field.fieldNameCn || field.fieldNameEn])),
     fieldMetadata: fieldMetadataMap(table.fields),
     primaryKeys: primaryKeyFields(table.fields),
+    contentHash: table.contentHash,
+    schemaFingerprint: table.schemaFingerprint,
+    assetVersion: table.assetVersion != null ? String(table.assetVersion) : undefined,
+    relativePath: table.relativePath,
+    sourceKey: table.sourceKey,
   };
 }
 
@@ -403,6 +413,8 @@ export function topicTableToSelection(topic: TopicTableAsset): AnalysisDataTable
     dimensionCodes: topic.dimensionCodes,
     defaultDimensions: topic.defaultDimensions,
     chartTypes: topic.chartTypes,
+    assetVersion: topic.assetVersion != null ? String(topic.assetVersion) : undefined,
+    schemaFingerprint: topic.schemaVersion,
   };
 }
 
@@ -425,6 +437,9 @@ export function pageDataToSelection(pageData: PageDataAsset): AnalysisDataTableS
     dimensionCodes: pageData.dimensionFields,
     defaultDimensions: pageData.dimensionFields,
     chartTypes: ["table", "column", "line", "bar", "pie"],
+    contentHash: pageData.contentHash,
+    schemaFingerprint: pageData.schemaFingerprint,
+    assetVersion: pageData.assetVersion != null ? String(pageData.assetVersion) : undefined,
   };
 }
 
@@ -477,6 +492,11 @@ export function backendTableToSelection(value: unknown): AnalysisDataTableSelect
     dimensionCodes: Array.isArray(table.dimensionCodes) ? table.dimensionCodes.map(String) : undefined,
     defaultDimensions: Array.isArray(table.defaultDimensions) ? table.defaultDimensions.map(String) : undefined,
     chartTypes: Array.isArray(table.chartTypes) ? table.chartTypes.map(String) : undefined,
+    contentHash: String(table.contentHash || table.content_hash || "").trim() || undefined,
+    schemaFingerprint: String(table.schemaFingerprint || table.schema_fingerprint || table.schemaVersion || "").trim() || undefined,
+    assetVersion: String(table.assetVersion || table.asset_version || table.version || "").trim() || undefined,
+    relativePath: String(table.relativePath || table.relative_path || "").trim() || undefined,
+    sourceKey: String(table.sourceKey || table.source_key || "").trim() || undefined,
   };
 }
 

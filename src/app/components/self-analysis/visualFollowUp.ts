@@ -1,6 +1,23 @@
 import { revealAnalysisWorkspace } from "../analysis-workspace/AnalysisWorkspaceRail";
+import { boundedVisualRows } from "../analysis-workspace/visualAnalysisScope";
 import { revealContextRail } from "../context-rail/ContextSideRail";
-import type { AnalysisDataTableSelection, AnalysisRow, ResultVisualKey, VisualizationType } from "./domain";
+import { backendTableToSelection, type AnalysisDataTableSelection, type AnalysisRow, type ResultVisualKey, type VisualizationType } from "./domain";
+
+export function resolveVisualAnalysisTables(
+  ...candidates: Array<AnalysisDataTableSelection[] | unknown[] | unknown | undefined | null>
+): AnalysisDataTableSelection[] {
+  for (const candidate of candidates) {
+    const tables = (Array.isArray(candidate) ? candidate : []).flatMap((item: unknown) => {
+      if (!item || typeof item !== "object") return [];
+      const record = item as AnalysisDataTableSelection;
+      if (record.id && record.kind && record.name && record.code) return [record];
+      const converted = backendTableToSelection(item);
+      return converted ? [converted] : [];
+    });
+    if (tables.length) return tables;
+  }
+  return [];
+}
 
 export function revealVisualFollowUp({
   key,
@@ -25,7 +42,7 @@ export function revealVisualFollowUp({
   question: string;
   summary: string;
   plan: string;
-  selectedDataTables: AnalysisDataTableSelection[];
+  selectedDataTables?: AnalysisDataTableSelection[] | unknown[] | null;
   railPageKey?: string;
   selectedText?: string;
 }) {
@@ -42,6 +59,8 @@ export function revealVisualComment(input: Parameters<typeof revealVisualFollowU
 function buildVisualDataPoint({ key, title, type, rows, taskId, reportId, question, summary, plan, selectedDataTables, selectedText }: Parameters<typeof revealVisualFollowUp>[0]) {
   const firstRow = rows[0];
   const artifactId = reportId || taskId || "current-analysis";
+  const boundTables = resolveVisualAnalysisTables(selectedDataTables);
+  const sourceTable = boundTables[0];
   return {
     targetType: type === "table" || type === "pivot" ? "table" : type === "text" ? "text" : "chart",
     targetId: `${artifactId}:${key}`,
@@ -57,18 +76,43 @@ function buildVisualDataPoint({ key, title, type, rows, taskId, reportId, questi
       row_count: rows.length,
       metric_name: firstRow?.metricName || "",
       metric_unit: firstRow?.metricUnit || "",
-      selected_data_table_ids: selectedDataTables.map((table) => table.id),
-      selected_data_tables: selectedDataTables.map((table) => ({
-        id: table.id,
-        kind: table.kind,
-        name: table.name,
-        code: table.code,
-        datasetId: table.datasetId,
-        field_labels: table.fieldLabels || {},
-        metric_codes: table.metricCodes || table.defaultMetrics || [],
-        dimension_codes: table.dimensionCodes || table.defaultDimensions || [],
-      })),
-      field_labels: firstRow?.fieldLabels || selectedDataTables[0]?.fieldLabels || {},
+      chart_bound_source: true,
+      follow_up_source_question: question,
+      visual_rows: boundedVisualRows(rows),
+      selected_data_table_ids: boundTables.map((table) => table.id),
+      selected_data_tables: boundTables.map((table) => {
+        const metricCodes = table.metricCodes || table.defaultMetrics || [];
+        const dimensionCodes = table.dimensionCodes || table.defaultDimensions || [];
+        return {
+          id: table.id,
+          kind: table.kind,
+          name: table.name,
+          code: table.code,
+          datasetId: table.datasetId,
+          fields: table.fields,
+          field_labels: table.fieldLabels || {},
+          fieldLabels: table.fieldLabels || {},
+          metric_codes: metricCodes,
+          metricCodes,
+          defaultMetrics: table.defaultMetrics || metricCodes,
+          dimension_codes: dimensionCodes,
+          dimensionCodes,
+          defaultDimensions: table.defaultDimensions || dimensionCodes,
+          contentHash: table.contentHash,
+          schemaFingerprint: table.schemaFingerprint,
+          assetVersion: table.assetVersion,
+          relativePath: table.relativePath,
+          sourceKey: table.sourceKey,
+        };
+      }),
+      dataset_snapshot: sourceTable ? {
+        id: sourceTable.datasetId || sourceTable.id,
+        version: sourceTable.assetVersion || sourceTable.contentHash,
+        content_hash: sourceTable.contentHash,
+        schema_fingerprint: sourceTable.schemaFingerprint,
+        generatedAt: new Date().toISOString(),
+      } : {},
+      field_labels: firstRow?.fieldLabels || sourceTable?.fieldLabels || {},
       selected_content: selectedText || "",
     },
   } as const;

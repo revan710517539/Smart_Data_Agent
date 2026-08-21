@@ -75,7 +75,8 @@ class AnalysisWorkflow:
         task: AnalysisTask | None = None,
         planning_hook: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> AnalysisTask:
-        intent_rule = self._select_intent_rule(context, question)
+        planning_question = str(context.page_context.get("analysis_planning_question") or question).strip() or question
+        intent_rule = self._select_intent_rule(context, planning_question)
         task_type = intent_rule.task_type
         task = task or self.create_task(context, question)
         if self.agent_runtime:
@@ -124,7 +125,7 @@ class AnalysisWorkflow:
             intent_rule,
             knowledge_hits,
             visible_memories,
-            question,
+            planning_question,
             tenant_id=context.tenant_id,
         )
         task.analysis_plan = _apply_page_analysis_context(task.analysis_plan, context.page_context)
@@ -133,7 +134,7 @@ class AnalysisWorkflow:
             task.analysis_plan = _build_temporary_raw_table_plan(
                 task.analysis_plan,
                 selected_raw_table,
-                question,
+                planning_question,
             )
         if self.learning_service is not None:
             learned_skills = self.learning_service.resolve_analysis_skills(

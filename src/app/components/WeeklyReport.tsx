@@ -47,9 +47,9 @@ import { fetchOperatingSnapshot } from "../services/operatingSnapshotApi";
 import {
   analyzeWeeklyReportVersion,
   createReportComment,
-  deleteSavedAnalysisResult,
   fetchReportComments,
   fetchSavedAnalysisResults,
+  saveAnalysisResultToWeeklyReport,
   fetchWeeklyReportVersions,
   mutateReportComment,
   saveWeeklyReportVersion,
@@ -143,6 +143,7 @@ import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
 import { NoteParagraphField } from "./notes/RichNoteEditor";
 import { NOTE_TEXT_CLASS, NOTE_TEXT_STYLE, placeCaretAtStart, selectionOffsetsWithin } from "./notes/richNote";
 import { useStickyNote } from "./notes/useStickyNote";
+import { canDeleteSharedVisual } from "./visualization/visualAccess";
 import { useVisualReportCollection, VisualReportDeleteConfirm } from "./visual-report/VisualReportLibrary";
 import type { VisualReport } from "../services/visualReportApi";
 import { VisualReportCards } from "./visual-report/VisualReportCards";
@@ -154,7 +155,7 @@ export function WeeklyReport() {
   const analysisRevisionRef = useRef<Record<string, number>>({});
   const analysisRunRef = useRef<Record<string, string>>({});
   const autoAnalysisStartedRef = useRef<Set<string>>(new Set());
-  const { selectedInstitution, tenantId, userId, userName } = usePlatformContext();
+  const { selectedInstitution, tenantId, userId, userName, isSuperAdmin, isInstitutionAdmin } = usePlatformContext();
   const weeklyPageData = usePageDataComposer({ pageCode: "weekly_report", moduleKey: "weekly_report", railPageKey: "weekly-report" });
   const stickyNote = useStickyNote("weekly_report", "weekly_report");
   const weeklyVisualReports = useVisualReportCollection("weekly");
@@ -270,7 +271,7 @@ export function WeeklyReport() {
         title: asset.name,
         subtitle: `页面数据 · 原始表：${asset.sourceTableName}`,
         visible: weeklyPageData.layoutIds.includes(asset.id),
-        deletable: false,
+        deletable: isSuperAdmin,
         sourceId: asset.id,
       })),
       ...weeklyVisualReports.reports.map((report) => ({
@@ -279,18 +280,20 @@ export function WeeklyReport() {
         title: report.title,
         subtitle: `可视化报表 · ${report.cards.length} 个图表`,
         visible: preferenceById.get(`visual-report:${report.id}`)?.visible ?? true,
-        deletable: true,
+        deletable: canDeleteSharedVisual({ isSuperAdmin, isInstitutionAdmin, ownerUserId: report.ownerUserId, userId }),
         sourceId: report.id,
       })),
-      ...analysisModules.filter((module) => module.kind === "saved").map((module) => ({
+      ...analysisModules.filter((module) => module.kind === "saved").map((module) => {
+        const result = savedAnalysisResults.find((item) => item.id === module.savedAnalysisId);
+        return {
         id: module.id,
         kind: "saved-analysis" as const,
         title: module.title,
         subtitle: `智能分析 · 分析时间：${module.analysisTime}`,
         visible: module.visible,
-        deletable: true,
+        deletable: canDeleteSharedVisual({ isSuperAdmin, isInstitutionAdmin, ownerUserId: result?.ownerUserId, userId }),
         sourceId: module.savedAnalysisId || module.id,
-      })),
+      };}),
     ];
     if (!analysisModuleSettings.orderCustomized) return defaults;
     const itemById = new Map(defaults.map((item) => [item.id, item]));
@@ -298,7 +301,7 @@ export function WeeklyReport() {
       ...analysisModuleSettings.preferences.map((item) => itemById.get(item.id)).filter((item): item is WeeklyDataModule => Boolean(item)),
       ...defaults.filter((item) => !preferenceById.has(item.id)),
     ];
-  }, [analysisModuleSettings.orderCustomized, analysisModuleSettings.preferences, analysisModules, weeklyPageData.assets, weeklyPageData.layoutIds, weeklyVisualReports.reports]);
+  }, [analysisModuleSettings.orderCustomized, analysisModuleSettings.preferences, analysisModules, isInstitutionAdmin, isSuperAdmin, savedAnalysisResults, userId, weeklyPageData.assets, weeklyPageData.layoutIds, weeklyVisualReports.reports]);
 
   useEffect(() => {
     setReports(createWeeklyReports(selectedInstitution, userName, userId));
@@ -807,7 +810,12 @@ export function WeeklyReport() {
   }
 
   async function deleteWeeklyDataItem(item: WeeklyDataModule) {
-    if (weeklyPageData.mode !== "edit" || !item.deletable) return;
+    if (!item.deletable) return;
+    if (item.kind === "page-data") {
+      if (weeklyPageData.mode !== "edit") return;
+      weeklyPageData.toggleAsset(item.sourceId);
+      return;
+    }
     if (item.kind === "visual-report") {
       const report = weeklyVisualReports.reports.find((candidate) => candidate.id === item.sourceId);
       if (!report) return;
@@ -820,15 +828,15 @@ export function WeeklyReport() {
     }
   }
   async function deleteAnalysisModule(module: WeeklyAnalysisModule) {
-    if (module.kind !== "saved" || !module.savedAnalysisId || !window.confirm(`确认删除“${module.title}”吗？`)) return;
+    if (module.kind !== "saved" || !module.savedAnalysisId || !window.confirm(`确认从经营周报移除“${module.title}”吗？源报表仍会保留。`)) return;
     const resultIds = module.savedAnalysisIds?.length ? module.savedAnalysisIds : [module.savedAnalysisId];
     try {
-      await Promise.all(resultIds.map((resultId) => deleteSavedAnalysisResult({ tenantId, userId, resultId })));
+      await Promise.all(resultIds.map((resultId) => saveAnalysisResultToWeeklyReport({ tenantId, userId, resultId, weeklyReportEligible: false })));
       setSavedAnalysisResults((current) => current.filter((item) => !resultIds.includes(item.id)));
       setAnalysisModuleSettings((current) => ({ ...current, preferences: current.preferences.filter((item) => item.id !== module.id) }));
       if (resultIds.includes(selectedAnalysisId)) setSelectedAnalysisId("");
-      setSavedAt(`已删除分析模块“${module.title}”`);
-    } catch (error) { setSavedAt(error instanceof Error ? `删除分析模块失败：${error.message}` : "删除分析模块失败"); }
+      setSavedAt(`已从经营周报移除“${module.title}”`);
+    } catch (error) { setSavedAt(error instanceof Error ? `移出周报失败：${error.message}` : "移出周报失败"); }
   }
   function stopBlockAnalysis(blockId: string) {
     const block = activeReport.sections.flatMap((section) => section.blocks).find((item) => item.id === blockId);
@@ -1455,7 +1463,7 @@ export function WeeklyReport() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <StickyNoteButton onClick={stickyNote.show} className="weekly-report-sticky-note-toggle" />
-          <PageDataModeToggle controller={weeklyPageData} onSave={saveReportVersion} className="weekly-report-page-data-mode-toggle" />
+          {isSuperAdmin && <PageDataModeToggle controller={weeklyPageData} onSave={saveReportVersion} className="weekly-report-page-data-mode-toggle" />}
           <div className="relative" data-weekly-history-menu="true">
             <button
               onClick={() => void openReportHistory()}

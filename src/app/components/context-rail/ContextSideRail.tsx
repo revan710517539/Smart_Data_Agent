@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { MessageSquarePlus, MessageSquareText, PanelRightClose, PanelRightOpen, Sparkles } from "lucide-react";
+import { revealAnalysisWorkspace } from "../analysis-workspace/AnalysisWorkspaceRail";
 
 export type ContextRailTab = "comments" | "analysis" | "message-board";
 export const contextRailRevealEvent = "smart-data-agent:reveal-context-rail";
@@ -26,6 +27,7 @@ export function ContextSideRail({
   messageBoard,
   wide = false,
   onWideChange,
+  flushToViewport = false,
 }: {
   pageKey: string;
   activeTab: ContextRailTab;
@@ -36,10 +38,12 @@ export function ContextSideRail({
   messageBoard: ReactNode;
   wide?: boolean;
   onWideChange?: (wide: boolean) => void;
+  flushToViewport?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(true);
   const [edgeVisible, setEdgeVisible] = useState(false);
   const railRef = useRef<HTMLElement>(null);
+  const railWidthClass = wide ? "w-[640px]" : "w-[320px]";
 
   useEffect(() => {
     setCollapsed(true);
@@ -63,13 +67,12 @@ export function ContextSideRail({
   }, [pageKey, wide]);
 
   useLayoutEffect(() => {
-    if (collapsed) return;
+    if (collapsed || flushToViewport) return;
     const rail = railRef.current;
     if (!rail) return;
-    const orbClearancePx = 104;
     const apply = () => {
       const top = rail.getBoundingClientRect().top;
-      const nextHeight = Math.max(280, Math.round(window.innerHeight - top - orbClearancePx));
+      const nextHeight = Math.max(280, Math.round(window.innerHeight - top));
       rail.style.height = `${nextHeight}px`;
     };
     apply();
@@ -83,17 +86,18 @@ export function ContextSideRail({
       main?.removeEventListener("scroll", apply);
       rail.style.height = "";
     };
-  }, [collapsed, pageKey, wide]);
+  }, [collapsed, flushToViewport, pageKey, wide]);
 
   return (
     <>
+      {flushToViewport && !collapsed ? <div className={`weekly-report-print-hidden shrink-0 ${railWidthClass}`} data-context-rail-spacer="true" /> : null}
       <aside
         ref={railRef}
-        className={`weekly-report-print-hidden sticky top-4 mr-20 h-[calc(100vh-8rem)] shrink-0 overflow-hidden rounded-xl border border-[#e5e5ea] bg-white ${wide ? "w-[640px]" : "w-[320px]"} ${collapsed ? "hidden" : ""}`}
+        className={`weekly-report-print-hidden min-h-0 overflow-hidden rounded-tl-xl border border-b-0 border-r-0 border-[#e5e5ea] bg-white ${railWidthClass} ${collapsed ? "hidden" : ""} ${flushToViewport ? "fixed top-4 right-0 bottom-0 z-[65]" : "sticky top-4 h-[calc(100vh-1rem)] shrink-0"}`}
         data-context-rail={collapsed ? "collapsed" : "expanded"}
         data-context-page={pageKey}
         data-context-rail-wide={wide ? "true" : "false"}
-        data-context-rail-orb-clearance="true"
+        data-context-rail-flush="true"
       >
         <div className="absolute inset-x-0 top-0 z-[75] border-b border-[#ececf0] bg-white p-2" data-context-rail-tabs="true">
           <div className="grid grid-cols-[32px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-1">
@@ -104,7 +108,7 @@ export function ContextSideRail({
               <MessageSquareText className="h-3.5 w-3.5" />
               评论{commentCount ? ` ${commentCount}` : ""}
             </button>
-            <button type="button" onClick={() => onTabChange("analysis")} className={`flex h-10 items-center justify-center gap-1.5 rounded-lg text-[12px] transition-colors ${activeTab === "analysis" ? "bg-[#edf4fb] text-[#0a66c2]" : "text-[#636366] hover:bg-[#f2f2f7]"}`}>
+            <button type="button" data-context-rail-analysis-tab="true" onClick={() => { revealAnalysisWorkspace(undefined); onTabChange("analysis"); }} className={`flex h-10 items-center justify-center gap-1.5 rounded-lg text-[12px] transition-colors ${activeTab === "analysis" ? "bg-[#edf4fb] text-[#0a66c2]" : "text-[#636366] hover:bg-[#f2f2f7]"}`}>
               <Sparkles className="h-3.5 w-3.5" />
               AI 分析
             </button>
@@ -114,7 +118,7 @@ export function ContextSideRail({
             </button>
           </div>
         </div>
-        <div className="absolute inset-x-0 bottom-0 top-[57px] flex min-h-0 flex-col overflow-y-auto overscroll-contain bg-[#f7f8fa] px-2 pb-3" data-context-rail-scroll="true">
+        <div className="absolute inset-x-0 bottom-0 top-[57px] flex min-h-0 flex-col overflow-y-auto overscroll-contain bg-[#f7f8fa] px-2 pb-2" data-context-rail-scroll="true">
           <div className={activeTab === "comments" ? "min-h-0" : "hidden"}>{comments}</div>
           <div className={activeTab === "analysis" ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}>{analysis}</div>
           <div className={activeTab === "message-board" ? "min-h-0" : "hidden"}>{messageBoard}</div>

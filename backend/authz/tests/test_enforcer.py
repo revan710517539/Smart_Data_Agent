@@ -9,6 +9,7 @@ from backend.authz import (
     build_default_rbac_seed,
     expand_menu_selection,
     normalize_tenant_id,
+    reconcile_role_defaults,
     tenant_role_id,
 )
 from backend.authz.models import PermissionPolicy, Role, RoleAssignment, RoleLevel
@@ -57,6 +58,10 @@ class AuthEnforcerTest(unittest.TestCase):
         self.assertTrue(self.enforcer.enforce("u_super", "tenant_b", "metric:any", "delete"))
         self.assertTrue(self.enforcer.has_super_admin_role("u_super", "tenant_b"))
         self.assertFalse(self.enforcer.has_super_admin_role("u_admin", "tenant_a"))
+        self.assertTrue(self.enforcer.has_tenant_admin_role("u_admin", "tenant_a"))
+        self.assertTrue(self.enforcer.can_manage_shared_visual("u_admin", "tenant_a", "u_operator"))
+        self.assertFalse(self.enforcer.can_manage_shared_visual("u_operator", "tenant_a", "u_admin"))
+        self.assertTrue(self.enforcer.can_manage_shared_visual("u_operator", "tenant_a", "u_operator"))
 
     def test_super_admin_overrides_lower_role_deny(self) -> None:
         repository = InMemoryPolicyRepository(
@@ -114,6 +119,48 @@ class AuthEnforcerTest(unittest.TestCase):
     def test_manageable_role_boundary(self) -> None:
         self.assertTrue(self.enforcer.can_manage_role("u_admin", "tenant_a", "operator"))
         self.assertFalse(self.enforcer.can_manage_role("u_operator", "tenant_a", "tenant_admin"))
+
+    def test_default_rbac_does_not_seed_opt_in_menus_or_retired_posts(self) -> None:
+        seed = build_default_rbac_seed(["华兴银行"])
+        tenant_id = normalize_tenant_id("华兴银行")
+        names = {role.name for role in seed.roles if role.tenant_id == tenant_id}
+        self.assertEqual(names, {"管理员", "操作员"})
+        admin_id = tenant_role_id(tenant_id, "管理员")
+        objects = {policy.obj for policy in seed.policies if policy.role_id == admin_id}
+        self.assertNotIn("menu:dashboard", objects)
+        self.assertNotIn("menu:market-customer", objects)
+        self.assertNotIn("menu:task-workbench", objects)
+        self.assertNotIn("menu:notifications", objects)
+        self.assertIn("menu:self-analysis", objects)
+        self.assertIn("menu:settings.users", objects)
+
+    def test_reconcile_retires_seeded_custom_posts_and_keeps_opt_in_menu_grants(self) -> None:
+        tenant_id = normalize_tenant_id("华兴银行")
+        admin_id = tenant_role_id(tenant_id, "管理员")
+        custom_id = tenant_role_id(tenant_id, "周报分析岗")
+        seed = build_default_rbac_seed(["华兴银行"])
+        repository = InMemoryPolicyRepository(
+            roles=[
+                *seed.roles,
+                Role(custom_id, tenant_id, "周报分析岗", RoleLevel.OPERATOR, False, created_by=admin_id),
+            ],
+            assignments=[
+                *seed.assignments,
+                RoleAssignment("u_chenlei", tenant_id, custom_id),
+            ],
+            policies=[
+                *seed.policies,
+                PermissionPolicy(admin_id, tenant_id, "menu:dashboard", "read"),
+                PermissionPolicy(admin_id, tenant_id, "menu:market-customer", "read"),
+                PermissionPolicy(custom_id, tenant_id, "menu:self-analysis", "read"),
+            ],
+            manageable_roles=seed.manageable_roles,
+        )
+        reconcile_role_defaults(repository)
+        self.assertIsNone(repository.get_role(custom_id))
+        objects = {policy.obj for policy in repository.get_role_policies(admin_id)}
+        self.assertIn("menu:market-customer", objects)
+        self.assertTrue(any(item.role_id == tenant_role_id(tenant_id, "操作员") for item in repository.list_user_assignments("u_chenlei")))
 
     def test_default_rbac_has_single_global_super_admin(self) -> None:
         seed = build_default_rbac_seed(["华兴银行", "广州银行"])

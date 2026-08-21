@@ -2,15 +2,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, GripVertical, LayoutDashboard, Pencil, Plus, Trash2 } from "lucide-react";
 import { createClientUuid } from "../../utils/clientUuid";
 import { usePlatformContext } from "../../platform/PlatformContext";
+import { canDeleteOwnVisualCopy } from "../visualization/visualAccess";
 import { apiErrorMessage } from "../../services/apiClient";
 import { runApplicationAction, type ApplicationModuleKey } from "../../services/applicationApi";
 import { fetchPageDataRows, fetchPageDataWorkspace, readPageDataWorkspaceMemory, type PageDataAsset, type PageDataPageCode, type PageDataRows } from "../../services/dataAssetApi";
 import { pageDataBelongsToPage, resolvePageDataLayout } from "./assignment";
+import { revealAnalysisWorkspace, replaceVisualAnalysisSourceGroup } from "../analysis-workspace/AnalysisWorkspaceRail";
+import { boundedVisualRows } from "../analysis-workspace/visualAnalysisScope";
 import { revealContextRail } from "../context-rail/ContextSideRail";
 import { AnalysisVisualCard, type VisualizationCardConfig } from "../self-analysis/ResultViews";
 import { ResizableVisualizationGrid } from "../self-analysis/ResizableVisualizationGrid";
 import { visualDuplicateLayout } from "../self-analysis/visualGridLayout";
-import type { AnalysisRow, VisualizationType } from "../self-analysis/domain";
+import { pageDataToSelection, type AnalysisRow, type VisualizationType } from "../self-analysis/domain";
 
 export type ComposerMode = "browse" | "edit";
 export const PAGE_DATA_PAGE_GUTTER_CLASS = "p-7";
@@ -28,6 +31,7 @@ type PageDataNote = {
   noteTitle: string;
   noteBody: string;
   noteTitleHidden?: boolean;
+  createdByUserId?: string;
   config: VisualizationCardConfig;
 };
 
@@ -54,7 +58,7 @@ function applyWorkspace(workspace: { assets?: PageDataAsset[]; layout?: string[]
 }
 
 export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDataComposerOptions) {
-  const { tenantId, userId } = usePlatformContext();
+  const { tenantId, userId, isSuperAdmin } = usePlatformContext();
   const cached = readPageDataWorkspaceMemory(tenantId, pageCode);
   const initial = cached ? applyWorkspace(cached, pageCode) : null;
   const [assets, setAssets] = useState<PageDataAsset[]>(initial?.assets || []);
@@ -96,6 +100,18 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
 
   const assetById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
   const visibleAssets = useMemo(() => layoutIds.map((id) => assetById.get(id)).filter((asset): asset is PageDataAsset => Boolean(asset)), [assetById, layoutIds]);
+
+  useEffect(() => {
+    replaceVisualAnalysisSourceGroup(railPageKey, "page-data", visibleAssets.map((asset) => ({
+      id: asset.id,
+      label: asset.name,
+      tables: [pageDataToSelection(asset) as unknown as Record<string, unknown>],
+      question: asset.name,
+      summary: asset.sourceTableName || asset.name,
+      rows: boundedVisualRows(rowsById[asset.id]?.rows),
+    })));
+    return () => { replaceVisualAnalysisSourceGroup(railPageKey, "page-data", []); };
+  }, [railPageKey, rowsById, visibleAssets]);
 
   useEffect(() => {
     const missing = visibleAssets.filter((asset) => !rowsById[asset.id] && !rowsFailed[asset.id]);
@@ -181,6 +197,7 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
         noteTitle: "",
         noteBody: "",
         noteTitleHidden: false,
+        createdByUserId: userId,
         config: { ...config, noteTitle: "", noteBody: "", noteItems: [], noteTitleHidden: false, ...layout },
       }];
       void writeNotes(next);
@@ -198,11 +215,12 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
     void commitLayout(next);
   };
 
-  const openRail = (asset: PageDataAsset, tab: "analysis" | "comments", detail?: { selectedText?: string; label?: string; targetId?: string }) => {
+  const openRail = (asset: PageDataAsset, tab: "analysis" | "comments", detail?: { selectedText?: string; dataTables?: ReturnType<typeof pageDataToSelection>[]; label?: string; targetId?: string }) => {
     const rows = rowsById[asset.id];
-    revealContextRail(railPageKey, tab, {
+    const selectedTable = detail?.dataTables?.[0] || pageDataToSelection(asset);
+    const selectedDataPoint = {
       targetId: detail?.targetId || `page-data:${asset.id}`,
-      targetType: visualTypes[asset.id] === "table" || visualTypes[asset.id] === "pivot" ? "table" : "chart",
+      targetType: visualTypes[asset.id] === "table" || visualTypes[asset.id] === "pivot" ? "table" as const : "chart" as const,
       label: detail?.label || asset.name,
       values: {
         page_data_id: asset.id,
@@ -214,8 +232,21 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
         question: asset.name,
         analysis_summary: `${asset.name}${asset.sourceTableName ? ` · ${asset.sourceTableName}` : ""}`,
         selected_content: detail?.selectedText || "",
+        chart_bound_source: true,
+        visual_rows: boundedVisualRows(rows?.rows),
+        selected_data_table_ids: [selectedTable.id],
+        selected_data_tables: [selectedTable],
+        dataset_snapshot: {
+          id: selectedTable.id,
+          version: selectedTable.assetVersion || selectedTable.contentHash,
+          content_hash: selectedTable.contentHash,
+          schema_fingerprint: selectedTable.schemaFingerprint,
+          generatedAt: new Date().toISOString(),
+        },
       },
-    });
+    };
+    revealContextRail(railPageKey, tab, selectedDataPoint);
+    if (tab === "analysis") revealAnalysisWorkspace(selectedDataPoint, "context-rail");
   };
 
   return {
@@ -250,11 +281,15 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
     persistNoteChanges: () => { void writeNotes(notes); },
     removeNote: (noteId: string) => {
       setNotes((current) => {
+        const target = current.find((note) => note.id === noteId);
+        if (target && !canDeleteOwnVisualCopy({ createdByUserId: target.createdByUserId, userId, isSuperAdmin })) return current;
         const next = current.filter((note) => note.id !== noteId);
         void writeNotes(next);
         return next;
       });
     },
+    userId,
+    isSuperAdmin,
     openRail,
   };
 }
@@ -277,6 +312,7 @@ function normalizePageDataNotes(value: unknown, availableIds: Set<string>): Page
       noteTitle: typeof record.noteTitle === "string" ? record.noteTitle : "",
       noteBody: typeof record.noteBody === "string" ? record.noteBody : "",
       noteTitleHidden: Boolean(record.noteTitleHidden),
+      createdByUserId: typeof record.createdByUserId === "string" ? record.createdByUserId : "",
       config,
     }];
   });
@@ -332,6 +368,8 @@ export function PageDataVisualizationModules({
     addTextCard,
     updateNote,
     removeNote,
+    userId,
+    isSuperAdmin,
   } = controller;
   const [instanceTitles, setInstanceTitles] = useState<Record<string, string>>({});
   const [instanceConfigs, setInstanceConfigs] = useState<Record<string, import("../visualization/visualizationDataModel").VisualizationCardConfig>>({});
@@ -379,6 +417,7 @@ export function PageDataVisualizationModules({
                 initialConfig={instanceConfigs[instanceKey] || { metricFields: asset.metricFields, dimensionFields: asset.dimensionFields }}
                 compact
                 fillHeight
+                analysisSource={[pageDataToSelection(asset)]}
                 onFollowUp={(detail) => openRail(asset, "analysis", detail)}
                 onComment={(detail) => openRail(asset, "comments", detail)}
                 onTypeChange={(type) => setVisualTypes((current) => ({ ...current, [instanceKey]: type }))}
@@ -392,7 +431,7 @@ export function PageDataVisualizationModules({
                   setInstanceConfigs((current) => ({ ...current, [`${asset.id}:${index + 1}`]: config }));
                   setInstanceTitles((current) => ({ ...current, [`${asset.id}:${index + 1}`]: `${instanceTitles[instanceKey] || asset.name} · 副本` }));
                   void commitLayout(next);
-                } : undefined}
+                } : (config, options) => { if (options?.asText) addTextCard(asset.id, config, instanceKey); }}
                 onDelete={showEditorControls && mode === "edit" ? () => { const next = layoutIds.filter((_, layoutIndex) => layoutIndex !== index); void commitLayout(next); } : undefined}
               />}
             </div>
@@ -407,7 +446,7 @@ export function PageDataVisualizationModules({
               data-visual-grid-max-span={note.config.maxLayoutSpan}
               data-visual-grid-max-height={note.config.maxLayoutHeight}
             >
-              {showEditorControls && mode === "edit" && <div className="mb-1 flex h-7 shrink-0 items-center justify-end rounded-lg bg-[#f6f8f7] px-2 text-[10px] text-[#7c8781]"><button type="button" onClick={() => removeNote(note.id)} className="inline-flex h-6 items-center justify-center gap-1 rounded-md px-2 hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3 w-3" />移除</button></div>}
+              {canDeleteOwnVisualCopy({ createdByUserId: note.createdByUserId, userId, isSuperAdmin }) && <div className="mb-1 flex h-7 shrink-0 items-center justify-end rounded-lg bg-[#f6f8f7] px-2 text-[10px] text-[#7c8781]"><button type="button" onClick={() => removeNote(note.id)} className="inline-flex h-6 items-center justify-center gap-1 rounded-md px-2 hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3 w-3" />移除</button></div>}
               <div className="min-h-0 flex-1">
                 <AnalysisVisualCard
                   id={note.id}
@@ -422,14 +461,15 @@ export function PageDataVisualizationModules({
                   visualGridHeight={note.config.layoutHeight}
                   visualGridMaxSpan={note.config.maxLayoutSpan}
                   visualGridMaxHeight={note.config.maxLayoutHeight}
+                  analysisSource={[pageDataToSelection(asset)]}
                   onFollowUp={(detail) => openRail(asset, "analysis", { ...detail, label: note.noteTitle || `${asset.name} · 结论`, targetId: `page-data-note:${note.id}` })}
                   onComment={(detail) => openRail(asset, "comments", { ...detail, label: note.noteTitle || `${asset.name} · 结论`, targetId: `page-data-note:${note.id}` })}
                   onTypeChange={(type) => updateNote(note.id, { type })}
                   onTitleChange={(title) => updateNote(note.id, { noteTitle: title })}
                   onConfigChange={(config) => updateNote(note.id, { config, noteTitle: config.noteTitle ?? note.noteTitle, noteBody: config.noteBody ?? note.noteBody, noteTitleHidden: config.noteTitleHidden ?? note.noteTitleHidden })}
                   onCreateText={(config) => addTextCard(asset.id, config, note.id)}
-                  onDuplicate={showEditorControls && mode === "edit" ? (config) => addTextCard(asset.id, config) : undefined}
-                  onDelete={() => removeNote(note.id)}
+                  onDuplicate={(config, options) => { if (!options || options.asText) addTextCard(asset.id, config); }}
+                  onDelete={canDeleteOwnVisualCopy({ createdByUserId: note.createdByUserId, userId, isSuperAdmin }) ? () => removeNote(note.id) : undefined}
                 />
               </div>
             </div>

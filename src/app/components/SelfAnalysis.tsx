@@ -46,7 +46,7 @@ import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
 import { useStickyNote } from "./notes/useStickyNote";
 import { TrustedArtifactPanel } from "./analysis-workspace/TrustedArtifactPanel";
 import { syncSelfAnalysisWorkspaceContext } from "./self-analysis/workspaceContext";
-import { revealVisualComment, revealVisualFollowUp } from "./self-analysis/visualFollowUp";
+import { resolveVisualAnalysisTables, revealVisualComment, revealVisualFollowUp } from "./self-analysis/visualFollowUp";
 import { AnalysisSkillMenu } from "./self-analysis/AnalysisSkillMenu";
 import { DataPageSelector, useClientPagination } from "./ui/DataPageSelector";
 import {
@@ -270,8 +270,8 @@ export function SelfAnalysis() {
   const [reportActionLoadingId, setReportActionLoadingId] = useState("");
   const [reportLoadingId, setReportLoadingId] = useState("");
   useEffect(() => {
-    syncSelfAnalysisWorkspaceContext({ activeView, expandedReportId, reportSourceFilter, savedAnalysisResults, selectedDataTables, selectedInstitution });
-  }, [activeView, expandedReportId, reportSourceFilter, savedAnalysisResults, selectedDataTables, selectedInstitution]);
+    syncSelfAnalysisWorkspaceContext({ activeView, expandedReportId, reportSourceFilter, savedAnalysisResults, selectedDataTables, selectedInstitution, analysisTaskId });
+  }, [activeView, expandedReportId, reportSourceFilter, savedAnalysisResults, selectedDataTables, selectedInstitution, analysisTaskId]);
   const [analysisTopicsLoaded, setAnalysisTopicsLoaded] = useState(false);
   const [analysisTopicsExpanded, setAnalysisTopicsExpanded] = useState(false);
   const [topicShortcutMenu, setTopicShortcutMenu] = useState<TopicShortcutMenuState>(null);
@@ -305,6 +305,10 @@ export function SelfAnalysis() {
   const primaryAnalysisSkill = selectedSceneSkill || selectedTopicSkill || selectedModeSkill;
   const querySkillReferences = buildQuerySkillReferences(query, dismissedAutoSkillIds, availableAnalysisSkills);
   const visibleAnalysisTopicShortcuts = analysisTopicShortcuts.filter((topic) => !topic.hidden);
+  const boundChartTables = resolveVisualAnalysisTables(
+    selectedDataTables,
+    selectedTopic ? [topicTableToSelection(selectedTopic)] : [],
+  );
   const recentSavedQueries = savedAnalysisResults
     .filter(
       (item, index, items) =>
@@ -1216,6 +1220,8 @@ export function SelfAnalysis() {
       setPythonScript(backendPython);
       setResultMode("visual");
       partialAnalysisResponseRef.current = response;
+      const resolvedTables = resolveVisualAnalysisTables(response.asset_context?.selected_data_tables, effectiveDataTables);
+      if (resolvedTables.length) setSelectedDataTables(resolvedTables);
       addConversationTurn(
         makeConversationTurn("assistant", backendSummary, {
           query: nextQuery,
@@ -1500,6 +1506,8 @@ export function SelfAnalysis() {
       setPythonScript(backendPython);
       setResultMode("visual");
       partialAnalysisResponseRef.current = response;
+      const resolvedTables = resolveVisualAnalysisTables(response.asset_context?.selected_data_tables, selectedDataTables);
+      if (resolvedTables.length) setSelectedDataTables(resolvedTables);
       setSaveMessage("已重跑");
       addConversationTurn(
         makeConversationTurn("assistant", backendSummary, {
@@ -2223,7 +2231,9 @@ export function SelfAnalysis() {
     setQuery(restoredQuery);
     setAnalysisTaskId(task.task_id);
     setAnalysisPlan(formatBackendPlan(restoredQuery, task.analysis_plan) || "历史执行未保存分析计划。");
-    setAnalysisRows(mapBackendRows(task, restoredQuery, selectedDataTables));
+    const historyTables = resolveVisualAnalysisTables(task.asset_context?.selected_data_tables, selectedDataTables);
+    if (historyTables.length) setSelectedDataTables(historyTables);
+    setAnalysisRows(mapBackendRows(task, restoredQuery, historyTables.length ? historyTables : selectedDataTables));
     setAnalysisSummary(
       task.intelligent_analysis?.analysis_summary?.trim()
         || task.conclusions?.filter(Boolean).join("\n")
@@ -2696,8 +2706,9 @@ export function SelfAnalysis() {
                       type={card.type}
                       rows={analysisRows}
                       initialConfig={card.config}
-                      onFollowUp={(detail) => revealVisualFollowUp({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: analysisTaskId, question: query, summary: analysisSummary, plan: analysisPlan, selectedDataTables, selectedText: detail?.selectedText })}
-                      onComment={(detail) => revealVisualComment({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: analysisTaskId, question: query, summary: analysisSummary, plan: analysisPlan, selectedDataTables, selectedText: detail?.selectedText })}
+                      analysisSource={boundChartTables}
+                      onFollowUp={(detail) => revealVisualFollowUp({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: analysisTaskId, question: query, summary: analysisSummary, plan: analysisPlan, selectedDataTables: resolveVisualAnalysisTables(detail?.dataTables, boundChartTables), selectedText: detail?.selectedText })}
+                      onComment={(detail) => revealVisualComment({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: analysisTaskId, question: query, summary: analysisSummary, plan: analysisPlan, selectedDataTables: resolveVisualAnalysisTables(detail?.dataTables, boundChartTables), selectedText: detail?.selectedText })}
                       onTypeChange={(nextType) => card.key ? updateVisualType(card.key, nextType) : updateVisualCard(card.id, { type: nextType })}
                       onTitleChange={(nextTitle) => updateVisualCard(card.id, { title: nextTitle })}
                       onConfigChange={(config) => updateVisualCard(card.id, { config })}
@@ -2789,8 +2800,9 @@ export function SelfAnalysis() {
                               type={card.type}
                               rows={analysisRows}
                               initialConfig={card.config}
-                              onFollowUp={() => revealVisualFollowUp({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: entry.result.analysisTaskId, reportId: entry.result.id, question: entry.result.query, summary: analysisSummary || entry.result.summary, plan: entry.result.plan, selectedDataTables })}
-                              onComment={() => revealVisualComment({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: entry.result.analysisTaskId, reportId: entry.result.id, question: entry.result.query, summary: analysisSummary || entry.result.summary, plan: entry.result.plan, selectedDataTables })}
+                              analysisSource={resolveVisualAnalysisTables(entry.result.selectedDataTables, selectedDataTables)}
+                              onFollowUp={(detail) => revealVisualFollowUp({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: entry.result.analysisTaskId, reportId: entry.result.id, question: entry.result.query, summary: analysisSummary || entry.result.summary, plan: entry.result.plan, selectedDataTables: resolveVisualAnalysisTables(detail?.dataTables, entry.result.selectedDataTables, selectedDataTables) })}
+                              onComment={(detail) => revealVisualComment({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: entry.result.analysisTaskId, reportId: entry.result.id, question: entry.result.query, summary: analysisSummary || entry.result.summary, plan: entry.result.plan, selectedDataTables: resolveVisualAnalysisTables(detail?.dataTables, entry.result.selectedDataTables, selectedDataTables) })}
                               onTypeChange={(nextType) => void persistSavedReportVisualizations(entry.result, cards.map((item) => item.id === card.id ? { ...item, type: nextType } : item))}
                               onTitleChange={(nextTitle) => void persistSavedReportVisualizations(entry.result, cards.map((item) => item.id === card.id ? { ...item, title: nextTitle } : item))}
                               onConfigChange={(config) => setSavedAnalysisResults((current) => current.map((item) => item.id === entry.result.id ? { ...item, visualizations: cards.map((visual) => visual.id === card.id ? { ...visual, config } : visual) } : item))}
@@ -2914,8 +2926,9 @@ export function SelfAnalysis() {
                         type={card.type}
                         rows={analysisRows}
                         initialConfig={card.config}
-                        onFollowUp={() => revealVisualFollowUp({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: result.analysisTaskId, reportId: result.id, question: result.query, summary: analysisSummary || result.summary, plan: result.plan, selectedDataTables })}
-                        onComment={() => revealVisualComment({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: result.analysisTaskId, reportId: result.id, question: result.query, summary: analysisSummary || result.summary, plan: result.plan, selectedDataTables })}
+                        analysisSource={resolveVisualAnalysisTables(result.selectedDataTables, selectedDataTables)}
+                        onFollowUp={(detail) => revealVisualFollowUp({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: result.analysisTaskId, reportId: result.id, question: result.query, summary: analysisSummary || result.summary, plan: result.plan, selectedDataTables: resolveVisualAnalysisTables(detail?.dataTables, result.selectedDataTables, selectedDataTables) })}
+                        onComment={(detail) => revealVisualComment({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: result.analysisTaskId, reportId: result.id, question: result.query, summary: analysisSummary || result.summary, plan: result.plan, selectedDataTables: resolveVisualAnalysisTables(detail?.dataTables, result.selectedDataTables, selectedDataTables) })}
                         onTypeChange={(nextType) => void persistSavedReportVisualizations(result, cards.map((item) => item.id === card.id ? { ...item, type: nextType } : item))}
                         onTitleChange={(nextTitle) => void persistSavedReportVisualizations(result, cards.map((item) => item.id === card.id ? { ...item, title: nextTitle } : item))}
                         onConfigChange={(config) => setSavedAnalysisResults((current) => current.map((item) => item.id === result.id ? { ...item, visualizations: cards.map((visual) => visual.id === card.id ? { ...visual, config } : visual) } : item))}

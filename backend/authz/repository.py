@@ -42,6 +42,9 @@ class PolicyRepository(Protocol):
     def replace_manageable_role_ids(self, role_id: str, manageable_role_ids: set[str]) -> None:
         ...
 
+    def delete_role(self, role_id: str) -> None:
+        ...
+
     def seed(
         self,
         roles: Iterable[Role],
@@ -120,6 +123,19 @@ class InMemoryPolicyRepository:
 
     def replace_manageable_role_ids(self, role_id: str, manageable_role_ids: set[str]) -> None:
         self._manageable_roles[role_id] = set(manageable_role_ids)
+
+    def delete_role(self, role_id: str) -> None:
+        self._roles.pop(role_id, None)
+        self._policies_by_role.pop(role_id, None)
+        self._manageable_roles.pop(role_id, None)
+        for key in list(self._manageable_roles):
+            self._manageable_roles[key].discard(role_id)
+        for key, items in list(self._assignments_by_user_domain.items()):
+            kept = [item for item in items if item.role_id != role_id]
+            if kept:
+                self._assignments_by_user_domain[key] = kept
+            else:
+                del self._assignments_by_user_domain[key]
 
     def seed(
         self,

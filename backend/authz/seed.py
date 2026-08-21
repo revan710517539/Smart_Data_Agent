@@ -27,7 +27,7 @@ class MenuResource:
 
 
 MENU_TREE = (
-    MenuResource("dashboard", "管理驾驶舱"),
+    MenuResource("dashboard", "多机构分析"),
     MenuResource(
         "business-analysis",
         "经营分析",
@@ -100,7 +100,22 @@ MENU_TREE = (
 # menu selection make audit or configuration disappear from its left navigation.
 MANDATORY_MENU_KEYS = frozenset({"settings.audit", "settings.config"})
 DEFAULT_ROLE_NAMES = ("管理员", "操作员")
-CUSTOM_ROLE_CANDIDATES = ("客户经理分析岗", "周报分析岗", "指标维护岗")
+CUSTOM_ROLE_CANDIDATES: tuple[str, ...] = ()
+RETIRED_SEEDED_CUSTOM_ROLES = ("客户经理分析岗", "周报分析岗", "指标维护岗")
+SUPER_ADMIN_OPT_IN_MENU_KEYS = frozenset({
+    "dashboard",
+    "market-customer",
+    "market-customer.segment",
+    "market-customer.competition",
+    "task-workbench",
+    "task-workbench.todos",
+    "task-workbench.tasks",
+    "task-workbench.message-board",
+    "notifications",
+    "notifications.alerts",
+    "notifications.subscriptions",
+    "notifications.history",
+})
 
 
 def flatten_menu_tree(menu_tree: Iterable[MenuResource] = MENU_TREE) -> dict[str, MenuResource]:

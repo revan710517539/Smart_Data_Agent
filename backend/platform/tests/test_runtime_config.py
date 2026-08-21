@@ -175,6 +175,22 @@ class RuntimeConfigTest(unittest.TestCase):
         self.assertEqual(from_header.tenant_id, "tenant:广州银行")
         self.assertEqual(from_websocket_query.tenant_id, "tenant:广州银行")
 
+    def test_super_admin_wildcard_session_allows_any_requested_tenant(self) -> None:
+        secret = "test-only-secret-with-32-characters-minimum"
+        with patch.dict("os.environ", {"SMART_DATA_AGENT_AUTH_SECRET": secret}, clear=True):
+            token = make_session_token(
+                "u_jinghaozhe_jk",
+                "tenant:华兴银行",
+                tenant_ids=("*", "tenant:华兴银行"),
+                secret=secret,
+                ttl_seconds=60,
+            )
+            switched = resolve_request_context(
+                {"authorization": f"Bearer {token}", "x-tenant-id": "tenant%3A%E4%B8%89%E5%B3%A1%E9%93%B6%E8%A1%8C"},
+            )
+        self.assertEqual(switched.tenant_id, "tenant:三峡银行")
+        self.assertEqual(switched.user_id, "u_jinghaozhe_jk")
+
 
 if __name__ == "__main__":
     unittest.main()

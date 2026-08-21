@@ -95,6 +95,22 @@ class VisualReportsTest(unittest.TestCase):
         other_state = store.get_module("tenant_a", "self_analysis", actor_user_id="u_other")["state"]
         self.assertEqual([report["id"] for report in owner_state["visualReports"]], ["visual_report_1"])
         self.assertEqual(other_state["visualReports"], [])
+        store.run_action(
+            "tenant_a",
+            "self_analysis",
+            "upsert_visual_report",
+            {"report": {**self.report, "id": "visual_report_weekly", "destinations": ["mine", "weekly"]}},
+            actor_user_id="u_owner",
+        )
+        shared = store.get_module("tenant_a", "self_analysis", actor_user_id="u_other")["state"]
+        self.assertIn("visual_report_weekly", [report["id"] for report in shared["visualReports"]])
+        store.run_action(
+            "tenant_a",
+            "self_analysis",
+            "upsert_visual_report",
+            {"report": {**self.report, "id": "visual_report_weekly", "destinations": ["mine"]}},
+            actor_user_id="u_owner",
+        )
         with self.assertRaisesRegex(PermissionError, "visual_report_owner_required"):
             store.run_action(
                 "tenant_a",

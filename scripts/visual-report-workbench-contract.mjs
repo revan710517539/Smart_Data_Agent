@@ -64,6 +64,7 @@ assert.match(builder, /if \(destination !== "topic"\) await saveAsTopic\(/, "三
 
 assert.match(cards, /AnalysisVisualCard/);
 assert.match(cards, /revealVisualFollowUp/);
+assert.match(cards, /replaceVisualAnalysisSourceGroup/, "可视化报表必须把当前页全部图表登记为页面 AI 分析数据源");
 assert.match(cards, /revealVisualComment/);
 assert.match(builder, /showFollowUp=\{false\}/, "新增图表弹窗预览必须隐藏追问");
 assert.match(visualCard, /showFollowUp = true/, "落地后的标准图表默认必须显示追问");
@@ -94,6 +95,7 @@ assert.match(supervision, /onHide=\{stickyNote.hide\}/, "机构督导便签必�
 assert.match(weekly, /onHide=\{stickyNote.hide\}/, "经营周报便签必须支持右键删除收起");
 assert.match(builder, /onHide=\{stickyNote.hide\}/, "可视化报表便签必须支持右键删除收起");
 assert.match(selfAnalysis, /onHide=\{analysisSticky.hide\}/, "智能分析便签必须支持右键删除收起");
+assert.match(cards, /analysisSource=\{\[selectedTable\]\}/, "可视化报表追问必须绑定当前图表数据集");
 assert.match(application, /_sanitize_note_html/, "便签加粗 HTML 必须在保存时清洗");
 assert.match(domain, /type: "text", label: "文本框"/, "文本框必须作为标准可视化样式出现在样式菜单中");
 assert.match(visualCard, /disabled=\{isTextCard\}/, "文本框样式下条件必须灰显");

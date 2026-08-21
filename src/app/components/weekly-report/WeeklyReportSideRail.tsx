@@ -3,7 +3,7 @@ import { ContextSideRail } from "../context-rail/ContextSideRail";
 import { CommentsPanel } from "./CommentsPanel";
 import { WeeklyContextAnalysisPanel } from "./ContextAnalysisPanel";
 import { MessageBoardPanel } from "../message-board/MessageBoardPanel";
-import { AnalysisWorkspacePanel, updateAnalysisWorkspacePageContext } from "../analysis-workspace/AnalysisWorkspaceRail";
+import { AnalysisWorkspacePanel, replaceVisualAnalysisSourceGroup, updateAnalysisWorkspacePageContext } from "../analysis-workspace/AnalysisWorkspaceRail";
 import type { SelectedDataPoint } from "../../services/analysisWorkspaceApi";
 import type { CommentTarget } from "./domain";
 
@@ -43,22 +43,29 @@ export function WeeklyReportSideRail({
 
   useEffect(() => {
     const topicTable = analysisProps.topicTable;
+    const topicSourceTable = topicTable ? [{
+      id: topicTable.id,
+      kind: "topic",
+      name: topicTable.name,
+      code: topicTable.code,
+      datasetId: topicTable.datasetId,
+      fields: topicTable.fields,
+    }] : [];
     updateAnalysisWorkspacePageContext(pageKey, {
       workspace_key: `${pageKey}:${analysisProps.report.id}`,
       artifact_id: analysisProps.report.id,
       filters: { institution: analysisProps.selectedInstitution },
-      selected_data_tables: topicTable ? [{
-        id: topicTable.id,
-        kind: "topic",
-        name: topicTable.name,
-        code: topicTable.code,
-        datasetId: topicTable.datasetId,
-        fields: topicTable.fields,
-      }] : [],
+      selected_data_tables: topicSourceTable,
       selected_content: selectedDataPoint,
       analysis_skill: analysisProps.analysisSkill || {},
       analysis_policy: { engine: "IntelligentAnalysisEngine", resultDelivery: "data_first" },
     });
+    replaceVisualAnalysisSourceGroup(pageKey, "weekly-topic", topicTable ? [{
+      id: topicTable.id,
+      label: topicTable.name,
+      tables: topicSourceTable,
+      question: topicTable.name,
+    }] : []);
   }, [analysisProps.analysisSkill, analysisProps.report.id, analysisProps.selectedInstitution, analysisProps.topicTable, pageKey, selectedDataPoint]);
 
   if (!visible) return null;

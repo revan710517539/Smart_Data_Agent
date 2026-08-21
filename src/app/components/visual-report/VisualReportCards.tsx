@@ -7,6 +7,8 @@ import { upsertVisualReport, type VisualReport, type VisualReportCard } from "..
 import { AnalysisVisualCard } from "../self-analysis/ResultViews";
 import { ResizableVisualizationGrid } from "../self-analysis/ResizableVisualizationGrid";
 import { visualDuplicateLayout } from "../self-analysis/visualGridLayout";
+import { replaceVisualAnalysisSourceGroup } from "../analysis-workspace/AnalysisWorkspaceRail";
+import { boundedVisualRows } from "../analysis-workspace/visualAnalysisScope";
 import { revealVisualComment, revealVisualFollowUp } from "../self-analysis/visualFollowUp";
 import type { AnalysisDataTableSelection, AnalysisRow } from "../self-analysis/domain";
 import { rowsFromPageVisualDataset, rowsFromRawVisualDataset, rowsFromTopicVisualDataset, visualReportDatasetMatches } from "./reportData";
@@ -113,6 +115,19 @@ export function VisualReportCards({
     return [...report.cards, ...extraCards.filter((card) => !known.has(card.id))];
   }, [extraCards, report.cards]);
 
+  useEffect(() => {
+    const group = `visual-report:${report.id}`;
+    replaceVisualAnalysisSourceGroup(railPageKey, group, visibleCards.map((card) => ({
+      id: `${report.id}:${card.id}`,
+      label: card.title,
+      tables: [datasetSelection(card) as unknown as Record<string, unknown>],
+      question: card.title,
+      summary: report.title,
+      rows: boundedVisualRows(rowsByDataset[card.dataset.id]),
+    })));
+    return () => { replaceVisualAnalysisSourceGroup(railPageKey, group, []); };
+  }, [railPageKey, report.id, report.title, rowsByDataset, visibleCards]);
+
   const updateCard = (cardId: string, patch: Partial<VisualReportCard>) => {
     if (extraCards.some((card) => card.id === cardId)) {
       setExtraCards((current) => current.map((card) => card.id === cardId ? { ...card, ...patch } : card));
@@ -179,8 +194,9 @@ export function VisualReportCards({
                 rows={rows}
                 initialConfig={card.config}
                 fillHeight
-                onFollowUp={() => revealVisualFollowUp({ key: "primary", title: card.title, type: card.type, rows, reportId: report.id, question: report.title, summary: "可视化报表配置", plan: "基于已授权数据集的可视化报表", selectedDataTables: [selectedTable], railPageKey })}
-                onComment={() => revealVisualComment({ key: "primary", title: card.title, type: card.type, rows, reportId: report.id, question: report.title, summary: "可视化报表配置", plan: "基于已授权数据集的可视化报表", selectedDataTables: [selectedTable], railPageKey })}
+                analysisSource={[selectedTable]}
+                onFollowUp={(detail) => revealVisualFollowUp({ key: "primary", title: card.title, type: card.type, rows, reportId: report.id, question: report.title, summary: "可视化报表配置", plan: "基于已授权数据集的可视化报表", selectedDataTables: detail?.dataTables?.length ? detail.dataTables : [selectedTable], railPageKey })}
+                onComment={(detail) => revealVisualComment({ key: "primary", title: card.title, type: card.type, rows, reportId: report.id, question: report.title, summary: "可视化报表配置", plan: "基于已授权数据集的可视化报表", selectedDataTables: detail?.dataTables?.length ? detail.dataTables : [selectedTable], railPageKey })}
                 onTypeChange={(type) => updateCard(card.id, { type })}
                 onTitleChange={editable || card.type === "text" ? (title) => updateCard(card.id, { title }) : undefined}
                 onConfigChange={editable || card.type === "text" ? (config) => updateCard(card.id, { config }) : undefined}

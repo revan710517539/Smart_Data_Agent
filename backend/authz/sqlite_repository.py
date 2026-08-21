@@ -370,3 +370,10 @@ class SQLitePolicyRepository(PolicyRepository):
                 """,
                 [(role_id, manageable_role_id) for manageable_role_id in sorted(manageable_role_ids)],
             )
+
+    def delete_role(self, role_id: str) -> None:
+        with self._conn:
+            self._conn.execute("DELETE FROM auth_manageable_roles WHERE role_id = ? OR manageable_role_id = ?", (role_id, role_id))
+            self._conn.execute("DELETE FROM auth_permission_policies WHERE role_id = ?", (role_id,))
+            self._conn.execute("DELETE FROM auth_role_assignments WHERE role_id = ?", (role_id,))
+            self._conn.execute("DELETE FROM auth_roles WHERE role_id = ?", (role_id,))

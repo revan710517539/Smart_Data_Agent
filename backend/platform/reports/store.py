@@ -68,7 +68,10 @@ class InMemoryReportStore:
         normalized = _normalize_analysis_result(result)
         existing = self._analysis_results_by_tenant.get(tenant_id, {}).get(normalized["id"])
         if existing and updated_by and existing.get("ownerUserId") != updated_by:
-            raise PermissionError("saved_analysis_owner_required")
+            if existing.get("weeklyReportEligible") and not normalized.get("weeklyReportEligible"):
+                normalized["ownerUserId"] = str(existing.get("ownerUserId") or "")
+            else:
+                raise PermissionError("saved_analysis_owner_required")
         normalized["ownerUserId"] = str(existing.get("ownerUserId") if existing else updated_by or "")
         normalized["updatedBy"] = updated_by or normalized.get("updatedBy") or ""
         self._analysis_results_by_tenant.setdefault(tenant_id, {})[normalized["id"]] = normalized
@@ -472,7 +475,9 @@ class SQLiteReportStore:
             (tenant_id, normalized["id"]),
         ).fetchone()
         if existing and updated_by and existing["created_by"] != updated_by:
-            raise PermissionError("saved_analysis_owner_required")
+            previous = self.get_analysis_result(tenant_id, normalized["id"])
+            if not (previous and previous.get("weeklyReportEligible") and not normalized.get("weeklyReportEligible")):
+                raise PermissionError("saved_analysis_owner_required")
         normalized["ownerUserId"] = str(existing["created_by"] if existing else updated_by or "")
         normalized["updatedBy"] = updated_by or normalized.get("updatedBy") or ""
         with self._conn:

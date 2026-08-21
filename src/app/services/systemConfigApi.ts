@@ -126,6 +126,7 @@ type SystemConfigResponse = {
   tenant_id: string;
   config_scope?: string;
   config_owner_user_id?: string;
+  can_read_system_params?: boolean;
   models: ModelIntegration[];
   speech_integrations: SpeechIntegration[];
   system_params: SystemDataParam[];

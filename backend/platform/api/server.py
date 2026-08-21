@@ -289,15 +289,24 @@ class AnalysisAPIHandler(BaseHTTPRequestHandler):
         target_id: str = "",
         detail: dict[str, Any] | None = None,
     ) -> None:
-        event = self.services.audit_store.write(
-            tenant_id=context.tenant_id,
-            actor_user_id=context.user_id,
-            action=action,
-            target_type=target_type,
-            target_id=target_id,
-            detail=detail or {},
-            ip_address=self.client_address[0] if self.client_address else "",
-        )
+        try:
+            event = self.services.audit_store.write(
+                tenant_id=context.tenant_id,
+                actor_user_id=context.user_id,
+                action=action,
+                target_type=target_type,
+                target_id=target_id,
+                detail=detail or {},
+                ip_address=self.client_address[0] if self.client_address else "",
+            )
+        except Exception as exc:
+            self.services.trace_recorder.add_span(
+                "audit.write",
+                inputs={"action": action, "target_type": target_type},
+                status="error",
+                error_code=type(exc).__name__,
+            )
+            return
         try:
             self.services.learning_service.observe_operation(event)
         except Exception as exc:

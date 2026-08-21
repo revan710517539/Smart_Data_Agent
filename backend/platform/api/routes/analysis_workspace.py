@@ -4,7 +4,13 @@ from typing import Any
 from urllib.parse import parse_qs
 
 from backend.platform.analysis_workspace.models import AnalysisWorkspaceContext
-from backend.platform.analysis_workspace.service import build_trusted_manifest, verify_trusted_manifest
+from backend.platform.analysis_workspace.service import (
+    build_trusted_manifest,
+    manifest_has_display_provenance,
+    provenance_dataset_snapshot,
+    provenance_metric_versions,
+    verify_trusted_manifest,
+)
 from backend.platform.analysis_workspace.visualization import VisualizationPlanner
 from backend.platform.api.support import first_query_value, send_route_exception
 
@@ -131,20 +137,34 @@ def handle_analysis_artifact_trust(handler: Any, query: str) -> None:
             raise PermissionError("analysis_task_not_owned")
         result = ((task.get("skill_results") or [{}])[0]) if isinstance(task.get("skill_results"), list) else {}
         stored_manifest = result.get("trusted_manifest") if isinstance(result, dict) else None
-        if isinstance(stored_manifest, dict):
-            if not verify_trusted_manifest(stored_manifest):
-                raise RuntimeError("trusted_manifest_hash_mismatch")
+        if isinstance(stored_manifest, dict) and verify_trusted_manifest(stored_manifest) and manifest_has_display_provenance(stored_manifest):
             handler._send_json({"manifest": stored_manifest})
             return
+        if isinstance(stored_manifest, dict) and stored_manifest and not verify_trusted_manifest(stored_manifest):
+            raise RuntimeError("trusted_manifest_hash_mismatch")
         evidence = result.get("evidence") if isinstance(result, dict) and isinstance(result.get("evidence"), dict) else {}
         semantic = result.get("semantic_info") if isinstance(result, dict) and isinstance(result.get("semantic_info"), dict) else {}
+        asset_context = task.get("asset_context") if isinstance(task.get("asset_context"), dict) else {}
+        result_rows = result.get("data") if isinstance(result, dict) and isinstance(result.get("data"), list) else []
         manifest = build_trusted_manifest(
             tenant_id=context.tenant_id,
             artifact_id=str(task.get("execution_id") or task_id),
-            dataset_snapshot=semantic.get("source_snapshot") if isinstance(semantic.get("source_snapshot"), dict) else {},
-            metric_versions=semantic.get("metric_versions") if isinstance(semantic.get("metric_versions"), list) else [],
+            dataset_snapshot=provenance_dataset_snapshot(
+                semantic.get("source_snapshot"),
+                evidence.get("source_snapshot"),
+                stored_manifest.get("dataset_snapshot") if isinstance(stored_manifest, dict) else {},
+                *_objects(asset_context.get("selected_data_tables")),
+                schema_material=[semantic.get("schema_mapping"), result_rows],
+                content_material=result_rows,
+            ),
+            metric_versions=provenance_metric_versions(
+                semantic.get("metric_versions"),
+                evidence.get("metric_versions"),
+                asset_context.get("metric_dictionary_definitions"),
+                stored_manifest.get("metric_versions") if isinstance(stored_manifest, dict) else [],
+            ),
             sql=str(evidence.get("executed_sql") or ""),
-            result=result.get("data") if isinstance(result, dict) else [],
+            result=result_rows,
             visualization=result.get("visualization_spec") if isinstance(result, dict) and isinstance(result.get("visualization_spec"), dict) else {},
             skill_versions=task.get("skill_versions") if isinstance(task.get("skill_versions"), list) else [],
             model_version=str(task.get("selected_model") or ""),
@@ -195,3 +215,7 @@ def _workspace_context(value: Any) -> AnalysisWorkspaceContext:
 
 def _strings(value: Any, limit: int) -> list[str]:
     return [str(item).strip()[:160] for item in value[:limit] if str(item or "").strip()] if isinstance(value, list) else []
+
+
+def _objects(value: Any) -> list[dict[str, Any]]:
+    return [dict(item) for item in value if isinstance(item, dict)] if isinstance(value, list) else []

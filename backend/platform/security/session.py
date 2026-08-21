@@ -59,7 +59,7 @@ def resolve_request_context(
         )
         if requested_tenant_id and requested_tenant_id != session.tenant_id:
             allowed_tenant_ids = set(session.tenant_ids or (session.tenant_id,))
-            if requested_tenant_id not in allowed_tenant_ids:
+            if "*" not in allowed_tenant_ids and requested_tenant_id not in allowed_tenant_ids:
                 raise AuthenticationError("tenant is not authorized for this session.")
             return SignedSession(
                 user_id=session.user_id,

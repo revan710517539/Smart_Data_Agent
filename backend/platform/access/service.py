@@ -4,7 +4,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
-from backend.authz import SUPER_ADMIN_ROLE_ID, normalize_tenant_id, tenant_role_id
+from backend.authz import SUPER_ADMIN_ROLE_ID, SUPER_ADMIN_USER_ID, normalize_tenant_id, tenant_role_id
 from backend.authz.models import PermissionPolicy, Role, RoleAssignment, RoleLevel
 from backend.authz.repository import PolicyRepository
 from backend.platform.governance import PermissionBroker
@@ -14,7 +14,7 @@ from .store import UserDirectoryStore, UserProfile
 
 
 PERMISSION_MENU_LABELS = [
-    "管理驾驶舱",
+    "多机构分析",
     "经营分析",
     "经营周报",
     "机构督导",
@@ -57,6 +57,7 @@ PERMISSION_DATA_SCOPES = [
     "系统配置数据",
 ]
 _MENU_LABEL_TO_KEYS = {
+    "多机构分析": {"dashboard"},
     "管理驾驶舱": {"dashboard"},
     "经营分析": {"business-analysis", "business-analysis.weekly-report", "business-analysis.supervision"},
     "经营周报": {"business-analysis.weekly-report"},
@@ -463,6 +464,22 @@ class AccessControlService:
             if role.tenant_id == tenant_id and not role.is_system
         ]
 
+    def _delete_custom_role(self, tenant_id: str, name: str) -> None:
+        role = self._find_role_by_name(tenant_id, name)
+        if not role or role.is_system:
+            return
+        operator = self._find_role_by_name(tenant_id, "操作员")
+        affected = [item.user_id for item in self.policy_repository.list_user_assignments() if item.role_id == role.role_id]
+        for user_id in dict.fromkeys(affected):
+            existing = self.policy_repository.list_user_assignments(user_id)
+            kept = [item for item in existing if item.role_id != role.role_id]
+            if operator and not any(item.role_id == operator.role_id and item.tenant_id == tenant_id for item in kept):
+                kept.append(RoleAssignment(user_id, tenant_id, operator.role_id, granted_by=SUPER_ADMIN_USER_ID))
+            self.policy_repository.replace_user_assignments(user_id, kept)
+        delete_role = getattr(self.policy_repository, "delete_role", None)
+        if callable(delete_role):
+            delete_role(role.role_id)
+
     def _role_configs_from_payload(
         self,
         payload: dict[str, Any],
@@ -525,19 +542,25 @@ class AccessControlService:
             existing_names.add(config["name"])
 
         configured_names = {config["name"] for config in configs}
-        for name in self._custom_role_names(tenant_id):
-            if name not in configured_names:
-                configs.append(
-                    {
-                        "roleId": tenant_role_id(tenant_id, name),
-                        "name": name,
-                        "roleType": "custom",
-                        "isSystem": False,
-                        "menus": [],
-                        "dataScopes": [],
-                        "manageableRoles": [],
-                    }
-                )
+        existing_custom = self._custom_role_names(tenant_id)
+        if isinstance(payload.get("roleConfigs"), list) and payload.get("roleConfigs"):
+            for name in existing_custom:
+                if name not in configured_names:
+                    self._delete_custom_role(tenant_id, name)
+        else:
+            for name in existing_custom:
+                if name not in configured_names:
+                    configs.append(
+                        {
+                            "roleId": tenant_role_id(tenant_id, name),
+                            "name": name,
+                            "roleType": "custom",
+                            "isSystem": False,
+                            "menus": [],
+                            "dataScopes": [],
+                            "manageableRoles": [],
+                        }
+                    )
         return configs
 
     def _serialize_role_configs(self, tenant_id: str) -> list[dict[str, Any]]:
@@ -814,6 +837,7 @@ def _menu_keys_from_labels(labels: list[str]) -> set[str]:
     keys = set(_MANDATORY_MENU_KEYS)
     for label in labels:
         keys.update(_MENU_LABEL_TO_KEYS.get(label, set()))
+    keys.discard("dashboard")
     return keys
 
 

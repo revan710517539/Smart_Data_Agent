@@ -54,8 +54,8 @@ export function TrustedArtifactPanel({ taskId, compact = false }: { taskId?: str
           {error ? <div role="alert" className="text-[#b42318]">{error}</div> : null}
           {manifest ? (
             <div className="grid gap-x-3 gap-y-1 sm:grid-cols-2">
-              <EvidenceValue label="数据版本" value={String(snapshot.version || snapshot.asset_version || snapshot.content_hash || "未记录")} />
-              <EvidenceValue label="Schema" value={String(snapshot.schema_fingerprint || "未记录")} />
+              <EvidenceValue label="数据版本" value={dataVersionLabel(snapshot)} />
+              <EvidenceValue label="Schema" value={schemaLabel(snapshot)} />
               <EvidenceValue label="指标版本" value={manifest.metric_versions.length ? manifest.metric_versions.map(versionLabel).join("、") : "未绑定"} />
               <EvidenceValue label="模型版本" value={manifest.model_version || "服务端默认"} />
               <EvidenceValue label="SQL 哈希" value={manifest.sql_hash} />
@@ -77,8 +77,19 @@ function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function dataVersionLabel(snapshot: Record<string, unknown>) {
+  return String(snapshot.version || snapshot.asset_version || snapshot.content_hash || snapshot.snapshot_id || snapshot.artifact_sha256 || "未记录");
+}
+
+function schemaLabel(snapshot: Record<string, unknown>) {
+  return String(snapshot.schema_fingerprint || snapshot.schemaFingerprint || snapshot.schema_hash || snapshot.schema_version || "未记录");
+}
+
 function versionLabel(value: Record<string, unknown>) {
-  return String(value.metric_id || value.metricId || value.metric_code || value.version || "已绑定");
+  const metricId = String(value.metric_id || value.metricId || value.metric_code || value.metricCode || "").trim();
+  const version = String(value.version || value.semanticVersion || "").trim();
+  if (metricId && version) return `${metricId}@${version}`;
+  return metricId || version || "已绑定";
 }
 
 function shortHash(value: string) {

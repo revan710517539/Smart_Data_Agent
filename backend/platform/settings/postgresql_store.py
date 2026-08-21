@@ -62,7 +62,10 @@ class PostgreSQLSystemConfigStore:
     def upsert_model(self, tenant_id: str, model: dict[str, Any], updated_by: str | None = None) -> dict[str, Any]:
         normalized = _normalize_model(model)
         with self._transaction() as connection:
-            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, system_config_storage_tenant(tenant_id))
+            storage_tenant = system_config_storage_tenant(tenant_id)
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, storage_tenant, required=False)
+            if tenant_key is None:
+                tenant_key = PostgreSQLIdentityResolver.ensure_tenant(connection, storage_tenant, storage_tenant)
             stored_model_id = system_config_storage_code(tenant_id, normalized["id"])
             prefix = system_config_storage_prefix(tenant_id)
             actor_key = PostgreSQLIdentityResolver.user_id(connection, updated_by, required=False) if updated_by else None
@@ -169,7 +172,10 @@ class PostgreSQLSystemConfigStore:
     def upsert_speech_integration(self, tenant_id: str, integration: dict[str, Any], updated_by: str | None = None) -> dict[str, str]:
         normalized = _normalize_speech_integration(integration)
         with self._transaction() as connection:
-            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, system_config_storage_tenant(tenant_id))
+            storage_tenant = system_config_storage_tenant(tenant_id)
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, storage_tenant, required=False)
+            if tenant_key is None:
+                tenant_key = PostgreSQLIdentityResolver.ensure_tenant(connection, storage_tenant, storage_tenant)
             stored_integration_id = system_config_storage_code(tenant_id, normalized["id"])
             actor_key = PostgreSQLIdentityResolver.user_id(connection, updated_by, required=False) if updated_by else None
             existing = self._credential(connection, "platform_speech_integrations", "integration_code", tenant_key, stored_integration_id)

@@ -611,10 +611,17 @@ class PageDataAssetTest(unittest.TestCase):
         self.assertEqual(allowed.response[1], HTTPStatus.OK)
         self.assertEqual(allowed.response[0]["module"]["state"]["pageDataLayout"], ["multi_1"])
 
+    def test_weekly_layout_action_requires_super_admin(self) -> None:
+        denied = _ApplicationHandler(super_admin=False)
+        denied.payload = {"module_key": "weekly_report", "action": "set_page_data_layout", "payload": {"assetIds": []}}
+        denied.services.data_asset_store = SimpleNamespace(list_published_bundle=lambda _tenant_id: {"page_data": []})
+        handle_application_action_post(denied)
+        self.assertEqual(denied.response[1], HTTPStatus.FORBIDDEN)
+
     def test_postgresql_shared_state_contract_is_limited_to_page_layout_modules(self) -> None:
         self.assertTrue(_shared_page_layout_module("dashboard"))
         self.assertTrue(_shared_page_layout_module("institution_supervision"))
-        self.assertFalse(_shared_page_layout_module("weekly_report"))
+        self.assertTrue(_shared_page_layout_module("weekly_report"))
 
 
 if __name__ == "__main__":

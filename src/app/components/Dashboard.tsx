@@ -15,7 +15,9 @@ import { AnalysisUnderlineProvider, SelectableRegion } from "./weekly-report/Sel
 import { WeeklyReportSideRail } from "./weekly-report/WeeklyReportSideRail";
 import { useInstitutionCommentThread } from "./context-rail/useInstitutionCommentThread";
 import { revealContextRail } from "./context-rail/ContextSideRail";
-import { updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
+import { replaceVisualAnalysisSourceGroup, updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
+import { boundedVisualRows } from "./analysis-workspace/visualAnalysisScope";
+import { pageDataToSelection } from "./self-analysis/domain";
 import { makeAnalysisSelectionTarget, makeTextBlock, summarizeContextValue, type CommentTarget, type WeeklyInstitutionReport } from "./weekly-report/domain";
 import { PAGE_DATA_PAGE_GUTTER_CLASS, PageDataModeToggle, PageDataVisualizationModules, usePageDataComposer, type PageDataComposerController } from "./page-data/PageDataComposer";
 import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
@@ -89,7 +91,15 @@ export function Dashboard() {
         visualization_types: pageData.visualTypes,
       },
     });
-  }, [dashboardReportId, pageData.visibleAssets, pageData.visualTypes, selectedInstitution, tenantId]);
+    replaceVisualAnalysisSourceGroup("multi-institution-analysis", "page-data", pageData.visibleAssets.map((asset) => ({
+      id: asset.id,
+      label: asset.name,
+      tables: [pageDataToSelection(asset) as unknown as Record<string, unknown>],
+      question: asset.name,
+      summary: asset.sourceTableName || asset.name,
+      rows: boundedVisualRows(pageData.rowsById[asset.id]?.rows),
+    })));
+  }, [dashboardReportId, pageData.rowsById, pageData.visibleAssets, pageData.visualTypes, selectedInstitution, tenantId]);
 
   useEffect(() => {
     setAnalysisTarget(null);

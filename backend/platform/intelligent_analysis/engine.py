@@ -115,7 +115,8 @@ class IntelligentAnalysisEngine:
 
     def analyze(self, request: IntelligentAnalysisRequest, planning: dict[str, Any]) -> dict[str, Any]:
         skill_name = _skill_label(request)
-        fallback_conclusions = self._build_conclusions(request, skill_name)
+        brief = _is_brief_follow_up(request)
+        fallback_conclusions = self._build_brief_conclusions(request) if brief else self._build_conclusions(request, skill_name)
         fallback_summary = "\n".join(fallback_conclusions)
         visualization_suggestions = list(planning.get("visualization_suggestions") or self._build_visualization_suggestions(request))
         query_rows = request.query_result.get("data") if isinstance(request.query_result.get("data"), list) else []
@@ -137,6 +138,16 @@ class IntelligentAnalysisEngine:
                 "message": "实际查询返回 0 行，跳过无数据情况下的模型结论调用。",
                 "prompt_template_id": ANALYSIS_PROMPT_TEMPLATE_ID,
                 "reason": "empty_query_result",
+            }
+        elif brief:
+            # Rail follow-up already has the chart rows. Skip the 6-section
+            # essay so the right rail returns in seconds, not a full article.
+            model_invocation = {
+                "status": "skipped",
+                "callable": False,
+                "message": "右栏追问改为短结论和聚焦图表，跳过长文模型生成。",
+                "prompt_template_id": "intelligent_analysis.rail_brief.v1",
+                "reason": "brief_visual_follow_up",
             }
         elif not isinstance(request.model, dict) or not request.model.get("id"):
             model_invocation = {
@@ -363,6 +374,42 @@ LIMIT 50;"""
             policy_note,
             "最后结合业务口径输出结论、风险提示和后续动作。",
         ]
+
+    def _build_brief_conclusions(self, request: IntelligentAnalysisRequest) -> list[str]:
+        rows = [row for row in (request.query_result.get("data") or []) if isinstance(row, dict)]
+        if not rows:
+            return ["当前没有可分析的返回数据，请检查筛选或数据源。"]
+        plan_metrics = _safe_list(request.analysis_plan.get("metrics"))
+        plan_dims = _safe_list(request.analysis_plan.get("dimensions"))
+        inferred_metrics, inferred_dims = _infer_fields_from_rows(rows)
+        metrics = [item for item in plan_metrics if item in rows[0]] or inferred_metrics
+        dimensions = [item for item in plan_dims if item in rows[0]] or inferred_dims
+        time_dim = next((item for item in dimensions if _is_time_field_name(item)), "")
+        category_dim = next((item for item in dimensions if item != time_dim), "")
+        labels = _field_labels_from_rows(rows)
+        highlights: list[str] = []
+        for metric in metrics[:2]:
+            metric_label = _human_field_label(metric, labels)
+            if time_dim:
+                highlights.extend(_brief_time_highlights(rows, metric, metric_label, time_dim, category_dim, labels))
+            else:
+                highlights.extend(_brief_rank_highlights(rows, metric, metric_label, category_dim or (dimensions[0] if dimensions else ""), labels))
+        if not highlights:
+            return [f"已返回 {len(rows)} 行数据，但没有可比较的数值字段。"]
+        conclusion = "；".join(highlights[:2]) + "。"
+        coverage = []
+        if category_dim:
+            groups = {str(row.get(category_dim) or "").strip() for row in rows if str(row.get(category_dim) or "").strip()}
+            if groups:
+                coverage.append(f"覆盖{_human_field_label(category_dim, labels)} {'、'.join(list(groups)[:4])}")
+        if time_dim:
+            points = sorted({str(row.get(time_dim) or "").strip() for row in rows if str(row.get(time_dim) or "").strip()})
+            if points:
+                time_label = _human_field_label(time_dim, labels)
+                coverage.append(f"{time_label} {points[0]} 至 {points[-1]}" if len(points) > 1 else f"{time_label} {points[0]}")
+        coverage.append(f"共 {len(rows)} 个数据点")
+        description = "。".join(coverage) + "。"
+        return [conclusion, description]
 
     def _build_conclusions(self, request: IntelligentAnalysisRequest, skill_name: str) -> list[str]:
         rows = request.query_result.get("data") if isinstance(request.query_result.get("data"), list) else []
@@ -805,6 +852,140 @@ def _skill_label(request: IntelligentAnalysisRequest) -> str:
     if request.skill:
         names.append(str(request.skill.get("name") or "").strip())
     return " + ".join(dict.fromkeys(name for name in names if name))
+
+
+def _is_brief_follow_up(request: IntelligentAnalysisRequest) -> bool:
+    policy = request.context_policy if isinstance(request.context_policy, dict) else {}
+    surface = request.surface_context if isinstance(request.surface_context, dict) else {}
+    if str(policy.get("resultFormat") or policy.get("result_format") or "").strip() == "brief_visual":
+        return True
+    return str(surface.get("visual_analysis_scope") or "").strip() in {"chart", "page"}
+
+
+def _infer_fields_from_rows(rows: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+    if not rows:
+        return [], []
+    skip = {"_visual_source", "fieldLabels", "field_labels", "raw"}
+    keys = [str(key) for key in rows[0].keys() if str(key) not in skip and not str(key).startswith("_")]
+    metrics: list[str] = []
+    dimensions: list[str] = []
+    for key in keys:
+        numeric = sum(1 for row in rows if _safe_number(row.get(key)) is not None)
+        if numeric >= max(1, (len(rows) + 1) // 2):
+            metrics.append(key)
+        else:
+            dimensions.append(key)
+    time_dims = [item for item in dimensions if _is_time_field_name(item)]
+    dimensions = time_dims + [item for item in dimensions if item not in time_dims]
+    return metrics, dimensions
+
+
+def _field_labels_from_rows(rows: list[dict[str, Any]]) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for row in rows[:8]:
+        raw = row.get("fieldLabels") or row.get("field_labels")
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                name = str(value or "").strip()
+                if name:
+                    labels[str(key)] = name
+    return labels
+
+
+def _is_time_field_name(name: str) -> bool:
+    lowered = str(name or "").strip().lower()
+    return any(token in lowered for token in ("month", "date", "week", "year", "day", "time", "月份", "日期", "周"))
+
+
+def _brief_time_highlights(
+    rows: list[dict[str, Any]],
+    metric: str,
+    metric_label: str,
+    time_dim: str,
+    category_dim: str,
+    labels: dict[str, str],
+) -> list[str]:
+    groups: dict[str, list[tuple[str, float]]] = {}
+    for row in rows:
+        value = _safe_number(row.get(metric))
+        time_value = str(row.get(time_dim) or "").strip()
+        if value is None or not time_value:
+            continue
+        category = str(row.get(category_dim) or "").strip() if category_dim else ""
+        groups.setdefault(category or "总体", []).append((time_value, value))
+    highlights: list[str] = []
+    for category, points in list(groups.items())[:3]:
+        ordered = sorted(points, key=lambda item: item[0])
+        start_label, start_value = ordered[0]
+        end_label, end_value = ordered[-1]
+        prefix = f"{category}的" if category_dim and category not in {"", "总体"} else ""
+        if start_label == end_label:
+            highlights.append(f"{prefix}{metric_label}在{end_label}为{_format_brief_number(end_value, metric)}")
+            continue
+        direction = "升至" if end_value > start_value else "降至" if end_value < start_value else "仍为"
+        highlights.append(
+            f"{prefix}{metric_label}从{start_label}的{_format_brief_number(start_value, metric)}{direction}{end_label}的{_format_brief_number(end_value, metric)}"
+        )
+    return highlights
+
+
+def _brief_rank_highlights(
+    rows: list[dict[str, Any]],
+    metric: str,
+    metric_label: str,
+    category_dim: str,
+    labels: dict[str, str],
+) -> list[str]:
+    scored = []
+    for row in rows:
+        value = _safe_number(row.get(metric))
+        if value is None:
+            continue
+        name = str(row.get(category_dim) or "").strip() if category_dim else ""
+        scored.append((name or "该分组", value))
+    if not scored:
+        return []
+    top_name, top_value = max(scored, key=lambda item: item[1])
+    bottom_name, bottom_value = min(scored, key=lambda item: item[1])
+    if top_name == bottom_name or top_value == bottom_value:
+        return [f"{metric_label}为{_format_brief_number(top_value, metric)}"]
+    dimension_label = _human_field_label(category_dim, labels) if category_dim else "分组"
+    return [
+        f"{metric_label}最高为{dimension_label}{top_name} {_format_brief_number(top_value, metric)}，最低为{bottom_name} {_format_brief_number(bottom_value, metric)}"
+    ]
+
+
+def _human_field_label(name: str, labels: dict[str, str] | None = None) -> str:
+    if labels and labels.get(name):
+        return str(labels[name])
+    defaults = {
+        "m1_overdue_rate": "M1逾期率",
+        "loan_balance": "在贷余额",
+        "loan_amount": "放款金额",
+        "drawdown_rate": "动支率",
+        "conversion_rate": "转化率",
+        "active_customer_count": "活跃客户数",
+        "product_line": "产品线",
+        "branch_name": "机构",
+        "month": "月份",
+        "customer_segment": "客群",
+    }
+    return defaults.get(str(name or ""), str(name or ""))
+
+
+def _format_brief_number(value: float, metric_name: str) -> str:
+    lowered = str(metric_name or "").lower()
+    rate_like = any(token in lowered for token in ("rate", "ratio", "逾期", "占比", "转化", "yield"))
+    if rate_like and abs(value) <= 2:
+        percent = value * 100 if abs(value) <= 1 else value
+        return f"{percent:.2f}%"
+    if abs(value) >= 1e8:
+        return f"{value / 1e8:.1f}亿"
+    if abs(value) >= 1e4:
+        return f"{value / 1e4:.1f}万"
+    if abs(value) >= 100:
+        return f"{value:,.0f}"
+    return f"{value:,.2f}"
 
 
 def _build_model_context_brief(request: IntelligentAnalysisRequest) -> str:

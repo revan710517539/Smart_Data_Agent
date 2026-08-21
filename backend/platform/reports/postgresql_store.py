@@ -86,17 +86,21 @@ class PostgreSQLReportStore:
                 )
                 existing = cursor.fetchone()
                 if existing and _value(existing, "owner_user_id", 0) != actor_key:
-                    raise PermissionError("saved_analysis_owner_required")
+                    existing_tags = _json_value(_value(existing, "tags", 1), [])
+                    was_weekly = isinstance(existing_tags, list) and _WEEKLY_REPORT_TAG in existing_tags
+                    if not (was_weekly and not normalized["weeklyReportEligible"]):
+                        raise PermissionError("saved_analysis_owner_required")
+                    actor_key = _value(existing, "owner_user_id", 0)
                 tags = _json_value(_value(existing, "tags", 1), []) if existing else []
                 tags = [str(tag) for tag in tags if isinstance(tag, str)] if isinstance(tags, list) else []
                 tags = [tag for tag in tags if not tag.startswith(_PRESENTATION_CONFIG_TAG_PREFIX)]
                 if normalized["visualizations"]:
                     tags.append(_PRESENTATION_CONFIG_TAG_PREFIX + _json(normalized["visualizations"]))
+                tags = [
+                    tag for tag in tags
+                    if tag != _WEEKLY_REPORT_TAG and not tag.startswith(_WEEKLY_REPORT_SAVED_AT_PREFIX)
+                ]
                 if normalized["weeklyReportEligible"]:
-                    tags = [
-                        tag for tag in tags
-                        if tag != _WEEKLY_REPORT_TAG and not tag.startswith(_WEEKLY_REPORT_SAVED_AT_PREFIX)
-                    ]
                     tags.extend([
                         _WEEKLY_REPORT_TAG,
                         f'{_WEEKLY_REPORT_SAVED_AT_PREFIX}{normalized["weeklyReportSavedAt"]}',
@@ -113,7 +117,7 @@ class PostgreSQLReportStore:
                     """,
                     (tenant_key,normalized["id"],task_key,actor_key,normalized["title"],normalized["visibility"],_json(tags),actor_key),
                 )
-        saved = next((item for item in self.list_analysis_results(tenant_id, updated_by) if item["id"] == normalized["id"]), None)
+        saved = self.get_analysis_result(tenant_id, normalized["id"])
         if saved is None:
             raise RuntimeError("saved_analysis_persistence_failed")
         return saved

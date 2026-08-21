@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useReducer, useRef, useState, type PointerEvent } from "react";
 import { AudioLines, Bot, BrainCircuit, Database, ExternalLink, Eye, History, ListChecks, Mic, Send, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react";
 import { useLocation, useNavigate } from "react-router";
 import { fetchPlatformCapabilities } from "../../services/capabilitiesApi";
@@ -48,6 +48,12 @@ type NavigationAction = AgentActionDefinition & { path?: string };
 type SupervisorVoiceMode = "manual" | "realtime";
 
 const historyStorageKey = "smart_data_agent_agent_supervisor_conversations_v1";
+const orbOffsetStorageKey = "smart_data_agent_supervisor_orb_offset_v1";
+const orbSizePx = 48;
+const orbDefaultInsetPx = 24;
+const orbDragThresholdPx = 4;
+const orbSectorRadiusCm = 5;
+const orbSectorRadiusPx = (orbSectorRadiusCm * 96) / 2.54;
 const supervisorSelector = "[data-agent-supervisor]";
 const highImpactTerms = /删除|保存|提交|发布|启用|停用|退出|确认删除|确认保存|导入|上传|下载|发送|取消任务/;
 // The main self-analysis screen retains its independent 5-second behavior.
@@ -84,7 +90,7 @@ const navigationActions = [
 export function AgentSupervisor() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { currentTenantRoles, selectedInstitution, tenantId, userId } = usePlatformContext();
+  const { currentTenantRoles, institutions, selectedInstitution, tenantId, userId } = usePlatformContext();
   const [open, setOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [input, setInput] = useState("");
@@ -113,6 +119,9 @@ export function AgentSupervisor() {
   const voiceRenderedRef = useRef("");
   const voiceSegmentIdRef = useRef(0);
   const voiceSilenceTimerRef = useRef<number | null>(null);
+  const [orbOffset, setOrbOffset] = useState(readOrbOffset);
+  const [orbDragging, setOrbDragging] = useState(false);
+  const orbDragRef = useRef<{ pointerId: number; startX: number; startY: number; startRight: number; startBottom: number; moved: boolean } | null>(null);
   const [, refreshActions] = useReducer((value) => value + 1, 0);
 
   useEffect(() => agentActionRegistry.subscribe(refreshActions), []);
@@ -137,12 +146,15 @@ export function AgentSupervisor() {
     };
   }, [open, tenantId, userId]);
   useEffect(() => {
-    const cleanups = navigationActions.map((action) => agentActionRegistry.register({
+    const visibleActions = institutions.length < 2
+      ? navigationActions.filter((action) => action.id !== "dashboard")
+      : navigationActions;
+    const cleanups = visibleActions.map((action) => agentActionRegistry.register({
       ...action,
       execute: () => navigate(action.path),
     }));
     return () => cleanups.forEach((cleanup) => cleanup());
-  }, [navigate]);
+  }, [institutions.length, navigate]);
 
   // Keep the conversation focused on the latest exchange. This runs for the
   // user's question as well as every asynchronous supervisor response.
@@ -465,6 +477,42 @@ export function AgentSupervisor() {
   submitRef.current = submit;
 
   useEffect(() => () => stopVoiceInput(), []);
+  useEffect(() => {
+    const onResize = () => setOrbOffset((current) => clampOrbOffset(current.right, current.bottom));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const moveOrb = (event: PointerEvent<HTMLButtonElement>) => {
+    const drag = orbDragRef.current;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const nextRight = drag.startRight + (drag.startX - event.clientX);
+    const nextBottom = drag.startBottom + (drag.startY - event.clientY);
+    if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) >= orbDragThresholdPx) {
+      drag.moved = true;
+      setOrbDragging(true);
+    }
+    if (drag.moved) setOrbOffset(clampOrbOffset(nextRight, nextBottom));
+  };
+
+  const endOrbDrag = (event: PointerEvent<HTMLButtonElement>) => {
+    const drag = orbDragRef.current;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    const moved = drag.moved;
+    const next = clampOrbOffset(drag.startRight + (drag.startX - event.clientX), drag.startBottom + (drag.startY - event.clientY));
+    orbDragRef.current = null;
+    setOrbDragging(false);
+    if (moved) {
+      setOrbOffset(next);
+      persistOrbOffset(next);
+      return;
+    }
+    trackInteraction({ eventName: "assistant_robot_click", resourceType: "agent_supervisor", extension: { open: !open } });
+    if (open) stopVoiceInput();
+    setOpen((value) => !value);
+    window.setTimeout(() => inputRef.current?.focus(), 80);
+  };
 
   return (
     <div
@@ -479,7 +527,7 @@ export function AgentSupervisor() {
       }}
     >
       {open && (
-        <div className={`pointer-events-auto absolute bottom-[88px] right-6 flex h-[min(640px,calc(100vh-112px))] max-w-[calc(100vw-32px)] overflow-hidden rounded-2xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/15 ${historyOpen ? "w-[min(600px,calc(100vw-32px))]" : "w-[min(440px,calc(100vw-32px))]"}`} role="dialog" aria-label="Agent 总管">
+        <div className={`pointer-events-auto absolute flex h-[min(640px,calc(100vh-112px))] max-w-[calc(100vw-32px)] overflow-hidden rounded-2xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/15 ${historyOpen ? "w-[min(600px,calc(100vw-32px))]" : "w-[min(440px,calc(100vw-32px))]"}`} role="dialog" aria-label="Agent 总管" style={{ right: orbOffset.right, bottom: orbOffset.bottom + orbSizePx + 16 }}>
           {historyOpen && (
             <aside className="flex w-40 shrink-0 flex-col border-r border-[#e5e5ea] bg-[#fafbfc] p-2">
               <div className="mb-2 flex items-center justify-between text-[11px] text-[#636366]"><span>历史对话</span><button type="button" onClick={() => setHistoryOpen(false)} aria-label="关闭历史" className="rounded p-0.5 hover:bg-white"><X className="h-3 w-3" /></button></div>
@@ -515,7 +563,34 @@ export function AgentSupervisor() {
           </section>
         </div>
       )}
-      <button type="button" onClick={() => { trackInteraction({ eventName: "assistant_robot_click", resourceType: "agent_supervisor", extension: { open: !open } }); if (open) stopVoiceInput(); setOpen((value) => !value); window.setTimeout(() => inputRef.current?.focus(), 80); }} aria-label="打开 Agent 总管" aria-expanded={open} className="pointer-events-auto absolute bottom-6 right-6 flex h-12 w-12 items-center justify-center rounded-full bg-[#1d1d1f] text-white shadow-xl shadow-black/20 transition-colors hover:bg-[#2c2c2e]"><Bot className="h-5 w-5" /><span className="absolute right-0 top-0 h-3 w-3 rounded-full border-2 border-white bg-[#34c759]" /></button>
+      <button
+        type="button"
+        aria-label="打开 Agent 总管"
+        aria-expanded={open}
+        aria-grabbed={orbDragging}
+        data-agent-supervisor-orb="true"
+        data-orb-sector-cm={orbSectorRadiusCm}
+        className={`pointer-events-auto absolute flex h-12 w-12 items-center justify-center rounded-full bg-[#1d1d1f] text-white shadow-xl shadow-black/20 transition-colors hover:bg-[#2c2c2e] ${orbDragging ? "cursor-grabbing" : "cursor-grab"}`}
+        style={{ right: orbOffset.right, bottom: orbOffset.bottom, touchAction: "none" }}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          orbDragRef.current = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            startRight: orbOffset.right,
+            startBottom: orbOffset.bottom,
+            moved: false,
+          };
+        }}
+        onPointerMove={moveOrb}
+        onPointerUp={endOrbDrag}
+        onPointerCancel={endOrbDrag}
+      >
+        <Bot className="h-5 w-5" />
+        <span className="absolute right-0 top-0 h-3 w-3 rounded-full border-2 border-white bg-[#34c759]" />
+      </button>
     </div>
   );
 }
@@ -526,6 +601,33 @@ function welcomeMessage(institution: string): Message {
 
 function readHistory(): StoredConversation[] {
   try { return JSON.parse(window.localStorage.getItem(historyStorageKey) || "[]") as StoredConversation[]; } catch { return []; }
+}
+
+function readOrbOffset() {
+  try {
+    const stored = window.sessionStorage.getItem(orbOffsetStorageKey);
+    const raw = stored ? JSON.parse(stored) as { right?: unknown; bottom?: unknown } : null;
+    if (raw && typeof raw.right === "number" && typeof raw.bottom === "number") return clampOrbOffset(raw.right, raw.bottom);
+  } catch {
+    /* keep default inset */
+  }
+  return clampOrbOffset(orbDefaultInsetPx, orbDefaultInsetPx);
+}
+
+function persistOrbOffset(offset: { right: number; bottom: number }) {
+  window.sessionStorage.setItem(orbOffsetStorageKey, JSON.stringify(offset));
+}
+
+function clampOrbOffset(right: number, bottom: number) {
+  const radius = orbSectorRadiusPx;
+  let nextRight = Math.min(Math.max(0, right), radius);
+  let nextBottom = Math.min(Math.max(0, bottom), radius);
+  const distance = Math.hypot(nextRight, nextBottom);
+  if (distance > radius && distance > 0) {
+    nextRight = (nextRight / distance) * radius;
+    nextBottom = (nextBottom / distance) * radius;
+  }
+  return { right: nextRight, bottom: nextBottom };
 }
 
 function QuickAction({ icon: Icon, label, onClick }: { icon: LucideIcon; label: string; onClick: () => void }) {

@@ -55,7 +55,7 @@ def handle_application_action_post(handler: Any) -> None:
                 action_payload["task"] = task_payload
         if action == "set_page_data_layout" and module_key in {"dashboard", "weekly_report", "institution_supervision"}:
             action_payload = dict(action_payload or {})
-            if module_key in {"dashboard", "institution_supervision"} and not handler.services.permission_broker.enforcer.has_super_admin_role(
+            if not handler.services.permission_broker.enforcer.has_super_admin_role(
                 context.user_id, context.tenant_id,
             ):
                 raise PermissionError("global_super_admin_required_for_page_layout")
@@ -99,8 +99,22 @@ def handle_application_action_post(handler: Any) -> None:
                 source_id = str(note.get("sourceAssetId") or "").strip()
                 if source_id and source_id not in allowed_ids:
                     raise PermissionError("page_data_note_asset_unavailable")
+            existing_state = handler.services.application_store.get_module(
+                context.tenant_id, module_key, actor_user_id=context.user_id
+            ).get("state") or {}
+            action_payload["notes"] = _merge_page_data_notes(
+                existing_state.get("pageDataNotes") or [],
+                notes or [],
+                context.user_id,
+                handler.services.permission_broker.enforcer.has_super_admin_role(context.user_id, context.tenant_id),
+            )
         if module_key == "self_analysis" and action == "upsert_visual_report":
-            action_payload = _bind_visual_report_payload(handler, context, action_payload or {})
+            action_payload = _authorize_visual_report_upsert(
+                handler, context, _bind_visual_report_payload(handler, context, action_payload or {})
+            )
+        if module_key == "self_analysis" and action == "delete_visual_report":
+            action_payload = dict(action_payload or {})
+            _authorize_visual_report_delete(handler, context, str(action_payload.get("reportId") or action_payload.get("id") or ""))
         handler._require_application_permission(context, "execute")
         result = handler.services.application_store.run_action(
             context.tenant_id,
@@ -226,3 +240,77 @@ def _bind_visual_report_payload(handler: Any, context: Any, payload: dict[str, A
             },
         })
     return {**payload, "report": {**report, "cards": bound_cards}}
+
+
+def _merge_page_data_notes(
+    existing: list[Any],
+    requested: list[Any],
+    actor_user_id: str,
+    can_override: bool,
+) -> list[dict[str, Any]]:
+    actor = str(actor_user_id or "").strip()
+    existing_notes = [item for item in existing if isinstance(item, dict) and str(item.get("id") or "").strip()]
+    existing_by_id = {str(item.get("id") or ""): item for item in existing_notes}
+    requested_ids: set[str] = set()
+    merged: list[dict[str, Any]] = []
+    for item in requested:
+        if not isinstance(item, dict):
+            continue
+        note_id = str(item.get("id") or "").strip()
+        if not note_id or note_id in requested_ids:
+            continue
+        requested_ids.add(note_id)
+        previous = existing_by_id.get(note_id)
+        owner = str((previous or item).get("createdByUserId") or "").strip()
+        if previous and owner and owner != actor and not can_override:
+            merged.append(dict(previous))
+            continue
+        merged.append({**item, "createdByUserId": owner or actor})
+    for previous in existing_notes:
+        note_id = str(previous.get("id") or "").strip()
+        if note_id in requested_ids:
+            continue
+        owner = str(previous.get("createdByUserId") or "").strip()
+        if owner == actor or can_override:
+            continue
+        merged.append(dict(previous))
+    return merged
+
+
+def _visual_reports_from_module(handler: Any, context: Any) -> list[dict[str, Any]]:
+    module = handler.services.application_store.get_module(
+        context.tenant_id, "self_analysis", actor_user_id=context.user_id
+    )
+    reports = (module.get("state") or {}).get("visualReports") or []
+    return [item for item in reports if isinstance(item, dict)]
+
+
+def _authorize_visual_report_upsert(handler: Any, context: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    report = payload.get("report")
+    if not isinstance(report, dict):
+        return payload
+    report_id = str(report.get("id") or "").strip()
+    existing = next((item for item in _visual_reports_from_module(handler, context) if str(item.get("id") or "") == report_id), None)
+    if existing is None:
+        return payload
+    owner = str(existing.get("ownerUserId") or "").strip()
+    if owner in {"", context.user_id}:
+        return payload
+    requested_destinations = report.get("destinations") if isinstance(report.get("destinations"), list) else []
+    existing_destinations = existing.get("destinations") if isinstance(existing.get("destinations"), list) else []
+    removing_weekly = "weekly" in existing_destinations and "weekly" not in [str(item) for item in requested_destinations]
+    if removing_weekly and handler.services.permission_broker.enforcer.can_manage_shared_visual(
+        context.user_id, context.tenant_id, owner
+    ):
+        return {**payload, "report": {**existing, "destinations": [str(item) for item in requested_destinations if str(item)]}}
+    raise PermissionError("visual_report_owner_required")
+
+
+def _authorize_visual_report_delete(handler: Any, context: Any, report_id: str) -> None:
+    existing = next((item for item in _visual_reports_from_module(handler, context) if str(item.get("id") or "") == report_id), None)
+    if existing is None:
+        return
+    owner = str(existing.get("ownerUserId") or "").strip()
+    if owner in {"", context.user_id}:
+        return
+    raise PermissionError("visual_report_owner_required")

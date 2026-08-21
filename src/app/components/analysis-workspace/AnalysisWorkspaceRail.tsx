@@ -1,21 +1,28 @@
 import { useEffect, useRef, useState } from "react";
-import { GitBranch, GitMerge, LoaderCircle, Maximize2, Minimize2, Send, ShieldCheck, Sparkles } from "lucide-react";
+import { waitForSelfAnalysis, type AnalysisProgressStep } from "../../services/analysisApi";
+import { createClientUuid } from "../../utils/clientUuid";
+import { AnalysisProgressPanel } from "../self-analysis/AnalysisProgressPanel";
+import { WorkspaceFollowUpChart, followUpVisualFromRefs } from "./WorkspaceFollowUpChart";
+import { GitBranch, GitMerge, LoaderCircle, Maximize2, Minimize2, Send, Sparkles } from "lucide-react";
 import { useLocation } from "react-router";
 import { usePlatformContext } from "../../platform/PlatformContext";
 import { apiErrorMessage } from "../../services/apiClient";
 import {
-  appendAnalysisTurn,
   createAnalysisBranch,
   ensureAnalysisWorkspace,
   fetchAnalysisWorkspace,
   mergeAnalysisThreads,
-  runWorkspaceAnalysis,
   type AnalysisThread,
   type AnalysisWorkspace,
   type AnalysisWorkspaceContext,
   type SelectedDataPoint,
 } from "../../services/analysisWorkspaceApi";
 import { TrustedArtifactPanel } from "./TrustedArtifactPanel";
+import {
+  mergeVisualAnalysisSourceGroups,
+  pageVisualAnalysisContext,
+  type VisualAnalysisSource,
+} from "./visualAnalysisScope";
 
 type PageDefinition = { pageKey: string; title: string; prompt: string };
 
@@ -40,8 +47,24 @@ export const analysisWorkspaceContextEvent = "smart-data-agent:analysis-workspac
 const latestPageContexts = new Map<string, Record<string, unknown>>();
 
 export function updateAnalysisWorkspacePageContext(pageKey: string, context: Record<string, unknown>) {
-  latestPageContexts.set(pageKey, context);
-  window.dispatchEvent(new CustomEvent(analysisWorkspaceContextEvent, { detail: { pageKey, context } }));
+  const previous = latestPageContexts.get(pageKey) || {};
+  const next = { ...context };
+  if (!("visual_analysis_sources" in context) && Array.isArray(previous.visual_analysis_sources)) {
+    next.visual_analysis_sources = previous.visual_analysis_sources;
+    const nextTables = Array.isArray(next.selected_data_tables) ? next.selected_data_tables : [];
+    const previousTables = Array.isArray(previous.selected_data_tables) ? previous.selected_data_tables : [];
+    if (!nextTables.length && previousTables.length) next.selected_data_tables = previous.selected_data_tables;
+  }
+  latestPageContexts.set(pageKey, next);
+  window.dispatchEvent(new CustomEvent(analysisWorkspaceContextEvent, { detail: { pageKey, context: next } }));
+}
+
+export function replaceVisualAnalysisSourceGroup(pageKey: string, group: string, sources: VisualAnalysisSource[]) {
+  const previous = latestPageContexts.get(pageKey) || {};
+  updateAnalysisWorkspacePageContext(pageKey, {
+    ...previous,
+    ...pageVisualAnalysisContext(mergeVisualAnalysisSourceGroups(previous.visual_analysis_sources, group, sources)),
+  });
 }
 
 export function revealAnalysisWorkspace(selectedDataPoint?: SelectedDataPoint, surface: "context-rail" | "agent-supervisor" = "context-rail") {
@@ -61,16 +84,38 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
   const [notice, setNotice] = useState("");
   const [selectedMergeIds, setSelectedMergeIds] = useState<string[]>([]);
   const [pageContext, setPageContext] = useState<Record<string, unknown>>({});
+  const [pendingQuestion, setPendingQuestion] = useState("");
+  const [progressSteps, setProgressSteps] = useState<AnalysisProgressStep[]>([]);
   const scopeRef = useRef("");
+  const pageScopeRef = useRef(false);
+  const waitAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => { waitAbortRef.current?.abort(); }, []);
 
   useEffect(() => {
-    if (revealedDataPoint) setSelectedDataPoint(revealedDataPoint);
+    const incomingBound = isChartBoundDataPoint(revealedDataPoint);
+    if (pageScopeRef.current && !incomingBound) return;
+    if (incomingBound) {
+      pageScopeRef.current = false;
+      setSelectedDataPoint(revealedDataPoint);
+      return;
+    }
+    setSelectedDataPoint((current) => {
+      if (isChartBoundDataPoint(current) && current?.targetId && current.targetId === revealedDataPoint?.targetId) return current;
+      return revealedDataPoint;
+    });
   }, [revealedDataPoint]);
 
   useEffect(() => {
     const reveal = (event: Event) => {
       const detail = (event as CustomEvent<{ selectedDataPoint?: SelectedDataPoint }>).detail;
-      setSelectedDataPoint(detail?.selectedDataPoint);
+      if (!detail?.selectedDataPoint) {
+        pageScopeRef.current = true;
+        setSelectedDataPoint(undefined);
+        return;
+      }
+      pageScopeRef.current = false;
+      setSelectedDataPoint(detail.selectedDataPoint);
     };
     window.addEventListener(analysisWorkspaceRevealEvent, reveal);
     return () => window.removeEventListener(analysisWorkspaceRevealEvent, reveal);
@@ -128,11 +173,32 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
     return thread.thread_id === activeThread?.thread_id || (!duplicates.some((candidate) => candidate.thread_id === activeThread?.thread_id) && duplicates[0]?.thread_id === thread.thread_id && index >= 0);
   });
   const analysisTitle = selectedDataPoint?.label || definition.title;
-  const selectedPointValues = objectValue(selectedDataPoint?.values);
-  const selectedPointTables = objectArray(selectedPointValues.selected_data_tables);
-  const effectivePageContext = selectedPointTables.length
-    ? { ...pageContext, selected_data_tables: selectedPointTables }
-    : pageContext;
+  const chartValues = objectValue(selectedDataPoint?.values);
+  const pageSources = objectArray(pageContext.visual_analysis_sources);
+  const chartFollowUp = Boolean(selectedDataPoint?.targetId && chartValues.chart_bound_source);
+  const selectedTables = chartFollowUp
+    ? boundVisualAnalysisTables(selectedDataPoint, pageContext)
+    : (objectArray(pageContext.selected_data_tables).length ? objectArray(pageContext.selected_data_tables) : pageSources.flatMap((source) => objectArray(source.tables)));
+  const parentTaskId = chartFollowUp
+    ? (stringValue(chartValues.analysis_task_id) || stringValue(pageContext.analysis_task_id))
+    : "";
+  const sourceQuestion = chartFollowUp
+    ? stringValue(chartValues.question)
+    : pageSources.map((source) => stringValue(source.question) || stringValue(source.label)).filter(Boolean).join("；");
+  const chartSnapshot = objectValue(chartValues.dataset_snapshot);
+  const hasChartSnapshot = Boolean(
+    chartSnapshot.id || chartSnapshot.version || chartSnapshot.content_hash || chartSnapshot.schema_fingerprint,
+  );
+  const effectivePageContext: Record<string, unknown> = {
+    ...pageContext,
+    visual_analysis_scope: chartFollowUp ? "chart" : "page",
+    chart_bound_source: chartFollowUp,
+    selected_data_tables: selectedTables,
+    dataset_snapshot: chartFollowUp && hasChartSnapshot ? chartSnapshot : pageContext.dataset_snapshot,
+    ...(parentTaskId ? { parent_task_id: parentTaskId } : { parent_task_id: undefined }),
+    ...(sourceQuestion ? { follow_up_source_question: sourceQuestion } : {}),
+    selected_data_point: chartFollowUp ? selectedDataPoint : undefined,
+  };
 
   const reload = async () => {
     if (!workspace) return;
@@ -158,66 +224,83 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
   const submit = async () => {
     const prompt = question.trim();
     if (!prompt || !activeThread || busy) return;
-    const selectedTables = objectArray(effectivePageContext.selected_data_tables);
-    if (definition.pageKey === "self-analysis" && selectedTables.length === 0) {
+    if (!selectedTables.length && !chartFollowUp && !parentTaskId && !pageSources.length && definition.pageKey === "self-analysis") {
       setNotice("请先在智能分析主输入区选择当前机构的数据表，再发起线程追问。");
       return;
     }
     setBusy(true);
     setNotice("");
+    setPendingQuestion(prompt);
+    setProgressSteps([{
+      step_code: "request_queued",
+      sequence_no: 0,
+      status: "running",
+      output_refs: [{ label: "理解问题", detail: chartFollowUp ? "正在装载当前图表绑定的数据。" : "正在装载当前页面全部可视化数据。" }],
+    }]);
+    waitAbortRef.current?.abort();
+    const controller = new AbortController();
+    waitAbortRef.current = controller;
     try {
-      const result = await runWorkspaceAnalysis(prompt, {
-        ...effectivePageContext,
-        workspace_id: workspace?.workspace_id,
-        thread_id: activeThread.thread_id,
-        page_key: definition.pageKey,
-        selected_data_point: selectedDataPoint,
-        model_application_module: "intelligent_analysis_reasoning",
-        analysis_skill: objectWithFallback(pageContext.analysis_skill, {
-          id: `page-${definition.pageKey}`,
-          name: `${definition.title}页面追问`,
-          category: "场景",
-          description: `只基于${definition.title}当前筛选、受治理数据与证据进行追问分析。`,
-        }),
-        analysis_context_skills: objectArray(pageContext.analysis_context_skills).length
-          ? objectArray(pageContext.analysis_context_skills)
-          : [{
-              id: `page-${definition.pageKey}`,
-              name: `${definition.title}页面追问`,
-              category: "场景",
-              description: `只基于${definition.title}当前筛选、受治理数据与证据进行追问分析。`,
-            }],
-        analysis_policy: {
-          engine: "IntelligentAnalysisEngine",
-          resultDelivery: "data_first",
-          conflictStrategy: "executed_query_evidence_overrides_page_context",
-          detailAnalysisOrder: "selected_table_full_dimensions_metrics_then_related_detail_table",
-          missingDetailMessage: "没有更细粒度数据，请关联明细数据",
-          ...objectValue(effectivePageContext.analysis_policy),
+      const result = await waitForSelfAnalysis({
+        question: prompt,
+        tenantId,
+        userId,
+        requestId: createClientUuid(),
+        signal: controller.signal,
+        pollIntervalMs: 800,
+        onRun: (run) => setProgressSteps(run.progress_steps?.length ? run.progress_steps : [{
+          step_code: "request_queued",
+          sequence_no: 0,
+          status: run.status === "queued" ? "queued" : "running",
+          output_refs: [{ label: "创建分析任务", detail: "分析任务已进入执行队列。" }],
+        }]),
+        pageContext: {
+          ...effectivePageContext,
+          workspace_id: workspace?.workspace_id,
+          thread_id: activeThread.thread_id,
+          page_key: definition.pageKey,
+          selected_data_point: chartFollowUp ? selectedDataPoint : undefined,
+          model_application_module: "intelligent_analysis_reasoning",
+          analysis_skill: objectWithFallback(pageContext.analysis_skill, {
+            id: `page-${definition.pageKey}`,
+            name: `${definition.title}页面追问`,
+            category: "场景",
+            description: `只基于${definition.title}当前筛选、受治理数据与证据进行追问分析。`,
+          }),
+          analysis_context_skills: objectArray(pageContext.analysis_context_skills).length
+            ? objectArray(pageContext.analysis_context_skills)
+            : [{
+                id: `page-${definition.pageKey}`,
+                name: `${definition.title}页面追问`,
+                category: "场景",
+                description: `只基于${definition.title}当前筛选、受治理数据与证据进行追问分析。`,
+              }],
+          analysis_policy: {
+            engine: "IntelligentAnalysisEngine",
+            resultDelivery: "data_first",
+            conflictStrategy: "executed_query_evidence_overrides_page_context",
+            detailAnalysisOrder: "selected_table_full_dimensions_metrics_then_related_detail_table",
+            missingDetailMessage: "没有更细粒度数据，请关联明细数据",
+            ...objectValue(effectivePageContext.analysis_policy),
+            resultFormat: "brief_visual",
+          },
         },
-      }, { tenantId, userId });
+      });
       const returnedAssetContext = objectValue(result.asset_context);
       if (returnedAssetContext.detail_table_status === "unavailable") {
         setNotice(String(returnedAssetContext.detail_table_message || "没有更细粒度数据，请关联明细数据"));
       }
-      const answer = analysisAnswer(result);
-      if (!objectValue(result.workspace_turn).turn_id) {
-        await appendAnalysisTurn(activeThread.thread_id, {
-          question: prompt,
-          answer,
-          status: answer ? "completed" : "partial",
-          intent: objectValue(result.analysis_plan),
-          execution_plan: { plan: result.plan || [] },
-          artifact_refs: analysisArtifactRefs(result),
-          evidence_refs: analysisEvidenceRefs(result),
-        }, { tenantId, userId });
-      }
       setQuestion("");
       await reload();
     } catch (error) {
+      if ((error as { name?: string })?.name === "AbortError") return;
       setNotice(apiErrorMessage(error, "追问执行失败，已保留现有线程。"));
     } finally {
-      setBusy(false);
+      if (waitAbortRef.current === controller) {
+        setBusy(false);
+        setPendingQuestion("");
+        setProgressSteps([]);
+      }
     }
   };
 
@@ -239,7 +322,7 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
   };
 
   return (
-        <section className="flex h-full min-h-0 flex-col overflow-hidden bg-white" data-analysis-workspace-panel="true" data-page-key={definition.pageKey}>
+        <section className="flex h-full min-h-0 flex-col overflow-hidden bg-white" data-analysis-workspace-panel="true" data-page-key={definition.pageKey} data-visual-analysis-scope={chartFollowUp ? "chart" : "page"}>
           <div className="flex items-center border-b border-[#ececf0] bg-[#fafbfc] px-2 py-2">
             <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" data-analysis-thread-tabs="true">
               <Sparkles className="h-4 w-4 shrink-0 text-[#636366]" aria-hidden="true" />
@@ -253,9 +336,10 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
             <button type="button" onClick={() => onWideChange?.(!wide)} aria-label={wide ? "恢复右栏宽度" : "放大右栏"} title={wide ? "恢复右栏宽度" : "放大右栏"} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#636366] outline-none hover:bg-white focus-visible:outline-none" data-global-analysis-wide-toggle="true">{wide ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}</button>
           </div>
           <div className="flex-1 overflow-y-auto bg-[#f8f8fa] p-2.5">
-            {!activeThread?.turns.length ? <div className="rounded-lg border border-dashed border-[#d9d9de] bg-white px-4 py-8 text-center text-[11px] leading-5 text-[#8a8a8e]">{selectedDataPoint ? `基于“${analysisTitle}”继续追问、拆解或验证。` : definition.prompt}</div> : null}
+            {!activeThread?.turns.length && !busy ? <div className="rounded-lg border border-dashed border-[#d9d9de] bg-white px-4 py-8 text-center text-[11px] leading-5 text-[#8a8a8e]">{chartFollowUp ? `基于“${analysisTitle}”继续追问、拆解或验证。` : pageSources.length ? `基于当前页面 ${pageSources.length} 个可视化继续分析。` : definition.prompt}</div> : null}
             <div className="space-y-2">
-              {activeThread?.turns.map((turn) => <div key={turn.turn_id} className="rounded-lg border border-[#ececf0] bg-white p-3"><div className="text-[11px] text-[#1d1d1f]">{turn.question}</div><div className="mt-2 whitespace-pre-wrap text-[11px] leading-5 text-[#636366]">{turn.answer || "本轮仅返回部分数据，结论尚未完成。"}</div><div className="mt-2 flex items-center gap-1 text-[9px] text-[#aeaeb2]"><ShieldCheck className="h-3 w-3" />轮次 {turn.turn_no} · {turn.status}</div><TrustedArtifactPanel taskId={String(turn.execution_plan.task_id || "")} compact /></div>)}
+              {activeThread?.turns.map((turn) => <div key={turn.turn_id} className="rounded-lg border border-[#ececf0] bg-white p-3" data-workspace-follow-up-turn="true"><div className="text-[11px] text-[#1d1d1f]">{turn.question}</div><WorkspaceFollowUpChart visual={followUpVisualFromRefs(turn.artifact_refs)} /><div className="mt-2 whitespace-pre-wrap text-[11px] leading-5 text-[#636366]">{turn.answer || "本轮仅返回部分数据，结论尚未完成。"}</div><TrustedArtifactPanel taskId={String(turn.execution_plan.task_id || "")} compact /></div>)}
+              {busy ? <div className="rounded-lg border border-[#ececf0] bg-white p-3" data-workspace-follow-up-thinking="true"><div className="text-[11px] text-[#1d1d1f]">{pendingQuestion || question}</div><div className="mt-2"><AnalysisProgressPanel embedded compact steps={progressSteps} running={busy} hasResult={false} /></div></div> : null}
             </div>
             {notice ? <div className="mt-2 rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[10px] text-[#636366]">{notice}</div> : null}
           </div>
@@ -267,12 +351,48 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
               </div>
             ) : null}
             <div className="flex items-end gap-2 rounded-lg border border-[#d9d9de] bg-white px-2.5 py-1.5 focus-within:border-[#8a8a8e]">
-              <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} rows={2} placeholder="基于当前页面继续追问…" className="min-h-[36px] flex-1 resize-none bg-transparent text-[11px] leading-5 text-[#1d1d1f] outline-none placeholder:text-[#aeaeb2]" />
+              <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} rows={2} placeholder={chartFollowUp ? "基于当前图表继续追问…" : "基于当前页面全部可视化继续分析…"} className="min-h-[36px] flex-1 resize-none bg-transparent text-[11px] leading-5 text-[#1d1d1f] outline-none placeholder:text-[#aeaeb2]" />
               <button type="button" onClick={() => void submit()} disabled={!question.trim() || busy || !activeThread} className="flex h-7 w-7 items-center justify-center rounded-full bg-[#1d1d1f] text-white disabled:bg-[#d1d1d6]" aria-label="提交追问">{busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}</button>
             </div>
           </div>
         </section>
   );
+}
+
+function isChartBoundDataPoint(selectedDataPoint: SelectedDataPoint | undefined) {
+  return Boolean(selectedDataPoint?.targetId && objectValue(selectedDataPoint.values).chart_bound_source);
+}
+
+function boundVisualAnalysisTables(selectedDataPoint: SelectedDataPoint | undefined, pageContext: Record<string, unknown>) {
+  const values = objectValue(selectedDataPoint?.values);
+  const fromChart = objectArray(values.selected_data_tables).map(normalizeBoundTable);
+  if (fromChart.length) return fromChart;
+  const pageDataId = stringValue(values.page_data_id);
+  if (pageDataId) {
+    return [{
+      id: pageDataId,
+      kind: "page_data",
+      name: stringValue(selectedDataPoint?.label) || stringValue(values.source_table_name) || "页面数据",
+      code: `page_data_${pageDataId}`,
+    }];
+  }
+  return objectArray(pageContext.selected_data_tables).map(normalizeBoundTable);
+}
+
+function normalizeBoundTable(item: Record<string, unknown>) {
+  const metricCodes = stringList(item.metricCodes).length ? stringList(item.metricCodes) : stringList(item.metric_codes);
+  const dimensionCodes = stringList(item.dimensionCodes).length ? stringList(item.dimensionCodes) : stringList(item.dimension_codes);
+  return {
+    ...item,
+    metricCodes,
+    defaultMetrics: stringList(item.defaultMetrics).length ? stringList(item.defaultMetrics) : metricCodes,
+    dimensionCodes,
+    defaultDimensions: stringList(item.defaultDimensions).length ? stringList(item.defaultDimensions) : dimensionCodes,
+  };
+}
+
+function stringList(value: unknown) {
+  return Array.isArray(value) ? value.map((item) => String(item || "").trim()).filter(Boolean) : [];
 }
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -305,27 +425,4 @@ function objectWithFallback(value: unknown, fallback: Record<string, unknown>) {
 
 function stringValue(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function analysisAnswer(result: Record<string, unknown>) {
-  const conclusions = Array.isArray(result.conclusions) ? result.conclusions.map(String).filter(Boolean) : [];
-  if (conclusions.length) return conclusions.join("\n");
-  const review = objectValue(result.review);
-  return String(review.summary || "");
-}
-
-function analysisArtifactRefs(result: Record<string, unknown>) {
-  const skillResults = Array.isArray(result.skill_results) ? result.skill_results : [];
-  return skillResults.flatMap((item, index) => {
-    const value = objectValue(item);
-    return value.visualization_artifact ? [{ type: "visualization", index, value: value.visualization_artifact }] : [];
-  });
-}
-
-function analysisEvidenceRefs(result: Record<string, unknown>) {
-  const skillResults = Array.isArray(result.skill_results) ? result.skill_results : [];
-  return skillResults.flatMap((item) => {
-    const evidence = objectValue(objectValue(item).evidence);
-    return Object.keys(evidence).length ? [evidence] : [];
-  });
 }

@@ -122,7 +122,7 @@ def handle_auth_refresh(handler: Any) -> None:
             grant.user_id,
             tenant_hint=grant.primary_tenant_id,
         )
-        token = _token_for_grant(grant)
+        token = _token_for_grant(grant, is_super_admin=bool(session.get("is_super_admin")))
         handler._send_json(
             {
                 "status": "refreshed",
@@ -204,7 +204,7 @@ def _issue_session(handler: Any, session: dict[str, Any]) -> tuple[dict[str, Any
         user_agent_hash=hashlib.sha256(str(handler.headers.get("User-Agent") or "").encode("utf-8")).hexdigest(),
         ip_prefix=_client_ip_prefix(handler),
     )
-    token = _token_for_grant(grant)
+    token = _token_for_grant(grant, is_super_admin=bool(session.get("is_super_admin")))
     response = dict(session)
     response["session_expires_at"] = grant.access_expires_at
     response["session_idle_expires_at"] = grant.idle_expires_at
@@ -212,11 +212,14 @@ def _issue_session(handler: Any, session: dict[str, Any]) -> tuple[dict[str, Any
     return response, _session_cookies(token, grant.refresh_token, handler.services.runtime_config.is_production)
 
 
-def _token_for_grant(grant: Any) -> str:
+def _token_for_grant(grant: Any, *, is_super_admin: bool = False) -> str:
+    tenant_ids = grant.tenant_ids
+    if is_super_admin:
+        tenant_ids = ("*", *tuple(tenant_ids or ()))
     return make_session_token(
         user_id=grant.user_id,
         tenant_id=grant.primary_tenant_id,
-        tenant_ids=grant.tenant_ids,
+        tenant_ids=tenant_ids,
         ttl_seconds=max(1, grant.access_expires_at - grant.issued_at),
         issued_at=grant.issued_at,
         session_id=grant.access_jti,

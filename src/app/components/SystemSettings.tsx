@@ -60,7 +60,7 @@ import {
   type PermissionRole,
   type SystemUser,
   type InstitutionPermission,
-  customRoleOptions,
+
   userRoleOptions,
   modelSourceOptions,
   emptyUserForm,
@@ -171,6 +171,7 @@ export function SystemSettings() {
   const [systemDataParams, setSystemDataParams] = useState<SystemDataParam[]>(
     isDemoFallbackEnabled() ? initialSystemDataParams : [],
   );
+  const [canReadSystemParams, setCanReadSystemParams] = useState(isDemoFallbackEnabled());
   const [configNotice, setConfigNotice] = useState("");
   const [testingModelId, setTestingModelId] = useState("");
   const [testingSpeechIntegrationId, setTestingSpeechIntegrationId] = useState("");
@@ -209,10 +210,11 @@ export function SystemSettings() {
         setModelIntegrations(response.models);
         setSpeechIntegrations(response.speech_integrations || []);
         setSystemDataParams(response.system_params);
+        setCanReadSystemParams(Boolean(response.can_read_system_params));
         setConfigNotice(
           response.count.models || response.count.speech_integrations || response.count.system_params
-            ? `系统接入配置已连接后端：${selectedInstitution}`
-            : `系统接入配置已连接后端：${selectedInstitution}，当前暂无模型或语音配置。`,
+            ? `当前账号模型接入已连接后端：${selectedInstitution}`
+            : `当前账号模型接入已连接后端：${selectedInstitution}，当前暂无模型或语音配置。`,
         );
       } catch (error) {
         if (cancelled) return;
@@ -226,12 +228,14 @@ export function SystemSettings() {
           setModelIntegrations(initialModelIntegrations);
           setSpeechIntegrations(initialSpeechIntegrations);
           setSystemDataParams(initialSystemDataParams);
+          setCanReadSystemParams(true);
           setConfigNotice(`系统接入配置后端暂不可用，已使用显式 demo 本地状态。${apiErrorMessage(error, "")}`);
           return;
         }
         setModelIntegrations([]);
         setSpeechIntegrations([]);
         setSystemDataParams([]);
+        setCanReadSystemParams(false);
         setConfigNotice(`${demoFallbackDisabledMessage("系统接入配置加载")} ${apiErrorMessage(error, "")}`);
       }
     };
@@ -764,7 +768,12 @@ export function SystemSettings() {
     users: { title: "用户管理", description: isSuperAdmin ? "管理全部授权用户、角色绑定与账号对应机构" : "管理当前机构用户、角色绑定与账号状态" },
     roles: { title: "角色权限", description: "按机构维护管理员、操作员和自定义角色权限" },
     audit: { title: "审计日志", description: "查看当前账号有权访问的机构操作与安全审计记录" },
-    config: { title: "系统配置", description: "维护模型接入与系统运行参数" },
+    config: {
+      title: "系统配置",
+      description: canReadSystemParams
+        ? "维护当前账号的模型 Key / API 地址，以及机构运行参数"
+        : "为当前账号绑定模型 Key 与 API 地址，账号下各机构共用",
+    },
   }[activeTab];
   const pageStatusNotice = activeTab === "audit"
     ? auditNotice
@@ -788,7 +797,7 @@ export function SystemSettings() {
           { label: "接入机构", value: String(permissionInstitutions.length), icon: Database },
           { label: "权限菜单", value: String(permissionMenus.length), icon: Shield },
           { label: "数据范围", value: String(permissionDataScopes.length), icon: Key },
-          { label: "自定义角色", value: String(customRoleOptions.length), icon: Users },
+          { label: "自定义角色", value: String(permissionInstitutions.reduce((count, item) => count + (item.customRoles?.length || 0), 0)), icon: Users },
         ]
       : activeTab === "audit"
         ? [
@@ -839,7 +848,8 @@ export function SystemSettings() {
         <p className="text-[13px] text-[#aeaeb2] mt-1">{pageHeading.description}</p>
         <div className="mt-5" data-settings-upper-module={upperModuleKind}>
           {activeTab === "config" ? (
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
+            <div className={`grid gap-4 ${canReadSystemParams ? "xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]" : ""}`}>
+              {canReadSystemParams && (
               <section className="rounded-xl border border-[#f0f0f2] bg-white p-4" data-system-config-summary="true">
                 <div className="mb-3 flex items-center justify-between">
                   <div>
@@ -858,9 +868,10 @@ export function SystemSettings() {
                   ))}
                 </div>
               </section>
+              )}
               <AccessConfigCard
                 title="模型接入"
-                subtitle="统一维护大模型与语音转文字接入"
+                subtitle="按账号绑定大模型与语音转文字的 Key 和 API 地址"
                 icon={Key}
                 items={[
                   `${modelIntegrations.length} 个大模型接入`,
@@ -1045,7 +1056,13 @@ export function SystemSettings() {
 
       {activeTab === "config" && (
         <div className="space-y-5" data-settings-route-body="config">
-          <SystemDataParamsPanel params={systemDataParams} currentTenantId={tenantId} onSave={updateSystemDataParam} />
+          {canReadSystemParams ? (
+            <SystemDataParamsPanel params={systemDataParams} currentTenantId={tenantId} onSave={updateSystemDataParam} />
+          ) : (
+            <div className="rounded-xl border border-[#f0f0f2] bg-white p-5 text-[12px] text-[#8a8a8e]">
+              模型 Key 与 API 地址保存在当前账号下，保存后立即用于本账号的分析。
+            </div>
+          )}
         </div>
       )}
 
@@ -1515,6 +1532,14 @@ function PermissionEditorModal({
     updateRoleConfig(activeConfig.name, { [field]: values });
   };
 
+  const removeCustomRole = (name: string) => {
+    const target = roleConfigs.find((role) => role.name === name);
+    if (!target || target.isSystem) return;
+    const nextConfigs = roleConfigs.filter((role) => role.name !== name);
+    setDraft((current) => syncPermissionFromRoleConfigs(current, nextConfigs));
+    if (activeConfig?.name === name) onRoleChange(nextConfigs[0]?.name || "管理员");
+  };
+
   const addCustomRole = () => {
     const existingNames = new Set(roleConfigs.map((role) => role.name));
     let index = roleConfigs.filter((role) => role.roleType === "custom").length + 1;
@@ -1584,17 +1609,31 @@ function PermissionEditorModal({
               </button>
             </div>
             {roleConfigs.map((role) => (
-              <button
+              <div
                 key={role.name}
-                type="button"
-                onClick={() => onRoleChange(role.name)}
-                className={`mb-2 flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[12px] transition-colors ${
+                className={`mb-2 flex w-full items-center rounded-lg px-3 py-2 text-left text-[12px] transition-colors ${
                   activeConfig?.name === role.name ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#636366] hover:bg-white"
                 }`}
               >
-                <span className="min-w-0 truncate">{roleLabel(role)}</span>
-                <ChevronRight className="h-3.5 w-3.5 text-[#c7c7cc]" />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => onRoleChange(role.name)}
+                  className="flex min-w-0 flex-1 items-center justify-between"
+                >
+                  <span className="min-w-0 truncate">{roleLabel(role)}</span>
+                  {role.isSystem ? <ChevronRight className="h-3.5 w-3.5 text-[#c7c7cc]" /> : null}
+                </button>
+                {role.isSystem ? null : (
+                  <button
+                    type="button"
+                    onClick={() => removeCustomRole(role.name)}
+                    className="ml-1 rounded-md p-1 text-[#c7c7cc] hover:bg-[#f2f2f7] hover:text-[#d93025]"
+                    aria-label={`删除${role.name}`}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
             ))}
 
             <div className="mt-5 rounded-lg border border-[#f0f0f2] bg-white p-3">
@@ -1734,8 +1773,9 @@ function EditableMenuPermissionBlock({
       <div className="space-y-2">
         {permissionMenuGroups.map((group) => {
           const expanded = expandedGroups.includes(group.label);
+          const automatic = Boolean(group.automatic);
           const selectedCount = group.children.filter((child) => selected.includes(child)).length;
-          const allSelected = selectedCount === group.children.length;
+          const allSelected = !automatic && selectedCount === group.children.length;
           return (
             <div key={group.label} className="rounded-lg border border-[#f0f0f2]">
               <div className="flex items-center justify-between gap-2 px-3 py-2">
@@ -1746,15 +1786,19 @@ function EditableMenuPermissionBlock({
                 >
                   <ChevronRight className={`h-3.5 w-3.5 text-[#c7c7cc] transition-transform ${expanded ? "rotate-90" : ""}`} />
                   <span className="truncate">{group.label}</span>
-                  <span className="text-[10px] text-[#aeaeb2]">{selectedCount}/{group.children.length}</span>
+                  <span className="text-[10px] text-[#aeaeb2]">{automatic ? "自动" : `${selectedCount}/${group.children.length}`}</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => selectGroup(group.children)}
-                  className={`rounded-md px-2 py-1 text-[11px] ${allSelected ? "bg-[#1d1d1f] text-white" : "bg-[#f5f5f7] text-[#636366]"}`}
-                >
-                  {allSelected ? "取消" : "全选"}
-                </button>
+                {automatic ? (
+                  <span className="rounded-md bg-[#f5f5f7] px-2 py-1 text-[11px] text-[#8a8a8e]">按机构数</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => selectGroup(group.children)}
+                    className={`rounded-md px-2 py-1 text-[11px] ${allSelected ? "bg-[#1d1d1f] text-white" : "bg-[#f5f5f7] text-[#636366]"}`}
+                  >
+                    {allSelected ? "取消" : "全选"}
+                  </button>
+                )}
               </div>
               {expanded && (
                 <div className="grid gap-2 border-t border-[#f0f0f2] bg-[#fafbfc] p-3 sm:grid-cols-2">
@@ -1763,13 +1807,14 @@ function EditableMenuPermissionBlock({
                     return (
                       <label
                         key={child}
-                        className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-[12px] transition-colors ${
-                          checked ? "border-[#d1d1d6] bg-white text-[#1d1d1f]" : "border-[#f0f0f2] bg-white text-[#636366]"
+                        className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-[12px] ${
+                          automatic ? "cursor-default border-[#f0f0f2] bg-white text-[#8a8a8e]" : `cursor-pointer ${checked ? "border-[#d1d1d6] bg-white text-[#1d1d1f]" : "border-[#f0f0f2] bg-white text-[#636366]"}`
                         }`}
                       >
                         <input
                           type="checkbox"
                           checked={checked}
+                          disabled={automatic}
                           onChange={() => onToggle(child)}
                           className="h-3.5 w-3.5 accent-[#1d1d1f]"
                         />
@@ -1777,6 +1822,7 @@ function EditableMenuPermissionBlock({
                       </label>
                     );
                   })}
+                  {group.hint ? <div className="sm:col-span-2 text-[11px] leading-5 text-[#8a8a8e]">{group.hint}</div> : null}
                 </div>
               )}
             </div>
@@ -1881,11 +1927,16 @@ function ensurePermissionRoleConfigs(permission: InstitutionPermission): Institu
   return syncPermissionFromRoleConfigs(permission, getPermissionRoleConfigs(permission));
 }
 
+function stripAutomaticMenus(menus: string[]) {
+  const automatic = new Set(permissionMenuGroups.filter((group) => group.automatic).flatMap((group) => group.children));
+  return menus.filter((item) => !automatic.has(item));
+}
+
 function getPermissionRoleConfigs(permission: InstitutionPermission): AccessRoleConfig[] {
   if (permission.roleConfigs?.length) {
     return permission.roleConfigs.map((role) => ({
       ...role,
-      menus: role.menus || [],
+      menus: stripAutomaticMenus(role.menus || []),
       dataScopes: role.dataScopes || [],
       manageableRoles: role.manageableRoles || [],
     }));
@@ -1897,7 +1948,7 @@ function getPermissionRoleConfigs(permission: InstitutionPermission): AccessRole
       name: "管理员",
       roleType: "admin",
       isSystem: true,
-      menus: permission.adminMenus || [],
+      menus: stripAutomaticMenus(permission.adminMenus || []),
       dataScopes: permission.adminDataScopes || [],
       manageableRoles: permission.manageableRoles || [],
     },
@@ -1906,7 +1957,7 @@ function getPermissionRoleConfigs(permission: InstitutionPermission): AccessRole
       name: "操作员",
       roleType: "operator",
       isSystem: true,
-      menus: permission.operatorAdminMenus || [],
+      menus: stripAutomaticMenus(permission.operatorAdminMenus || []),
       dataScopes: permission.operatorAdminDataScopes || [],
       manageableRoles: [],
     },
@@ -1942,15 +1993,15 @@ function syncPermissionFromRoleConfigs(permission: InstitutionPermission, config
   const customRoles = configs.filter((role) => role.roleType === "custom").map((role) => role.name);
   return {
     ...permission,
-    adminMenus: admin?.menus || [],
+    adminMenus: stripAutomaticMenus(admin?.menus || []),
     adminDataScopes: admin?.dataScopes || [],
     operatorSuperMenus: [],
     operatorSuperDataScopes: [],
-    operatorAdminMenus: operator?.menus || [],
+    operatorAdminMenus: stripAutomaticMenus(operator?.menus || []),
     operatorAdminDataScopes: operator?.dataScopes || [],
     manageableRoles: admin?.manageableRoles || [],
     customRoles,
-    roleConfigs: configs,
+    roleConfigs: configs.map((role) => ({ ...role, menus: stripAutomaticMenus(role.menus || []) })),
   };
 }
 
@@ -2177,7 +2228,7 @@ function ModelAccessModal({
       <div className="flex h-[min(760px,86vh)] w-full max-w-[1200px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
         <ModalHeader
           title="模型接入管理"
-          desc="模型按账号统一保存，账号下所有机构共用；可选子模型以测试接口的实际返回为准。"
+          desc="每个登录账号都可以绑定自己的模型 Key 与 API 地址，账号下所有机构共用；可选子模型以测试接口的实际返回为准。"
           onClose={onClose}
         />
         {notice && (

@@ -8,12 +8,14 @@ export function AnalysisProgressPanel({
   error,
   hasResult,
   embedded = false,
+  compact = false,
 }: {
   steps: AnalysisProgressStep[];
   running: boolean;
   error?: string;
   hasResult: boolean;
   embedded?: boolean;
+  compact?: boolean;
 }) {
   const hasFailureSignal = steps.some((step) => step.status === "failed") || Boolean(error);
   const degraded = hasResult && hasFailureSignal;
@@ -39,7 +41,7 @@ export function AnalysisProgressPanel({
           </div>
         </div>
       )}
-      <div className={`max-h-[360px] min-h-[240px] overflow-y-auto overscroll-contain ${embedded ? "px-0 py-1" : "px-4 py-3"}`} aria-live="polite" data-analysis-progress-scroll="manual">
+      <div className={`${compact ? "max-h-[168px] min-h-0 overflow-y-auto overscroll-contain px-0 py-1" : `max-h-[360px] min-h-[240px] overflow-y-auto overscroll-contain ${embedded ? "px-0 py-1" : "px-4 py-3"}`}`} aria-live="polite" data-analysis-progress-scroll="manual">
         <div className="space-y-0">
           {steps.map((step, index) => {
             const summary = step.output_refs?.[0] || {};

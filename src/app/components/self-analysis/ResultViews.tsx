@@ -36,6 +36,7 @@ import {
   displayRawCell,
   visualizationLabel,
   visualizationOptions,
+  type AnalysisDataTableSelection,
   type AnalysisRow,
   type ResultVisualKey,
   type VisualizationType,
@@ -90,6 +91,7 @@ type AnalysisVisualCardProps = {
   compact?: boolean;
   fillHeight?: boolean;
   showFollowUp?: boolean;
+  analysisSource?: AnalysisDataTableSelection[];
   initialConfig?: Partial<VisualizationCardConfig>;
   onFollowUp: (detail?: VisualSelectionDetail) => void;
   onComment: (detail?: VisualSelectionDetail) => void;
@@ -105,10 +107,10 @@ type AnalysisVisualCardProps = {
   visualGridMaxHeight?: number;
 };
 
-export type VisualSelectionDetail = { selectedText?: string };
+export type VisualSelectionDetail = { selectedText?: string; dataTables?: AnalysisDataTableSelection[] };
 export type VisualDuplicateOptions = { asText?: boolean };
 
-export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compact = false, fillHeight = false, showFollowUp = true, initialConfig, onFollowUp, onComment, onTypeChange, onTitleChange, onConfigChange, onDuplicate, onCreateText, onDelete, visualGridSpan, visualGridHeight, visualGridMaxSpan, visualGridMaxHeight }: AnalysisVisualCardProps) {
+export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compact = false, fillHeight = false, showFollowUp = true, analysisSource, initialConfig, onFollowUp, onComment, onTypeChange, onTitleChange, onConfigChange, onDuplicate, onCreateText, onDelete, visualGridSpan, visualGridHeight, visualGridMaxSpan, visualGridMaxHeight }: AnalysisVisualCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const [moreMenuPos, setMoreMenuPos] = useState<{ top: number; left: number } | null>(null);
@@ -354,7 +356,7 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
             </div>, document.body)}
           </div>
           <button type="button" onClick={() => { trackVisual(showData ? "visual_hide_data_click" : "visual_show_data_click"); setShowData((value) => !value); }} disabled={!rows.length} className="h-7 whitespace-nowrap rounded-full px-2 text-[11px] text-[#4f685b] hover:bg-white/80 disabled:opacity-40" data-visual-data-toggle="true">{showData ? "隐藏数据" : "显示数据"}</button>
-          {showFollowUp && <button type="button" onClick={() => { trackVisual("visual_follow_up_click"); onFollowUp(); }} className="h-7 whitespace-nowrap rounded-full px-2 text-[11px] text-[#178a53] hover:bg-white/80" aria-label={`追问${title}`} data-visual-follow-up="true">追问</button>}
+          {showFollowUp && <button type="button" onClick={() => { trackVisual("visual_follow_up_click"); onFollowUp({ dataTables: analysisSource }); }} className="h-7 whitespace-nowrap rounded-full px-2 text-[11px] text-[#178a53] hover:bg-white/80" aria-label={`追问${title}`} data-visual-follow-up="true">追问</button>}
         </div>
         <div aria-hidden={!operationsOpen} {...(!operationsOpen ? ({ inert: "" } as Record<string, string>) : {})} className={`flex items-center gap-0.5 overflow-hidden transition-[max-width,opacity] duration-200 motion-reduce:transition-none ${operationsOpen ? "max-w-[260px] opacity-100" : "pointer-events-none max-w-0 opacity-0"}`} data-visual-operation-tray={operationsOpen ? "expanded" : "collapsed"}>
           <button tabIndex={operationsOpen ? 0 : -1} type="button" onClick={() => { trackVisual("visual_style_click"); togglePanel("style"); }} className={`h-7 whitespace-nowrap rounded-full px-2 text-[11px] outline-none focus-visible:outline-none ${activePanel === "style" ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`}>样式</button>
@@ -375,7 +377,7 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     {operationsOpen && activePanel === "dimension" && <FieldPanel title="维度" fields={dimensionFields} candidates={dimensionCandidates} labels={fieldLabels} reorder={dimensionReorder} onToggle={(field) => setDimensionFields((current) => toggleVisualizationField("dimension", cardType, current, field))} />}
     {voiceNoticeVisible && (voice.listening || voice.error || commandNotice || voice.transcript) && <div className="absolute right-4 top-12 z-40 max-w-[280px] rounded-lg border border-[#dce7df] bg-white px-3 py-2 text-[10px] leading-4 text-[#53615a] shadow-lg" role="status" data-visual-voice-notice="true" data-visual-interactive="true">{voice.listening ? "正在听取样式、指标或维度指令…" : voice.error || commandNotice || voice.transcript}</div>}
     {commentPoint && <button type="button" aria-label="评论可视化" onClick={() => { onComment(); setCommentPoint(null); }} className="absolute z-40 flex h-8 w-8 items-center justify-center rounded-full bg-[#1d1d1f] text-white shadow-lg shadow-black/20 outline-none hover:bg-[#2c2c2e] focus-visible:outline-none" style={commentPoint} data-visual-comment-action="true" data-visual-interactive="true"><MessageSquareText className="h-4 w-4" /></button>}
-    <div className={fillHeight ? "min-h-0 flex-1 overflow-auto" : ""} onWheelCapture={isTextCard ? undefined : passWheelToPage} data-chart-wheel-passthrough={isTextCard ? undefined : "true"}>{isTextCard ? <VisualNoteFields title={noteTitle} body={noteBody} items={noteItems} titleHidden={true} fields={fields} metricFields={metricFields} dimensionFields={dimensionFields} labels={fieldLabels} uploadContext={{ tenantId, userId, reportId: `visual-note-${stateKey}`, blockId: String(id) }} onTitleChange={(value) => { setNoteTitle(value); onTitleChange?.(value || title); }} onBodyChange={setNoteBody} onItemsChange={setNoteItems} onHideTitle={() => setNoteTitleHidden(true)} onOpenComment={(selectedText) => onComment({ selectedText })} onOpenAnalysis={(selectedText) => onFollowUp({ selectedText })} /> : <VisualizationRenderer type={cardType} rows={rows} metricFields={metricFields} dimensionFields={dimensionFields} filters={filters} filterGroups={filterGroups} sumFilteredRows={sumFilteredRows} comboLineFields={comboLineFields} onComboLineFieldsChange={setComboLineFields} onMetricFieldsChange={setMetricFields} onDimensionFieldsChange={setDimensionFields} metricReorder={metricReorder} compact={compact} showData={showData} fillHeight={fillHeight} />}</div>
+    <div className={fillHeight ? "min-h-0 flex-1 overflow-auto" : ""} onWheelCapture={isTextCard ? undefined : passWheelToPage} data-chart-wheel-passthrough={isTextCard ? undefined : "true"}>{isTextCard ? <VisualNoteFields title={noteTitle} body={noteBody} items={noteItems} titleHidden={true} fields={fields} metricFields={metricFields} dimensionFields={dimensionFields} labels={fieldLabels} uploadContext={{ tenantId, userId, reportId: `visual-note-${stateKey}`, blockId: String(id) }} onTitleChange={(value) => { setNoteTitle(value); onTitleChange?.(value || title); }} onBodyChange={setNoteBody} onItemsChange={setNoteItems} onHideTitle={() => setNoteTitleHidden(true)} onOpenComment={(selectedText) => onComment({ selectedText })} onOpenAnalysis={(selectedText) => onFollowUp({ selectedText, dataTables: analysisSource })} /> : <VisualizationRenderer type={cardType} rows={rows} metricFields={metricFields} dimensionFields={dimensionFields} filters={filters} filterGroups={filterGroups} sumFilteredRows={sumFilteredRows} comboLineFields={comboLineFields} onComboLineFieldsChange={setComboLineFields} onMetricFieldsChange={setMetricFields} onDimensionFieldsChange={setDimensionFields} metricReorder={metricReorder} compact={compact} showData={showData} fillHeight={fillHeight} />}</div>
     <ReorderPreview reorder={metricReorder} /><ReorderPreview reorder={dimensionReorder} />
   </div>;
 }

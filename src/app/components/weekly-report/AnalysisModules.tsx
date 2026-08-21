@@ -176,7 +176,7 @@ export function WeeklyAnalysisModuleMenu({
               onClick={() => onToggle(item)}
               className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${editable ? "text-[#7d8982] hover:bg-white hover:text-[#258a3f]" : "cursor-default text-[#c7c7cc]"}`}
             >{item.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}</button>
-            {item.deletable ? <button type="button" disabled={!editable} aria-label={`删除${item.title}`} title="删除" onClick={() => onDelete(item)} className={`mr-2 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${editable ? "text-[#aeaeb2] hover:bg-[#fff0f0] hover:text-[#d93025]" : "cursor-default text-[#d1d1d6]"}`}><Trash2 className="h-3.5 w-3.5" /></button> : <span className="mr-2 h-7 w-7 shrink-0" aria-hidden="true" />}
+            {item.deletable ? <button type="button" aria-label={`删除${item.title}`} title="删除" onClick={() => onDelete(item)} className="mr-2 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#aeaeb2] hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3.5 w-3.5" /></button> : <span className="mr-2 h-7 w-7 shrink-0" aria-hidden="true" />}
           </div>)}
           {!loading && !items.length ? <div className="px-3 py-4 text-center text-[11px] text-[#aeaeb2]">暂无可编排的周报数据</div> : null}
           {notice ? <div className="mx-2 mt-1 rounded-md bg-[#f7faf8] px-2 py-1.5 text-[10px] text-[#68736d]">{notice}</div> : null}

@@ -878,6 +878,10 @@ def handle_data_asset_item_upsert(handler: Any) -> None:
         item = payload.get("item")
         if not isinstance(item, dict):
             raise ValueError("item must be an object.")
+        if item_type == "page_data" and not handler.services.permission_broker.enforcer.has_super_admin_role(
+            context.user_id, context.tenant_id
+        ):
+            raise PermissionError("global_super_admin_required_for_page_data")
         handler._require_asset_permission(context, "manage" if item_type == "raw_table" else "create")
         item = dict(item)
         if item_type == "raw_table":
@@ -1690,6 +1694,10 @@ def handle_data_asset_item_delete(handler: Any, query: str) -> None:
         item_id = first_query_value(params, "item_id")
         if not item_type or not item_id:
             raise ValueError("item_type and item_id are required.")
+        if item_type == "page_data" and not handler.services.permission_broker.enforcer.has_super_admin_role(
+            context.user_id, context.tenant_id
+        ):
+            raise PermissionError("global_super_admin_required_for_page_data")
         handler._require_asset_permission(context, "create")
         deleted = handler.services.data_asset_store.delete_item(context.tenant_id, item_type, item_id)
         updated_shortcut_count = (

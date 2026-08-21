@@ -9,6 +9,7 @@ from .rbac import (
     assert_single_global_super_admin,
     build_default_rbac_seed,
     normalize_tenant_id,
+    reconcile_role_defaults,
     tenant_role_id,
 )
 from .seed import (
@@ -42,6 +43,7 @@ __all__ = [
     "TenantRoleBundle",
     "assert_single_global_super_admin",
     "build_default_rbac_seed",
+    "reconcile_role_defaults",
     "expand_menu_selection",
     "flatten_menu_tree",
     "normalize_tenant_id",

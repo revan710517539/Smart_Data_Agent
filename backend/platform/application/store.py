@@ -159,6 +159,7 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
         "exports": [],
         "pageDataLayout": [],
         "pageDataNotes": [],
+        "weeklyVisualReports": [],
         "pageStickyNote": {"visible": False, "items": [], "updatedAt": ""},
         "historyOpenedAt": "",
     },
@@ -648,9 +649,23 @@ def _execute_action(
             ),
             None,
         )
-        if existing and str(existing.get("ownerUserId") or "") not in {"", str(actor_user_id or "")}:
-            raise PermissionError("visual_report_owner_required")
         if existing:
+            existing_owner = str(existing.get("ownerUserId") or "")
+            if existing_owner not in {"", str(actor_user_id or "")}:
+                existing_destinations = [str(item) for item in existing.get("destinations") or []]
+                next_destinations = [str(item) for item in report.get("destinations") or []]
+                if "weekly" not in existing_destinations or "weekly" in next_destinations:
+                    raise PermissionError("visual_report_owner_required")
+                report = {
+                    **existing,
+                    **report,
+                    "cards": existing.get("cards") or report.get("cards"),
+                    "title": existing.get("title") or report.get("title"),
+                    "destinations": next_destinations,
+                    "ownerUserId": existing_owner,
+                }
+            else:
+                report["ownerUserId"] = existing_owner or report["ownerUserId"]
             report["createdAt"] = str(existing.get("createdAt") or report["createdAt"])
         reports.insert(0, report)
         next_state["visualReports"] = reports[:100]
@@ -1081,6 +1096,7 @@ def _normalize_page_data_notes(value: Any, available_ids: set[str]) -> list[dict
             "noteTitle": str(item.get("noteTitle") or "")[:200],
             "noteBody": str(item.get("noteBody") or "")[:20000],
             "noteTitleHidden": bool(item.get("noteTitleHidden")),
+            "createdByUserId": str(item.get("createdByUserId") or "")[:80],
             "config": _normalize_visual_report_config(item.get("config")),
         })
     return notes
@@ -1161,7 +1177,11 @@ def _state_for_actor(module_key: str, state: dict[str, Any], actor_user_id: str 
     if module_key == "self_analysis" and actor_user_id:
         resolved["visualReports"] = [
             report for report in resolved.get("visualReports", [])
-            if isinstance(report, dict) and str(report.get("ownerUserId") or "") in {"", actor_user_id}
+            if isinstance(report, dict)
+            and (
+                str(report.get("ownerUserId") or "") in {"", actor_user_id}
+                or "weekly" in (report.get("destinations") or [])
+            )
         ]
         return resolved
     if module_key != "agent_workspace" or not actor_user_id:

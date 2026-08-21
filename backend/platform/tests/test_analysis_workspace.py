@@ -4,19 +4,27 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from backend.platform.api.routes.analysis import _analysis_cache_context, _cache_snapshot_matches
+from backend.platform.api.routes.analysis import (
+    _analysis_cache_context,
+    _cache_snapshot_matches,
+    _inherit_chart_follow_up_context,
+    _visual_analysis_scope,
+    run_analysis,
+)
+from backend.platform.intelligent_analysis.engine import IntelligentAnalysisEngine, IntelligentAnalysisRequest
 from backend.platform.analysis_workspace.models import AnalysisWorkspaceContext
 from backend.platform.analysis_workspace.service import (
     AnalysisWorkspaceService,
     InMemoryAnalysisGovernanceStore,
     InMemoryAnalysisWorkspaceStore,
     build_trusted_manifest,
+    provenance_dataset_snapshot,
+    provenance_metric_versions,
     safe_cache_key,
     verify_trusted_manifest,
 )
 from backend.platform.analysis_workspace.visualization import VisualizationPlanner
 from backend.platform.bootstrap import build_local_platform
-from backend.platform.api.routes.analysis import run_analysis
 
 
 class AnalysisWorkspaceTest(unittest.TestCase):
@@ -73,6 +81,124 @@ class AnalysisWorkspaceTest(unittest.TestCase):
         first = safe_cache_key(tenant_id="tenant-a", authorization_snapshot={"p": 1}, institution_ids=["b", "a"], csv_snapshot={"s": 1}, semantic_versions=[{"m": 1}], filters={}, time_grain="month", skill_versions=[], model_version="m", code_version="c")
         second = safe_cache_key(tenant_id="tenant-a", authorization_snapshot={"p": 2}, institution_ids=["a", "b"], csv_snapshot={"s": 1}, semantic_versions=[{"m": 1}], filters={}, time_grain="month", skill_versions=[], model_version="m", code_version="c")
         self.assertNotEqual(first, second)
+
+    def test_provenance_helpers_normalize_snapshot_and_metric_versions(self) -> None:
+        snapshot = provenance_dataset_snapshot(
+            {"snapshot_id": "snap-1", "artifact_sha256": "a" * 64, "immutable": True},
+            {"contentHash": "b" * 64, "schemaFingerprint": "schema-v2"},
+        )
+        self.assertEqual(snapshot["version"], "snap-1")
+        self.assertEqual(snapshot["schema_fingerprint"], "schema-v2")
+        self.assertEqual(snapshot["content_hash"], "a" * 64)
+        derived = provenance_dataset_snapshot(
+            {"id": "csv_overdue"},
+            schema_material={"metrics": ["m1_overdue_rate"], "dimensions": ["product_line"]},
+            content_material=[{"product_line": "经营贷", "m1_overdue_rate": 0.0145}],
+        )
+        self.assertTrue(derived.get("version"))
+        self.assertTrue(derived.get("schema_fingerprint"))
+        self.assertTrue(derived.get("content_hash"))
+        versions = provenance_metric_versions(
+            {"m1_overdue_rate": "v3"},
+            [{"metricCode": "loan_amount", "semanticVersion": "v2"}],
+            {"m2": "temporary"},
+            [{"metric_id": "m3", "version": "table-field"}],
+        )
+        self.assertEqual(versions[0], {"metric_id": "m1_overdue_rate", "version": "v3"})
+        self.assertEqual(versions[1], {"metric_id": "loan_amount", "version": "v2"})
+        self.assertEqual(len(versions), 2)
+
+    def test_warehouse_analysis_records_snapshot_without_inventing_metric_versions(self) -> None:
+        services = build_local_platform()
+        try:
+            from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
+
+            attach_governed_test_warehouse(services)
+            result = run_analysis(services, "u_super_admin", "tenant_demo", "各分行放款金额")
+            manifest = result["skill_results"][0]["trusted_manifest"]
+            snapshot = manifest["dataset_snapshot"]
+            self.assertTrue(snapshot.get("version") or snapshot.get("snapshot_id"))
+            self.assertTrue(snapshot.get("schema_fingerprint"))
+            self.assertFalse(any(str(item.get("version") or "") in {"temporary", "table-field"} for item in manifest["metric_versions"]))
+        finally:
+            services.close()
+
+    def test_embedded_follow_up_records_selected_table_snapshot(self) -> None:
+        services = build_local_platform()
+        try:
+            result = run_analysis(
+                services,
+                "u_super_admin",
+                "tenant_demo",
+                "分析一下这个数据",
+                page_context={
+                    "visual_analysis_scope": "chart",
+                    "chart_bound_source": True,
+                    "analysis_policy": {"resultFormat": "brief_visual"},
+                    "selected_data_point": {
+                        "targetType": "chart",
+                        "targetId": "chart-1",
+                        "values": {
+                            "chart_bound_source": True,
+                            "visual_rows": [{"product_line": "经营贷", "m1_overdue_rate": 0.0145}],
+                            "selected_data_tables": [{
+                                "id": "csv_overdue",
+                                "kind": "raw",
+                                "code": "csv_overdue",
+                                "contentHash": "c" * 64,
+                                "schemaFingerprint": "schema-overdue",
+                                "assetVersion": "12",
+                                "metricCodes": ["m1_overdue_rate"],
+                            }],
+                            "dataset_snapshot": {"id": "csv_overdue", "content_hash": "c" * 64, "schema_fingerprint": "schema-overdue"},
+                        },
+                    },
+                },
+            )
+            manifest = result["skill_results"][0]["trusted_manifest"]
+            snapshot = manifest["dataset_snapshot"]
+            self.assertEqual(snapshot.get("content_hash") or snapshot.get("version"), "c" * 64)
+            self.assertEqual(snapshot.get("schema_fingerprint"), "schema-overdue")
+            self.assertEqual(manifest["metric_versions"], [])
+        finally:
+            services.close()
+
+    def test_embedded_follow_up_derives_snapshot_when_table_hashes_missing(self) -> None:
+        services = build_local_platform()
+        try:
+            result = run_analysis(
+                services,
+                "u_super_admin",
+                "tenant_demo",
+                "分析一下这个数据",
+                page_context={
+                    "visual_analysis_scope": "chart",
+                    "chart_bound_source": True,
+                    "analysis_policy": {"resultFormat": "brief_visual"},
+                    "selected_data_point": {
+                        "targetType": "chart",
+                        "targetId": "chart-1",
+                        "values": {
+                            "chart_bound_source": True,
+                            "visual_rows": [{"product_line": "经营贷", "month": "2026-06", "m1_overdue_rate": 0.0145}],
+                            "selected_data_tables": [{
+                                "id": "csv_overdue",
+                                "kind": "raw",
+                                "code": "csv_overdue",
+                                "fields": "product_line(产品线:string), month(月份:string), m1_overdue_rate(M1逾期率:decimal)",
+                                "fieldLabels": {"product_line": "产品线", "month": "月份", "m1_overdue_rate": "M1逾期率"},
+                            }],
+                        },
+                    },
+                },
+            )
+            manifest = result["skill_results"][0]["trusted_manifest"]
+            snapshot = manifest["dataset_snapshot"]
+            self.assertTrue(snapshot.get("version") or snapshot.get("content_hash"))
+            self.assertTrue(snapshot.get("schema_fingerprint"))
+            self.assertEqual(manifest["metric_versions"], [])
+        finally:
+            services.close()
 
     def test_cache_key_binds_question_and_cache_rechecks_authorization(self) -> None:
         first = safe_cache_key(tenant_id="tenant-a", question="余额趋势", authorization_snapshot={"p": 1}, institution_ids=["a"], csv_snapshot={"s": 1}, semantic_versions=[{"m": 1}], filters={}, time_grain="month", skill_versions=[], model_version="m", code_version="c")
@@ -201,6 +327,331 @@ class AnalysisWorkspaceTest(unittest.TestCase):
                 )
         finally:
             services.close()
+
+    def test_chart_follow_up_inherits_parent_tables_and_plan(self) -> None:
+        inherited = _inherit_chart_follow_up_context(
+            {
+                "selected_data_point": {
+                    "targetType": "chart",
+                    "targetId": "task-1:primary",
+                    "values": {"analysis_task_id": "task-1", "chart_bound_source": True},
+                }
+            },
+            {
+                "task_id": "task-1",
+                "analysis_plan": {
+                    "dataset_id": "custom_mart",
+                    "metrics": ["loan_balance"],
+                    "dimensions": ["month"],
+                    "chart_types": ["column"],
+                },
+                "skill_results": [{
+                    "intelligent_analysis": {
+                        "context": {
+                            "asset_context": {
+                                "selected_data_tables": [{
+                                    "id": "topic_chart_source",
+                                    "code": "chart_source",
+                                    "datasetId": "custom_mart",
+                                }],
+                            }
+                        }
+                    }
+                }],
+            },
+        )
+        self.assertEqual(inherited["selected_data_tables"][0]["id"], "topic_chart_source")
+        self.assertEqual(inherited["analysis_plan_hint"]["dataset_id"], "custom_mart")
+        self.assertEqual(inherited["analysis_plan_hint"]["metrics"], ["loan_balance"])
+        from_point = _inherit_chart_follow_up_context(
+            {
+                "selected_data_point": {
+                    "values": {
+                        "selected_data_tables": [{"id": "csv_chart", "code": "csv_chart"}],
+                    }
+                }
+            },
+            None,
+        )
+        self.assertEqual(from_point["selected_data_tables"][0]["id"], "csv_chart")
+        self.assertNotIn("analysis_plan_hint", from_point)
+        complete = _inherit_chart_follow_up_context(
+            {
+                "selected_data_tables": [{
+                    "id": "topic_ready",
+                    "datasetId": "custom_mart",
+                    "metricCodes": ["loan_balance"],
+                    "dimensionCodes": ["month"],
+                }]
+            },
+            {
+                "analysis_plan": {
+                    "dataset_id": "other_mart",
+                    "metrics": ["loan_amount"],
+                    "dimensions": ["branch_name"],
+                }
+            },
+        )
+        self.assertEqual(complete["selected_data_tables"][0]["id"], "topic_ready")
+        self.assertNotIn("analysis_plan_hint", complete)
+        csv_bound = _inherit_chart_follow_up_context(
+            {
+                "chart_bound_source": True,
+                "selected_data_point": {
+                    "targetType": "chart",
+                    "values": {
+                        "question": "按客群分析贷款余额",
+                        "chart_bound_source": True,
+                        "analysis_task_id": "task-1",
+                    },
+                },
+            },
+            {
+                "analysis_plan": {
+                    "dataset_id": "csv_88477a04ee48",
+                    "metrics": ["field_2"],
+                    "dimensions": ["field_1"],
+                },
+                "skill_results": [{
+                    "intelligent_analysis": {
+                        "context": {
+                            "asset_context": {
+                                "selected_data_tables": [{
+                                    "id": "csv_88477a04ee489135224dac6a",
+                                    "relativePath": "csv/yushu/data.csv",
+                                }],
+                            }
+                        }
+                    }
+                }],
+            },
+        )
+        self.assertEqual(csv_bound["selected_data_tables"][0]["id"], "csv_88477a04ee489135224dac6a")
+        self.assertNotIn("analysis_plan_hint", csv_bound)
+        self.assertEqual(csv_bound["follow_up_source_question"], "按客群分析贷款余额")
+        governed = _inherit_chart_follow_up_context(
+            {"chart_bound_source": True, "selected_data_point": {"targetType": "chart", "values": {"chart_bound_source": True}}},
+            {"analysis_plan": {"dataset_id": "loan_operation_mart", "metrics": ["loan_amount"], "dimensions": ["branch_name"]}},
+        )
+        self.assertEqual(governed["analysis_plan_hint"]["dataset_id"], "loan_operation_mart")
+
+    def test_chart_follow_up_binds_parent_task_from_selected_data_point(self) -> None:
+        services = build_local_platform()
+        try:
+            from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
+
+            attach_governed_test_warehouse(services)
+            first = run_analysis(services, "u_super_admin", "tenant_demo", "各分行放款金额")
+            second = run_analysis(
+                services,
+                "u_super_admin",
+                "tenant_demo",
+                "你好呀",
+                page_context={
+                    "selected_data_point": {
+                        "targetType": "chart",
+                        "targetId": f"{first['task_id']}:primary",
+                        "label": "主分析视图·条形图",
+                        "values": {
+                            "analysis_task_id": first["task_id"],
+                            "chart_bound_source": True,
+                        },
+                    }
+                },
+            )
+            self.assertEqual(second["parent_execution_id"], first["execution_id"])
+            self.assertEqual(second["revision"], 2)
+            self.assertEqual(second["analysis_plan"]["dataset_id"], first["analysis_plan"]["dataset_id"])
+            self.assertEqual(second["analysis_plan"]["metrics"], first["analysis_plan"]["metrics"])
+        finally:
+            services.close()
+
+    def test_visual_follow_up_reuses_parent_chart_rows_without_reselecting_tables(self) -> None:
+        services = build_local_platform()
+        try:
+            from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
+
+            attach_governed_test_warehouse(services)
+            first = run_analysis(services, "u_super_admin", "tenant_demo", "各分行放款金额")
+            self.assertTrue(first["skill_results"][0]["data"])
+            second = run_analysis(
+                services,
+                "u_super_admin",
+                "tenant_demo",
+                "分析一下",
+                page_context={
+                    "chart_bound_source": True,
+                    "selected_data_point": {
+                        "targetType": "chart",
+                        "targetId": f"{first['task_id']}:primary",
+                        "label": "主分析视图·条形图",
+                        "values": {
+                            "analysis_task_id": first["task_id"],
+                            "chart_bound_source": True,
+                            "question": first["question"],
+                        },
+                    },
+                },
+            )
+            self.assertEqual(second["parent_execution_id"], first["execution_id"])
+            self.assertEqual(second["skill_results"][0]["data"], first["skill_results"][0]["data"])
+            self.assertNotEqual(second["task_id"], first["task_id"])
+        finally:
+            services.close()
+
+    def test_page_visual_analysis_unions_all_chart_rows(self) -> None:
+        self.assertEqual(_visual_analysis_scope({"visual_analysis_scope": "page", "chart_bound_source": True}), "page")
+        self.assertEqual(_visual_analysis_scope({"selected_data_point": {"targetType": "chart", "values": {"chart_bound_source": True}}}), "chart")
+        services = build_local_platform()
+        try:
+            result = run_analysis(
+                services,
+                "u_super_admin",
+                "tenant_demo",
+                "分析一下",
+                page_context={
+                    "visual_analysis_scope": "page",
+                    "visual_analysis_sources": [
+                        {"id": "c1", "label": "放款图", "rows": [{"branch": "A", "loan_balance": 1}]},
+                        {"id": "c2", "label": "风险图", "rows": [{"branch": "B", "loan_balance": 2}]},
+                    ],
+                },
+            )
+            data = result["skill_results"][0]["data"]
+            self.assertEqual(len(data), 2)
+            self.assertEqual({row["_visual_source"] for row in data}, {"放款图", "风险图"})
+            self.assertTrue(result["skill_results"][0]["semantic_info"]["page_visual_union"])
+        finally:
+            services.close()
+
+    def test_page_scope_ignores_stale_chart_follow_up_point(self) -> None:
+        services = build_local_platform()
+        try:
+            from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
+
+            attach_governed_test_warehouse(services)
+            first = run_analysis(services, "u_super_admin", "tenant_demo", "各分行放款金额")
+            result = run_analysis(
+                services,
+                "u_super_admin",
+                "tenant_demo",
+                "分析一下",
+                page_context={
+                    "visual_analysis_scope": "page",
+                    "selected_data_point": {
+                        "targetType": "chart",
+                        "targetId": f"{first['task_id']}:primary",
+                        "values": {
+                            "analysis_task_id": first["task_id"],
+                            "chart_bound_source": True,
+                            "visual_rows": [{"only": "chart"}],
+                        },
+                    },
+                    "visual_analysis_sources": [
+                        {"id": "c1", "label": "图1", "rows": [{"branch": "A"}]},
+                        {"id": "c2", "label": "图2", "rows": [{"branch": "B"}]},
+                    ],
+                },
+            )
+            data = result["skill_results"][0]["data"]
+            self.assertEqual(len(data), 2)
+            self.assertFalse(result.get("parent_execution_id"))
+            self.assertEqual({row["_visual_source"] for row in data}, {"图1", "图2"})
+        finally:
+            services.close()
+
+    def test_chart_scope_uses_embedded_rows_when_catalog_unavailable(self) -> None:
+        services = build_local_platform()
+        try:
+            result = run_analysis(
+                services,
+                "u_super_admin",
+                "tenant_demo",
+                "分析一下",
+                page_context={
+                    "visual_analysis_scope": "chart",
+                    "chart_bound_source": True,
+                    "selected_data_point": {
+                        "targetType": "chart",
+                        "targetId": "page-data:1",
+                        "label": "页面图",
+                        "values": {
+                            "chart_bound_source": True,
+                            "question": "页面图",
+                            "visual_rows": [{"branch": "A", "value": 9}],
+                            "selected_data_tables": [{"id": "missing_page_data", "kind": "page_data", "code": "page_data_1"}],
+                        },
+                    },
+                },
+            )
+            self.assertEqual(result["skill_results"][0]["data"][0]["branch"], "A")
+            self.assertEqual(result["skill_results"][0]["data"][0]["value"], 9)
+        finally:
+            services.close()
+
+    def test_rail_brief_follow_up_returns_short_summary_and_chart_spec(self) -> None:
+        services = build_local_platform()
+        try:
+            result = run_analysis(
+                services,
+                "u_super_admin",
+                "tenant_demo",
+                "分析一下这个数据",
+                page_context={
+                    "visual_analysis_scope": "chart",
+                    "chart_bound_source": True,
+                    "analysis_policy": {"resultFormat": "brief_visual", "resultDelivery": "data_first"},
+                    "selected_data_point": {
+                        "targetType": "chart",
+                        "targetId": "chart-1",
+                        "values": {
+                            "chart_bound_source": True,
+                            "question": "经营贷逾期",
+                            "visual_rows": [
+                                {"product_line": "经营贷", "month": "2026-03", "m1_overdue_rate": 0.0118, "loan_balance": 1.88e9},
+                                {"product_line": "经营贷", "month": "2026-06", "m1_overdue_rate": 0.0145, "loan_balance": 1.37e9},
+                                {"product_line": "消费贷", "month": "2026-05", "m1_overdue_rate": 0.0096, "loan_balance": 1.21e9},
+                                {"product_line": "消费贷", "month": "2026-06", "m1_overdue_rate": 0.0109, "loan_balance": 1.21e9},
+                            ],
+                        },
+                    },
+                },
+            )
+            summary = str(result["intelligent_analysis"]["analysis_summary"])
+            self.assertLessEqual(len(summary), 400)
+            self.assertNotIn("经营建议", summary)
+            self.assertNotIn("核心结论：", summary)
+            self.assertNotIn("证据：", summary)
+            self.assertIn("经营贷", summary)
+            self.assertIn("M1逾期率", summary)
+            spec = result["skill_results"][0]["visualization_spec"]
+            self.assertTrue(spec.get("chart_type"))
+            self.assertTrue(spec.get("x") or spec.get("y"))
+            invocation = result["intelligent_analysis"]["model_invocation"]
+            self.assertEqual(invocation.get("reason"), "brief_visual_follow_up")
+        finally:
+            services.close()
+
+    def test_brief_conclusions_describe_trend_without_essay(self) -> None:
+        engine = IntelligentAnalysisEngine()
+        payload = engine.analyze(
+            IntelligentAnalysisRequest(
+                question="分析一下这个数据",
+                tenant_id="tenant_demo",
+                user_id="u_super_admin",
+                context_policy={"resultFormat": "brief_visual"},
+                surface_context={"visual_analysis_scope": "chart"},
+                query_result={"data": [
+                    {"product_line": "经营贷", "month": "2026-03", "m1_overdue_rate": 0.0118},
+                    {"product_line": "经营贷", "month": "2026-06", "m1_overdue_rate": 0.0145},
+                ]},
+            ),
+            {},
+        )
+        summary = str(payload["analysis_summary"])
+        self.assertLessEqual(len(summary), 280)
+        self.assertIn("经营贷", summary)
+        self.assertNotIn("原因边界", summary)
 
 
 class VisualizationPlannerTest(unittest.TestCase):

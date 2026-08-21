@@ -19,7 +19,9 @@ import { usePlatformContext } from "../platform/PlatformContext";
 import { apiErrorMessage } from "../services/apiClient";
 import { runApplicationAction } from "../services/applicationApi";
 import { fetchOperatingSnapshot, type OperatingSnapshot } from "../services/operatingSnapshotApi";
-import { updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
+import { replaceVisualAnalysisSourceGroup, updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
+import { boundedVisualRows } from "./analysis-workspace/visualAnalysisScope";
+import { pageDataToSelection } from "./self-analysis/domain";
 import { PAGE_DATA_PAGE_GUTTER_CLASS, PageDataModeToggle, PageDataVisualizationModules, usePageDataComposer, type PageDataComposerController } from "./page-data/PageDataComposer";
 import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
 import { useStickyNote } from "./notes/useStickyNote";
@@ -85,7 +87,15 @@ export function InstitutionSupervision() {
         analysis_angles: ["比较机构规模、效率和风险", "仅基于当前筛选和重新执行的证据形成督导结论"],
       },
     });
-  }, [model.branches.length, productFilter, selected, selectedBranch, snapshot]);
+    replaceVisualAnalysisSourceGroup("supervision", "page-data", pageData.visibleAssets.map((asset) => ({
+      id: asset.id,
+      label: asset.name,
+      tables: [pageDataToSelection(asset) as unknown as Record<string, unknown>],
+      question: asset.name,
+      summary: asset.sourceTableName || asset.name,
+      rows: boundedVisualRows(pageData.rowsById[asset.id]?.rows),
+    })));
+  }, [model.branches.length, pageData.rowsById, pageData.visibleAssets, productFilter, selected, selectedBranch, snapshot]);
   const runSupervisionAction = (action: string, payload: Record<string, unknown> = {}) =>
     runApplicationAction({ tenantId, userId, moduleKey: "institution_supervision", action, payload }).catch(() => undefined);
 

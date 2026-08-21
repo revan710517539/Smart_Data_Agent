@@ -176,21 +176,37 @@ def handle_report_analysis_result_delete(handler: Any, query: str) -> None:
 
 
 def handle_report_analysis_result_save_weekly(handler: Any) -> None:
-    """Make one owned saved analysis selectable from the weekly-report menu."""
+    """Share or unshare one saved analysis on the institution weekly report."""
 
     try:
         payload = handler._read_json()
         context = handler._request_context(payload=payload)
         handler._require_report_permission(context, "create")
-        result = _owned_saved_analysis(handler, context, str(payload.get("result_id") or ""))
+        eligible = payload.get("weeklyReportEligible", True)
+        if isinstance(eligible, str):
+            eligible = eligible.strip().lower() not in {"0", "false", "no"}
+        result_id = str(payload.get("result_id") or "")
+        if eligible:
+            result = _owned_saved_analysis(handler, context, result_id)
+        else:
+            result = handler.services.report_store.get_analysis_result(
+                context.tenant_id, result_id, actor_user_id=context.user_id
+            )
+            if result is None:
+                raise KeyError("saved_analysis_result_not_found")
+            if not handler.services.permission_broker.enforcer.can_manage_shared_visual(
+                context.user_id, context.tenant_id, str(result.get("ownerUserId") or "")
+            ):
+                raise PermissionError("saved_analysis_owner_required")
         hydrated = _hydrate_saved_analysis(handler, context.user_id, context.tenant_id, result)
         saved = handler.services.report_store.upsert_analysis_result(
             context.tenant_id,
             {
                 **result,
                 "topicData": hydrated.get("topicData") or result.get("topicData"),
-                "weeklyReportEligible": True,
-                "weeklyReportSavedAt": datetime.now(timezone.utc).isoformat(),
+                "weeklyReportEligible": bool(eligible),
+                "weeklyReportSavedAt": datetime.now(timezone.utc).isoformat() if eligible else "",
+                "visibility": "tenant" if eligible else "private",
             },
             updated_by=context.user_id,
         )

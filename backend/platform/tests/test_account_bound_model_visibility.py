@@ -188,6 +188,7 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
             handle_system_config_get(handler, "")
 
         self.assertEqual(response["parameter_tenant_ids"], ["tenant:sda-internal"])
+        self.assertTrue(response["can_read_system_params"])
         self.assertEqual(response["system_params"], [{
             "id": "ai_analysis_concurrency",
             "name": "AI分析并发上限",
@@ -724,6 +725,111 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
         self.assertEqual(default["name"], "默认模型")
         self.assertEqual(default["key"], "https://custom-relay.example/v1")
         self.assertEqual(stored["value"], "account-edited-secret")
+
+    def test_tenant_admin_and_operator_can_bind_own_model_without_system_config_permission(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                cases = (
+                    ("u_lina", normalize_tenant_id("华兴银行"), "lina_bound_model"),
+                    ("u_zhaomin", normalize_tenant_id("郑州银行"), "zhaomin_bound_model"),
+                )
+                payloads: dict[str, dict[str, object]] = {}
+                for user_id, tenant_id, model_id in cases:
+                    model = {
+                        **self._model(model_id),
+                        "name": f"{user_id}绑定模型",
+                        "key": f"https://{user_id}.example/v1",
+                        "value": f"{user_id}-secret",
+                    }
+                    create_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                    create_conn.request(
+                        "POST",
+                        "/api/system-config/model",
+                        body=json.dumps(
+                            {"user_id": user_id, "tenant_id": tenant_id, "model": model},
+                            ensure_ascii=False,
+                        ).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    create_response = create_conn.getresponse()
+                    create_payload = json.loads(create_response.read().decode("utf-8"))
+
+                    get_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                    get_conn.request(
+                        "GET",
+                        f"/api/system-config?tenant_id={quote(tenant_id)}&user_id={user_id}",
+                    )
+                    get_response = get_conn.getresponse()
+                    get_payload = json.loads(get_response.read().decode("utf-8"))
+
+                    param_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                    param_conn.request(
+                        "POST",
+                        "/api/system-config/system-param",
+                        body=json.dumps(
+                            {
+                                "user_id": user_id,
+                                "tenant_id": tenant_id,
+                                "param": {
+                                    "id": "analysis_user_concurrency_limit",
+                                    "name": "AI分析并发",
+                                    "value": "9",
+                                    "category": "system",
+                                    "description": "should stay admin gated",
+                                },
+                            },
+                            ensure_ascii=False,
+                        ).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    param_response = param_conn.getresponse()
+                    param_payload = json.loads(param_response.read().decode("utf-8"))
+                    payloads[user_id] = {
+                        "create_status": create_response.status,
+                        "create": create_payload,
+                        "get_status": get_response.status,
+                        "get": get_payload,
+                        "param_status": param_response.status,
+                        "param": param_payload,
+                        "model_id": model_id,
+                        "tenant_id": tenant_id,
+                    }
+
+                other_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                other_conn.request(
+                    "GET",
+                    f"/api/system-config?tenant_id={quote(normalize_tenant_id('郑州银行'))}&user_id=u_zhaomin",
+                )
+                other_response = other_conn.getresponse()
+                other_payload = json.loads(other_response.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        lina = payloads["u_lina"]
+        zhaomin = payloads["u_zhaomin"]
+        self.assertEqual(lina["create_status"], 200)
+        self.assertEqual(zhaomin["create_status"], 200)
+        self.assertEqual(lina["create"]["config_scope"], account_system_config_scope("u_lina"))
+        self.assertEqual(zhaomin["create"]["config_scope"], account_system_config_scope("u_zhaomin"))
+        self.assertEqual(lina["get_status"], 200)
+        self.assertEqual(zhaomin["get_status"], 200)
+        self.assertFalse(lina["get"]["can_read_system_params"])
+        self.assertFalse(zhaomin["get"]["can_read_system_params"])
+        self.assertEqual(lina["get"]["system_params"], [])
+        self.assertEqual(zhaomin["get"]["system_params"], [])
+        self.assertIn("lina_bound_model", {item["id"] for item in lina["get"]["models"]})
+        self.assertIn("zhaomin_bound_model", {item["id"] for item in zhaomin["get"]["models"]})
+        self.assertNotIn("lina_bound_model", {item["id"] for item in other_payload["models"]})
+        self.assertEqual(lina["param_status"], 403)
+        self.assertEqual(zhaomin["param_status"], 403)
+        self.assertEqual(lina["param"]["error"], "permission_denied")
+        self.assertEqual(zhaomin["param"]["error"], "permission_denied")
 
 
 if __name__ == "__main__":

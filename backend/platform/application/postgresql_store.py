@@ -20,11 +20,25 @@ from .store import (
     _require_module_key,
 )
 
-SHARED_PAGE_LAYOUT_MODULES = frozenset({"dashboard", "institution_supervision"})
+SHARED_PAGE_LAYOUT_MODULES = frozenset({"dashboard", "institution_supervision", "weekly_report"})
 
 
 def _shared_page_layout_module(module_key: str) -> bool:
     return module_key in SHARED_PAGE_LAYOUT_MODULES
+
+
+def _merge_weekly_visual_reports(owned: Any, shared: Any) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in [*(owned if isinstance(owned, list) else []), *(shared if isinstance(shared, list) else [])]:
+        if not isinstance(item, dict):
+            continue
+        report_id = str(item.get("id") or "").strip()
+        if not report_id or report_id in seen:
+            continue
+        seen.add(report_id)
+        merged.append(item)
+    return merged
 
 
 class PostgreSQLApplicationStore:
@@ -49,6 +63,14 @@ class PostgreSQLApplicationStore:
                 state["pageDataLayout"] = list(shared_state.get("pageDataLayout") or [])
                 state["pageDataNotes"] = list(shared_state.get("pageDataNotes") or [])
                 state["pageStickyNote"] = dict(shared_state.get("pageStickyNote") or {})
+                if module_key == "weekly_report":
+                    state["weeklyVisualReports"] = list(shared_state.get("weeklyVisualReports") or [])
+            if module_key == "self_analysis":
+                weekly_shared = self._load_state(connection, tenant_key, "weekly_report", None)
+                state["visualReports"] = _merge_weekly_visual_reports(
+                    state.get("visualReports") or [],
+                    weekly_shared.get("weeklyVisualReports") or [],
+                )
             if module_key == "agent_workspace":
                 state["todos"] = self._todos(connection, tenant_key, actor_key)
                 state["createdTasks"] = self._tasks(connection, tenant_key, actor_key)
@@ -78,6 +100,14 @@ class PostgreSQLApplicationStore:
                 state["pageDataLayout"] = list(shared_state.get("pageDataLayout") or [])
                 state["pageDataNotes"] = list(shared_state.get("pageDataNotes") or [])
                 state["pageStickyNote"] = dict(shared_state.get("pageStickyNote") or {})
+                if module_key == "weekly_report":
+                    state["weeklyVisualReports"] = list(shared_state.get("weeklyVisualReports") or [])
+            if module_key == "self_analysis":
+                weekly_shared = self._load_state(connection, tenant_key, "weekly_report", None)
+                state["visualReports"] = _merge_weekly_visual_reports(
+                    state.get("visualReports") or [],
+                    weekly_shared.get("weeklyVisualReports") or [],
+                )
             if module_key == "agent_workspace":
                 state["todos"] = self._todos(connection, tenant_key, actor_key)
                 state["createdTasks"] = self._tasks(connection, tenant_key, actor_key)
@@ -109,6 +139,25 @@ class PostgreSQLApplicationStore:
                     shared_state["pageStickyNote"] = dict(next_state.get("pageStickyNote") or {})
                 self._save_non_core_state(
                     connection, tenant_key, module_key, None, shared_state,
+                    created_by_key=actor_key,
+                )
+            elif module_key == "self_analysis" and action in {"upsert_visual_report", "delete_visual_report"}:
+                merged_reports = [item for item in next_state.get("visualReports") or [] if isinstance(item, dict)]
+                next_state["visualReports"] = [
+                    item for item in merged_reports
+                    if str(item.get("ownerUserId") or "") in {"", actor_user_id}
+                ]
+                weekly_shared = self._load_state(connection, tenant_key, "weekly_report", None)
+                weekly_shared["weeklyVisualReports"] = [
+                    item for item in merged_reports
+                    if "weekly" in (item.get("destinations") or [])
+                ]
+                self._save_non_core_state(
+                    connection, tenant_key, module_key, actor_key, next_state,
+                    created_by_key=actor_key,
+                )
+                self._save_non_core_state(
+                    connection, tenant_key, "weekly_report", None, weekly_shared,
                     created_by_key=actor_key,
                 )
             else:

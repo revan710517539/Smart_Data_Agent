@@ -1537,6 +1537,31 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertNotIn("self-analysis.my-reports", payload["menu_keys"])
             self.assertNotIn("settings.users", payload["menu_keys"])
 
+    def test_super_admin_navigation_includes_dashboard_and_opt_in_menus(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                conn.request(
+                    "GET",
+                    "/api/navigation?tenant_id=tenant_demo&user_id=u_super_admin",
+                )
+                response = conn.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertEqual(response.status, 200)
+        self.assertIn("dashboard", payload["menu_keys"])
+        self.assertIn("market-customer", payload["menu_keys"])
+        self.assertIn("task-workbench", payload["menu_keys"])
+        self.assertIn("notifications", payload["menu_keys"])
+
     def test_tenant_admin_navigation_keeps_all_system_management_pages_visible(self) -> None:
         with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
@@ -1562,6 +1587,10 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertIn("settings.roles", payload["menu_keys"])
         self.assertIn("settings.audit", payload["menu_keys"])
         self.assertIn("settings.config", payload["menu_keys"])
+        self.assertNotIn("dashboard", payload["menu_keys"])
+        self.assertNotIn("market-customer", payload["menu_keys"])
+        self.assertNotIn("task-workbench.todos", payload["menu_keys"])
+        self.assertNotIn("notifications", payload["menu_keys"])
 
     def test_http_access_user_upsert_persists_profile_and_role_assignment(self) -> None:
         tenant_id = normalize_tenant_id("华兴银行")
@@ -1808,8 +1837,8 @@ class PlatformWorkflowTest(unittest.TestCase):
             "operatorSuperDataScopes": [],
             "operatorAdminMenus": ["经营周报"],
             "operatorAdminDataScopes": ["指标字典"],
-            "manageableRoles": ["操作员", "周报分析岗"],
-            "customRoles": ["客户经理分析岗", "周报分析岗", "指标维护岗"],
+            "manageableRoles": ["操作员"],
+            "customRoles": [],
             "updatedBy": "测试",
             "updatedAt": "刚刚",
         }
@@ -1857,7 +1886,7 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertFalse(can_read_dashboard)
         self.assertTrue(can_read_metric)
         self.assertIn("操作员", manageable_names)
-        self.assertIn("周报分析岗", manageable_names)
+        self.assertNotIn("周报分析岗", manageable_names)
 
     def test_access_role_policy_save_creates_custom_role_configs(self) -> None:
         tenant_id = normalize_tenant_id("华兴银行")

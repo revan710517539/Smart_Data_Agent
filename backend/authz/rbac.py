@@ -4,7 +4,13 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 from .models import PermissionPolicy, Role, RoleAssignment, RoleLevel
-from .seed import CUSTOM_ROLE_CANDIDATES, DEFAULT_ROLE_NAMES, MANDATORY_MENU_KEYS, OPERATING_TENANTS
+from .seed import (
+    CUSTOM_ROLE_CANDIDATES,
+    DEFAULT_ROLE_NAMES,
+    MANDATORY_MENU_KEYS,
+    OPERATING_TENANTS,
+    RETIRED_SEEDED_CUSTOM_ROLES,
+)
 
 
 SUPER_ADMIN_ROLE_ID = "role:global:super_admin"
@@ -19,24 +25,17 @@ DEFAULT_OPERATOR_MENU_KEYS = (
     "data-assets.data-management",
 )
 DEFAULT_TENANT_ADMIN_MENU_KEYS = (
-    "dashboard",
     "business-analysis",
     "business-analysis.weekly-report",
     "business-analysis.sandbox",
     "business-analysis.funnel",
     "business-analysis.supervision",
     "business-analysis.email-daily",
-    "market-customer",
-    "market-customer.segment",
-    "market-customer.competition",
     "self-analysis",
     "self-analysis.visual-reports",
     "self-analysis.smart-analysis",
     "self-analysis.my-reports",
     "self-analysis.analysis-config",
-    "task-workbench",
-    "task-workbench.todos",
-    "task-workbench.tasks",
     "task-workbench.skills",
     "data-assets",
     "data-assets.metrics",
@@ -44,10 +43,6 @@ DEFAULT_TENANT_ADMIN_MENU_KEYS = (
     "data-assets.data-management",
     "data-assets.quality",
     "data-assets.tools",
-    "notifications",
-    "notifications.alerts",
-    "notifications.subscriptions",
-    "notifications.history",
     "settings",
     "settings.users",
     "settings.roles",
@@ -86,7 +81,7 @@ def build_default_rbac_seed(
     """Build default RBAC policies with a single global super administrator.
 
     The global super administrator is not duplicated under tenants. Each tenant receives
-    only administrator, operator, and optional custom roles.
+    administrator and operator by default; additional roles are created by administrators.
     """
 
     tenants = tuple(normalize_tenant_id(name) for name in tenant_names)
@@ -248,6 +243,38 @@ def build_default_rbac_seed(
         manageable_roles=manageable_roles,
         tenant_roles=tuple(tenant_bundles),
     )
+
+
+def reconcile_role_defaults(repository: object) -> None:
+    """Retire seeded custom posts. Super-admin role grants of opt-in menus stay."""
+
+    list_roles = getattr(repository, "list_roles", None)
+    if not callable(list_roles):
+        return
+    for role in list(list_roles()):
+        if role.name in RETIRED_SEEDED_CUSTOM_ROLES and not role.is_system:
+            _retire_custom_role(repository, role)
+
+
+def _retire_custom_role(repository: object, role: Role) -> None:
+    operator_id = tenant_role_id(role.tenant_id, DEFAULT_ROLE_NAMES[1]) if role.tenant_id else ""
+    list_assignments = getattr(repository, "list_user_assignments", None)
+    replace_assignments = getattr(repository, "replace_user_assignments", None)
+    if callable(list_assignments) and callable(replace_assignments):
+        affected = {item.user_id for item in list_assignments() if item.role_id == role.role_id}
+        for user_id in affected:
+            existing = list_assignments(user_id)
+            kept = [item for item in existing if item.role_id != role.role_id]
+            if (
+                operator_id
+                and role.tenant_id
+                and not any(item.role_id == operator_id and item.tenant_id == role.tenant_id for item in kept)
+            ):
+                kept.append(RoleAssignment(user_id, role.tenant_id, operator_id, granted_by=SUPER_ADMIN_USER_ID))
+            replace_assignments(user_id, kept)
+    delete_role = getattr(repository, "delete_role", None)
+    if callable(delete_role):
+        delete_role(role.role_id)
 
 
 def assert_single_global_super_admin(roles: Iterable[Role]) -> None:

@@ -8,6 +8,7 @@ import {
   BrainCircuit,
   Database,
   Bell,
+  PieChart,
   Settings,
   ChevronDown,
   ChevronRight,
@@ -53,6 +54,15 @@ const menuItems: MenuItem[] = [
     children: [
       { key: "business-analysis.weekly-report", path: "/weekly-report", label: "经营周报" },
       { key: "business-analysis.supervision", path: "/supervision", label: "机构督导" },
+    ],
+  },
+  {
+    key: "market-customer",
+    label: "市场洞察",
+    icon: PieChart,
+    children: [
+      { key: "market-customer.segment", path: "/customers", label: "客群分析" },
+      { key: "market-customer.competition", path: "/competition", label: "竞品分析" },
     ],
   },
   { key: "self-analysis.my-reports", path: "/self-analysis/reports", label: "我的报表", icon: FileChartColumn },
@@ -149,17 +159,23 @@ export function Layout() {
     const loadNavigation = async () => {
       setNavigationStatus("loading");
       setAllowedMenuKeys(new Set());
-      try {
-        const response = await fetchNavigation({ tenantId, userId });
-        if (!cancelled) {
-          setAllowedMenuKeys(new Set(response.menu_keys));
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const response = await fetchNavigation({ tenantId, userId });
+          if (cancelled) return;
+          setAllowedMenuKeys(new Set(Array.isArray(response.menu_keys) ? response.menu_keys : []));
           setNavigationStatus("ready");
+          return;
+        } catch (error) {
+          lastError = error;
+          if (attempt < 2) await new Promise((resolve) => window.setTimeout(resolve, 400 * (attempt + 1)));
         }
-      } catch {
-        if (!cancelled) {
-          setAllowedMenuKeys(new Set());
-          setNavigationStatus("failed");
-        }
+      }
+      if (!cancelled) {
+        setAllowedMenuKeys(new Set());
+        setNavigationStatus("failed");
+        console.warn("navigation_load_failed", lastError);
       }
     };
     void loadNavigation();
@@ -188,11 +204,11 @@ export function Layout() {
   }, []);
 
   const visibleMenuItems = useMemo(
-    () => filterMenuItems(menuItems, allowedMenuKeys),
-    [allowedMenuKeys],
+    () => filterMenuItems(menuItems, allowedMenuKeys, institutions.length),
+    [allowedMenuKeys, institutions.length],
   );
   const currentMenuKey = menuKeyForPath(menuItems, location.pathname);
-  const accessFallbackPath = firstAllowedMenuPath(menuItems, allowedMenuKeys) || "/";
+  const accessFallbackPath = firstVisibleMenuPath(visibleMenuItems) || "/";
   const isTodoPage = location.pathname === "/agent/todos";
   const isSmartAnalysisPage = location.pathname === "/self-analysis/query";
 
@@ -261,8 +277,7 @@ export function Layout() {
   if (
     navigationStatus === "ready" &&
     currentMenuKey &&
-    allowedMenuKeys &&
-    !allowedMenuKeys.has(currentMenuKey)
+    !menuItemsHasKey(visibleMenuItems, currentMenuKey)
   ) {
     return <Navigate to={accessFallbackPath} replace />;
   }
@@ -521,6 +536,19 @@ export function Layout() {
         ) : navigationStatus === "failed" ? (
           <div className="m-7 rounded-xl border border-[#ffd7d7] bg-[#fff5f5] px-4 py-3 text-[13px] text-[#b42318]">
             页面权限加载失败，请确认登录状态后刷新页面。
+            <button
+              type="button"
+              className="ml-3 rounded-md border border-[#f5c2c2] bg-white px-2 py-1 text-[12px] text-[#b42318]"
+              onClick={() => {
+                setNavigationStatus("loading");
+                void fetchNavigation({ tenantId, userId }).then((response) => {
+                  setAllowedMenuKeys(new Set(Array.isArray(response.menu_keys) ? response.menu_keys : []));
+                  setNavigationStatus("ready");
+                }).catch(() => setNavigationStatus("failed"));
+              }}
+            >
+              重试
+            </button>
           </div>
         ) : (
           <Outlet key={tenantId} />
@@ -534,15 +562,32 @@ export function Layout() {
   );
 }
 
-function filterMenuItems(items: MenuItem[], allowedKeys: Set<string> | null): MenuItem[] {
+function filterMenuItems(items: MenuItem[], allowedKeys: Set<string> | null, institutionCount: number): MenuItem[] {
   if (!allowedKeys) return items;
-  return items
+  const filtered = items
     .map((item) => {
       const children = item.children?.filter((child) => allowedKeys.has(child.key));
       if (!allowedKeys.has(item.key) && !children?.length) return null;
       return children ? { ...item, children } : item;
     })
     .filter((item): item is MenuItem => item !== null);
+  if (institutionCount < 2) return filtered.filter((item) => item.key !== "dashboard");
+  if (filtered.some((item) => item.key === "dashboard")) return filtered;
+  const dashboard = items.find((item) => item.key === "dashboard");
+  return dashboard ? [dashboard, ...filtered] : filtered;
+}
+
+function menuItemsHasKey(items: MenuItem[], key: string) {
+  return items.some((item) => item.key === key || item.children?.some((child) => child.key === key));
+}
+
+function firstVisibleMenuPath(items: MenuItem[]): string | null {
+  for (const item of items) {
+    if (item.path) return item.path;
+    const child = item.children?.find((candidate) => candidate.path);
+    if (child?.path) return child.path;
+  }
+  return null;
 }
 
 function menuKeyForPath(items: MenuItem[], pathname: string): string | null {
@@ -551,16 +596,6 @@ function menuKeyForPath(items: MenuItem[], pathname: string): string | null {
     if (item.path === normalizedPath) return item.key;
     const child = item.children?.find((candidate) => candidate.path === normalizedPath);
     if (child) return child.key;
-  }
-  return null;
-}
-
-function firstAllowedMenuPath(items: MenuItem[], allowedKeys: Set<string> | null): string | null {
-  if (!allowedKeys) return null;
-  for (const item of items) {
-    if (item.path && allowedKeys.has(item.key)) return item.path;
-    const child = item.children?.find((candidate) => candidate.path && allowedKeys.has(candidate.key));
-    if (child?.path) return child.path;
   }
   return null;
 }

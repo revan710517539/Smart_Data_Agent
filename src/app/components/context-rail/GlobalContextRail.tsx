@@ -126,7 +126,7 @@ export function GlobalContextRail() {
   };
 
   return (
-    <div className="hidden shrink-0 bg-[#f8f8fa] pb-24 pt-4 pr-4 lg:block" data-global-context-rail="true">
+    <div className="hidden h-full min-h-0 shrink-0 bg-[#f8f8fa] lg:flex lg:flex-col" data-global-context-rail="true">
       <ContextSideRail
         pageKey={definition.pageKey}
         activeTab={activeTab}
@@ -134,6 +134,7 @@ export function GlobalContextRail() {
         commentCount={openComments.length}
         wide={wide}
         onWideChange={setWide}
+        flushToViewport
         comments={(
           <CommentsPanel
             showHeader={false}

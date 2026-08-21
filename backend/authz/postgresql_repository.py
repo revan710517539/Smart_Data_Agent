@@ -196,6 +196,15 @@ class PostgreSQLPolicyRepository(PolicyRepository):
             for policy in policies:
                 self._insert_policy(connection, policy)
 
+    def delete_role(self, role_id: str) -> None:
+        with self._transaction() as connection:
+            internal_role_id = PostgreSQLIdentityResolver.role_id(connection, role_id)
+            with connection.cursor() as cursor:
+                cursor.execute("DELETE FROM auth_manageable_roles WHERE role_id = %s OR manageable_role_id = %s", (internal_role_id, internal_role_id))
+                cursor.execute("DELETE FROM auth_permission_policies WHERE role_id = %s", (internal_role_id,))
+                cursor.execute("DELETE FROM auth_role_assignments WHERE role_id = %s", (internal_role_id,))
+                cursor.execute("UPDATE auth_roles SET status = 'disabled' WHERE role_id = %s", (internal_role_id,))
+
     def replace_manageable_role_ids(self, role_id: str, manageable_role_ids: set[str]) -> None:
         if role_id in manageable_role_ids:
             raise ValueError("role_cannot_manage_itself")

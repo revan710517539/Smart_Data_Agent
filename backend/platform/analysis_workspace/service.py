@@ -345,8 +345,60 @@ class MySQLAnalysisWorkspaceStore:
         return {"target_thread_id": target_thread_id, "source_thread_ids": source_thread_ids, "turn": turn}
 
 
+def provenance_dataset_snapshot(*sources: Any, schema_material: Any = None, content_material: Any = None) -> dict[str, Any]:
+    """Normalize table/warehouse snapshots into the keys the evidence panel reads."""
+    snapshot: dict[str, Any] = {}
+    for source in sources:
+        if isinstance(source, list):
+            for item in source:
+                _merge_snapshot_source(snapshot, item)
+        else:
+            _merge_snapshot_source(snapshot, source)
+    if not _first_text(snapshot, "schema_fingerprint", "schema_hash", "schema_version"):
+        fingerprint = _schema_fingerprint_from_material(schema_material)
+        if fingerprint:
+            snapshot["schema_fingerprint"] = fingerprint
+    if not _first_text(snapshot, "content_hash", "artifact_sha256"):
+        content = _content_hash_from_material(content_material, snapshot)
+        if content:
+            snapshot["content_hash"] = content
+    version = _first_text(snapshot, "version", "asset_version", "snapshot_id", "content_hash", "artifact_sha256")
+    schema = _first_text(snapshot, "schema_fingerprint", "schema_hash", "schema_version")
+    content = _first_text(snapshot, "content_hash", "artifact_sha256")
+    if version:
+        snapshot["version"] = version
+    if schema:
+        snapshot["schema_fingerprint"] = schema
+    if content:
+        snapshot["content_hash"] = content
+    return snapshot
+
+
+def provenance_metric_versions(*sources: Any) -> list[dict[str, Any]]:
+    """Accept metric_versions lists or metric_definition_versions maps."""
+    seen: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for source in sources:
+        for item in _metric_version_items(source):
+            key = item["metric_id"]
+            if key in seen or not _recorded_metric_version(item.get("version")):
+                continue
+            seen.add(key)
+            result.append(item)
+    return result
+
+
+def manifest_has_display_provenance(manifest: dict[str, Any]) -> bool:
+    snapshot = manifest.get("dataset_snapshot") if isinstance(manifest.get("dataset_snapshot"), dict) else {}
+    has_version = any(str(snapshot.get(key) or "").strip() for key in ("version", "asset_version", "snapshot_id", "content_hash", "artifact_sha256"))
+    has_schema = any(str(snapshot.get(key) or "").strip() for key in ("schema_fingerprint", "schemaFingerprint", "schema_hash", "schema_version"))
+    return bool(has_version and has_schema)
+
+
 def build_trusted_manifest(*, tenant_id: str, artifact_id: str, dataset_snapshot: dict[str, Any], metric_versions: list[dict[str, Any]], sql: str, result: Any, visualization: dict[str, Any], skill_versions: list[dict[str, Any]], model_version: str, authorization_snapshot: dict[str, Any], evidence_refs: list[dict[str, Any]], evaluation: dict[str, Any]) -> dict[str, Any]:
-    manifest = {"manifest_version": 1, "tenant_id": tenant_id, "artifact_id": artifact_id, "dataset_snapshot": dataset_snapshot, "metric_versions": metric_versions, "sql_hash": _hash(sql), "result_hash": _hash(result), "visualization_hash": _hash(visualization), "skill_versions": skill_versions, "model_version": model_version, "authorization_hash": _hash(authorization_snapshot), "evidence_refs": evidence_refs, "evaluation": evaluation, "created_at": _now()}
+    snapshot = provenance_dataset_snapshot(dataset_snapshot)
+    versions = provenance_metric_versions(metric_versions)
+    manifest = {"manifest_version": 1, "tenant_id": tenant_id, "artifact_id": artifact_id, "dataset_snapshot": snapshot, "metric_versions": versions, "sql_hash": _hash(sql), "result_hash": _hash(result), "visualization_hash": _hash(visualization), "skill_versions": skill_versions, "model_version": model_version, "authorization_hash": _hash(authorization_snapshot), "evidence_refs": evidence_refs, "evaluation": evaluation, "created_at": _now()}
     return {**manifest, "manifest_hash": _hash(manifest)}
 
 
@@ -435,6 +487,141 @@ def _decoded(value: Any, default: Any) -> Any:
         return json.loads(value) if value else deepcopy(default)
     except (TypeError, json.JSONDecodeError):
         return deepcopy(default)
+
+
+def _merge_snapshot_source(snapshot: dict[str, Any], source: Any) -> None:
+    if not isinstance(source, dict):
+        return
+    nested = source.get("source_snapshot")
+    if isinstance(nested, dict):
+        _merge_snapshot_source(snapshot, nested)
+    aliases = (
+        ("id", ("id", "dataset_id", "datasetId", "table_id", "code")),
+        ("table_id", ("table_id",)),
+        ("dataset_id", ("dataset_id", "datasetId")),
+        ("version", ("version", "asset_version", "assetVersion")),
+        ("snapshot_id", ("snapshot_id", "snapshotId")),
+        ("content_hash", ("content_hash", "contentHash", "artifact_sha256")),
+        ("schema_fingerprint", ("schema_fingerprint", "schemaFingerprint", "schema_hash", "schema_version", "schemaVersion")),
+        ("asset_version", ("asset_version", "assetVersion")),
+        ("observed_at", ("observed_at", "generatedAt", "generated_at")),
+        ("relative_path", ("relative_path", "relativePath")),
+        ("source_key", ("source_key", "sourceKey")),
+        ("immutable", ("immutable",)),
+        ("artifact_sha256", ("artifact_sha256",)),
+        ("page_data_id", ("page_data_id",)),
+        ("relationship_group_id", ("relationship_group_id", "relationshipGroupId")),
+        ("institution_scope", ("institution_scope",)),
+        ("source_row_count", ("source_row_count",)),
+    )
+    for dest, keys in aliases:
+        if snapshot.get(dest) not in (None, "", [], {}):
+            continue
+        for key in keys:
+            value = source.get(key)
+            if value not in (None, "", [], {}):
+                snapshot[dest] = value
+                break
+
+
+def _metric_version_items(source: Any) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    if isinstance(source, list):
+        for item in source:
+            if not isinstance(item, dict):
+                continue
+            metric_id = str(item.get("metric_id") or item.get("metricId") or item.get("metric_code") or item.get("metricCode") or "").strip()
+            version = str(item.get("version") or item.get("semanticVersion") or item.get("version_id") or "").strip()
+            if metric_id:
+                items.append({"metric_id": metric_id, "version": version})
+        return items
+    if isinstance(source, dict) and source and all(not isinstance(value, (dict, list)) for value in source.values()):
+        for key, value in source.items():
+            metric_id = str(key).strip()
+            if metric_id:
+                items.append({"metric_id": metric_id, "version": str(value or "").strip()})
+    return items
+
+
+def _recorded_metric_version(value: Any) -> bool:
+    version = str(value or "").strip().casefold()
+    return bool(version) and version not in {"temporary", "table-field", "published", "pinned", "unbound"}
+
+
+def _schema_fingerprint_from_material(material: Any) -> str:
+    identity = _schema_identity(material)
+    return _hash(identity) if identity not in (None, "", [], {}) else ""
+
+
+def _schema_identity(material: Any) -> Any:
+    parts = _collect_schema_parts(material)
+    return parts or None
+
+
+def _collect_schema_parts(material: Any) -> list[Any]:
+    if material is None or material in ("", [], {}):
+        return []
+    if isinstance(material, str):
+        text = material.strip()
+        return [text] if text else []
+    if isinstance(material, list):
+        if material and all(isinstance(item, dict) for item in material):
+            first = material[0]
+            if any(key in first for key in ("fieldNameEn", "fieldNameCn", "field_name_en")):
+                return [[{"name": str(item.get("fieldNameEn") or item.get("code") or item.get("name") or ""), "type": str(item.get("type") or "")} for item in material]]
+            if any("kind" in item or "tableNameEn" in item or "code" in item and "id" in item for item in material[:3]):
+                parts: list[Any] = []
+                for item in material:
+                    parts.extend(_collect_schema_parts(item))
+                return parts
+            return [sorted(str(key) for key in first if not str(key).startswith("_") and str(key) not in {"fieldLabels", "field_labels", "raw"})]
+        parts = []
+        for item in material:
+            parts.extend(_collect_schema_parts(item))
+        return parts
+    if not isinstance(material, dict):
+        return []
+    parts = []
+    if "schema_mapping" in material:
+        parts.extend(_collect_schema_parts(material.get("schema_mapping")))
+    labels = material.get("field_labels") or material.get("fieldLabels")
+    if isinstance(labels, dict) and labels:
+        parts.append(sorted(str(key) for key in labels))
+    if material.get("fields"):
+        parts.extend(_collect_schema_parts(material.get("fields")))
+    metrics = material.get("metrics") if isinstance(material.get("metrics"), list) else material.get("metric")
+    dimensions = material.get("dimensions") if isinstance(material.get("dimensions"), list) else material.get("dimension")
+    if metrics or dimensions:
+        parts.append({"metrics": metrics or [], "dimensions": dimensions or []})
+    elif not parts and all(not isinstance(value, (dict, list)) for value in material.values()):
+        parts.append(sorted(str(key) for key in material))
+    return parts
+
+
+def _content_hash_from_material(material: Any, snapshot: dict[str, Any]) -> str:
+    rows = material if isinstance(material, list) else []
+    bounded: list[dict[str, Any]] = []
+    for item in rows[:200]:
+        if not isinstance(item, dict):
+            continue
+        bounded.append({str(key): item[key] for key in item if not str(key).startswith("_") and str(key) not in {"fieldLabels", "field_labels"}})
+    identity = {
+        "id": str(snapshot.get("id") or snapshot.get("table_id") or snapshot.get("dataset_id") or "").strip(),
+        "source_key": str(snapshot.get("source_key") or "").strip(),
+        "relative_path": str(snapshot.get("relative_path") or "").strip(),
+        "rows": bounded,
+    }
+    if not identity["id"] and not bounded:
+        return ""
+    return _hash(identity)
+
+
+def _first_text(payload: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return ""
 
 
 def _hash(value: Any) -> str:

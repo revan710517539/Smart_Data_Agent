@@ -16,7 +16,7 @@ export function VisualReportLibrary({
   embedded?: boolean;
 }) {
   const { reports, loading, error, remove } = useVisualReportCollection(destination);
-  const { tenantId, userId } = usePlatformContext();
+  const { tenantId, userId, isSuperAdmin, isInstitutionAdmin } = usePlatformContext();
   const featuredReports = useFeaturedReports(tenantId, userId);
   const [expandedId, setExpandedId] = useState("");
   const [pendingDelete, setPendingDelete] = useState<VisualReport | null>(null);
@@ -35,7 +35,7 @@ export function VisualReportLibrary({
         railPageKey={railPageKey}
         featured={allowFeatured ? featuredReports.isFeatured("visual", report.id) : undefined}
         onToggleFeatured={allowFeatured ? () => featuredReports.toggle("visual", report.id) : undefined}
-        onRequestDelete={destination === "mine" ? () => setPendingDelete(report) : undefined}
+        onRequestDelete={destination === "mine" || (destination === "weekly" && (isSuperAdmin || isInstitutionAdmin || report.ownerUserId === userId)) ? () => setPendingDelete(report) : undefined}
       />)}
       {!reports.length && <div className="rounded-lg border border-dashed border-[#e0e5e2] px-3 py-10 text-center text-[11px] text-[#9ba19e]">{destination === "mine" ? "暂无存入我的可视化报表" : "暂无存入周报的可视化报表"}</div>}
     </div>}

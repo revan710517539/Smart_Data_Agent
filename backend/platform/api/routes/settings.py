@@ -22,14 +22,14 @@ def handle_system_config_get(handler: Any, query: str) -> None:
     try:
         params = parse_qs(query)
         context = handler._request_context(params=params)
-        handler._require_system_config_permission(context, "read")
         config_scope = _account_config_scope(context)
         ensure_default_models_for_account(handler.services.system_config_store, context.user_id)
         models = _list_account_models(handler, context, config_scope)
         if not any(str(model.get("id") or "") == DEFAULT_RELAY_MODEL_ID for model in models):
             models = [default_relay_model_preset(), *models]
         speech_integrations = _list_account_speech_integrations(handler, context, config_scope)
-        parameter_scopes = _available_system_parameter_scopes(handler, context)
+        can_read_system_params = _can_read_system_params(handler, context)
+        parameter_scopes = _available_system_parameter_scopes(handler, context) if can_read_system_params else ()
         parameter_tenant_ids = tuple(tenant_id for tenant_id, _ in parameter_scopes)
         system_params = [
             {
@@ -46,6 +46,7 @@ def handle_system_config_get(handler: Any, query: str) -> None:
                 "config_scope": config_scope,
                 "model_config_scope": _model_account_scope(context),
                 "config_owner_user_id": context.user_id,
+                "can_read_system_params": can_read_system_params,
                 "parameter_tenant_ids": list(parameter_tenant_ids),
                 "models": models,
                 "speech_integrations": speech_integrations,
@@ -68,7 +69,6 @@ def handle_system_model_upsert(handler: Any) -> None:
         model = payload.get("model")
         if not isinstance(model, dict):
             raise ValueError("model must be an object.")
-        handler._require_system_config_permission(context, "manage")
         model = {**model, "applicationModule": "global_text_model"}
         if str(model.get("value") or "") == MASKED_SECRET:
             existing = _get_account_model(handler, context, str(model.get("id") or ""), reveal_secret=True)
@@ -93,7 +93,6 @@ def handle_system_model_delete(handler: Any, query: str) -> None:
         model_id = first_query_value(params, "model_id")
         if not model_id:
             raise ValueError("model_id is required.")
-        handler._require_system_config_permission(context, "manage")
         if model_id == DEFAULT_RELAY_MODEL_ID:
             raise ValueError("default_model_cannot_be_deleted")
         config_scope = _model_account_scope(context)
@@ -111,7 +110,6 @@ def handle_system_model_test(handler: Any) -> None:
     try:
         payload = handler._read_json()
         context = handler._request_context(payload=payload)
-        handler._require_system_config_permission(context, "manage")
         model = payload.get("model")
         model_id = str(payload.get("model_id") or "").strip()
         model_scope = _model_storage_scope(handler, context, model_id)
@@ -199,7 +197,6 @@ def handle_system_speech_integration_upsert(handler: Any) -> None:
         integration = payload.get("speech_integration")
         if not isinstance(integration, dict):
             raise ValueError("speech_integration must be an object.")
-        handler._require_system_config_permission(context, "manage")
         integration = {**integration, "applicationModule": "global_voice_model"}
         if str(integration.get("apiKey") or "") == MASKED_SECRET:
             existing = _get_account_speech_integration(
@@ -223,7 +220,6 @@ def handle_system_speech_integration_test(handler: Any) -> None:
     try:
         payload = handler._read_json()
         context = handler._request_context(payload=payload)
-        handler._require_system_config_permission(context, "manage")
         integration = payload.get("speech_integration")
         integration_id = str(payload.get("integration_id") or "").strip()
         if integration is None and integration_id:
@@ -271,7 +267,6 @@ def handle_system_speech_integration_delete(handler: Any, query: str) -> None:
         integration_id = first_query_value(params, "integration_id")
         if not integration_id:
             raise ValueError("integration_id is required.")
-        handler._require_system_config_permission(context, "manage")
         config_scope = _account_config_scope(context)
         deleted = False
         for scope in _model_scope_candidates(context):
@@ -285,6 +280,21 @@ def handle_system_speech_integration_delete(handler: Any, query: str) -> None:
 
 def _account_config_scope(context: Any) -> str:
     return account_system_config_scope(context.user_id)
+
+
+def _can_read_system_params(handler: Any, context: Any) -> bool:
+    # Account-owned model/speech bindings are authenticated-user scoped.
+    # Tenant system parameters remain behind system_config:* (super admin).
+    execution = (
+        context.to_execution_context()
+        if hasattr(context, "to_execution_context")
+        else ExecutionContext(user_id=context.user_id, tenant_id=context.tenant_id)
+    )
+    try:
+        handler.services.permission_broker.require_resource(execution, "system_config:*", "read")
+    except PermissionError:
+        return False
+    return True
 
 
 def _institution_label(tenant_id: str) -> str:

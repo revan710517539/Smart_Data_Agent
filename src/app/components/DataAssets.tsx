@@ -625,7 +625,7 @@ export function DataAssets() {
         />
       )}
 
-      {section === "data-management" && <DataManagement searchTerm={searchTerm} tenantId={tenantId} userId={userId} />}
+      {section === "data-management" && <DataManagement searchTerm={searchTerm} tenantId={tenantId} userId={userId} isSuperAdmin={isSuperAdmin} />}
 
       {section === "quality" && <QualityMonitor searchTerm={searchTerm} tenantId={tenantId} userId={userId} />}
 
@@ -1278,7 +1278,7 @@ function useDataAssetBundle(tenantId: string, userId: string, scope?: "knowledge
   };
 }
 
-function DataManagement({ searchTerm, tenantId, userId }: { searchTerm: string; tenantId: string; userId: string }) {
+function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { searchTerm: string; tenantId: string; userId: string; isSuperAdmin: boolean }) {
   const [activeTab, setActiveTab] = useState<DataManagementTab | "relationships">("raw");
   const [rawPage, setRawPage] = useState(1);
   const [singlePageDataPage, setSinglePageDataPage] = useState(1);
@@ -1475,8 +1475,8 @@ function DataManagement({ searchTerm, tenantId, userId }: { searchTerm: string; 
                   新增主题表
                 </button>
               )}
-              {activeTab === "single_page" && <PageDataCreateButton scope="single_institution" onClick={() => void openPageDataEditor("single_institution")} />}
-              {activeTab === "multi_page" && <PageDataCreateButton scope="multi_institution" onClick={() => void openPageDataEditor("multi_institution")} />}
+              {isSuperAdmin && activeTab === "single_page" && <PageDataCreateButton scope="single_institution" onClick={() => void openPageDataEditor("single_institution")} />}
+              {isSuperAdmin && activeTab === "multi_page" && <PageDataCreateButton scope="multi_institution" onClick={() => void openPageDataEditor("multi_institution")} />}
               <SegmentedTabs
                 tabs={[
                   { key: "raw", label: `原始表 ${rawTables.length}` },
@@ -1520,6 +1520,7 @@ function DataManagement({ searchTerm, tenantId, userId }: { searchTerm: string; 
             assets={pagedSinglePageDataAssets}
             keyword={keyword}
             scope="single_institution"
+            canManage={isSuperAdmin}
             onEdit={(asset) => void openPageDataEditor("single_institution", asset)}
             onPageChange={async (asset, page) => { await savePageData({ ...asset, institutionScope: "single_institution", targetPages: [page] }); }}
             onDelete={async (asset) => {
@@ -1533,6 +1534,7 @@ function DataManagement({ searchTerm, tenantId, userId }: { searchTerm: string; 
             assets={pagedMultiPageDataAssets}
             keyword={keyword}
             scope="multi_institution"
+            canManage={isSuperAdmin}
             onEdit={(asset) => void openPageDataEditor("multi_institution", asset)}
             onPageChange={async () => undefined}
             onDelete={async (asset) => {

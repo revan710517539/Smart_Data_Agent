@@ -153,11 +153,12 @@ export async function saveAnalysisResultToWeeklyReport({
   tenantId,
   userId = getDefaultUserId(),
   resultId,
-}: ReportParams & { resultId: string }): Promise<{ tenant_id: string; result: SavedAnalysisResult }> {
+  weeklyReportEligible = true,
+}: ReportParams & { resultId: string; weeklyReportEligible?: boolean }): Promise<{ tenant_id: string; result: SavedAnalysisResult }> {
   return apiRequest<{ tenant_id: string; result: SavedAnalysisResult }>("/api/reports/analysis-result/save-weekly", {
     method: "POST",
     context: { tenantId, userId },
-    body: { result_id: resultId },
+    body: { result_id: resultId, weeklyReportEligible },
   });
 }
 

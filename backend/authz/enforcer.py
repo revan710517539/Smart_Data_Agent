@@ -59,6 +59,20 @@ class AuthEnforcer:
 
         return self._has_super_admin_role(user_id, tenant_id)
 
+    def has_tenant_admin_role(self, user_id: str, tenant_id: str) -> bool:
+        return any(role.level == RoleLevel.TENANT_ADMIN for role in self._load_roles(user_id, tenant_id))
+
+    def can_manage_shared_visual(self, user_id: str, tenant_id: str, owner_user_id: str) -> bool:
+        """Owner, institution admin, or super admin may remove a tenant-shared visual."""
+
+        actor = str(user_id or "").strip()
+        owner = str(owner_user_id or "").strip()
+        if actor and owner and actor == owner:
+            return True
+        if self.has_super_admin_role(actor, tenant_id):
+            return True
+        return self.has_tenant_admin_role(actor, tenant_id)
+
     def can_manage_role(self, user_id: str, tenant_id: str, target_role_id: str) -> bool:
         target = self.repository.get_role(target_role_id)
         if not target:

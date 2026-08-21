@@ -14,6 +14,7 @@ from backend.authz import (
     PostgreSQLPolicyRepository,
     build_default_rbac_seed,
     normalize_tenant_id,
+    reconcile_role_defaults,
     tenant_role_id,
 )
 from backend.authz.models import PermissionPolicy, Role, RoleAssignment, RoleLevel
@@ -292,6 +293,7 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
             policy_repository.seed(roles, assignments, policies, manageable_roles=manageable_roles)
         else:
             _reconcile_local_rbac_extensions(policy_repository, policies)
+        reconcile_role_defaults(policy_repository)
         task_repository = SQLiteAnalysisTaskRepository(db_path, initialize=False)
         knowledge_store = SQLiteKnowledgeStore(
             db_path,
@@ -561,6 +563,7 @@ def _build_mysql_production_platform(runtime_config: RuntimeConfig) -> PlatformS
                 apply_mysql_schema(runtime_config.database_url, connection=connection)
 
         policy_repository = PostgreSQLPolicyRepository(pool)
+        reconcile_role_defaults(policy_repository)
         task_repository: AnalysisTaskRepository = PostgreSQLAnalysisTaskRepository(pool)
         knowledge_store = PostgreSQLKnowledgeStore(pool)
         data_asset_store = PostgreSQLDataAssetStore(pool)
@@ -1292,7 +1295,7 @@ def _default_user_role_assignments() -> list[RoleAssignment]:
         ("u_wangqiang", "广州银行", "管理员"),
         ("u_zhaomin", "郑州银行", "操作员"),
         ("u_liuyang", "南京银行", "操作员"),
-        ("u_chenlei", "三峡银行", "周报分析岗"),
+        ("u_chenlei", "三峡银行", "操作员"),
     ]
     return [
         RoleAssignment(

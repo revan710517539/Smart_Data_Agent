@@ -1,6 +1,12 @@
 
   # 贷款数据分析Agent设计
 
+  ## 开发与发布规范
+
+  本项目所有开发、测试、候选和生产发布必须引用
+  [`sda-production-development/v1`](DEVELOPMENT.md)。任何改动提交前运行
+  `./scripts/release-gate.sh`；构建通过或接口返回 200 不等于已部署或生产可用。
+
   This is a code bundle for 贷款数据分析Agent设计. The original project is available at https://www.figma.com/design/Cs7QemQ1JsBLR6gXYw2wZs/%E8%B4%B7%E6%AC%BE%E6%95%B0%E6%8D%AE%E5%88%86%E6%9E%90Agent%E8%AE%BE%E8%AE%A1.
 
   ## Running the code

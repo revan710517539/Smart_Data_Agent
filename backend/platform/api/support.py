@@ -36,6 +36,7 @@ def first_query_value(params: dict[str, list[str]], key: str) -> str | None:
 
 def send_route_exception(handler: Any, exc: Exception) -> None:
     request_id = str(handler.headers.get("X-Request-Id") or f"req_{uuid4().hex[:20]}")
+    trace_id = str(handler.headers.get("X-Trace-Id") or request_id)
     if isinstance(exc, RateLimitExceeded):
         handler._send_json(
             {
@@ -49,10 +50,17 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
         )
         return
     if isinstance(exc, AuthenticationError):
+        status = HTTPStatus(getattr(exc, "status_code", HTTPStatus.UNAUTHORIZED))
+        error_code = str(getattr(exc, "error_code", "authentication_required"))
         handler._send_json(
-            {"error": "authentication_required", "message": "Authentication is required.", "request_id": request_id},
-            HTTPStatus.UNAUTHORIZED,
-            headers={"X-Request-Id": request_id},
+            {
+                "error": error_code,
+                "message": "Authentication is required." if status == HTTPStatus.UNAUTHORIZED else "Authenticated context conflicts with the request.",
+                "request_id": request_id,
+                "trace_id": trace_id,
+            },
+            status,
+            headers={"X-Request-Id": request_id, "X-Trace-Id": trace_id},
         )
         return
     if isinstance(exc, PermissionError):

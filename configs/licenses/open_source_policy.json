@@ -1,0 +1,65 @@
+{
+  "schema_version": "smart-data-agent-open-source-policy/v1",
+  "project_distribution": "internal-private",
+  "allowed_spdx": [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BlueOak-1.0.0",
+    "CC-BY-4.0",
+    "ISC",
+    "LGPL-3.0-only",
+    "MIT",
+    "MPL-2.0"
+  ],
+  "allowed_expressions": [
+    "(MIT OR Apache-2.0)",
+    "(MPL-2.0 OR Apache-2.0)",
+    "Apache-2.0 OR BSD-3-Clause",
+    "MIT AND ISC",
+    "MIT OR SEE LICENSE IN FEEL-FREE.md"
+  ],
+  "forbidden_license_prefixes": [
+    "AGPL-",
+    "BUSL-",
+    "Commercial",
+    "Elastic-License-",
+    "LicenseRef-Proprietary",
+    "PolyForm-",
+    "Proprietary",
+    "SSPL-"
+  ],
+  "forbidden_license_markers": [
+    "Commons Clause"
+  ],
+  "forbidden_source_paths": [
+    "vendor/lightdash/ee",
+    "third_party/lightdash/ee",
+    "vendor/lightdash-enterprise",
+    "vendor/jimureport",
+    "third_party/jimureport",
+    "vendor/supersonic",
+    "third_party/supersonic",
+    "vendor/sqlcoder-weights",
+    "third_party/sqlcoder-weights"
+  ],
+  "python_license_expectations": {
+    "boto3": ["Apache-2.0"],
+    "certifi": ["MPL-2.0"],
+    "croniter": ["MIT"],
+    "cryptography": ["Apache-2.0 OR BSD-3-Clause"],
+    "openpyxl": ["MIT"],
+    "polars": ["MIT"],
+    "psycopg": ["LGPL-3.0-only"],
+    "pyhive": ["Apache-2.0"],
+    "pyjwt": ["MIT"],
+    "pymysql": ["MIT"],
+    "pypdf": ["BSD-3-Clause"],
+    "python-docx": ["MIT"],
+    "redis": ["MIT"],
+    "sqlglot": ["MIT"],
+    "uvicorn": ["BSD-3-Clause"],
+    "websocket-client": ["Apache-2.0"]
+  }
+}

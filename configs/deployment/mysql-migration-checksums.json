@@ -36,6 +36,11 @@
       "version": "0034",
       "path": "migrations/0034_capability_pack_snapshots.sql",
       "sha256": "ff6e5ee6515aeee79824a86077aa0cc61dc597ab87d3485658a9ce54cac09f28"
+    },
+    {
+      "version": "0035",
+      "path": "migrations/0035_migration_attempts.sql",
+      "sha256": "b0011127dd3b1a4a014961b821951d82b2c2e4272008d86be689eb96fd87f254"
     }
   ]
 }

@@ -151,10 +151,14 @@ for script in (
     "scripts/candidate-smoke.sh",
     "scripts/auth-e2e.sh",
     "scripts/data-crawler-contract-smoke.sh",
+    "scripts/collect_release_evidence.py",
 ):
     require((ROOT / script).is_file(), f"release_script:{script}")
 
 require("org.opencontainers.image.revision" in dockerfile, "dockerfile_commit_label")
+require("SMART_DATA_AGENT_COMMIT_SHA=${SMART_DATA_AGENT_COMMIT_SHA}" in dockerfile, "dockerfile_runtime_commit_sha")
+require("collect_release_evidence.py" in read("scripts/build-image.sh"), "build_image_release_evidence")
+require("SMART_DATA_AGENT_EXPECTED_SHA" in read("scripts/candidate-smoke.sh"), "candidate_exact_sha")
 require("check_frontend_delivery.mjs" in dockerfile, "dockerfile_frontend_delivery_gate")
 
 try:

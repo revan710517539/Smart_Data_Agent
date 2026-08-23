@@ -37,6 +37,7 @@ class MySQLSQLClosureTest(unittest.TestCase):
                 "migrations/0032_unified_runtime.sql",
                 "migrations/0033_user_credentials.sql",
                 "migrations/0034_capability_pack_snapshots.sql",
+                "migrations/0035_migration_attempts.sql",
             ],
         )
         for path in REPO_MYSQL.rglob("*.sql"):
@@ -64,6 +65,7 @@ class MySQLSQLClosureTest(unittest.TestCase):
             "0032_unified_runtime.sql",
             "0033_user_credentials.sql",
             "0034_capability_pack_snapshots.sql",
+            "0035_migration_attempts.sql",
         ):
             text = (REPO_MYSQL / "migrations" / name).read_text(encoding="utf-8")
             self.assertIn("DEFAULT CURRENT_TIMESTAMP(6)", text)

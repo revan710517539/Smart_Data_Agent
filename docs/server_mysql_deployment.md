@@ -77,8 +77,14 @@ docker compose --env-file .env.production -f docker-compose.server.yml run --rm 
 ```bash
 docker compose --env-file .env.production -f docker-compose.server.yml up capabilities
 docker compose --env-file .env.production -f docker-compose.server.yml up -d worker api
-./scripts/candidate-smoke.sh http://127.0.0.1:8787
+SMART_DATA_AGENT_EXPECTED_SHA=<40位SHA> \
+  ./scripts/candidate-smoke.sh http://127.0.0.1:8787
 ```
+
+`build-image.sh` 会在 `artifacts/releases/<40位SHA>/` 生成脱敏
+`release-receipt.json` 和 `SHA256SUMS`，记录镜像 ID/digest、OCI revision、SBOM、MySQL
+目标版本与关键交付文件校验和。候选门禁会回读 `/api/ready` 的完整 SHA、MySQL 8.0.18
+及首页实际引用的全部 JS/CSS，并分别记录页面和静态资源耗时。
 
 `capabilities` 只激活 7 条平台基础场景/方法 Skill；33 条机构覆盖 Skill 保持
 `review`，110 条机构 Memory 保持 `candidate`，不会绕过四眼审批。API 与 Worker

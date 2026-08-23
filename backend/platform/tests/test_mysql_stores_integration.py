@@ -5,6 +5,7 @@ import json
 import os
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import pymysql
@@ -68,9 +69,40 @@ class MySQLStoresIntegrationTest(postgres_integration.PostgreSQLStoresIntegratio
                 cursor.execute("SELECT version, checksum FROM platform_schema_migrations ORDER BY version")
                 rows = list(cursor.fetchall())
         versions = [str(row["version"] if isinstance(row, dict) else row[0]) for row in rows]
-        self.assertEqual(versions, ["0001", "0029", "0030", "0031", "0032"])
+        self.assertEqual(versions, ["0001", "0029", "0030", "0031", "0032", "0033", "0034", "0035"])
+        with self.raw_pool.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT status FROM platform_schema_migration_attempts WHERE version=%s ORDER BY started_at DESC LIMIT 1",
+                    ("0035",),
+                )
+                attempt = cursor.fetchone()
+        self.assertEqual(str(attempt["status"] if isinstance(attempt, dict) else attempt[0]), "succeeded")
         schema_file = Path(__file__).resolve().parents[1] / "database" / "mysql" / "0001_production_schema.sql"
         self.assertEqual(first.checksum, hashlib.sha256(schema_file.read_bytes()).hexdigest())
+
+    def test_mysql_failed_additive_migration_records_attempt_and_no_ledger_success(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            migration_dir = Path(tmpdir)
+            (migration_dir / "9999_failure_probe.sql").write_text(
+                "SELECT * FROM platform_table_that_must_not_exist;\n",
+                encoding="utf-8",
+            )
+            with patch("backend.platform.database.mysql.MYSQL_ADDITIVE_MIGRATION_DIR", migration_dir):
+                with self.assertRaises(Exception):
+                    apply_mysql_schema(DATABASE_URL)
+        with self.raw_pool.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT status,error_code FROM platform_schema_migration_attempts WHERE version=%s ORDER BY started_at DESC LIMIT 1",
+                    ("9999",),
+                )
+                attempt = cursor.fetchone()
+                cursor.execute("SELECT COUNT(*) AS count FROM platform_schema_migrations WHERE version=%s", ("9999",))
+                ledger = cursor.fetchone()
+        self.assertEqual(str(attempt["status"] if isinstance(attempt, dict) else attempt[0]), "failed")
+        self.assertTrue(str(attempt["error_code"] if isinstance(attempt, dict) else attempt[1]))
+        self.assertEqual(int(ledger["count"] if isinstance(ledger, dict) else ledger[0]), 0)
 
     def test_mysql_platform_composition_uses_mysql_primary(self) -> None:
         config = RuntimeConfig(

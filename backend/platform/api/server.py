@@ -389,9 +389,9 @@ class AnalysisAPIHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Credentials", "true")
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
-        allowed_headers = "content-type,authorization,x-request-id,x-idempotency-key"
+        allowed_headers = "content-type,authorization,x-request-id,x-trace-id,x-idempotency-key,x-tenant-id"
         if self.services.runtime_config.auth_mode == "development":
-            allowed_headers += ",x-user-id,x-tenant-id"
+            allowed_headers += ",x-user-id"
         self.send_header("Access-Control-Allow-Headers", allowed_headers)
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -484,6 +484,7 @@ def _runtime_health(handler: AnalysisAPIHandler) -> dict[str, Any]:
     return {
         "status": "ok" if ready and not degraded else "degraded" if ready else "unavailable",
         "ready": ready,
+        "build": {"commit_sha": os.getenv("SMART_DATA_AGENT_COMMIT_SHA", "").strip()},
         "checks": checks,
     }
 

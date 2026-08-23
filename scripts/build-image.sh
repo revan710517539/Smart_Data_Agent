@@ -9,6 +9,8 @@ esac
 
 test "$(git rev-parse HEAD)" = "$sha" || { echo "requested SHA is not HEAD" >&2; exit 1; }
 test -z "$(git status --porcelain --untracked-files=normal)" || { echo "worktree must be clean for an immutable image" >&2; exit 1; }
+python3 scripts/check_production_development_standard.py
+uv run python scripts/check_open_source_licenses.py --write-sbom
 image=${SMART_DATA_AGENT_IMAGE_REPOSITORY:-smart-data-agent}:$sha
 build_date=$(git show -s --format=%cI "$sha")
 docker build \
@@ -18,4 +20,5 @@ docker build \
   --tag "$image" .
 image_revision=$(docker image inspect "$image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
 test "$image_revision" = "$sha" || { echo "image revision label mismatch" >&2; exit 1; }
+python3 scripts/collect_release_evidence.py "$image" "$sha"
 printf '%s\n' "$image"

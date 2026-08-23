@@ -2,6 +2,8 @@
 set -eu
 
 git diff --check
+python3 scripts/check_production_development_standard.py
+python3 scripts/check_mysql_migration_history.py
 python3 scripts/check_server_deployment_contract.py
 python3 scripts/check_mysql_sql_closure.py
 python3 scripts/check_production_capability_pack.py

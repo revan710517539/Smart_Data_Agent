@@ -2126,8 +2126,9 @@ class PlatformWorkflowTest(unittest.TestCase):
 
         self.assertEqual(allowed_response.status, 200)
         self.assertEqual(allowed_payload["tenant_id"], guangzhou_tenant)
-        self.assertEqual(denied_response.status, 401)
-        self.assertEqual(denied_payload["error"], "authentication_required")
+        self.assertEqual(denied_response.status, 403)
+        self.assertEqual(denied_payload["error"], "tenant_context_conflict")
+        self.assertEqual(denied_payload["trace_id"], denied_payload["request_id"])
 
     def test_http_tenants_lists_backend_operating_tenants(self) -> None:
         with TemporaryDirectory() as tmpdir:

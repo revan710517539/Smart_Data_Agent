@@ -6,6 +6,7 @@ import queue
 import re
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ MYSQL_SCHEMA_VERSION = "0001"
 MYSQL_SCHEMA_PATH = Path(__file__).resolve().parent / "mysql" / "0001_production_schema.sql"
 MYSQL_ADDITIVE_MIGRATION_DIR = Path(__file__).resolve().parent / "mysql" / "migrations"
 MYSQL_MIGRATION_LOCK = "smart_data_agent_schema_migration"
+MYSQL_TARGET_VERSION = "8.0.18"
 # These exact hashes were applied by the immediately preceding repository
 # revision before MySQL 8.0.18-compatible datetime defaults were corrected.
 # They are schema-equivalent for already-created databases. Unknown drift still
@@ -48,7 +50,7 @@ def parse_mysql_url(database_url: str) -> dict[str, Any]:
     if not parsed.hostname or not database:
         raise ValueError("mysql_database_url_incomplete")
     query = parse_qs(parsed.query)
-    ssl_enabled = (query.get("ssl") or query.get("ssl_mode") or [""])[0].lower()
+    ssl_enabled = (query.get("ssl") or query.get("ssl_mode") or [""])[0].strip().lower()
     options: dict[str, Any] = {
         "host": parsed.hostname,
         "port": parsed.port or 3306,
@@ -62,12 +64,19 @@ def parse_mysql_url(database_url: str) -> dict[str, Any]:
         "write_timeout": int((query.get("write_timeout") or ["30"])[0]),
         "init_command": "SET time_zone = '+00:00'",
     }
-    if ssl_enabled in {"1", "true", "required", "verify_ca", "verify_identity"}:
-        ssl: dict[str, Any] = {}
-        ca = (query.get("ssl_ca") or [""])[0]
-        if ca:
-            ssl["ca"] = ca
-        options["ssl"] = ssl
+    if ssl_enabled and ssl_enabled not in {"1", "true", "required", "verify_ca", "verify_identity"}:
+        raise ValueError("mysql_ssl_mode_invalid")
+    if ssl_enabled in {"1", "true", "required"}:
+        options["ssl"] = {}
+    elif ssl_enabled in {"verify_ca", "verify_identity"}:
+        ca = (query.get("ssl_ca") or [""])[0].strip()
+        if not ca:
+            raise ValueError("mysql_ssl_ca_required")
+        options["ssl"] = {
+            "ca": ca,
+            "check_hostname": ssl_enabled == "verify_identity",
+            "verify_mode": True,
+        }
     return options
 
 
@@ -161,10 +170,14 @@ class MySQLConnectionPool:
             with self.connection() as connection, connection.cursor() as cursor:
                 cursor.execute("SELECT VERSION() AS version, @@session.time_zone AS time_zone")
                 row = cursor.fetchone() or {}
+            version = str(_value(row, "version", 0) or "")
+            supported = mysql_version_supported(version)
             return {
-                "ready": True,
+                "ready": supported,
                 "adapter": "mysql_primary",
-                "version": str(_value(row, "version", 0) or ""),
+                "version": version,
+                "target_version": MYSQL_TARGET_VERSION,
+                **({"error": "mysql_version_unsupported"} if not supported else {}),
                 "time_zone": str(_value(row, "time_zone", 1) or ""),
                 "latency_ms": max(0, round((time.perf_counter() - started) * 1000)),
                 "min_size": self.min_size,
@@ -213,6 +226,10 @@ def apply_mysql_schema(
             lock_acquired = int(_value(cursor.fetchone(), "GET_LOCK(%s, 30)", 0) or 0) == 1
             if not lock_acquired:
                 raise MySQLMigrationError("mysql_schema_migration_lock_timeout")
+            cursor.execute("SELECT VERSION() AS version")
+            version = str(_value(cursor.fetchone(), "version", 0) or "")
+            if not mysql_version_supported(version):
+                raise MySQLMigrationError(f"mysql_version_unsupported:{version}")
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS platform_schema_migrations (
@@ -248,7 +265,7 @@ def apply_mysql_schema(
                     (MYSQL_SCHEMA_VERSION, path.stem, checksum, elapsed_ms),
                 )
                 baseline_applied = True
-            _apply_mysql_additive_migrations(cursor)
+            _apply_mysql_additive_migrations(connection, cursor)
         connection.commit()
         elapsed_ms = max(0, round((time.perf_counter() - started) * 1000))
         return MySQLMigrationResult(MYSQL_SCHEMA_VERSION, checksum, baseline_applied, elapsed_ms)
@@ -272,7 +289,7 @@ def _creates_schema_migration_table(statement: str) -> bool:
     return normalized.startswith("create table platform_schema_migrations ")
 
 
-def _apply_mysql_additive_migrations(cursor: Any) -> None:
+def _apply_mysql_additive_migrations(connection: Any, cursor: Any) -> None:
     if not MYSQL_ADDITIVE_MIGRATION_DIR.exists():
         return
     for path in sorted(MYSQL_ADDITIVE_MIGRATION_DIR.glob("*.sql")):
@@ -288,12 +305,73 @@ def _apply_mysql_additive_migrations(cursor: Any) -> None:
                 raise MySQLMigrationError(f"mysql_schema_checksum_drift:{version}")
             continue
         started = time.perf_counter()
-        for statement in split_mysql_statements(ddl):
-            cursor.execute(statement)
-        cursor.execute(
-            "INSERT INTO platform_schema_migrations(version,name,checksum,execution_ms) VALUES(%s,%s,%s,%s)",
-            (version, path.stem, checksum, max(0, round((time.perf_counter() - started) * 1000))),
-        )
+        statements = split_mysql_statements(ddl)
+        attempt_id = str(uuid.uuid4())
+        attempts_available = _migration_attempts_table_exists(cursor)
+        if attempts_available:
+            cursor.execute(
+                """
+                INSERT INTO platform_schema_migration_attempts(
+                    attempt_id,version,name,checksum,status,statement_count,last_statement_index,runner_revision
+                ) VALUES(%s,%s,%s,%s,'running',%s,0,%s)
+                """,
+                (attempt_id, version, path.stem, checksum, len(statements), _runner_revision()),
+            )
+            connection.commit()
+        last_statement_index = 0
+        try:
+            for last_statement_index, statement in enumerate(statements, start=1):
+                cursor.execute(statement)
+            elapsed_ms = max(0, round((time.perf_counter() - started) * 1000))
+            cursor.execute(
+                "INSERT INTO platform_schema_migrations(version,name,checksum,execution_ms) VALUES(%s,%s,%s,%s)",
+                (version, path.stem, checksum, elapsed_ms),
+            )
+            if _migration_attempts_table_exists(cursor):
+                if attempts_available:
+                    cursor.execute(
+                        """
+                        UPDATE platform_schema_migration_attempts
+                        SET status='succeeded',last_statement_index=%s,finished_at=CURRENT_TIMESTAMP(6),execution_ms=%s
+                        WHERE attempt_id=%s
+                        """,
+                        (last_statement_index, elapsed_ms, attempt_id),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO platform_schema_migration_attempts(
+                            attempt_id,version,name,checksum,status,statement_count,last_statement_index,
+                            started_at,finished_at,execution_ms,runner_revision
+                        ) VALUES(%s,%s,%s,%s,'succeeded',%s,%s,CURRENT_TIMESTAMP(6),CURRENT_TIMESTAMP(6),%s,%s)
+                        """,
+                        (attempt_id, version, path.stem, checksum, len(statements), last_statement_index, elapsed_ms, _runner_revision()),
+                    )
+            connection.commit()
+        except BaseException as exc:
+            connection.rollback()
+            if attempts_available:
+                try:
+                    with connection.cursor() as failure_cursor:
+                        failure_cursor.execute(
+                            """
+                            UPDATE platform_schema_migration_attempts
+                            SET status='failed',last_statement_index=%s,error_code=%s,error_summary=%s,
+                                finished_at=CURRENT_TIMESTAMP(6),execution_ms=%s
+                            WHERE attempt_id=%s
+                            """,
+                            (
+                                last_statement_index,
+                                type(exc).__name__[:160],
+                                _safe_error_summary(exc),
+                                max(0, round((time.perf_counter() - started) * 1000)),
+                                attempt_id,
+                            ),
+                        )
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+            raise
 
 
 def _checksum_matches(version: str, stored: str, current: str) -> bool:
@@ -337,7 +415,30 @@ def split_mysql_statements(ddl: str) -> list[str]:
 def mysql_tls_configured(database_url: str) -> bool:
     query = parse_qs(urlparse(database_url).query)
     value = (query.get("ssl") or query.get("ssl_mode") or [""])[0].lower()
-    return value in {"1", "true", "required", "verify_ca", "verify_identity"}
+    ca = (query.get("ssl_ca") or [""])[0].strip()
+    return value in {"verify_ca", "verify_identity"} and bool(ca)
+
+
+def mysql_version_supported(version: str) -> bool:
+    return str(version or "").split("-", 1)[0].strip() == MYSQL_TARGET_VERSION
+
+
+def _migration_attempts_table_exists(cursor: Any) -> bool:
+    cursor.execute(
+        "SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=%s",
+        ("platform_schema_migration_attempts",),
+    )
+    return int(_value(cursor.fetchone(), "count", 0) or 0) == 1
+
+
+def _runner_revision() -> str:
+    value = os.getenv("SMART_DATA_AGENT_COMMIT_SHA", "").strip().lower()
+    return value if re.fullmatch(r"[0-9a-f]{40}", value) else ""
+
+
+def _safe_error_summary(exc: BaseException) -> str:
+    text = " ".join(str(exc).split())
+    return (text or type(exc).__name__)[:500]
 
 
 def _strip_leading_comments(statement: str) -> str:

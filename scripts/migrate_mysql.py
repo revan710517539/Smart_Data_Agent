@@ -40,4 +40,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException as exc:
+        print(json.dumps({
+            "status": "failed",
+            "error": "mysql_migration_failed",
+            "error_type": type(exc).__name__,
+            "message": " ".join(str(exc).split())[:500],
+        }, sort_keys=True), file=sys.stderr)
+        raise SystemExit(1) from exc

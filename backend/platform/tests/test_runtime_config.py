@@ -49,7 +49,7 @@ class RuntimeConfigTest(unittest.TestCase):
                 "SMART_DATA_AGENT_AUTH_MODE": "strict",
                 "SMART_DATA_AGENT_AUTH_SECRET": "test-only-secret-with-32-characters-minimum",
                 "SMART_DATA_AGENT_DATA_WAREHOUSE": "csv_object",
-                "SMART_DATA_AGENT_DATABASE_URL": "mysql+pymysql://sda@db.example/smart_data_agent?ssl_mode=verify_identity",
+                "SMART_DATA_AGENT_DATABASE_URL": "mysql+pymysql://sda@db.example/smart_data_agent?ssl_mode=verify_identity&ssl_ca=/run/secrets/mysql_ca.pem",
                 "SMART_DATA_AGENT_SECRET_PROVIDER": "kms",
                 "SMART_DATA_AGENT_KMS_COMMAND": "vault-helper",
                 "SMART_DATA_AGENT_OBJECT_STORE": "s3",
@@ -86,7 +86,7 @@ class RuntimeConfigTest(unittest.TestCase):
                 "SMART_DATA_AGENT_AUTH_MODE": "strict",
                 "SMART_DATA_AGENT_AUTH_SECRET": "test-only-secret-with-32-characters-minimum",
                 "SMART_DATA_AGENT_DATA_WAREHOUSE": "csv_object",
-                "SMART_DATA_AGENT_DATABASE_URL": "mysql+pymysql://sda@db.example/smart_data_agent?ssl_mode=verify_identity",
+                "SMART_DATA_AGENT_DATABASE_URL": "mysql+pymysql://sda@db.example/smart_data_agent?ssl_mode=verify_identity&ssl_ca=/run/secrets/mysql_ca.pem",
                 "SMART_DATA_AGENT_SECRET_PROVIDER": "kms",
                 "SMART_DATA_AGENT_KMS_COMMAND": "vault-helper",
                 "SMART_DATA_AGENT_OBJECT_STORE": "s3",
@@ -176,6 +176,22 @@ class RuntimeConfigTest(unittest.TestCase):
             )
         self.assertEqual(switched.tenant_id, "tenant:三峡银行")
         self.assertEqual(switched.user_id, "u_jinghaozhe_jk")
+
+    def test_strict_session_rejects_conflicting_user_tenant_and_cookie(self) -> None:
+        secret = "test-only-secret-with-32-characters-minimum"
+        with patch.dict("os.environ", {"SMART_DATA_AGENT_AUTH_SECRET": secret}, clear=True):
+            token = make_session_token("u_admin", "tenant_a", tenant_ids=("tenant_a",), secret=secret, ttl_seconds=60)
+            other = make_session_token("u_other", "tenant_b", tenant_ids=("tenant_b",), secret=secret, ttl_seconds=60)
+            with self.assertRaisesRegex(AuthenticationError, "requested user") as user_error:
+                resolve_request_context({"authorization": f"Bearer {token}", "x-user-id": "u_other"})
+            with self.assertRaisesRegex(AuthenticationError, "tenant is not authorized") as tenant_error:
+                resolve_request_context({"authorization": f"Bearer {token}", "x-tenant-id": "tenant_b"})
+            with self.assertRaisesRegex(AuthenticationError, "different sessions") as session_error:
+                resolve_request_context({"authorization": f"Bearer {token}", "cookie": f"sda_session={other}"})
+        self.assertEqual(user_error.exception.error_code, "user_context_conflict")
+        self.assertEqual(user_error.exception.status_code, 403)
+        self.assertEqual(tenant_error.exception.error_code, "tenant_context_conflict")
+        self.assertEqual(session_error.exception.error_code, "session_context_conflict")
 
 
 if __name__ == "__main__":

@@ -20,6 +20,11 @@ TOKEN_PREFIX = "sda1"
 class AuthenticationError(ValueError):
     """Raised when an API request cannot be tied to a trusted user context."""
 
+    def __init__(self, message: str, *, error_code: str = "authentication_required", status_code: int = 401) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.status_code = status_code
+
 
 @dataclass(frozen=True)
 class SignedSession:
@@ -50,9 +55,29 @@ def resolve_request_context(
     auth_mode = mode or _auth_mode_from_env()
     bearer = _bearer_token(headers.get("authorization") or headers.get("Authorization"))
     cookie_token = _session_cookie_token(headers.get("cookie") or headers.get("Cookie"))
+    if bearer and cookie_token:
+        bearer_session = verify_session_token(bearer)
+        cookie_session = verify_session_token(cookie_token)
+        if (
+            bearer_session.user_id != cookie_session.user_id
+            or bearer_session.session_id != cookie_session.session_id
+            or set(bearer_session.tenant_ids) != set(cookie_session.tenant_ids)
+        ):
+            raise AuthenticationError(
+                "authorization header and session cookie identify different sessions.",
+                error_code="session_context_conflict",
+                status_code=401,
+            )
     trusted_token = bearer or cookie_token
     if trusted_token:
         session = verify_session_token(trusted_token)
+        requested_user_id = _first_non_empty(headers.get("x-user-id") or headers.get("X-User-Id"))
+        if requested_user_id and requested_user_id != session.user_id:
+            raise AuthenticationError(
+                "requested user does not match the authenticated session.",
+                error_code="user_context_conflict",
+                status_code=403,
+            )
         requested_tenant_id = _first_non_empty(
             headers.get("x-tenant-id") or headers.get("X-Tenant-Id"),
             _first_query_value(params or {}, "tenant_id"),
@@ -60,7 +85,11 @@ def resolve_request_context(
         if requested_tenant_id and requested_tenant_id != session.tenant_id:
             allowed_tenant_ids = set(session.tenant_ids or (session.tenant_id,))
             if "*" not in allowed_tenant_ids and requested_tenant_id not in allowed_tenant_ids:
-                raise AuthenticationError("tenant is not authorized for this session.")
+                raise AuthenticationError(
+                    "tenant is not authorized for this session.",
+                    error_code="tenant_context_conflict",
+                    status_code=403,
+                )
             return SignedSession(
                 user_id=session.user_id,
                 tenant_id=requested_tenant_id,

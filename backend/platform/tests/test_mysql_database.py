@@ -10,6 +10,8 @@ from backend.platform.database.mysql import (
     MYSQL_SCHEMA_PATH,
     MySQLConnectionPool,
     _creates_schema_migration_table,
+    mysql_tls_configured,
+    mysql_version_supported,
     parse_mysql_url,
     split_mysql_statements,
 )
@@ -73,6 +75,27 @@ class MySQLDatabaseContractTest(unittest.TestCase):
         self.assertIn("ssl", parsed)
         with self.assertRaisesRegex(ValueError, "mysql_database_url_required"):
             parse_mysql_url("postgresql://db/smart_data_agent")
+
+    def test_verified_mysql_tls_requires_ca_and_configures_hostname_verification(self) -> None:
+        verified = parse_mysql_url(
+            "mysql://sda@db.example/sda?ssl_mode=verify_identity&ssl_ca=/run/secrets/mysql_ca.pem"
+        )
+        self.assertEqual(
+            verified["ssl"],
+            {"ca": "/run/secrets/mysql_ca.pem", "check_hostname": True, "verify_mode": True},
+        )
+        self.assertTrue(mysql_tls_configured("mysql://sda@db/sda?ssl_mode=verify_ca&ssl_ca=/ca.pem"))
+        self.assertFalse(mysql_tls_configured("mysql://sda@db/sda?ssl_mode=required"))
+        with self.assertRaisesRegex(ValueError, "mysql_ssl_ca_required"):
+            parse_mysql_url("mysql://sda@db.example/sda?ssl_mode=verify_ca")
+        with self.assertRaisesRegex(ValueError, "mysql_ssl_mode_invalid"):
+            parse_mysql_url("mysql://sda@db.example/sda?ssl_mode=prefer")
+
+    def test_mysql_runtime_accepts_exact_server_version_only(self) -> None:
+        self.assertTrue(mysql_version_supported("8.0.18"))
+        self.assertTrue(mysql_version_supported("8.0.18-commercial"))
+        self.assertFalse(mysql_version_supported("8.0.19"))
+        self.assertFalse(mysql_version_supported("8.4.0"))
 
     def test_generated_schema_is_mysql_only_and_complete(self) -> None:
         ddl = Path(MYSQL_SCHEMA_PATH).read_text(encoding="utf-8")

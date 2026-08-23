@@ -34,6 +34,7 @@ MENU_TREE = (
         (
             MenuResource("business-analysis.weekly-report", "经营周报"),
             MenuResource("business-analysis.supervision", "机构督导"),
+            MenuResource("business-analysis.customer-segment", "分客群分析"),
         ),
     ),
     MenuResource(
@@ -70,7 +71,7 @@ MENU_TREE = (
         (
             MenuResource("data-assets.metrics", "指标字典"),
             MenuResource("data-assets.knowledge", "知识记忆"),
-            MenuResource("data-assets.data-management", "数据管理"),
+            MenuResource("data-assets.data-management", "站内数据"),
             MenuResource("data-assets.quality", "质量监控"),
             MenuResource("data-assets.tools", "工具调用"),
         ),

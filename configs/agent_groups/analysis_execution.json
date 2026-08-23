@@ -23,7 +23,12 @@
       "name": "Data Analysis Agent",
       "type": "数据分析型",
       "responsibility": "对已授权查询结果执行确定性的指标剖析和维度分析。",
-      "allowed_skills": ["data.analysis.profile"]
+      "allowed_skills": [
+        "data.analysis.profile",
+        "data.analysis.descriptive",
+        "data.analysis.attribution",
+        "data.analysis.predictive"
+      ]
     },
     {
       "agent_id": "data_governance",

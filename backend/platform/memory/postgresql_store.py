@@ -10,6 +10,7 @@ from backend.platform.database.identity import PostgreSQLIdentityResolver
 from backend.platform.database.postgresql import PostgreSQLConnectionPool
 
 from .models import MemoryRecord
+from .fusion import FUSIBLE_MEMORY_TYPES, fuse_record_content, memory_identity
 from .policies import should_persist_memory
 from .store import _canonical_status, canonical_memory_type
 
@@ -25,7 +26,13 @@ class PostgreSQLMemoryStore:
         if self.owns_pool:
             self.pool.close()
 
-    def write(self, record: MemoryRecord, force: bool = False) -> bool:
+    def write(
+        self,
+        record: MemoryRecord,
+        force: bool = False,
+        *,
+        consolidate_existing: bool = False,
+    ) -> bool:
         if not force and not should_persist_memory(record):
             return False
         memory_type = canonical_memory_type(record.memory_type)
@@ -38,12 +45,61 @@ class PostgreSQLMemoryStore:
             or (record.created_by if subject_type == "user" else record.tenant_id)
             or record.tenant_id
         )
-        content_json = _json(record.content)
-        content_hash = hashlib.sha256(content_json.encode("utf-8")).hexdigest()
         with self._transaction() as connection:
             tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, record.tenant_id)
             actor_key = PostgreSQLIdentityResolver.user_id(connection, record.created_by, required=False) if record.created_by else None
             with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT 1 FROM platform_memory_records WHERE tenant_id = %s AND memory_key = %s",
+                    (tenant_key, record.memory_id),
+                )
+                if cursor.fetchone():
+                    return False
+                content = dict(record.content)
+                superseded_rows: list[Any] = []
+                if memory_type in FUSIBLE_MEMORY_TYPES:
+                    identity = memory_identity(memory_type, content, title=record.title or record.subject)
+                    cursor.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        (f"memory-fusion:{tenant_key}:{identity.merge_key}",),
+                    )
+                    cursor.execute(
+                        """
+                        SELECT memory_id, memory_key, title, content, status, updated_at
+                        FROM platform_memory_records
+                        WHERE tenant_id = %s AND memory_type = %s AND subject_type = %s
+                          AND subject_id = %s AND status IN ('candidate','review','active')
+                        ORDER BY updated_at, memory_key
+                        LIMIT 500
+                        FOR UPDATE
+                        """,
+                        (tenant_key, memory_type, subject_type, subject_id),
+                    )
+                    candidates = list(cursor.fetchall())
+                    superseded_rows = [
+                        row
+                        for row in candidates
+                        if memory_identity(
+                            memory_type,
+                            dict(_json_value(_value(row, "content", 3), {})),
+                            title=str(_value(row, "title", 2)),
+                        ).merge_key
+                        == identity.merge_key
+                    ]
+                    fusion_contents = [
+                        dict(_json_value(_value(row, "content", 3), {}))
+                        for row in superseded_rows
+                    ]
+                    if not consolidate_existing or not fusion_contents:
+                        fusion_contents.append(content)
+                    content = fuse_record_content(
+                        memory_type,
+                        record.title or record.subject,
+                        fusion_contents,
+                        memory_ids=(str(_value(row, "memory_key", 1)) for row in superseded_rows),
+                    )
+                content_json = _json(content)
+                content_hash = hashlib.sha256(content_json.encode("utf-8")).hexdigest()
                 cursor.execute(
                     """
                     SELECT 1 FROM platform_memory_records
@@ -63,6 +119,8 @@ class PostgreSQLMemoryStore:
                     )
                     row = cursor.fetchone()
                     supersedes_id = _value(row, "memory_id", 0) if row else None
+                elif superseded_rows:
+                    supersedes_id = _value(superseded_rows[-1], "memory_id", 0)
                 cursor.execute(
                     """
                     INSERT INTO platform_memory_records(
@@ -86,6 +144,17 @@ class PostgreSQLMemoryStore:
                     ),
                 )
                 memory_id = _value(cursor.fetchone(), "memory_id", 0)
+                for previous in superseded_rows:
+                    previous_status = str(_value(previous, "status", 4))
+                    if previous_status in {"candidate", "review"} or status == "active":
+                        cursor.execute(
+                            """
+                            UPDATE platform_memory_records
+                            SET status = 'superseded', updated_at = now(), lock_version = lock_version + 1
+                            WHERE memory_id = %s AND status IN ('candidate','review','active')
+                            """,
+                            (_value(previous, "memory_id", 0),),
+                        )
                 if record.evidence_type and record.evidence_id and record.evidence_hash:
                     if len(record.evidence_hash) != 64:
                         raise ValueError("memory_evidence_hash_must_be_sha256")

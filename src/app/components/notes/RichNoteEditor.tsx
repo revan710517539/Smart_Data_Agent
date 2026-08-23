@@ -224,7 +224,7 @@ export function NoteParagraphField({
   useEffect(() => {
     if (!autoFocus || readOnly) return;
     const editor = editorRef.current;
-    editor?.focus();
+    editor?.focus({ preventScroll: true });
     placeCaretAtStart(editor);
   }, [autoFocus, readOnly]);
 

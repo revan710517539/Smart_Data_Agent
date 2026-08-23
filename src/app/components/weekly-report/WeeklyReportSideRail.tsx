@@ -26,7 +26,7 @@ export function WeeklyReportSideRail({
   onTabChange: (tab: "comments" | "analysis" | "message-board") => void;
   commentCount: number;
   railHeight: number;
-  commentsProps: Omit<CommentsProps, "showHeader">;
+  commentsProps: Omit<CommentsProps, "showHeader" | "composerScopeKey">;
   analysisProps: AnalysisProps;
   pageKey?: string;
   pageTitle?: string;
@@ -77,8 +77,8 @@ export function WeeklyReportSideRail({
       commentCount={commentCount}
       wide={railWide}
       onWideChange={setRailWide}
-      comments={<CommentsPanel {...commentsProps} showHeader={false} />}
-      analysis={<div className="h-full min-h-0"><AnalysisWorkspacePanel revealedDataPoint={selectedDataPoint} wide={railWide} onWideChange={setRailWide} /></div>}
+      comments={<CommentsPanel {...commentsProps} showHeader={false} composerScopeKey={`${analysisProps.tenantId}:${analysisProps.userId}:${analysisProps.report.id}`} />}
+      analysis={<div className="flex h-full min-h-0 flex-col overflow-hidden"><AnalysisWorkspacePanel revealedDataPoint={selectedDataPoint} wide={railWide} onWideChange={setRailWide} /></div>}
       messageBoard={<MessageBoardPanel tenantId={analysisProps.tenantId} userId={analysisProps.userId} pageKey={pageKey} pageTitle={pageTitle} target={selectedTarget} />}
     />
   );

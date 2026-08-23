@@ -16,8 +16,11 @@ def build_data_product_skills() -> list[tuple[SkillSpec, Callable[[SkillRequest]
     execution floor that learned procedural skills may guide but never replace.
     """
 
+    from .loan_analysis import build_loan_analysis_skills
+
     return [
         _profile_skill(),
+        *build_loan_analysis_skills(),
         _conclusion_skill(),
         _bi_report_skill(),
         _governance_skill(),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -9,8 +10,8 @@ from backend.platform.security.sql_validation import validate_read_only_sql_cand
 from backend.platform.settings import call_model_text_completion
 
 
-PLANNING_PROMPT_TEMPLATE_ID = "intelligent_analysis.bank_operating.plan.v2"
-ANALYSIS_PROMPT_TEMPLATE_ID = "intelligent_analysis.bank_operating.final.v2"
+PLANNING_PROMPT_TEMPLATE_ID = "intelligent_analysis.loan_analyst.plan.v3"
+ANALYSIS_PROMPT_TEMPLATE_ID = "intelligent_analysis.loan_analyst.final.v3"
 
 
 @dataclass(frozen=True)
@@ -139,16 +140,6 @@ class IntelligentAnalysisEngine:
                 "prompt_template_id": ANALYSIS_PROMPT_TEMPLATE_ID,
                 "reason": "empty_query_result",
             }
-        elif brief:
-            # Rail follow-up already has the chart rows. Skip the 6-section
-            # essay so the right rail returns in seconds, not a full article.
-            model_invocation = {
-                "status": "skipped",
-                "callable": False,
-                "message": "右栏追问改为短结论和聚焦图表，跳过长文模型生成。",
-                "prompt_template_id": "intelligent_analysis.rail_brief.v1",
-                "reason": "brief_visual_follow_up",
-            }
         elif not isinstance(request.model, dict) or not request.model.get("id"):
             model_invocation = {
                 "status": "skipped",
@@ -167,7 +158,7 @@ class IntelligentAnalysisEngine:
             if completion.get("status") == "connected":
                 try:
                     payload = _parse_model_json(str(completion.get("response_text") or ""))
-                    final_payload = _normalize_final_payload(payload, final_payload)
+                    final_payload = _normalize_final_payload(payload, final_payload, request)
                 except Exception as first_exc:
                     retry = call_model_text_completion(
                         request.model,
@@ -186,7 +177,7 @@ class IntelligentAnalysisEngine:
                     if retry.get("status") == "connected":
                         try:
                             payload = _parse_model_json(str(retry.get("response_text") or ""))
-                            final_payload = _normalize_final_payload(payload, final_payload)
+                            final_payload = _normalize_final_payload(payload, final_payload, request)
                             model_invocation = retry_invocation
                         except Exception as retry_exc:
                             model_invocation = retry_invocation
@@ -200,6 +191,10 @@ class IntelligentAnalysisEngine:
                             )
                     else:
                         model_invocation = retry_invocation
+        # Apply the same label and leakage guard to connected-model,
+        # deterministic-fallback and no-model paths. Raw keys remain available
+        # in query rows, SQL and evidence, but never become conclusion copy.
+        final_payload = _normalize_final_payload(final_payload, final_payload, request)
         return {
             "planning": planning,
             "suggested_sql": str(planning.get("sql") or ""),
@@ -217,6 +212,7 @@ class IntelligentAnalysisEngine:
             "planning_invocation": dict(planning.get("planning_invocation") or {}),
             "model_invocation": model_invocation,
             "model_draft": final_payload["analysis_summary"],
+            "runtime_chain": _runtime_chain(request, planning, model_invocation),
             "context": {
                 "analysis_trigger": request.analysis_trigger,
                 "skill": request.skill or None,
@@ -310,29 +306,34 @@ LIMIT 50;"""
 '''
 
     def _build_visualization_suggestions(self, request: IntelligentAnalysisRequest) -> list[dict[str, Any]]:
-        chart_types = list(dict.fromkeys(
-            _normalize_chart_type(chart_type)
-            for chart_type in (_safe_list(request.analysis_plan.get("chart_types")) or ["column", "table"])
-        ))
         dimensions = _safe_list(request.analysis_plan.get("dimensions")) or ["branch_name", "product_line"]
         metrics = _safe_list(request.analysis_plan.get("metrics")) or ["metric_value"]
+        labels = _field_labels_for_request(request)
+        time_dimension = next((item for item in dimensions if _is_time_field_name(item)), "")
+        detail_dimension = next((item for item in dimensions if item != time_dimension), dimensions[0])
+        chart_types = ["line"] if time_dimension else []
+        chart_types.extend(["column", "table"])
         suggestions: list[dict[str, Any]] = []
-        for index, chart_type in enumerate(chart_types[:3]):
+        for index, chart_type in enumerate(dict.fromkeys(chart_types)):
+            dimension = time_dimension if chart_type == "line" and time_dimension else detail_dimension
+            metric = metrics[min(index, len(metrics) - 1)]
             if chart_type == "line":
-                purpose = "观察指标随统计周期的连续变化、拐点和异常波动。"
+                purpose = "先看总体趋势、拐点和异常波动。"
             elif chart_type == "table":
-                purpose = "保留多维明细字段，支持交叉查看、二次下钻和人工核对。"
+                purpose = "最后保留必要明细，支持核对和继续下钻。"
             else:
-                purpose = "比较不同维度下的指标规模、排名和贡献。"
+                purpose = "再拆结构、排名和主要贡献分组。"
             suggestions.append(
                 {
                     "type": chart_type,
-                    "title": f"{metrics[0]}按{dimensions[index % len(dimensions)]}分析",
-                    "dimension": dimensions[index % len(dimensions)],
-                    "metric": metrics[min(index, len(metrics) - 1)],
+                    "title": f"{_human_field_label(metric, labels)}按{_human_field_label(dimension, labels)}分析",
+                    "dimension": dimension,
+                    "metric": metric,
                     "purpose": purpose,
                 }
             )
+            if len(suggestions) >= 3:
+                break
         return suggestions
 
     def _build_approach(self, request: IntelligentAnalysisRequest, skill_name: str) -> list[str]:
@@ -362,8 +363,10 @@ LIMIT 50;"""
             if request.analysis_trigger == "realtime_voice_silence"
             else "本轮由用户主动触发。"
         )
+        scene_note = _scene_approach_note(request)
         return [
             trigger_note,
+            scene_note,
             f"按“{skill_name or '通用智能分析'}”主题组织分析框架。",
             "先从指标字典、原始表、主题表中抽取可用指标和维度。",
             table_note,
@@ -386,7 +389,7 @@ LIMIT 50;"""
         dimensions = [item for item in plan_dims if item in rows[0]] or inferred_dims
         time_dim = next((item for item in dimensions if _is_time_field_name(item)), "")
         category_dim = next((item for item in dimensions if item != time_dim), "")
-        labels = _field_labels_from_rows(rows)
+        labels = _field_labels_for_request(request)
         highlights: list[str] = []
         for metric in metrics[:2]:
             metric_label = _human_field_label(metric, labels)
@@ -557,9 +560,11 @@ def _planning_prompt(request: IntelligentAnalysisRequest, skill_name: str, fallb
         "chart_types": request.analysis_plan.get("chart_types") or [],
         "metric_definitions": request.analysis_plan.get("metric_definitions") or [],
     }
-    return f"""你是银行数据分析规划模型。第一阶段只做问题理解和可执行规划，不得编造实际数据结论。
+    return f"""你是金融贷款产品的数据分析规划模型。第一阶段只做场景/意图理解和可执行规划，不得编造实际数据结论。
 问题：{request.question}
 分析场景：{skill_name or '通用智能分析'}
+场景判断：{json.dumps(_scene_prompt_context(request), ensure_ascii=False, sort_keys=True)}
+分析方法要求：{_scene_kind_instructions(request)}
 输入框完整上下文：{json.dumps(_model_input_context_for_prompt(request), ensure_ascii=False, sort_keys=True, default=str)}
 服务端允许的分析计划：{json.dumps(safe_plan, ensure_ascii=False, sort_keys=True, default=str)}
 
@@ -571,8 +576,11 @@ def _planning_prompt(request: IntelligentAnalysisRequest, skill_name: str, fallb
 2. SQL 只能是一条只读 SELECT/WITH；禁止 DDL、DML、多语句和危险函数，并保留租户与时间参数。
 3. 两段 Python 都禁止 import、文件、网络、反射和动态执行；数据加工只能定义 process_data(data, context)，可视化只能定义 build_chart(data, context)，并返回 JSON 可序列化对象。
 4. metric_scenarios 必须穷举每个选中指标的较好、平稳、较差三类表现及分析方向，但不得声称这些情景已经发生。
-5. 总 JSON 不超过 9000 个字符；两段 Python 各不超过 900 个字符且不要注释；分析步骤最多6条，情景文字每项不超过60个汉字，可视化建议最多3项。
-6. 不要输出 Markdown、解释性前后缀或代码围栏。"""
+5. analysis_approach 必须按“总体判断 → 趋势/结构拆解 → 异常或原因验证 → 经营动作”组织；先形成规划，再把匹配的 Skill 和 Memory 作为方法约束加入执行，不得用 Skill 名称代替分析步骤。
+6. visualization_suggestions 必须从总到分：优先总体趋势，其次机构/产品/客群/渠道结构，最后必要明细；最多3项。
+7. 没有合适 Skill 或 Memory 时，使用通用贷款分析框架：规模、转化/效率、收益、风险、客群与机构差异，并严格受现有字段约束。
+8. 总 JSON 不超过 9000 个字符；两段 Python 各不超过 900 个字符且不要注释；分析步骤最多6条，情景文字每项不超过60个汉字。
+9. 不要输出 Markdown、解释性前后缀或代码围栏。"""
 
 
 def _final_analysis_prompt(request: IntelligentAnalysisRequest, skill_name: str, planning: dict[str, Any]) -> str:
@@ -601,23 +609,28 @@ def _final_analysis_prompt(request: IntelligentAnalysisRequest, skill_name: str,
             {"type": "column", "title": "图表标题", "dimension": "维度", "metric": "指标", "purpose": "用途"}
         ],
     }
-    return f"""你是银行经营分析模型。现在执行第二阶段：把第一阶段规划和实际取数证据一起分析，生成最终页面结果。
+    output_mode = "右侧 AI 分析栏，摘要不超过360字、结论最多4条" if _is_brief_follow_up(request) else "完整分析页面，摘要不超过700字、结论最多6条"
+    return f"""你是金融贷款产品的数据分析师。现在执行唯一运行时的第二阶段：融合第一阶段规划、已调度 Skill、相关 Memory 与实际取数证据，生成最终页面结果。
 问题：{request.question}
 分析场景：{skill_name or '通用智能分析'}
+场景判断：{json.dumps(_scene_prompt_context(request), ensure_ascii=False, sort_keys=True)}
+分析方法要求：{_scene_kind_instructions(request)}
 输入框完整上下文：{json.dumps(_model_input_context_for_prompt(request), ensure_ascii=False, sort_keys=True, default=str)}
 第一阶段规划：{json.dumps(safe_planning, ensure_ascii=False, sort_keys=True, default=str)}
 实际执行证据：{_query_evidence_for_prompt(request.query_result)}
+输出场景：{output_mode}
 
 请返回且只返回一个 JSON 对象，结构必须完全匹配：
 {json.dumps(schema, ensure_ascii=False, sort_keys=True)}
 
 约束：
 1. 只能依据实际执行证据陈述事实；没有返回的指标必须明确写“未返回”，不得套用情景结论冒充事实。
-2. 每条结论必须可追溯到证据ID、字段、汇总值或返回行。
-3. visualization_suggestions 只能使用 line、column、table，并根据时间趋势、维度对比或多维明细主题绑定实际返回的指标和维度。
-4. 对每个返回指标都要覆盖总体值、头部、尾部、零值/异常值；对每个返回维度说明已覆盖范围，无法从证据判断的原因必须列入 limitations。
-5. analysis_summary 必须包含核心结论、数据证据、原因边界、经营建议、风险提示和后续动作。
-6. 不要输出 Markdown、解释性前后缀或代码围栏。"""
+2. 先给总体判断，再给趋势/结构，随后解释已被数据验证的主要驱动或明确原因边界，最后给1至3项经营动作；不把相关性写成因果。
+3. 每条结论必须包含业务中文名和关键数字；同一个事实只说一次，禁止同义反复、模板套话、SQL、证据ID、技术字段名、下划线字段名或数据库表名出现在用户可见文字中。
+4. visualization_suggestions 只能使用 line、column、table，并从总到分组织：总体趋势 → 机构/产品/客群/渠道结构 → 必要明细；绑定实际返回的指标和维度。
+5. 对返回指标覆盖总体值、头尾差异和明显异常；证据不足时明确“当前数据无法判断原因”，不得补写未经验证的风险或建议。
+6. analysis_summary 使用短句和数字，{output_mode}；metric_findings 只保留不重复的关键发现。
+7. 不要输出 Markdown、解释性前后缀或代码围栏。"""
 
 
 def _safe_invocation(completion: dict[str, Any], prompt_template_id: str) -> dict[str, Any]:
@@ -736,22 +749,38 @@ def _normalize_planning_payload(payload: dict[str, Any], fallback: dict[str, Any
     }
 
 
-def _normalize_final_payload(payload: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
-    conclusions = _safe_list(payload.get("conclusions"))[:20] or list(fallback["conclusions"])
-    summary = str(payload.get("analysis_summary") or "").strip() or "\n".join(conclusions)
+def _normalize_final_payload(
+    payload: dict[str, Any],
+    fallback: dict[str, Any],
+    request: IntelligentAnalysisRequest,
+) -> dict[str, Any]:
+    brief = _is_brief_follow_up(request)
+    conclusion_limit = 4 if brief else 6
+    summary_limit = 360 if brief else 700
+    labels = _field_labels_for_request(request)
+    raw_conclusions = _safe_list(payload.get("conclusions")) or list(fallback["conclusions"])
+    conclusions = _dedupe_user_text(raw_conclusions, labels, limit=conclusion_limit, item_limit=160)
+    if not conclusions:
+        conclusions = _dedupe_user_text(fallback["conclusions"], labels, limit=conclusion_limit, item_limit=160)
+    raw_summary = str(payload.get("analysis_summary") or "").strip() or "\n".join(conclusions)
+    summary = _sanitize_user_text(raw_summary, labels, summary_limit)
+    summary = _dedupe_summary_sentences(summary, summary_limit) or "\n".join(conclusions)
     findings = [
         {
-            "metric": str(item.get("metric") or "").strip(),
-            "observed": str(item.get("observed") or "").strip(),
-            "interpretation": str(item.get("interpretation") or "").strip(),
-            "evidence": str(item.get("evidence") or "").strip(),
+            "metric": _human_field_label(str(item.get("metric") or "").strip(), labels),
+            "observed": _sanitize_user_text(str(item.get("observed") or ""), labels, 120),
+            "interpretation": _sanitize_user_text(str(item.get("interpretation") or ""), labels, 160),
+            "evidence": "已执行数据证据",
         }
         for item in (payload.get("metric_findings") or [])
         if isinstance(item, dict) and str(item.get("metric") or "").strip()
-    ][:20]
+    ][:6]
     visualizations = _normalize_visualizations(payload.get("visualization_suggestions"), [], [])
+    for item in visualizations:
+        item["title"] = _sanitize_user_text(str(item.get("title") or ""), labels, 80)
+        item["purpose"] = _sanitize_user_text(str(item.get("purpose") or ""), labels, 100)
     return {
-        "analysis_summary": summary[:12_000],
+        "analysis_summary": summary,
         "conclusions": conclusions,
         "metric_findings": findings,
         "visualization_suggestions": visualizations or list(fallback["visualization_suggestions"]),
@@ -759,6 +788,103 @@ def _normalize_final_payload(payload: dict[str, Any], fallback: dict[str, Any]) 
         # language model.  This makes exhaustiveness auditable and deterministic.
         "conclusion_coverage": dict(fallback.get("conclusion_coverage") or {}),
     }
+
+
+def _field_labels_for_request(request: IntelligentAnalysisRequest) -> dict[str, str]:
+    rows = [row for row in (request.query_result.get("data") or []) if isinstance(row, dict)]
+    labels = _field_labels_from_rows(rows)
+    semantic = request.query_result.get("semantic_info") if isinstance(request.query_result.get("semantic_info"), dict) else {}
+    mapping = semantic.get("schema_mapping") if isinstance(semantic.get("schema_mapping"), dict) else {}
+    for source in (
+        request.query_result.get("field_labels"),
+        request.query_result.get("fieldLabels"),
+        semantic.get("field_labels"),
+        semantic.get("fieldLabels"),
+        mapping.get("field_labels"),
+        mapping.get("fieldLabels"),
+    ):
+        if isinstance(source, dict):
+            labels.update({str(key): str(value).strip() for key, value in source.items() if str(value).strip()})
+    selected_tables = request.asset_context.get("selected_data_tables") if isinstance(request.asset_context, dict) else []
+    for table in selected_tables if isinstance(selected_tables, list) else []:
+        table_mapping = table.get("schema_mapping") if isinstance(table, dict) and isinstance(table.get("schema_mapping"), dict) else {}
+        for source in (
+            table.get("fieldLabels") if isinstance(table, dict) else None,
+            table.get("field_labels") if isinstance(table, dict) else None,
+            table_mapping.get("field_labels"),
+            table_mapping.get("fieldLabels"),
+        ):
+            if isinstance(source, dict):
+                labels.update({str(key): str(value).strip() for key, value in source.items() if str(value).strip()})
+        for field in table.get("fields") if isinstance(table, dict) and isinstance(table.get("fields"), list) else []:
+            if not isinstance(field, dict):
+                continue
+            code = str(field.get("fieldNameEn") or field.get("code") or "").strip()
+            name = str(field.get("fieldNameCn") or field.get("name") or "").strip()
+            if code and name:
+                labels[code] = name
+    for definition in request.analysis_plan.get("metric_definitions") or []:
+        if not isinstance(definition, dict):
+            continue
+        code = str(definition.get("metric_code") or definition.get("metricCode") or "").strip()
+        name = str(definition.get("metric_name") or definition.get("metricName") or "").strip()
+        if code and name:
+            labels[code] = name
+    for code in [*_safe_list(request.analysis_plan.get("metrics")), *_safe_list(request.analysis_plan.get("dimensions"))]:
+        labels.setdefault(code, _human_field_label(code))
+    return labels
+
+
+def _sanitize_user_text(value: str, labels: dict[str, str], limit: int) -> str:
+    text = str(value or "").strip()
+    for code, label in sorted(labels.items(), key=lambda item: len(item[0]), reverse=True):
+        if code and label and code != label:
+            text = text.replace(code, label)
+    text = re.sub(r"\bev_[a-fA-F0-9]{8,}\b", "", text)
+    text = re.sub(r"\b(?:SELECT|FROM|WHERE|GROUP BY|ORDER BY|LIMIT)\b[^。；\n]*", "", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"\b[a-zA-Z][a-zA-Z0-9]*(?:_[a-zA-Z0-9]+)+\b",
+        lambda match: _human_field_label(match.group(0), labels),
+        text,
+    )
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"([，；。])\1+", r"\1", text)
+    return text.strip(" \n，；")[:limit]
+
+
+def _dedupe_user_text(
+    values: list[Any],
+    labels: dict[str, str],
+    *,
+    limit: int,
+    item_limit: int,
+) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _sanitize_user_text(str(value or ""), labels, item_limit)
+        key = re.sub(r"[\s，。；：、,.!?！？]", "", text).casefold()
+        if not text or not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _dedupe_summary_sentences(value: str, limit: int) -> str:
+    parts = [part.strip() for part in re.split(r"(?<=[。！？；\n])", value) if part.strip()]
+    result: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        key = re.sub(r"[\s，。；：、,.!?！？]", "", part).casefold()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(part)
+    return "\n".join(result)[:limit].strip()
 
 
 def _build_metric_scenarios(plan: dict[str, Any]) -> list[dict[str, str]]:
@@ -845,6 +971,49 @@ def _safe_model_context(model: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+def _scene_payload(request: IntelligentAnalysisRequest) -> dict[str, Any]:
+    surface = request.surface_context if isinstance(request.surface_context, dict) else {}
+    scene = surface.get("analysis_scene") if isinstance(surface.get("analysis_scene"), dict) else {}
+    return scene
+
+
+def _scene_prompt_context(request: IntelligentAnalysisRequest) -> dict[str, Any]:
+    scene = _scene_payload(request)
+    return {
+        "surface": scene.get("surface") or "",
+        "voice_mode": scene.get("voice_mode") or "",
+        "analysis_kinds": scene.get("analysis_kinds") or [],
+        "skill_ids": scene.get("skill_ids") or [],
+        "dataset_scope": scene.get("dataset_scope") or "",
+        "reason": scene.get("reason") or "",
+    }
+
+
+def _scene_kind_instructions(request: IntelligentAnalysisRequest) -> str:
+    try:
+        from backend.platform.kernel.scene import analysis_kind_instructions
+
+        scene = _scene_payload(request)
+        return analysis_kind_instructions(tuple(scene.get("analysis_kinds") or ()))
+    except Exception:
+        return "描述性分析：陈述现状、结构、分布、趋势、极值和异常，不解释因果。"
+
+
+def _scene_approach_note(request: IntelligentAnalysisRequest) -> str:
+    scene = _scene_payload(request)
+    surface = str(scene.get("surface") or "")
+    kinds = "、".join(str(item) for item in (scene.get("analysis_kinds") or ["descriptive"]))
+    if surface == "chart_followup":
+        location = "图表追问，仅使用当前图绑定数据集"
+    elif surface == "page_rail":
+        location = "整页 AI 分析，汇总当前页可视化数据"
+    elif surface == "textbox_voice":
+        location = "文本框实时语音仅转写，不进入分析运行时"
+    else:
+        location = "智能分析主查询"
+    return f"场景：{location}。分析方法：{kinds}。{_scene_kind_instructions(request)}"
+
+
 def _skill_label(request: IntelligentAnalysisRequest) -> str:
     names: list[str] = []
     if isinstance(request.skills, list):
@@ -859,7 +1028,63 @@ def _is_brief_follow_up(request: IntelligentAnalysisRequest) -> bool:
     surface = request.surface_context if isinstance(request.surface_context, dict) else {}
     if str(policy.get("resultFormat") or policy.get("result_format") or "").strip() == "brief_visual":
         return True
-    return str(surface.get("visual_analysis_scope") or "").strip() in {"chart", "page"}
+    scene = surface.get("analysis_scene") if isinstance(surface.get("analysis_scene"), dict) else {}
+    hint = str(surface.get("analysis_scene_hint") or scene.get("surface") or "").strip()
+    return hint in {"chart_followup", "page_rail"}
+
+
+def _runtime_chain(
+    request: IntelligentAnalysisRequest,
+    planning: dict[str, Any],
+    model_invocation: dict[str, Any],
+) -> dict[str, Any]:
+    scene = _scene_prompt_context(request)
+    memories = (request.asset_context.get("analysis_memories") if isinstance(request.asset_context, dict) else []) or []
+    skill_ids = [
+        str(skill.get("id") or "").strip()
+        for skill in request.skills
+        if isinstance(skill, dict) and str(skill.get("id") or "").strip()
+    ]
+    skill_memories = [
+        memory
+        for skill in request.skills
+        if isinstance(skill, dict)
+        for memory in (skill.get("memories") or [])
+        if isinstance(memory, dict)
+    ]
+    memory_ids = [
+        str(memory.get("id") or "").strip()
+        for memory in [*(memories if isinstance(memories, list) else []), *skill_memories]
+        if isinstance(memory, dict) and str(memory.get("id") or "").strip()
+    ]
+    return {
+        "version": "loan_analysis_runtime.v1",
+        "engine": "IntelligentAnalysisEngine",
+        "model_application_module": str(request.surface_context.get("model_application_module") or "intelligent_analysis_reasoning"),
+        "dataset_scope": str(scene.get("dataset_scope") or "page"),
+        "scene_intent": {
+            "surface": str(scene.get("surface") or ""),
+            "analysis_kinds": list(scene.get("analysis_kinds") or []),
+        },
+        "stages": [
+            {"code": "scene_intent", "status": "completed"},
+            {
+                "code": "analysis_plan",
+                "status": "completed",
+                "source": str(planning.get("planning_source") or "deterministic"),
+                "prompt_template_id": str((planning.get("planning_invocation") or {}).get("prompt_template_id") or PLANNING_PROMPT_TEMPLATE_ID),
+            },
+            {"code": "skill_dispatch", "status": "completed", "skill_ids": list(dict.fromkeys(skill_ids))},
+            {"code": "memory_fusion", "status": "completed", "memory_ids": list(dict.fromkeys(memory_ids))},
+            {"code": "evidence_query", "status": "completed", "row_count": len(request.query_result.get("data") or [])},
+            {
+                "code": "result_synthesis",
+                "status": "completed" if model_invocation.get("status") in {"connected", "skipped"} else "fallback",
+                "prompt_template_id": str(model_invocation.get("prompt_template_id") or ANALYSIS_PROMPT_TEMPLATE_ID),
+            },
+        ],
+        "output_framework": "total_to_detail",
+    }
 
 
 def _infer_fields_from_rows(rows: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
@@ -970,7 +1195,34 @@ def _human_field_label(name: str, labels: dict[str, str] | None = None) -> str:
         "month": "月份",
         "customer_segment": "客群",
     }
-    return defaults.get(str(name or ""), str(name or ""))
+    raw = str(name or "").strip()
+    if raw in defaults:
+        return defaults[raw]
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+", raw):
+        return raw
+    token_labels = {
+        "active": "活跃", "amount": "金额", "approval": "审批", "average": "平均", "avg": "平均",
+        "balance": "余额", "branch": "机构", "channel": "渠道", "completion": "完成", "count": "数量",
+        "customer": "客户", "date": "日期", "day": "日", "drawdown": "动支", "gap": "差异",
+        "id": "编号", "line": "线", "loan": "贷款", "metric": "指标", "month": "月份",
+        "name": "名称", "order": "顺序", "overdue": "逾期", "product": "产品", "rate": "率",
+        "ratio": "占比", "risk": "风险", "segment": "客群", "stage": "阶段", "stat": "统计",
+        "target": "目标", "total": "总计", "value": "数值", "week": "周", "year": "年度",
+    }
+    translated: list[str] = []
+    unknown = False
+    for token in raw.lower().split("_"):
+        label = token_labels.get(token)
+        if label:
+            translated.append(label)
+        elif re.fullmatch(r"m\d+", token):
+            translated.append(token.upper())
+        else:
+            unknown = True
+    if not translated:
+        return "业务字段"
+    label = "".join(translated)
+    return f"{label}相关字段" if unknown else label
 
 
 def _format_brief_number(value: float, metric_name: str) -> str:

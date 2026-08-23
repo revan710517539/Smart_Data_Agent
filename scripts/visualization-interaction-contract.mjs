@@ -9,6 +9,7 @@ const visualGridSource = await readFile(new URL("../src/app/components/self-anal
 const visualGridLayoutSource = await readFile(new URL("../src/app/components/self-analysis/visualGridLayout.ts", import.meta.url), "utf8");
 const analysisWorkspaceSource = await readFile(new URL("../src/app/components/analysis-workspace/AnalysisWorkspaceRail.tsx", import.meta.url), "utf8");
 const voiceSource = await readFile(new URL("../src/app/components/visualization/useVisualizationVoiceCommand.ts", import.meta.url), "utf8");
+const tableSortSource = await readFile(new URL("../src/app/components/visualization/tableSort.ts", import.meta.url), "utf8");
 const messageBoardSource = await readFile(new URL("../src/app/components/message-board/MessageBoardPanel.tsx", import.meta.url), "utf8");
 const workbenchPersistenceSource = await readFile(new URL("../src/app/components/self-analysis/useSelfAnalysisWorkbenchPersistence.ts", import.meta.url), "utf8");
 const selfAnalysisSource = await readFile(new URL("../src/app/components/SelfAnalysis.tsx", import.meta.url), "utf8");
@@ -16,12 +17,17 @@ const compiled = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
 }).outputText;
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`;
-const { moveVisualizationField, resolveVisualizationVoiceCommand } = await import(moduleUrl);
+const { classifyVisualVoiceIntent, moveVisualizationField, resolveVisualizationVoiceCommand } = await import(moduleUrl);
 const visualGridLayoutCompiled = ts.transpileModule(visualGridLayoutSource, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
 }).outputText;
 const visualGridLayoutModuleUrl = `data:text/javascript;base64,${Buffer.from(visualGridLayoutCompiled).toString("base64")}`;
 const { defaultVisualGridSpan, packVisualGridItems } = await import(visualGridLayoutModuleUrl);
+const tableSortCompiled = ts.transpileModule(tableSortSource, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
+}).outputText;
+const tableSortModuleUrl = `data:text/javascript;base64,${Buffer.from(tableSortCompiled).toString("base64")}`;
+const { nextTableSortState, sortTableRows } = await import(tableSortModuleUrl);
 
 assert.deepEqual(
   resolveVisualizationVoiceCommand(
@@ -37,7 +43,18 @@ assert.equal(resolveVisualizationVoiceCommand("按照放款金额展示趋势图
 assert.equal(resolveVisualizationVoiceCommand("按照放款金额展示趋势图", ["field_3"], ["field_1"], { field_1: "日期", field_3: "放款金额" }).visualizationType, "line", "趋势图必须映射为折线图");
 assert.equal(resolveVisualizationVoiceCommand("先改成表格，随后按照放款金额展示趋势图", ["field_3"], ["field_1"], { field_1: "日期", field_3: "放款金额" }).visualizationType, "line", "累计语音文本必须以最后一次样式要求为准");
 assert.deepEqual(moveVisualizationField(["field_2", "field_3", "field_4"], "field_2", "field_4"), ["field_3", "field_4", "field_2"]);
+assert.equal(classifyVisualVoiceIntent("改成折线图", "chart").mode, "chart_control", "非文本可视化实时语音必须走图表形态控制");
+assert.equal(classifyVisualVoiceIntent("记下这段口径", "text").mode, "textbox_record", "文本框实时语音在记录意图下不得触发分析");
+assert.deepEqual(classifyVisualVoiceIntent("分析一下放款为什么下降", "text"), { mode: "textbox_record", analysisKinds: [] }, "文本框口述内容即使含分析词也只能转写，不能静默启动模型");
+assert.ok(visualCardSource.includes('data-visual-text-voice="true"') && visualCardSource.includes("正在将语音转写到文本框") && !visualCardSource.includes("textbox_analyze") && !visualCardSource.includes("runTextCardVoiceAnalysis") && !visualCardSource.includes("waitForSelfAnalysis"), "文本框必须提供独立实时语音转写入口，且不得保留第二条分析链");
 assert.deepEqual(moveVisualizationField(["field_2", "field_3"], "missing", "field_3"), ["field_2", "field_3"]);
+const sortRows = [{ raw: { amount: 20 } }, { raw: { amount: 5 } }, { raw: { amount: 20 } }];
+const ascending = nextTableSortState(null, "amount");
+const descending = nextTableSortState(ascending, "amount");
+assert.deepEqual(sortTableRows(sortRows, ascending).map((row) => row.raw.amount), [5, 20, 20], "首次点击表头必须正排且同值稳定");
+assert.deepEqual(sortTableRows(sortRows, descending).map((row) => row.raw.amount), [20, 20, 5], "第二次点击表头必须倒排");
+assert.equal(nextTableSortState(descending, "amount"), null, "第三次点击表头必须恢复原始顺序");
+assert.strictEqual(sortTableRows(sortRows, null), sortRows, "复原状态不得复制或修改源数据行");
 
 const followUpIndex = visualCardSource.indexOf(">追问</button>");
 const operationTrayIndex = visualCardSource.indexOf("data-visual-operation-tray=");
@@ -48,15 +65,29 @@ assert.ok(visualCardSource.includes('rounded-full bg-[#f0f6f2]') && visualCardSo
 assert.ok(visualCardSource.includes("flex-nowrap") && visualCardSource.includes('aria-label={operationsOpen ? "收起可视化操作" : "展开可视化操作"}') && !visualCardSource.includes('<SlidersHorizontal className="h-3.5 w-3.5" />操作'), "工具栏必须保持单行，操作入口只显示图标");
 assert.ok(visualCardSource.includes("{fieldLabels[field] || field}") && visualCardSource.includes("{labels[field] || field}"), "表头、指标和维度必须优先显示字段中文名");
 assert.ok(visualCardSource.includes('window.setTimeout(() => setVoiceNoticeVisible(false), 1_000)'), "语音提示必须在 1 秒后自动收起");
-assert.ok(voiceSource.includes('scheduleCommand()') && voiceSource.includes('}, 1_000)') && !voiceSource.includes('onCommand(next);\n            stop();'), "可视化语音必须在静默 1 秒后执行且不自动停止");
+assert.ok(voiceSource.includes('scheduleCommand()') && voiceSource.includes("const silenceMs = Math.max(250, Number(options.silenceMs || 1_000))") && voiceSource.includes("}, silenceMs)") && voiceSource.includes("if (stopAfterCommand) stop()"), "共享语音入口必须默认静默一秒触发，并允许 AI 右栏单次提交后停止");
+assert.ok(voiceSource.includes("speechApplicationModule: applicationModule") && voiceSource.includes("buildFunAsrRealtimeUrl(tenantId, userId, applicationModule)"), "语音入口必须从模型应用模块读取同一套接入配置");
+assert.ok(analysisWorkspaceSource.includes('data-analysis-popup-voice="true"') && analysisWorkspaceSource.includes('data-analysis-realtime-voice="true"') && analysisWorkspaceSource.includes('applicationModule: "popup_voice_input"') && analysisWorkspaceSource.includes('applicationModule: "realtime_voice_input"') && analysisWorkspaceSource.includes("silenceMs: 1_000") && analysisWorkspaceSource.includes('resultDelivery: "planned_analysis"'), "AI 右栏两种语音必须转写后在一秒静默时进入唯一文本分析运行时");
 assert.ok(visualCardSource.includes('document.addEventListener("pointerdown", dismissTransientControls, true)'), "操作浮层必须支持点击页面其他区域收起");
 assert.ok(visualCardSource.includes('applyType(option.type); setActivePanel(null);') && !visualCardSource.includes('applyType(option.type); setActivePanel(null); setOperationsOpen(false);'), "选择样式后操作托盘不得自动折叠");
 assert.ok(visualCardSource.includes('长按 2 秒后拖动排序') && visualCardSource.includes('}, 2_000)') && visualCardSource.includes('data-table-long-press-reorder="true"'), "指标、维度、表头和首列必须使用两秒长按排序");
-assert.ok(visualCardSource.includes('onDoubleClick=') && visualCardSource.includes('data-visual-comment-action="true"') && visualCardSource.includes('<MessageSquareText'), "双击可视化必须显示周报同款评论图标");
+assert.match(visualCardSource, /data-visual-table-scroll="true"/, "超高表格必须在组件内滚动");
+assert.match(visualCardSource, /thead className="sticky top-0 z-20/, "表格滚动时表头必须吸顶");
+assert.match(visualCardSource, /data-visual-table-frozen-header="true"/, "超高表格表头必须标记为冻结");
+assert.match(visualCardSource, /data-visual-table-sort=\{field\}/, "每列表头必须提供统一排序入口");
+assert.match(visualCardSource, /data-visual-table-sort-direction=\{direction \|\| "original"\}/, "表头必须暴露原始、正排和倒排三态");
+assert.match(visualCardSource, /addEventListener\("wheel", onWheel, \{ passive: false, capture: true \}\)/, "表格滚轮必须用捕获阶段非被动监听拦截，避免带动页面");
+assert.match(visualCardSource, /node.scrollTop \+= event.deltaY/, "表格滚轮必须滚动表格而不是带动页面");
+assert.match(visualCardSource, /overscroll-contain/, "表格滚动不得把溢出传递给页面");
+assert.match(visualCardSource, /data-visual-table-region=\{isTableCard \? "true" : undefined\}/, "表格卡片图表区必须拦截滚轮，避免页面跟着动");
+assert.match(visualCardSource, /useVisualTableRegionWheelLock\(chartAreaRef, isTableCard\)/, "表格卡片必须把滚轮锁在可视化区域内");
+assert.ok(visualCardSource.includes('onClick={(event) =>') && visualCardSource.includes('onContextMenu={(event) =>') && visualCardSource.includes('data-visual-comment-action="true"') && visualCardSource.includes('<MessageSquareText'), "单击或右键可视化必须显示统一评论气泡");
+assert.ok(visualCardSource.includes('cardType !== "table" || !dimensionFields.includes(field)') && visualCardSource.includes('data-visual-table-header-comment="true"') && visualCardSource.includes('data-visual-merge-dimension='), "仅标准表格维度列右键菜单可同时提供评论与合并重复单元格");
+assert.ok(visualCardSource.includes("mergedDimensionFields") && visualCardSource.includes("setMergedDimensionFields") && visualCardSource.includes("source.mergedDimensionFields"), "合并维度选择必须进入统一图表配置并支持恢复");
 assert.ok(!visualCardSource.includes("右键可评论；操作中可配置样式、指标、维度与语音"), "可视化卡片不得保留冗余操作说明");
 assert.ok(analysisWorkspaceSource.includes("const analysisTitle = selectedDataPoint?.label || definition.title"), "AI 分析栏标题必须使用所点可视化名称");
 assert.ok(!analysisWorkspaceSource.includes("当前锚点："), "AI 分析栏不得保留重复锚点文本条");
-assert.ok(analysisWorkspaceSource.includes("const visibleThreads = threads.filter") && analysisWorkspaceSource.includes('data-analysis-thread-tabs="true"') && analysisWorkspaceSource.indexOf('data-global-analysis-wide-toggle="true"') > analysisWorkspaceSource.indexOf('data-analysis-thread-tabs="true"'), "重复线程标签必须去重且宽度按钮固定在滚动标签外");
+assert.ok(analysisWorkspaceSource.includes("const visibleThreads = openThreads.filter") && analysisWorkspaceSource.includes('data-analysis-thread-tabs="true"') && analysisWorkspaceSource.indexOf('data-global-analysis-wide-toggle="true"') > analysisWorkspaceSource.indexOf('data-analysis-thread-tabs="true"'), "重复线程标签必须去重且宽度按钮固定在滚动标签外");
 assert.ok(messageBoardSource.includes('引用 · {target.label || "页面内容"}') && !messageBoardSource.includes('>{target.selectedText}</div>'), "留言引用只能显示可视化名称");
 assert.ok(workbenchPersistenceSource.includes("sessionStorage.setItem") && workbenchPersistenceSource.includes("analysisRows.slice(0, 200)") && selfAnalysisSource.includes("useSelfAnalysisWorkbenchPersistence"), "智能分析离开页面后必须恢复租户用户范围内的有界数据与可视化状态");
 

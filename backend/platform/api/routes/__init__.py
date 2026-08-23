@@ -9,6 +9,7 @@ from .analysis import (
     handle_analysis_history_delete,
     handle_analysis_history_get,
     handle_analysis_run,
+    handle_analysis_uploaded_source,
     handle_analysis_run_async,
     handle_analysis_run_cancel,
     handle_analysis_run_status,
@@ -18,6 +19,7 @@ from .analysis import (
 from .analysis_workspace import (
     handle_analysis_artifact_trust,
     handle_analysis_execution_nodes,
+    handle_analysis_thread_archive,
     handle_analysis_thread_branch,
     handle_analysis_threads_merge,
     handle_analysis_turn_append,
@@ -33,6 +35,7 @@ from .approvals import (
 from .attachments import handle_attachment_content_get, handle_report_image_upload
 from .application import handle_application_action_post, handle_application_module_get
 from .capabilities import handle_platform_capabilities_get
+from .customer_segment import handle_customer_segment_list_confirm, handle_customer_segment_list_preview
 from .daily_email import handle_daily_email_generate, handle_daily_email_get, handle_daily_email_send
 from .data_acquisition import (
     handle_acquisition_artifact_get,
@@ -107,8 +110,10 @@ from .audit import handle_audit_logs_get
 from .supervisor import handle_supervisor_chat
 from .auth import (
     handle_auth_login,
+    handle_auth_login_survey,
     handle_auth_logout,
     handle_auth_me,
+    handle_auth_password_change,
     handle_auth_oidc_callback,
     handle_auth_oidc_start,
     handle_auth_refresh,
@@ -290,14 +295,20 @@ GET_ROUTE_HANDLERS = {
 POST_ROUTE_HANDLERS = {
     "/mcp": handle_mcp_stream_post,
     "/api/auth/login": handle_auth_login,
+    "/api/auth/login-survey": handle_auth_login_survey,
     "/api/auth/register": handle_auth_register,
+    "/api/auth/password": handle_auth_password_change,
     "/api/auth/logout": handle_auth_logout,
     "/api/auth/refresh": handle_auth_refresh,
     "/api/provider-callbacks/notification": handle_notification_provider_callback,
     "/api/analysis/run": handle_analysis_run,
+    "/api/customer-segment/list/preview": handle_customer_segment_list_preview,
+    "/api/customer-segment/list/confirm": handle_customer_segment_list_confirm,
+    "/api/analysis/uploaded-source": handle_analysis_uploaded_source,
     "/api/analysis/run-async": handle_analysis_run_async,
     "/api/analysis/run-cancel": handle_analysis_run_cancel,
     "/api/analysis/workspaces": handle_analysis_workspace_upsert,
+    "/api/analysis/threads/archive": handle_analysis_thread_archive,
     "/api/analysis/threads/branches": handle_analysis_thread_branch,
     "/api/analysis/threads/turns": handle_analysis_turn_append,
     "/api/analysis/threads/merge": handle_analysis_threads_merge,

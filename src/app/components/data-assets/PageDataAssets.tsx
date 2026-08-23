@@ -53,7 +53,7 @@ export function PageDataAssetList({
               <span className="rounded-full bg-[#eef7f1] px-2 py-0.5 text-[10px] text-[#178a53]">{visualizationLabel(asset.visualizationType)}</span>
             </div>
             <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-[#8a8a8e]">
-              <span>页面：{scope === "multi_institution" ? "多机构分析" : pageLabel(singleInstitutionAssignedPage(asset))}</span>
+              <span>页面：{scope === "multi_institution" ? "多机构分析" : scope === "customer_segment" ? "分客群分析" : pageLabel(singleInstitutionAssignedPage(asset))}</span>
               <span>指标：{fieldLabels(asset.metricFields, asset.sourceFields).join("、")}</span>
               <span>维度：{fieldLabels(asset.dimensionFields, asset.sourceFields).join("、")}</span>
             </div>
@@ -69,7 +69,7 @@ export function PageDataAssetList({
             >
               {pageOptions.map((page) => <option key={page.code} value={page.code}>{page.label}</option>)}
             </select>
-          </label> : <span className="shrink-0 rounded-lg border border-[#dfe5e1] bg-white px-2.5 py-2 text-[11px] text-[#536159]">多机构分析</span>}
+          </label> : <span className="shrink-0 rounded-lg border border-[#dfe5e1] bg-white px-2.5 py-2 text-[11px] text-[#536159]">{scope === "customer_segment" ? "分客群分析" : "多机构分析"}</span>}
           {canManage && <button type="button" aria-label={`编辑页面数据${asset.name}`} title="编辑页面数据" onClick={() => onEdit(asset)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8a918d] hover:bg-white hover:text-[#178a53]"><Pencil className="h-3.5 w-3.5" /></button>}
           {canManage && <button type="button" aria-label={`删除页面数据${asset.name}`} title="删除页面数据" onClick={() => void onDelete(asset).catch(() => undefined)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#a1a1a6] hover:bg-[#fff1f1] hover:text-[#d93025]"><Trash2 className="h-3.5 w-3.5" /></button>}
         </article>
@@ -80,7 +80,7 @@ export function PageDataAssetList({
 }
 
 export function PageDataCreateButton({ scope, onClick }: { scope: PageDataInstitutionScope; onClick: () => void }) {
-  const label = scope === "multi_institution" ? "新增多机构数据" : "新增单机构数据";
+  const label = scope === "multi_institution" ? "新增多机构数据" : scope === "customer_segment" ? "新增明细数据" : "新增单机构数据";
   return <button type="button" onClick={onClick} className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white hover:bg-[#2c2c2e]" data-page-data-add={scope}><Plus className="h-3.5 w-3.5" />{label}</button>;
 }
 
@@ -108,7 +108,7 @@ export const PageDataCreateModal = memo(function PageDataCreateModal({
   const sourceTablesByKey = useMemo(() => new Map(rawTables.map((table) => [table.sourceKey, table])), [rawTables]);
   const candidatesById = useMemo(() => new Map(multiInstitutionCandidates.map((candidate) => [candidate.id, candidate])), [multiInstitutionCandidates]);
   const selectedCandidate = candidatesById.get(sourceKey);
-  const selectedTable = scope === "single_institution" ? sourceTablesByKey.get(sourceKey) : undefined;
+  const selectedTable = scope !== "multi_institution" ? sourceTablesByKey.get(sourceKey) : undefined;
   const selectedFields = selectedTable?.fields || selectedCandidate?.fields || initialAsset?.sourceFields.filter((field) => field.fieldNameEn !== "__institution_name") || [];
   const fieldGroups = useMemo(() => classifyFields(selectedFields), [selectedFields]);
   const [name, setName] = useState(initialAsset?.name || "");
@@ -128,21 +128,21 @@ export const PageDataCreateModal = memo(function PageDataCreateModal({
   }, [onClose, saving]);
 
   const selectTable = (nextSourceKey: string) => {
-    const table = scope === "single_institution" ? sourceTablesByKey.get(nextSourceKey) : candidatesById.get(nextSourceKey);
+    const table = scope !== "multi_institution" ? sourceTablesByKey.get(nextSourceKey) : candidatesById.get(nextSourceKey);
     const fields = table && "fields" in table ? table.fields : [];
     const groups = classifyFields(fields || []);
     setSourceKey(nextSourceKey);
-    setName(table ? `${"name" in table ? table.name : table.tableNameCn || table.tableNameEn} · ${scope === "multi_institution" ? "多机构数据" : "单机构数据"}` : "");
+    setName(table ? `${"name" in table ? table.name : table.tableNameCn || table.tableNameEn} · ${scope === "multi_institution" ? "多机构数据" : scope === "customer_segment" ? "分客群明细" : "单机构数据"}` : "");
     setMetrics(groups.metrics.slice(0, 3).map((field) => field.fieldNameEn));
     setDimensions(groups.dimensions.slice(0, 2).map((field) => field.fieldNameEn));
     setError("");
   };
 
   const submit = async () => {
-    if (scope === "single_institution" && (!selectedTable?.sourceKey || !selectedTable.schemaFingerprint)) return setError("请选择当前机构的一张有效原始表。");
+    if (scope !== "multi_institution" && (!selectedTable?.sourceKey || !selectedTable.schemaFingerprint)) return setError(scope === "customer_segment" ? "请选择一张主键为客户号的明细原始表。" : "请选择当前机构的一张有效原始表。");
     if (scope === "multi_institution" && (!selectedCandidate?.id || !selectedCandidate.schemaFingerprint)) return setError("请选择一组已经在表关系中配置且结构一致的多机构数据表。");
     if (!name.trim()) return setError("请填写页面数据名称。");
-    if (!metrics.length || (scope === "single_institution" && !dimensions.length)) return setError("请至少选择一个指标和一个维度。");
+    if (!metrics.length || (scope !== "multi_institution" && !dimensions.length)) return setError("请至少选择一个指标和一个维度。");
     setSaving(true);
     setError("");
     try {
@@ -158,7 +158,7 @@ export const PageDataCreateModal = memo(function PageDataCreateModal({
         sourceTableName: scope === "multi_institution" ? selectedCandidate!.name : selectedTable!.tableNameCn || selectedTable!.tableNameEn,
         schemaFingerprint: scope === "multi_institution" ? selectedCandidate!.schemaFingerprint : selectedTable!.schemaFingerprint,
         sourceFields: scope === "multi_institution" ? selectedCandidate!.fields : selectedTable!.fields,
-        targetPages: scope === "multi_institution" ? ["dashboard"] : [targetPage],
+        targetPages: scope === "multi_institution" ? ["dashboard"] : scope === "customer_segment" ? ["customer_segment_analysis"] : [targetPage],
         metricFields: metrics,
         dimensionFields: scope === "multi_institution" ? ["__institution_name", ...dimensions] : dimensions,
         visualizationType,
@@ -171,7 +171,7 @@ export const PageDataCreateModal = memo(function PageDataCreateModal({
     }
   };
 
-  const scopeLabel = scope === "multi_institution" ? "多机构数据" : "单机构数据";
+  const scopeLabel = scope === "multi_institution" ? "多机构数据" : scope === "customer_segment" ? "分客群明细数据" : "单机构数据";
 
   return <div
     className="fixed inset-0 z-[150] flex items-center justify-center bg-[rgba(18,33,27,0.22)] p-4 sm:p-6"
@@ -189,13 +189,13 @@ export const PageDataCreateModal = memo(function PageDataCreateModal({
       style={{ contain: "layout paint" }}
       onMouseDown={(event) => event.stopPropagation()}
     >
-      <div className="flex items-center justify-between border-b border-[#f0f0f2] px-5 py-4"><div><h3 id="page-data-create-title" className="text-[15px] text-[#1d1d1f]">{editing ? "编辑" : "新增"}{scopeLabel}</h3><p id="page-data-create-description" className="mt-1 text-[11px] text-[#9a9aa0]">{scope === "multi_institution" ? "仅使用当前账号有权访问、已在表关系中显式关联且结构一致的数据表。" : "引用当前机构原始表，配置经营周报或机构督导及默认可视化。"}</p></div><button type="button" aria-label={`关闭${scopeLabel}弹窗`} disabled={saving} onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8a8a8e] hover:bg-[#f2f2f7] disabled:opacity-50"><X className="h-4 w-4" /></button></div>
+      <div className="flex items-center justify-between border-b border-[#f0f0f2] px-5 py-4"><div><h3 id="page-data-create-title" className="text-[15px] text-[#1d1d1f]">{editing ? "编辑" : "新增"}{scopeLabel}</h3><p id="page-data-create-description" className="mt-1 text-[11px] text-[#9a9aa0]">{scope === "multi_institution" ? "仅使用当前账号有权访问、已在表关系中显式关联且结构一致的数据表。" : scope === "customer_segment" ? "仅可选择当前机构中唯一主键为客户号的客户粒度明细表。" : "引用当前机构原始表，配置经营周报或机构督导及默认可视化。"}</p></div><button type="button" aria-label={`关闭${scopeLabel}弹窗`} disabled={saving} onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8a8a8e] hover:bg-[#f2f2f7] disabled:opacity-50"><X className="h-4 w-4" /></button></div>
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
         <div className="grid gap-4 md:grid-cols-2 md:items-start" data-page-data-primary-fields="true">
           <label className="block min-w-0 text-[11px] text-[#636366]">{scopeLabel}名称<input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：分行放款趋势" className="mt-1.5 h-10 w-full rounded-lg border border-[#dedee3] bg-white px-3 text-[12px] text-[#1d1d1f] outline-none focus:border-[#8fbfa4]" /></label>
           <label className="block min-w-0 text-[11px] text-[#636366]">{scope === "multi_institution" ? "已关联数据集" : "原始表"}<span className="ml-1 text-[#d93025]">*</span><select value={sourceKey} onChange={(event) => selectTable(event.target.value)} disabled={candidatesLoading} className="mt-1.5 h-10 w-full rounded-lg border border-[#dedee3] bg-white px-3 text-[12px] text-[#1d1d1f] outline-none focus:border-[#8fbfa4] disabled:bg-[#f7f7f8]"><option value="">{candidatesLoading ? "正在读取已关联数据集…" : scope === "multi_institution" ? "请选择已关联数据集" : "请选择原始表"}</option>{scope === "multi_institution" ? multiInstitutionCandidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>) : rawTables.map((table) => <option key={table.id} value={table.sourceKey}>{table.tableNameCn || table.tableNameEn} · {table.rowCount || 0} 行</option>)}</select></label>
         </div>
-        {scope === "single_institution" ? <ChoiceSection title="放置页面" hint="单机构数据只放置到一个页面">{pageOptions.map((page) => <CheckChoice key={page.code} checked={targetPage === page.code} label={page.label} onChange={() => setTargetPage(page.code as Extract<PageDataPageCode, "weekly_report" | "institution_supervision">)} />)}</ChoiceSection> : <ChoiceSection title="包含机构" hint="来自表关系配置且当前账号有权访问">{selectedCandidate?.sources.map((source) => <span key={`${source.tenantId}:${source.sourceKey}`} className="rounded-lg border border-[#dce9e0] bg-[#f5faf7] px-2.5 py-2 text-[11px] text-[#536159]">{source.institutionName} · {source.sourceTableName}</span>)}{!selectedCandidate && !candidatesLoading && <EmptyChoice text="选择数据集后显示包含机构" />}</ChoiceSection>}
+        {scope === "single_institution" ? <ChoiceSection title="放置页面" hint="单机构数据只放置到一个页面">{pageOptions.map((page) => <CheckChoice key={page.code} checked={targetPage === page.code} label={page.label} onChange={() => setTargetPage(page.code as Extract<PageDataPageCode, "weekly_report" | "institution_supervision">)} />)}</ChoiceSection> : scope === "multi_institution" ? <ChoiceSection title="包含机构" hint="来自表关系配置且当前账号有权访问">{selectedCandidate?.sources.map((source) => <span key={`${source.tenantId}:${source.sourceKey}`} className="rounded-lg border border-[#dce9e0] bg-[#f5faf7] px-2.5 py-2 text-[11px] text-[#536159]">{source.institutionName} · {source.sourceTableName}</span>)}{!selectedCandidate && !candidatesLoading && <EmptyChoice text="选择数据集后显示包含机构" />}</ChoiceSection> : <ChoiceSection title="客户关联键" hint="由原始表主键确定，不允许手工改写"><span className="rounded-lg border border-[#dce9e0] bg-[#f5faf7] px-2.5 py-2 text-[11px] text-[#536159]">{customerKeyLabel(selectedTable)}</span></ChoiceSection>}
         <ChoiceSection title="默认指标" hint="来自所选原始表中的数值字段">{fieldGroups.metrics.map((field) => <CheckChoice key={field.fieldNameEn} checked={metrics.includes(field.fieldNameEn)} label={field.fieldNameCn || field.fieldNameEn} onChange={() => setMetrics((current) => toggle(current, field.fieldNameEn))} />)}{selectedTable && !fieldGroups.metrics.length && <EmptyChoice text="该表没有可识别的数值指标" />}</ChoiceSection>
         <ChoiceSection title="默认维度" hint={scope === "multi_institution" ? "机构维度固定保留，可直接作为图表坐标轴" : "来自所选原始表中的分类或时间字段"}>{scope === "multi_institution" && selectedCandidate && <CheckChoice checked label="机构" onChange={() => undefined} />}{fieldGroups.dimensions.map((field) => <CheckChoice key={field.fieldNameEn} checked={dimensions.includes(field.fieldNameEn)} label={field.fieldNameCn || field.fieldNameEn} onChange={() => setDimensions((current) => toggle(current, field.fieldNameEn))} />)}{selectedTable && !fieldGroups.dimensions.length && <EmptyChoice text="该表没有可识别的维度字段" />}</ChoiceSection>
         <ChoiceSection title="默认样式" hint="使用系统内嵌可视化样式">{visualizationOptions.map((option) => <button key={option.type} type="button" onClick={() => setVisualizationType(option.type)} className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] ${visualizationType === option.type ? "border-[#a7d5b8] bg-[#edf8f1] text-[#178a53]" : "border-[#e5e5ea] bg-white text-[#636366] hover:bg-[#f7faf8]"}`}><option.icon className="h-3.5 w-3.5" />{option.label}</button>)}</ChoiceSection>
@@ -231,3 +231,24 @@ function toggle<T extends string>(values: T[], value: T) { return values.include
 function pageLabel(pageCode: PageDataPageCode) { return pageOptions.find((page) => page.code === pageCode)?.label || pageCode; }
 function fieldLabels(fields: string[], sourceFields: RawField[]) { const labels = Object.fromEntries(sourceFields.map((field) => [field.fieldNameEn, field.fieldNameCn || field.fieldNameEn])); return fields.map((field) => labels[field] || field); }
 function visualizationLabel(type: string) { return visualizationOptions.find((option) => option.type === type)?.label || type; }
+
+export function customerDetailTableKey(table: RawTableAsset) {
+  const primaryFields = (table.fields || []).filter((field) => field.isPrimaryKey);
+  if (primaryFields.length !== 1) return "";
+  const field = primaryFields[0];
+  const code = String(field.fieldNameEn || "").trim();
+  const label = String(field.fieldNameCn || "").trim();
+  const customerField = String(table.customerField || "").trim();
+  const normalized = `${code}${label}`.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, "");
+  const recognized = (customerField && code === customerField)
+    || ["customerid", "customerno", "custid", "custno", "clientid", "clientno"].some((token) => normalized.includes(token))
+    || ["客户号", "客户编号", "客户id", "客户代码", "客户标识"].some((token) => label.toLowerCase().replace(/\s/g, "").includes(token));
+  return recognized ? code : "";
+}
+
+function customerKeyLabel(table?: RawTableAsset) {
+  if (!table) return "选择明细表后显示客户号主键";
+  const code = customerDetailTableKey(table);
+  const field = table.fields.find((item) => item.fieldNameEn === code);
+  return field ? `${field.fieldNameCn || field.fieldNameEn} · ${field.fieldNameEn}` : "未识别到客户号主键";
+}

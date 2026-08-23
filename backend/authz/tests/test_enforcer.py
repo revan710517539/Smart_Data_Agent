@@ -200,6 +200,7 @@ class AuthEnforcerTest(unittest.TestCase):
         self.assertIn("business-analysis", expanded)
         self.assertIn("business-analysis.weekly-report", expanded)
         self.assertIn("business-analysis.supervision", expanded)
+        self.assertIn("business-analysis.customer-segment", expanded)
         self.assertNotIn("business-analysis.funnel", expanded)
         self.assertNotIn("business-analysis.sandbox", expanded)
         self.assertNotIn("business-analysis.email-daily", expanded)

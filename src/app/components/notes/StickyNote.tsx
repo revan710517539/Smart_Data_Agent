@@ -108,7 +108,7 @@ export function StickyNoteButton({
       onClick={onClick}
       data-sticky-note-toggle="true"
       className={compact
-        ? `flex items-center gap-1 rounded-lg border border-[#e5e5ea] px-3 py-1.5 text-[11px] text-[#636366] hover:bg-[#f2f2f7] ${className}`
+        ? `flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-[11px] text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#636366] ${className}`
         : `inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#636366] transition-colors hover:bg-[#f2f2f7] ${className}`}
     >
       <StickyNoteIcon className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />

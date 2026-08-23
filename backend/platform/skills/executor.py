@@ -27,6 +27,10 @@ class SkillExecutor:
         self.trace_recorder = trace_recorder
         self.rate_limiter = rate_limiter
         self.approval_store = approval_store
+        self._invoke_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="skill-invoke")
+
+    def close(self) -> None:
+        self._invoke_pool.shutdown(wait=False, cancel_futures=True)
 
     def execute(self, request: SkillRequest) -> SkillResult:
         spec = self.registry.get(request.skill_id)
@@ -73,9 +77,8 @@ class SkillExecutor:
     def _invoke_with_policy(self, spec: SkillSpec, request: SkillRequest) -> SkillResult:
         last_error: Exception | None = None
         for attempt in range(spec.max_retries + 1):
-            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"skill-{spec.skill_id}")
             context = copy_context()
-            future = executor.submit(context.run, self.registry.handler(spec.skill_id), request)
+            future = self._invoke_pool.submit(context.run, self.registry.handler(spec.skill_id), request)
             try:
                 return future.result(timeout=max(1, min(int(spec.timeout_seconds), 300)))
             except FutureTimeoutError as exc:
@@ -83,8 +86,6 @@ class SkillExecutor:
                 last_error = TimeoutError(f"skill_timeout:{spec.skill_id}")
             except Exception as exc:
                 last_error = exc
-            finally:
-                executor.shutdown(wait=False, cancel_futures=True)
             if attempt < spec.max_retries:
                 self.trace_recorder.add_span(
                     "skill.execute.retry",

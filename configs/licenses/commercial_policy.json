@@ -13,6 +13,7 @@
   "allowed_expressions": [
     "(MIT OR Apache-2.0)",
     "(MPL-2.0 OR Apache-2.0)",
+    "Apache-2.0 OR BSD-3-Clause",
     "MIT AND ISC",
     "MIT OR SEE LICENSE IN FEEL-FREE.md"
   ],
@@ -40,6 +41,7 @@
     "boto3",
     "certifi",
     "croniter",
+    "cryptography",
     "openpyxl",
     "polars",
     "psycopg",

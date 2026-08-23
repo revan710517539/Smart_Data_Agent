@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Image as ImageIcon, LoaderCircle, MessageSquarePlus, Quote, RefreshCw, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, ClipboardList, Image as ImageIcon, LoaderCircle, MessageSquarePlus, Quote, RefreshCw, Search } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
 import { fetchMessageBoardAdmin, updateMessageBoardStatus, type MessageBoardEntry, type MessageBoardQuote } from "../services/messageBoardApi";
 import { DataPageSelector } from "./ui/DataPageSelector";
@@ -39,6 +39,7 @@ export function MessageBoardManagement() {
     users: new Set(messages.map((item) => item.author_user_id)).size,
     pages: new Set(messages.map((item) => item.page_key)).size,
     quoted: messages.filter((item) => Boolean((item.quote_context as MessageBoardQuote)?.selected_text)).length,
+    surveys: messages.filter((item) => item.page_key === "login-survey").length,
   }), [messages]);
 
   const changeStatus = async (message: MessageBoardEntry, status: MessageBoardEntry["status"]) => {
@@ -68,7 +69,7 @@ export function MessageBoardManagement() {
           </div>
           <div className="min-w-0">
             <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">留言板管理</h2>
-            <p className="mt-0.5 text-[13px] text-[#aeaeb2]">查看当前机构各账号从业务页面提交的产品意见和需求</p>
+            <p className="mt-0.5 text-[13px] text-[#aeaeb2]">查看当前机构各账号提交的登录调查、产品意见和需求</p>
             {notice && <p className="mt-1 text-[11px] text-[#b42318]">{notice}</p>}
           </div>
         </div>
@@ -83,7 +84,7 @@ export function MessageBoardManagement() {
           <div>
             <h3 className="text-[14px] text-[#1d1d1f]">全部留言</h3>
             <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[#8a8a8e]" data-message-board-inline-summary="true">
-              <span>留言总数 {total}</span><span>留言账号 {summary.users}</span><span>来源页面 {summary.pages}</span><span>引用内容 {summary.quoted}</span>
+              <span>留言总数 {total}</span><span>登录调查 {summary.surveys}</span><span>留言账号 {summary.users}</span><span>来源页面 {summary.pages}</span><span>引用内容 {summary.quoted}</span>
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -115,7 +116,10 @@ export function MessageBoardManagement() {
                 </div>
                 <div className="line-clamp-2 text-[12px] leading-5 text-[#3a3a3c]">{message.content}</div>
                 <div className="min-w-0">
-                  <div className="truncate text-[12px] text-[#3a3a3c]">{message.page_title}</div>
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <div className="truncate text-[12px] text-[#3a3a3c]">{message.page_title}</div>
+                    {message.page_key === "login-survey" && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#eef8f2] px-1.5 py-0.5 text-[9px] text-[#0f8554]"><ClipboardList className="h-2.5 w-2.5" />登录调查</span>}
+                  </div>
                   <div className="truncate text-[10px] text-[#aeaeb2]">{message.page_url || message.page_key}</div>
                 </div>
                 <div>{quote?.selected_text ? <span className="inline-flex items-center gap-1 rounded-full bg-[#f5f1fb] px-2 py-0.5 text-[10px] text-[#7654a8]"><Quote className="h-3 w-3" />是</span> : <span className="text-[11px] text-[#aeaeb2]">否</span>}</div>
@@ -142,6 +146,7 @@ export function MessageBoardManagement() {
                     <dl className="mt-2 space-y-1.5 text-[11px] leading-5">
                       <div className="flex gap-2"><dt className="w-16 shrink-0 text-[#aeaeb2]">机构</dt><dd className="text-[#3a3a3c]">{message.tenant_id.replace(/^tenant:/, "")}</dd></div>
                       <div className="flex gap-2"><dt className="w-16 shrink-0 text-[#aeaeb2]">留言人</dt><dd className="break-all text-[#3a3a3c]">{message.author_name}</dd></div>
+                      <div className="flex gap-2"><dt className="w-16 shrink-0 text-[#aeaeb2]">来源</dt><dd className="text-[#3a3a3c]">{message.page_key === "login-survey" ? "登录页数据使用调查" : message.page_title}</dd></div>
                       <div className="flex gap-2"><dt className="w-16 shrink-0 text-[#aeaeb2]">附件</dt><dd className="text-[#3a3a3c]">{message.attachment_ids.length} 张截图</dd></div>
                       <div className="flex gap-2"><dt className="w-16 shrink-0 text-[#aeaeb2]">更新时间</dt><dd className="text-[#3a3a3c]">{formatDateTime(message.updated_at)}</dd></div>
                     </dl>

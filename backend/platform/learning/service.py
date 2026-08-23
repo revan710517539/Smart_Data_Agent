@@ -638,6 +638,16 @@ class SkillLearningService:
             for skill in bundle.get("analysis_skills", [])
             if str(skill.get("category") or "") == "场景"
             and bool(skill.get("enabled", True))
+            and str(skill.get("id") or "") not in {
+                "scene-analysis-intent",
+                "scene-chart-followup",
+                "scene-page-rail",
+                "scene-textbox-voice",
+                "scene-self-analysis",
+                "topic-descriptive",
+                "topic-attribution",
+                "topic-predictive",
+            }
             and not self._is_generated_skill(skill)
         ]
         scenes.sort(key=lambda skill: (-score(skill), int(skill.get("sortOrder") or 999), str(skill.get("name") or "")))

@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Landmark,
   ListChecks,
+  KeyRound,
   LogOut,
   X,
   Sparkles,
@@ -36,6 +37,8 @@ import {
   type TextModelOption,
 } from "../services/modelSelectionStore";
 import { trackInteraction } from "../services/interactionTelemetry";
+import { changeAccountPassword } from "../services/authApi";
+import { apiErrorMessage } from "../services/apiClient";
 
 type MenuItem = {
   key: string;
@@ -54,6 +57,7 @@ const menuItems: MenuItem[] = [
     children: [
       { key: "business-analysis.weekly-report", path: "/weekly-report", label: "经营周报" },
       { key: "business-analysis.supervision", path: "/supervision", label: "机构督导" },
+      { key: "business-analysis.customer-segment", path: "/customer-segment-analysis", label: "分客群分析" },
     ],
   },
   {
@@ -94,7 +98,7 @@ const menuItems: MenuItem[] = [
     children: [
       { key: "data-assets.metrics", path: "/data-assets/metrics", label: "指标字典" },
       { key: "data-assets.knowledge", path: "/data-assets/knowledge", label: "知识记忆" },
-      { key: "data-assets.data-management", path: "/data-assets/data-management", label: "数据管理" },
+      { key: "data-assets.data-management", path: "/data-assets/data-management", label: "站内数据" },
       { key: "data-assets.quality", path: "/data-assets/quality", label: "质量监控" },
       { key: "data-assets.tools", path: "/data-assets/tools", label: "工具调用" },
     ],
@@ -148,6 +152,11 @@ export function Layout() {
   const [todoReturnPath, setTodoReturnPath] = useState("/");
   const [textModelOptions, setTextModelOptions] = useState<TextModelOption[]>([]);
   const [selectedTextModelId, setSelectedTextModelId] = useState("");
+  const [passwordOpen, setPasswordOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [passwordNotice, setPasswordNotice] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -218,8 +227,27 @@ export function Layout() {
       ...(item.path ? [item.path] : []),
       ...(item.children?.flatMap((child) => child.path ? [child.path] : []) || []),
     ]);
-    return warmVisibleRoutePaths(visiblePaths, location.pathname);
-  }, [isAuthenticated, location.pathname, navigationStatus, visibleMenuItems]);
+    const cancelCodeWarmup = warmVisibleRoutePaths(visiblePaths, location.pathname);
+    let dashboardIdleId: number | null = null;
+    let dashboardTimeoutId: number | null = null;
+    const warmDashboardData = () => {
+      dashboardIdleId = null;
+      dashboardTimeoutId = null;
+      preloadRouteDataPath("/dashboard", { tenantId, userId });
+    };
+    if (location.pathname !== "/dashboard" && visiblePaths.includes("/dashboard")) {
+      if (typeof window.requestIdleCallback === "function") {
+        dashboardIdleId = window.requestIdleCallback(warmDashboardData, { timeout: 800 });
+      } else {
+        dashboardTimeoutId = window.setTimeout(warmDashboardData, 180);
+      }
+    }
+    return () => {
+      cancelCodeWarmup();
+      if (dashboardIdleId !== null && typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(dashboardIdleId);
+      if (dashboardTimeoutId !== null) window.clearTimeout(dashboardTimeoutId);
+    };
+  }, [isAuthenticated, location.pathname, navigationStatus, tenantId, userId, visibleMenuItems]);
 
   useEffect(() => {
     const parent = menuItems.find((item) => item.children?.some((child) => child.path === location.pathname));
@@ -506,6 +534,52 @@ export function Layout() {
 
         {/* User */}
         <div className="px-4 py-3.5 border-t border-[#ebebf0]">
+          {passwordOpen && (
+            <form
+              className="mb-3 space-y-2 rounded-lg border border-[#e5e5ea] bg-[#fafbfc] p-2.5"
+              data-account-password-form="true"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                setPasswordNotice("");
+                setPasswordSaving(true);
+                try {
+                  await changeAccountPassword({ currentPassword, newPassword });
+                  setCurrentPassword("");
+                  setNewPassword("");
+                  setPasswordNotice("密码已更新");
+                } catch (error) {
+                  setPasswordNotice(apiErrorMessage(error, "修改密码失败"));
+                } finally {
+                  setPasswordSaving(false);
+                }
+              }}
+            >
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(event) => setCurrentPassword(event.target.value)}
+                placeholder="当前密码"
+                autoComplete="current-password"
+                className="h-8 w-full rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none"
+              />
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                placeholder="新密码，至少 6 位"
+                autoComplete="new-password"
+                className="h-8 w-full rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none"
+              />
+              {passwordNotice && <div className="text-[11px] leading-4 text-[#636366]">{passwordNotice}</div>}
+              <button
+                type="submit"
+                disabled={passwordSaving || !currentPassword || !newPassword}
+                className="h-7 w-full rounded-md bg-[#1d1d1f] text-[11px] text-white disabled:opacity-40"
+              >
+                {passwordSaving ? "保存中" : "保存新密码"}
+              </button>
+            </form>
+          )}
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-full bg-[#ebebf0] flex items-center justify-center text-[11px] text-[#636366]">
               {userName[0] || "用"}
@@ -516,6 +590,19 @@ export function Layout() {
                 {selectedInstitution} · {currentTenantRoles.map((role) => role.role).join("、") || "未授权"}
               </div>
             </div>
+            <button
+              type="button"
+              onClick={() => {
+                setPasswordOpen((open) => !open);
+                setPasswordNotice("");
+              }}
+              className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f]"
+              aria-label="修改密码"
+              title="修改密码"
+              data-account-password-toggle="true"
+            >
+              <KeyRound className="h-3.5 w-3.5" />
+            </button>
             <button
               type="button"
               onClick={logout}

@@ -638,35 +638,69 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
         self.assertNotIn("test-default-secret", delete_body)
 
     def test_newly_registered_account_receives_the_protected_default_relay(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
-            configure_default_relay_model(server.services.system_config_store, "test-default-secret")
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            try:
-                port = server.server_address[1]
-                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                conn.request(
-                    "POST",
-                    "/api/auth/register",
-                    body=json.dumps(
-                        {"name": "默认模型用户", "email": "default-model-user@example.com", "institution": "华兴银行"},
-                        ensure_ascii=False,
-                    ).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                )
-                response = conn.getresponse()
-                payload = json.loads(response.read().decode("utf-8"))
-                user_id = payload["user"]["id"]
-                saved = server.services.system_config_store.get_model(
-                    account_system_config_scope(user_id), DEFAULT_RELAY_MODEL_ID, reveal_secret=True
-                )
-            finally:
-                server.shutdown()
-                server.server_close()
-                thread.join(timeout=5)
+        password = "test-only-explicit-login-secret"
+        with patch.dict("os.environ", {"SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD": password}):
+            with TemporaryDirectory() as tmpdir:
+                server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+                configure_default_relay_model(server.services.system_config_store, "test-default-secret")
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    port = server.server_address[1]
+                    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                    conn.request(
+                        "POST",
+                        "/api/auth/register",
+                        body=json.dumps(
+                            {
+                                "name": "默认模型用户",
+                                "email": "default-model-user@example.com",
+                                "password": password,
+                                "institution": "华兴银行",
+                            },
+                            ensure_ascii=False,
+                        ).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    response = conn.getresponse()
+                    payload = json.loads(response.read().decode("utf-8"))
+                    super_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                    super_conn.request(
+                        "POST",
+                        "/api/auth/login",
+                        body=json.dumps({"email": "xujingbo-jk@qifu.com", "password": "123456"}).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    super_response = super_conn.getresponse()
+                    super_cookie = super_response.getheader("Set-Cookie") or ""
+                    approve_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                    approve_conn.request(
+                        "POST",
+                        "/api/application/action",
+                        body=json.dumps(
+                            {
+                                "module_key": "agent_workspace",
+                                "action": "approve_registration",
+                                "payload": {"requestId": payload.get("request_id")},
+                            }
+                        ).encode("utf-8"),
+                        headers={"Content-Type": "application/json", "Cookie": super_cookie},
+                    )
+                    approve_response = approve_conn.getresponse()
+                    approve_payload = json.loads(approve_response.read().decode("utf-8"))
+                    user_id = approve_payload["result"]["user"]["user"]["id"]
+                    if not user_id:
+                        user_id = str(payload.get("request_id") or "")
+                    saved = server.services.system_config_store.get_model(
+                        account_system_config_scope(user_id), DEFAULT_RELAY_MODEL_ID, reveal_secret=True
+                    )
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
 
-        self.assertEqual(response.status, 201)
+        self.assertEqual(response.status, 202)
+        self.assertEqual(approve_response.status, 200)
         self.assertIsNotNone(saved)
         self.assertEqual(saved["applicationModule"], "global_text_model")
         self.assertEqual(saved["key"], "https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net")

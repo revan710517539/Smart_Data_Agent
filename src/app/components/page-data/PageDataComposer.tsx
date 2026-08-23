@@ -18,10 +18,18 @@ import { pageDataToSelection, type AnalysisRow, type VisualizationType } from ".
 export type ComposerMode = "browse" | "edit";
 export const PAGE_DATA_PAGE_GUTTER_CLASS = "p-7";
 
+export type PageEditController = {
+  mode: ComposerMode;
+  setMode: (mode: ComposerMode) => void;
+  savingLayout: boolean;
+  saveLayout: () => Promise<boolean>;
+};
+
 type PageDataComposerOptions = {
   pageCode: PageDataPageCode;
   moduleKey: ApplicationModuleKey;
   railPageKey: string;
+  refreshKey?: string | number;
 };
 
 type PageDataNote = {
@@ -39,13 +47,36 @@ const pageLabels: Record<PageDataPageCode, string> = {
   dashboard: "多机构分析",
   weekly_report: "经营周报",
   institution_supervision: "机构督导",
+  customer_segment_analysis: "分客群分析",
 };
+
+const pageDataRowErrorMessages: Record<string, string> = {
+  multi_institution_page_data_source_schema_changed: "多机构数据源结构已更新，当前图表所用字段或关联键不再兼容。请由超级管理员在“数据资产 > 页面数据”重新确认关联后保存。",
+  multi_institution_page_data_relationship_unavailable: "多机构关联配置已失效。请由超级管理员在“数据资产 > 表关联”确认来源后重新绑定页面数据。",
+  multi_institution_page_data_sources_unavailable: "当前账号已无法读取该多机构配置中的全部来源。请检查机构授权和表关联配置。",
+  page_data_selected_field_unavailable: "页面数据所选字段已不存在或语义发生变化。请重新选择维度和指标后保存。",
+  page_data_source_schema_changed: "页面数据源结构已更新，当前图表字段不再兼容。请重新绑定数据源后保存。",
+  page_data_source_unavailable: "页面数据源已不可用。请检查当前机构的数据目录和页面数据绑定。",
+  customer_segment_list_required: "请先在页面右上角上传并确认客户号名单，确认后系统会按名单重新计算全部图表。",
+  customer_segment_list_content_changed: "当前客群名单校验失败，请重新上传并确认名单。",
+  customer_segment_list_content_invalid: "当前客群名单内容无效，请重新上传符合要求的 Excel 文件。",
+  customer_segment_page_data_customer_key_changed: "明细表的客户号主键已经变化，请由超级管理员在站内数据的“分客群页面”中重新保存配置。",
+  customer_segment_detail_table_required: "该数据源不是客户号唯一主键的明细表，不能用于分客群分析。",
+  customer_segment_source_customer_key_duplicate: "明细表中客户号主键存在重复值，请先修复原始数据后再分析。",
+  csv_source_match_key_missing: "明细表中已找不到配置的客户号字段，请重新保存分客群页面数据配置。",
+};
+
+function pageDataRowErrorMessage(value: string) {
+  const code = String(value || "").trim();
+  if (pageDataRowErrorMessages[code]) return pageDataRowErrorMessages[code];
+  return /^[a-z][a-z0-9_]*$/.test(code) ? "页面数据暂时无法读取，请检查数据源授权与页面配置后重试。" : code;
+}
 
 function applyWorkspace(workspace: { assets?: PageDataAsset[]; layout?: string[]; notes?: unknown[]; rows?: Record<string, PageDataRows>; row_errors?: Record<string, string> }, pageCode: PageDataPageCode) {
   const available = (workspace.assets || []).filter((asset) => pageDataBelongsToPage(asset, pageCode));
   const availableIds = available.map((asset) => asset.id);
   const resolvedLayout = resolvePageDataLayout(workspace.layout || [], availableIds, {
-    includeNewlyAssigned: pageCode === "weekly_report" || pageCode === "institution_supervision",
+    includeNewlyAssigned: pageCode === "weekly_report" || pageCode === "institution_supervision" || pageCode === "customer_segment_analysis",
   });
   return {
     assets: available,
@@ -53,13 +84,13 @@ function applyWorkspace(workspace: { assets?: PageDataAsset[]; layout?: string[]
     visualTypes: Object.fromEntries(available.map((asset) => [asset.id, asset.visualizationType as VisualizationType])),
     notes: normalizePageDataNotes(workspace.notes, new Set(resolvedLayout)),
     rowsById: workspace.rows || {},
-    rowsFailed: workspace.row_errors || {},
+    rowsFailed: {},
   };
 }
 
-export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDataComposerOptions) {
+export function usePageDataComposer({ pageCode, moduleKey, railPageKey, refreshKey }: PageDataComposerOptions) {
   const { tenantId, userId, isSuperAdmin } = usePlatformContext();
-  const cached = readPageDataWorkspaceMemory(tenantId, pageCode);
+  const cached = readPageDataWorkspaceMemory(tenantId, userId, pageCode);
   const initial = cached ? applyWorkspace(cached, pageCode) : null;
   const [assets, setAssets] = useState<PageDataAsset[]>(initial?.assets || []);
   const [layoutIds, setLayoutIds] = useState<string[]>(initial?.layoutIds || []);
@@ -78,7 +109,7 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
   useEffect(() => {
     let cancelled = false;
     const requestId = ++requestRef.current;
-    if (!readPageDataWorkspaceMemory(tenantId, pageCode)) setLoading(true);
+    if (!readPageDataWorkspaceMemory(tenantId, userId, pageCode)) setLoading(true);
     fetchPageDataWorkspace({ tenantId, userId, pageCode }).then((workspace) => {
       if (cancelled || requestRef.current !== requestId) return;
       const next = applyWorkspace(workspace, pageCode);
@@ -88,7 +119,7 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
       setVisualTypes(next.visualTypes);
       setNotes(next.notes);
       setRowsById(next.rowsById);
-      setRowsFailed(next.rowsFailed);
+      setRowsFailed({});
       setNotice("");
     }).catch((error) => {
       if (!cancelled) setNotice(apiErrorMessage(error, "页面数据配置加载失败。"));
@@ -96,7 +127,7 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
       if (!cancelled && requestRef.current === requestId) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [pageCode, tenantId, userId]);
+  }, [pageCode, refreshKey, tenantId, userId]);
 
   const assetById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
   const visibleAssets = useMemo(() => layoutIds.map((id) => assetById.get(id)).filter((asset): asset is PageDataAsset => Boolean(asset)), [assetById, layoutIds]);
@@ -122,7 +153,7 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey }: PageDa
         const rows = await fetchPageDataRows({ tenantId, userId, pageDataId: asset.id, pageCode });
         return { id: asset.id, rows };
       } catch (error) {
-        const message = apiErrorMessage(error, `${asset.name} 数据加载失败。`);
+        const message = pageDataRowErrorMessage(apiErrorMessage(error, `${asset.name} 数据加载失败。`));
         return { id: asset.id, error: message };
       }
     })).then((results) => {
@@ -320,7 +351,7 @@ function normalizePageDataNotes(value: unknown, availableIds: Set<string>): Page
 
 export type PageDataComposerController = ReturnType<typeof usePageDataComposer>;
 
-export function PageDataModeToggle({ controller, className = "", onSave }: { controller: PageDataComposerController; className?: string; onSave?: () => void | Promise<void> }) {
+export function PageDataModeToggle({ controller, className = "", onSave }: { controller: PageEditController; className?: string; onSave?: () => void | Promise<void> }) {
   const toggleMode = async () => {
     if (controller.mode === "browse") {
       controller.setMode("edit");
@@ -375,9 +406,9 @@ export function PageDataVisualizationModules({
   const [instanceConfigs, setInstanceConfigs] = useState<Record<string, import("../visualization/visualizationDataModel").VisualizationCardConfig>>({});
   const renderedAssets = assetIds?.length ? visibleAssets.filter((asset) => assetIds.includes(asset.id)) : visibleAssets;
 
-  const pickerKind = pageCode === "dashboard" ? "多机构数据" : "单机构数据";
-  const pickerSource = pageCode === "dashboard" ? "多机构页面" : "单机构页面";
-  const picker = showAssetPicker && showEditorControls && mode === "edit" ? <div className="mb-3 rounded-xl border border-dashed border-[#cfe0d6] bg-white p-3" data-page-data-inline-picker="true"><div className="mb-2 text-[10px] text-[#7c8781]">选择要展示在{pageLabels[pageCode]}中的{pickerKind}</div><div className="flex flex-wrap gap-2">{assets.map((asset) => { const selected = layoutIds.includes(asset.id); return <button key={asset.id} type="button" onClick={() => toggleAsset(asset.id)} className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[10px] ${selected ? "border-[#75b492] bg-[#edf8f1] text-[#147d4f]" : "border-[#dfe7e2] bg-white text-[#59645e] hover:bg-[#f7faf8]"}`}><span className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${selected ? "border-[#178a53] bg-[#178a53] text-white" : "border-[#cfd7d2] text-transparent"}`}><Check className="h-2.5 w-2.5" /></span>{asset.name}</button>; })}{!assets.length && <span className="text-[10px] text-[#a1a7a3]">暂无可用数据，请先在数据管理的“{pickerSource}”中新增。</span>}</div></div> : null;
+  const pickerKind = pageCode === "dashboard" ? "多机构数据" : pageCode === "customer_segment_analysis" ? "分客群明细数据" : "单机构数据";
+  const pickerSource = pageCode === "dashboard" ? "多机构页面" : pageCode === "customer_segment_analysis" ? "分客群页面" : "单机构页面";
+  const picker = showAssetPicker && showEditorControls && mode === "edit" ? <div className="mb-3 rounded-xl border border-dashed border-[#cfe0d6] bg-white p-3" data-page-data-inline-picker="true"><div className="mb-2 text-[10px] text-[#7c8781]">选择要展示在{pageLabels[pageCode]}中的{pickerKind}</div><div className="flex flex-wrap gap-2">{assets.map((asset) => { const selected = layoutIds.includes(asset.id); return <button key={asset.id} type="button" onClick={() => toggleAsset(asset.id)} className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[10px] ${selected ? "border-[#75b492] bg-[#edf8f1] text-[#147d4f]" : "border-[#dfe7e2] bg-white text-[#59645e] hover:bg-[#f7faf8]"}`}><span className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${selected ? "border-[#178a53] bg-[#178a53] text-white" : "border-[#cfd7d2] text-transparent"}`}><Check className="h-2.5 w-2.5" /></span>{asset.name}</button>; })}{!assets.length && <span className="text-[10px] text-[#a1a7a3]">暂无可用数据，请先在站内数据的“{pickerSource}”中新增。</span>}</div></div> : null;
 
   if (!renderedAssets.length) return picker;
 
@@ -446,7 +477,6 @@ export function PageDataVisualizationModules({
               data-visual-grid-max-span={note.config.maxLayoutSpan}
               data-visual-grid-max-height={note.config.maxLayoutHeight}
             >
-              {canDeleteOwnVisualCopy({ createdByUserId: note.createdByUserId, userId, isSuperAdmin }) && <div className="mb-1 flex h-7 shrink-0 items-center justify-end rounded-lg bg-[#f6f8f7] px-2 text-[10px] text-[#7c8781]"><button type="button" onClick={() => removeNote(note.id)} className="inline-flex h-6 items-center justify-center gap-1 rounded-md px-2 hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3 w-3" />移除</button></div>}
               <div className="min-h-0 flex-1">
                 <AnalysisVisualCard
                   id={note.id}

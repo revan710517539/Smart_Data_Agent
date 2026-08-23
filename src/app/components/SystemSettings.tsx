@@ -79,6 +79,7 @@ import {
   initialPermissionInstitutions,
   emptyModelForm,
   emptySpeechForm,
+  isAccessFailureNotice,
   maskApiSecret,
   speechProviderLabel,
   modelSourceLabel,
@@ -360,7 +361,8 @@ export function SystemSettings() {
       applicationModule: "global_text_model",
       availableModels,
       enabledModels: availableModels.slice(0, 1),
-      status: "available",
+      testStatus: "untested",
+      status: "draft",
     };
     setModelIntegrations((current) => [...current, nextModel]);
     setModelForm(emptyModelForm);
@@ -376,7 +378,7 @@ export function SystemSettings() {
       } catch {
         // Keep the saved row even if a later refresh is delayed or stale.
       }
-      setConfigNotice("模型接入已同步到账号，并应用于全部非语音模型模块。");
+      setConfigNotice("模型接入已安全保存。请先完成连接测试并启用至少一个实际模型，测试通过后才会进入分析运行时。");
     } catch (error) {
       if (isDemoFallbackEnabled()) {
         setConfigNotice(`模型接入已保留在 demo 本地状态，后端同步失败：${apiErrorMessage(error, "未知错误")}`);
@@ -879,7 +881,20 @@ export function SystemSettings() {
                   modelIntegrations.map((model) => model.name).join("、") || "暂无大模型接入",
                   speechIntegrations.map((integration) => integration.name).join("、") || "暂无语音转文字接入",
                 ]}
-                onEdit={() => setAccessModal("model")}
+                onEdit={() => {
+                  const current = speechIntegrations[0];
+                  if (current) {
+                    setSpeechForm({
+                      name: current.name || emptySpeechForm.name,
+                      provider: current.provider || emptySpeechForm.provider,
+                      source: current.source || speechProviderLabel(current.provider),
+                      apiBase: current.apiBase || emptySpeechForm.apiBase,
+                      apiKey: "",
+                      applicationModule: "global_voice_model",
+                    });
+                  }
+                  setAccessModal("model");
+                }}
               />
             </div>
           ) : (
@@ -1248,6 +1263,11 @@ function UserEditorModal({
         <div className="grid gap-4 p-5 md:grid-cols-2">
           <ModelInput label="姓名" value={form.name} onChange={(value) => onChange("name", value)} />
           <ModelInput label="邮箱" value={form.email} onChange={(value) => onChange("email", value)} />
+          {!editing && (
+            <p className="md:col-span-2 text-[11px] leading-5 text-[#8a8a8e]">
+              新用户初始密码为 123456，登录后由本人在左侧栏修改为自己的密码。
+            </p>
+          )}
           <ModelInput label="部门" value={form.department} onChange={(value) => onChange("department", value)} />
           <label>
             <span className="mb-1.5 block text-[11px] text-[#8a8a8e]">状态</span>
@@ -2232,7 +2252,7 @@ function ModelAccessModal({
           onClose={onClose}
         />
         {notice && (
-          <div className={`border-b border-[#f0f0f2] px-5 py-2 text-[11px] ${/失败|不可用|错误/.test(notice) ? "text-[#c83a3a]" : "text-[#258a3f]"}`} role="status">
+          <div className={`border-b border-[#f0f0f2] px-5 py-2 text-[11px] ${isAccessFailureNotice(notice) ? "text-[#c83a3a]" : "text-[#258a3f]"}`} role="status">
             {notice}
           </div>
         )}
@@ -2311,7 +2331,7 @@ function ModelAccessModal({
                         <>
                           <span className="truncate text-left text-[12px] text-[#1d1d1f]">{model.name}</span>
                           <span className="truncate text-[11px] text-[#3a3a3c]">{modelSourceLabel(model.modelName)}</span>
-                          <span className="truncate text-[11px] text-[#8a8a8e]" title={model.key || "未配置 API 地址"}>{model.key || "未配置 API 地址"}</span>
+                          <span className="whitespace-normal break-all font-mono text-[10px] leading-4 text-[#8a8a8e]" title={model.key || "未配置 API 地址"}>{model.key || "未配置 API 地址"}</span>
                           <span className="font-mono text-[11px] text-[#636366]" title={model.requiresCredential ? "需要管理员配置受保护密钥" : "API密钥已隐藏"}>{model.requiresCredential ? "待配置" : maskApiSecret(model.value)}</span>
                         </>
                       )}
@@ -2414,7 +2434,7 @@ function ModelAccessModal({
               <div className="mb-3 text-[13px] text-[#1d1d1f]">新增模型</div>
               <ModelInput label="模型名称" value={form.name} onChange={(value) => onFormChange("name", value)} />
               <ModelSelect label="模型来源" value={modelSourceOptions.includes(form.modelName) ? form.modelName : modelSourceOptions[0]} options={modelSourceOptions.map((source) => ({ label: source, value: source }))} onChange={(value) => onFormChange("modelName", value)} />
-              <ModelInput label="API地址" value={form.key} placeholder="https://zetatechs.com/api/v1/..." onChange={(value) => onFormChange("key", value)} />
+              <ApiAddressInput label="API地址" value={form.key} placeholder="https://zetatechs.com/api/v1/..." onChange={(value) => onFormChange("key", value)} />
               <ModelInput label="API密钥" value={form.value} type="password" placeholder="请输入 API 密钥" onChange={(value) => onFormChange("value", value)} />
               <button
                 type="button"
@@ -2430,7 +2450,7 @@ function ModelAccessModal({
         )}
 
         {activeAccessTab === "speech" && (
-          <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_minmax(400px,0.42fr)]">
             <div className="overflow-hidden rounded-lg border border-[#f0f0f2]">
               <div className="grid grid-cols-[minmax(120px,0.9fr)_100px_minmax(160px,1.2fr)_100px_128px] gap-3 border-b border-[#f0f0f2] bg-[#fafbfc] px-3 py-2 text-[11px] text-[#8a8a8e]">
                 <span>模型名称</span>
@@ -2472,7 +2492,7 @@ function ModelAccessModal({
                         <>
                           <span className="truncate text-[12px] text-[#1d1d1f]" title={integration.name}>{integration.name || "未命名语音模型"}</span>
                           <span className="text-[12px] text-[#636366]">{integration.source || speechProviderLabel(integration.provider)}</span>
-                          <span className="truncate text-[11px] text-[#636366]" title={integration.apiBase}>{integration.apiBase || "未配置 API 地址"}</span>
+                          <span className="whitespace-normal break-all font-mono text-[10px] leading-4 text-[#636366]" title={integration.apiBase}>{integration.apiBase || "未配置 API 地址"}</span>
                           <span className="font-mono text-[11px] text-[#636366]" title="API密钥已隐藏">{maskApiSecret(integration.apiKey)}</span>
                         </>
                       )}
@@ -2529,6 +2549,7 @@ function ModelAccessModal({
                               : "border-[#ffe0b2] bg-[#fff8e8] text-[#9a6a00]"
                           }`}>
                             <div>{result.message}</div>
+                            {result.endpoint ? <div className="mt-1 break-all font-mono text-[10px] text-[#636366]">实际连接：{result.endpoint}</div> : null}
                             {result.response_preview && (
                               <div className="mt-1 truncate text-[#636366]">返回：{result.response_preview}</div>
                             )}
@@ -2543,10 +2564,9 @@ function ModelAccessModal({
             </div>
             <div className="rounded-lg bg-[#fafbfc] p-4">
               <div className="mb-3 text-[13px] text-[#1d1d1f]">{speechIntegrations.length ? "更新系统语音接入" : "新增语音转文字接入"}</div>
-              <p className="mb-3 text-[11px] leading-relaxed text-[#8a8a8e]">此配置用于系统内全部语音应用：实时录入、弹窗录入、可视化语音和周报语音。保存后各页面直接复用，无需再按入口单独接入。</p>
               <ModelInput label="模型名称" value={speechForm.name} onChange={(value) => onSpeechFormChange("name", value)} />
               <ModelSelect label="模型来源" value={speechForm.provider} options={[{ label: "阿里云 Fun-ASR", value: "aliyun_fun_asr" }]} onChange={(value) => { onSpeechFormChange("provider", value); onSpeechFormChange("source", speechProviderLabel(value)); }} />
-              <ModelInput label="API地址" value={speechForm.apiBase} placeholder="https://ws-xxx.cn-beijing.maas.aliyuncs.com/api/v1" onChange={(value) => onSpeechFormChange("apiBase", value)} />
+              <ApiAddressInput label="API地址" value={speechForm.apiBase} placeholder="https://ws-xxx.cn-beijing.maas.aliyuncs.com/api/v1" onChange={(value) => onSpeechFormChange("apiBase", value)} />
               <ModelInput label="API密钥" value={speechForm.apiKey} type="password" placeholder="请输入 DashScope API Key" onChange={(value) => onSpeechFormChange("apiKey", value)} />
               <button
                 type="button"
@@ -2582,6 +2602,36 @@ function ModalHeader({ title, desc, onClose }: { title: string; desc: string; on
         <X className="h-4 w-4" />
       </button>
     </div>
+  );
+}
+
+function ApiAddressInput({
+  label,
+  value,
+  placeholder,
+  hint,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder?: string;
+  hint?: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="mb-3 block">
+      <span className="mb-1.5 block text-[11px] text-[#8a8a8e]">{label}</span>
+      <textarea
+        rows={2}
+        autoComplete="off"
+        data-1p-ignore="true"
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        className="min-h-[52px] w-full resize-y rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 font-mono text-[11px] leading-4 text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
+      />
+      {hint ? <span className="mt-1 block text-[10px] leading-4 text-[#8a8a8e]">{hint}</span> : null}
+    </label>
   );
 }
 

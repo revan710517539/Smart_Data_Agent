@@ -39,6 +39,16 @@ class FunAsrProxyContractTest(unittest.TestCase):
             "wss://ws-nvbkaw0atdgdbvv7.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
         )
 
+    def test_repairs_truncated_maas_host_and_workspace_only_address(self) -> None:
+        self.assertEqual(
+            dashscope_api_base_to_fun_asr_endpoint("https://ws-nvbkaw0atdgdbvv7.cn-beijing.maas"),
+            "wss://ws-nvbkaw0atdgdbvv7.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+        )
+        self.assertEqual(
+            dashscope_api_base_to_fun_asr_endpoint("ws-nvbkaw0atdgdbvv7"),
+            "wss://ws-nvbkaw0atdgdbvv7.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+        )
+
     def test_run_task_event_matches_fun_asr_realtime_contract(self) -> None:
         context = [
             {

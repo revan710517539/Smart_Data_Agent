@@ -20,8 +20,15 @@ ANALYSIS_RESULT_FIELDS = (
 
 SAVED_ANALYSIS_VISUALIZATION_TYPES = frozenset({
     "kpi", "line", "area", "column", "bar", "stacked_bar", "combo", "donut",
-    "scatter", "funnel", "treemap", "radar", "table", "pivot",
+    "scatter", "funnel", "treemap", "radar", "table", "pivot", "text",
 })
+SAVED_ANALYSIS_VISUALIZATION_TYPE_ALIASES = {
+    "stackedbar": "stacked_bar",
+    "pie": "donut",
+    "crosstab": "pivot",
+    "note": "text",
+    "textbox": "text",
+}
 SAVED_ANALYSIS_FILTER_OPERATORS = frozenset({"in", "not_in", "contains", "not_contains"})
 
 
@@ -1460,6 +1467,7 @@ def _normalize_saved_analysis_visualizations(value: Any) -> list[dict[str, Any]]
             raise ValueError("saved_analysis_visualizations_invalid")
         card_id = str(raw_card.get("id") or f"visual-{index + 1}").strip()[:160]
         card_type = str(raw_card.get("type") or "table").strip()
+        card_type = SAVED_ANALYSIS_VISUALIZATION_TYPE_ALIASES.get(card_type.lower(), card_type.lower())
         if not card_id or card_id in seen_ids or card_type not in SAVED_ANALYSIS_VISUALIZATION_TYPES:
             raise ValueError("saved_analysis_visualizations_invalid")
         seen_ids.add(card_id)
@@ -1527,7 +1535,7 @@ def _normalize_saved_analysis_visualization_config(value: dict[str, Any]) -> dic
                     "rules": rules,
                 })
 
-    return {
+    config: dict[str, Any] = {
         "metricFields": string_list(value.get("metricFields")),
         "dimensionFields": string_list(value.get("dimensionFields")),
         "filters": filters,
@@ -1535,6 +1543,59 @@ def _normalize_saved_analysis_visualization_config(value: dict[str, Any]) -> dic
         "sumFilteredRows": bool(value.get("sumFilteredRows")),
         "comboLineFields": string_list(value.get("comboLineFields")),
     }
+    if "noteTitle" in value:
+        config["noteTitle"] = str(value.get("noteTitle") or "").strip()[:500]
+    if "noteBody" in value:
+        config["noteBody"] = str(value.get("noteBody") or "")[:8000]
+    if "noteTitleHidden" in value:
+        config["noteTitleHidden"] = bool(value.get("noteTitleHidden"))
+    if "noteItems" in value:
+        config["noteItems"] = _normalize_saved_note_items(value.get("noteItems"))
+    for key in ("layoutSpan", "layoutHeight", "maxLayoutSpan", "maxLayoutHeight"):
+        raw = value.get(key)
+        if raw is None:
+            continue
+        try:
+            number = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= number <= 24:
+            config[key] = number
+    return config
+
+
+def _normalize_saved_note_items(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for raw in value[:80]:
+        if not isinstance(raw, dict):
+            continue
+        item_id = str(raw.get("id") or "").strip()[:160]
+        item_type = str(raw.get("type") or "").strip()
+        if not item_id:
+            continue
+        if item_type == "paragraph":
+            item: dict[str, Any] = {
+                "id": item_id,
+                "type": "paragraph",
+                "text": str(raw.get("text") or "")[:8000],
+            }
+            html = str(raw.get("html") or "").strip()
+            if html:
+                item["html"] = html[:16000]
+            items.append(item)
+        elif item_type == "image":
+            src = str(raw.get("src") or "").strip()[:4000]
+            if not src:
+                continue
+            items.append({
+                "id": item_id,
+                "type": "image",
+                "src": src,
+                "name": str(raw.get("name") or "image").strip()[:300] or "image",
+            })
+    return items
 
 
 def _report_object_visible(item: dict[str, Any], actor_user_id: str | None) -> bool:

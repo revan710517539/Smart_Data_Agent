@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from backend.authz.seed import OPERATING_TENANTS
+from backend.platform.memory.fusion import MEMORY_ASSET_TYPES, prepare_asset_fusion
 from backend.platform.storage import connect_sqlite
 from .mock_analysis_defaults import MOCK_RAW_TABLES, MOCK_TOPIC_TABLES
 
@@ -34,9 +35,140 @@ ASSET_BUNDLE_KEYS = {
     "table_relationship": "table_relationships",
 }
 
+SCENE_INTENT_SKILL_ID = "scene-analysis-intent"
+SCENE_CHART_FOLLOWUP_SKILL_ID = "scene-chart-followup"
+SCENE_PAGE_RAIL_SKILL_ID = "scene-page-rail"
+SCENE_TEXTBOX_VOICE_SKILL_ID = "scene-textbox-voice"
+SCENE_SELF_ANALYSIS_SKILL_ID = "scene-self-analysis"
+CORE_TOPIC_SKILL_IDS = ("topic-descriptive", "topic-attribution", "topic-predictive")
+CORE_TOPIC_SKILL_LABELS = {
+    "topic-descriptive": "描述性分析",
+    "topic-attribution": "归因分析",
+    "topic-predictive": "预测分析",
+}
+PLATFORM_ANALYSIS_SKILL_IDS = (
+    SCENE_INTENT_SKILL_ID,
+    SCENE_CHART_FOLLOWUP_SKILL_ID,
+    SCENE_PAGE_RAIL_SKILL_ID,
+    SCENE_TEXTBOX_VOICE_SKILL_ID,
+    SCENE_SELF_ANALYSIS_SKILL_ID,
+    *CORE_TOPIC_SKILL_IDS,
+)
+PLATFORM_VISIBLE_ANALYSIS_SKILL_IDS = frozenset(PLATFORM_ANALYSIS_SKILL_IDS)
+
+
+def canonical_core_topic_skill_id(item: dict[str, Any]) -> str:
+    """Resolve only exact institution-named copies of the three core methods."""
+
+    if str(item.get("category") or "") != "主题":
+        return ""
+    base_skill_id = str(item.get("baseSkillId") or "").strip()
+    if base_skill_id in CORE_TOPIC_SKILL_IDS:
+        return base_skill_id
+    item_id = str(item.get("id") or "").strip()
+    if item_id in CORE_TOPIC_SKILL_IDS:
+        return item_id
+    kind_by_suffix = {
+        "descriptive": "topic-descriptive",
+        "attribution": "topic-attribution",
+        "predictive": "topic-predictive",
+    }
+    if item_id.startswith("institution."):
+        matched = kind_by_suffix.get(item_id.rsplit(".", 1)[-1])
+        if matched:
+            return matched
+    name = str(item.get("name") or "").strip()
+    for skill_id, label in CORE_TOPIC_SKILL_LABELS.items():
+        if name == label or any(name == f"{institution}{label}" for institution in OPERATING_TENANTS):
+            return skill_id
+    return ""
+
 SYSTEM_MANAGED_ASSET_IDS = {
     ("topic_table", "topic_core_weekly_metrics"),
+    *(("analysis_skill", skill_id) for skill_id in PLATFORM_ANALYSIS_SKILL_IDS),
 }
+
+def _platform_scene_skill(
+    skill_id: str,
+    name: str,
+    description: str,
+    method: str,
+    output_format: str,
+    viewpoint: str,
+    sort_order: int,
+) -> dict[str, Any]:
+    return {
+        "id": skill_id,
+        "name": name,
+        "category": "场景",
+        "description": description,
+        "memoryRefs": [],
+        "toolRefs": [],
+        "analysisMethod": method,
+        "documentAbstraction": "提取当前页面范围、选中图表、文本框光标、语音原文、已选数据表和用户问题。",
+        "outputFormat": output_format,
+        "viewpointStrategy": viewpoint,
+        "recommendedSkillIds": list(CORE_TOPIC_SKILL_IDS),
+        "enabled": True,
+        "displayLocation": "intelligent_analysis",
+        "sortOrder": sort_order,
+        "systemManaged": True,
+        "deletable": False,
+    }
+
+
+SCENE_INTENT_SKILL = _platform_scene_skill(
+    SCENE_INTENT_SKILL_ID,
+    "场景分析判断",
+    "数据分析意图识别：先判断发生在图表追问、整页 AI 分析、文本框实时语音还是智能分析主查询，再规划描述、归因、预测等主题 Skill。",
+    "先识别分析位置和语音意图（图表操控 / 文本转写 / AI 栏语音提问），再识别描述、归因、预测，并可组合多个主题 Skill。",
+    "场景 / 语音意图 / 分析方法 / 调度 Skill / 数据范围",
+    "先定位场景再分析；记录不分析；分析不编造；多 Skill 只组合被问题命中的能力。",
+    1,
+)
+SCENE_CHART_FOLLOWUP_SKILL = _platform_scene_skill(
+    SCENE_CHART_FOLLOWUP_SKILL_ID,
+    "图表追问分析",
+    "可视化图表点击追问后，右边栏 AI 分析只针对该图绑定的单个数据集。支持语音或文本提问。",
+    "只使用当前图表绑定数据。识别描述、归因或预测后输出短结论和聚焦图，不汇总整页其他图表。",
+    "短结论 / 聚焦图 / 数据范围 / 分析方法",
+    "结论必须落在当前图的指标、维度和返回行上。",
+    2,
+)
+SCENE_PAGE_RAIL_SKILL = _platform_scene_skill(
+    SCENE_PAGE_RAIL_SKILL_ID,
+    "整页AI分析",
+    "未选中单个可视化时，右边栏 AI 分析汇总当前页全部可视化数据。",
+    "收集当前页各图已查询数据后，按描述、归因或预测形成整页结论，避免只分析一张图。",
+    "整页结论 / 主要图表证据 / 跨图对比 / 分析方法",
+    "没有选中单图时必须声明结论来自整页数据。",
+    3,
+)
+SCENE_TEXTBOX_VOICE_SKILL = _platform_scene_skill(
+    SCENE_TEXTBOX_VOICE_SKILL_ID,
+    "文本框实时语音",
+    "可视化文本框点击实时语音后，只将语音转成文字写入光标所在的标题或正文，不触发数据分析。",
+    "持续接收语音转写，停顿一秒结束当前段落；只写入文字，不进入文本推理运行时。",
+    "写入位置 / 转写原文",
+    "即使口述中出现分析、原因或预测等词，也只按原文转写。",
+    4,
+)
+SCENE_SELF_ANALYSIS_SKILL = _platform_scene_skill(
+    SCENE_SELF_ANALYSIS_SKILL_ID,
+    "智能分析主查询",
+    "智能分析页基于当前所选数据表做完整分析，不锚定单张可视化。",
+    "使用用户已选数据表，按描述、归因或预测组织查询、可视化和结论。",
+    "分析结论 / 数据证据 / 可视化 / 后续动作",
+    "未选数据表时不得改用其他机构或默认样本表。",
+    5,
+)
+PLATFORM_SCENE_SKILLS = (
+    SCENE_INTENT_SKILL,
+    SCENE_CHART_FOLLOWUP_SKILL,
+    SCENE_PAGE_RAIL_SKILL,
+    SCENE_TEXTBOX_VOICE_SKILL,
+    SCENE_SELF_ANALYSIS_SKILL,
+)
 
 # Historical demonstration assets are deliberately identified by stable IDs,
 # never by a broad tenant or title match. They must not reappear when a real
@@ -132,10 +264,27 @@ def visible_items_for_tenant(tenant_id: str, item_type: str, items: list[dict[st
     for item in items:
         if _mentions_other_institution(item, tenant_id):
             continue
-        if not keep_system_defaults and _is_cloned_system_catalog_item(item_type, item):
+        if (
+            not keep_system_defaults
+            and _is_cloned_system_catalog_item(item_type, item)
+            and str(item.get("id") or "") not in PLATFORM_VISIBLE_ANALYSIS_SKILL_IDS
+        ):
             continue
         visible.append(item)
     return visible
+
+
+def analysis_skill_template(skill_id: str) -> dict[str, Any] | None:
+    wanted = str(skill_id or "").strip()
+    if not wanted:
+        return None
+    for item in PLATFORM_SCENE_SKILLS:
+        if str(item.get("id") or "") == wanted:
+            return deepcopy(item)
+    for item in DEFAULT_ASSET_ITEMS.get("analysis_skill", []):
+        if str(item.get("id") or "") == wanted:
+            return deepcopy(item)
+    return None
 
 
 def _runtime_default_items(item_type: str) -> list[dict[str, Any]]:
@@ -459,6 +608,7 @@ DEFAULT_ASSET_ITEMS: dict[str, list[dict[str, Any]]] = {
     ],
     "user_behavior_habit": [],
     "analysis_skill": [
+        *[deepcopy(item) for item in PLATFORM_SCENE_SKILLS],
         {
             "id": "scene-weekly-report", "name": "周报分析", "category": "场景",
             "description": "围绕机构经营周报组织口径、证据、观点和行动建议。",
@@ -500,8 +650,8 @@ DEFAULT_ASSET_ITEMS: dict[str, list[dict[str, Any]]] = {
                 "id": skill_id, "name": name, "category": "主题", "description": description,
                 "memoryRefs": memory_refs, "toolRefs": tool_refs, "analysisMethod": method,
                 "documentAbstraction": "按业务对象、时间范围、指标口径、限制条件和证据片段抽取输入文档。",
-                "outputFormat": "", "viewpointStrategy": viewpoint, "recommendedSkillIds": [],
-                "enabled": True, "sortOrder": 100 + index * 10,
+                "outputFormat": output_format, "viewpointStrategy": viewpoint, "recommendedSkillIds": [],
+                "enabled": True, "displayLocation": "intelligent_analysis", "sortOrder": 100 + index * 10,
             }
             for index, (skill_id, name, description, memory_refs, tool_refs, method, output_format, viewpoint) in enumerate([
                 ("topic-descriptive", "描述性分析", "描述现状、结构、分布和变化。", ["exp_weekly_growth_quality"], [], "核对总量后做分组、趋势、极值、零值和异常值描述。", "总体 / 结构 / 趋势 / 异常 / 口径", "区分事实描述和解释性判断。"),
@@ -575,6 +725,12 @@ class InMemoryDataAssetStore:
             # Tenant-maintained catalogs must not be re-cloned onto every
             # institution after an operator deletes or never created them.
             if item_type in TENANT_MAINTAINED_ASSET_TYPES:
+                if item_type == "analysis_skill":
+                    for skill_id in PLATFORM_ANALYSIS_SKILL_IDS:
+                        if self.get_item(tenant_id, item_type, skill_id) is None:
+                            template = analysis_skill_template(skill_id)
+                            if template:
+                                self.upsert_item(tenant_id, item_type, template, updated_by=updated_by, lifecycle_status="active")
                 continue
             existing = {
                 str(item.get("id") or ""): item
@@ -629,7 +785,12 @@ class InMemoryDataAssetStore:
         updated_by: str | None = None,
         lifecycle_status: str | None = None,
     ) -> dict[str, Any]:
-        normalized = _normalize_item(item_type, item, updated_by)
+        fusion = prepare_asset_fusion(
+            item_type,
+            item,
+            self._items_by_tenant_type.get((tenant_id, item_type), {}).values(),
+        )
+        normalized = _normalize_item(item_type, fusion.item, updated_by)
         _validate_asset_schema(item_type, normalized)
         status = _asset_status(lifecycle_status)
         key = (tenant_id, item_type, normalized["id"])
@@ -648,6 +809,11 @@ class InMemoryDataAssetStore:
         )
         versions.append(deepcopy(governed))
         self._items_by_tenant_type.setdefault((tenant_id, item_type), {})[normalized["id"]] = governed
+        for duplicate_id in fusion.duplicate_ids:
+            duplicate_versions = self._versions.get((tenant_id, item_type, duplicate_id), [])
+            if duplicate_versions:
+                duplicate_versions[-1]["lifecycleStatus"] = "archived"
+            self._items_by_tenant_type[(tenant_id, item_type)].pop(duplicate_id, None)
         return dict(governed)
 
     def get_item(self, tenant_id: str, item_type: str, item_id: str) -> dict[str, Any] | None:
@@ -707,7 +873,12 @@ class InMemoryDataAssetStore:
     def delete_item(self, tenant_id: str, item_type: str, item_id: str) -> bool:
         _require_valid_type(item_type)
         _require_deletable_asset(item_type, item_id)
-        return self._items_by_tenant_type.setdefault((tenant_id, item_type), {}).pop(item_id, None) is not None
+        removed = self._items_by_tenant_type.setdefault((tenant_id, item_type), {}).pop(item_id, None)
+        if removed is not None:
+            for version in self._versions.get((tenant_id, item_type, item_id), []):
+                if version.get("lifecycleStatus") in {"draft", "review", "active"}:
+                    version["lifecycleStatus"] = "archived"
+        return removed is not None
 
     def _list(self, tenant_id: str, item_type: str) -> list[dict[str, Any]]:
         items = self._items_by_tenant_type.get((tenant_id, item_type), {})
@@ -820,6 +991,12 @@ class SQLiteDataAssetStore:
             # Tenant-maintained catalogs must not be re-cloned onto every
             # institution after an operator deletes or never created them.
             if item_type in TENANT_MAINTAINED_ASSET_TYPES:
+                if item_type == "analysis_skill":
+                    for skill_id in PLATFORM_ANALYSIS_SKILL_IDS:
+                        if self.get_item(tenant_id, item_type, skill_id) is None:
+                            template = analysis_skill_template(skill_id)
+                            if template:
+                                self.upsert_item(tenant_id, item_type, template, updated_by=updated_by, lifecycle_status="active")
                 continue
             existing = {
                 str(item.get("id") or ""): item
@@ -887,7 +1064,9 @@ class SQLiteDataAssetStore:
         updated_by: str | None = None,
         lifecycle_status: str | None = None,
     ) -> dict[str, Any]:
-        normalized = _normalize_item(item_type, item, updated_by)
+        current_items = self._list(tenant_id, item_type) if item_type in MEMORY_ASSET_TYPES else ()
+        fusion = prepare_asset_fusion(item_type, item, current_items)
+        normalized = _normalize_item(item_type, fusion.item, updated_by)
         _validate_asset_schema(item_type, normalized)
         status = _asset_status(lifecycle_status)
         submitted_by = updated_by or "system"
@@ -952,6 +1131,25 @@ class SQLiteDataAssetStore:
                     status,
                 ),
             )
+            for duplicate_id in fusion.duplicate_ids:
+                self._conn.execute(
+                    """
+                    UPDATE platform_data_asset_items
+                    SET lifecycle_status = 'archived', updated_at = CURRENT_TIMESTAMP,
+                        lock_version = lock_version + 1
+                    WHERE tenant_id = ? AND item_type = ? AND item_id = ?
+                    """,
+                    (tenant_id, item_type, duplicate_id),
+                )
+                self._conn.execute(
+                    """
+                    UPDATE platform_data_asset_versions
+                    SET lifecycle_status = 'archived'
+                    WHERE tenant_id = ? AND item_type = ? AND item_id = ?
+                      AND lifecycle_status IN ('draft', 'review', 'active')
+                    """,
+                    (tenant_id, item_type, duplicate_id),
+                )
             self._conn.execute(
                 """
                 INSERT INTO platform_data_asset_versions(
@@ -1108,6 +1306,16 @@ class SQLiteDataAssetStore:
                 """,
                 (tenant_id, item_type, item_id),
             )
+            if cursor.rowcount > 0:
+                self._conn.execute(
+                    """
+                    UPDATE platform_data_asset_versions
+                    SET lifecycle_status = 'archived'
+                    WHERE tenant_id = ? AND item_type = ? AND item_id = ?
+                      AND lifecycle_status IN ('draft', 'review', 'active')
+                    """,
+                    (tenant_id, item_type, item_id),
+                )
         return cursor.rowcount > 0
 
     def _list(self, tenant_id: str, item_type: str) -> list[dict[str, Any]]:
@@ -1116,7 +1324,7 @@ class SQLiteDataAssetStore:
             SELECT payload, lifecycle_status, current_version, schema_version, lock_version,
                    submitted_by, reviewed_by, reviewed_at, published_at
             FROM platform_data_asset_items
-            WHERE tenant_id = ? AND item_type = ?
+            WHERE tenant_id = ? AND item_type = ? AND lifecycle_status <> 'archived'
             ORDER BY updated_at DESC, item_id
             LIMIT 200
             """,
@@ -1274,7 +1482,7 @@ def _validate_asset_schema(item_type: str, item: dict[str, Any]) -> None:
             and item.get("sourceSnapshot")
         )
         _validate_topic_sql(str(item["sql"]), allow_analysis_task_binding=task_bound)
-        _validate_fields(item.get("fields"), required=True)
+        _validate_fields(item.get("fields"), required=True, allow_executed_column_names=task_bound)
         return
     if item_type == "intent":
         _require_text(item, "scenario", "purpose", "description", "keywords")
@@ -1297,6 +1505,12 @@ def _validate_asset_schema(item_type: str, item: dict[str, Any]) -> None:
         _require_text(item, "name", "category", "description", "analysisMethod", "documentAbstraction", "viewpointStrategy")
         if str(item.get("category")) not in {"场景", "主题"}:
             raise ValueError("data_asset_invalid_analysis_skill_category")
+        display_location = str(item.get("displayLocation") or "intelligent_analysis")
+        if display_location not in {"intelligent_analysis", "hidden"}:
+            raise ValueError("data_asset_invalid_analysis_skill_display_location")
+        canonical_skill_id = canonical_core_topic_skill_id(item)
+        if canonical_skill_id and str(item.get("id") or "") != canonical_skill_id:
+            raise ValueError(f"data_asset_duplicate_core_topic_skill:{canonical_skill_id}")
         if str(item.get("category")) == "场景":
             _require_text(item, "outputFormat")
         return
@@ -1315,9 +1529,13 @@ def _validate_asset_schema(item_type: str, item: dict[str, Any]) -> None:
         _require_text(item, "name", "sourceKey", "schemaFingerprint", "sourceTableName", "visualizationType")
         pages = item.get("targetPages")
         scope = str(item.get("institutionScope") or "single_institution")
-        if scope not in {"single_institution", "multi_institution"}:
+        if scope not in {"single_institution", "multi_institution", "customer_segment"}:
             raise ValueError("page_data_institution_scope_invalid")
-        allowed_pages = {"weekly_report", "institution_supervision"} if scope == "single_institution" else {"dashboard"}
+        allowed_pages = (
+            {"weekly_report", "institution_supervision"} if scope == "single_institution"
+            else {"dashboard"} if scope == "multi_institution"
+            else {"customer_segment_analysis"}
+        )
         if not isinstance(pages, list) or len(pages) != 1 or str(pages[0]) not in allowed_pages:
             raise ValueError("page_data_target_pages_invalid")
         source_fields = item.get("sourceFields")
@@ -1346,6 +1564,15 @@ def _validate_asset_schema(item_type: str, item: dict[str, Any]) -> None:
                 or any(not source_key for _, source_key in source_refs)
             ):
                 raise ValueError("multi_institution_page_data_sources_invalid")
+        if scope == "customer_segment":
+            customer_key = str(item.get("customerKeyField") or "").strip()
+            primary_fields = [
+                str(field.get("fieldNameEn") or "").strip()
+                for field in source_fields
+                if isinstance(field, dict) and bool(field.get("isPrimaryKey"))
+            ]
+            if len(primary_fields) != 1 or customer_key != primary_fields[0]:
+                raise ValueError("customer_segment_detail_table_required")
         return
     if item_type == "table_relationship":
         _require_text(item, "name", "relationshipScope")
@@ -1399,7 +1626,7 @@ def _require_identifier(value: str, field: str) -> None:
         raise ValueError(f"data_asset_invalid_identifier:{field}")
 
 
-def _validate_fields(value: Any, *, required: bool) -> None:
+def _validate_fields(value: Any, *, required: bool, allow_executed_column_names: bool = False) -> None:
     if not isinstance(value, list) or (required and not value):
         raise ValueError("data_asset_fields_required")
     seen: set[str] = set()
@@ -1407,7 +1634,11 @@ def _validate_fields(value: Any, *, required: bool) -> None:
         if not isinstance(field, dict):
             raise ValueError("data_asset_field_must_be_object")
         name = str(field.get("fieldNameEn") or "").strip()
-        _require_identifier(name, "fieldNameEn")
+        if allow_executed_column_names:
+            if not name:
+                raise ValueError("data_asset_fields_required")
+        else:
+            _require_identifier(name, "fieldNameEn")
         if name in seen:
             raise ValueError(f"data_asset_duplicate_field:{name}")
         seen.add(name)

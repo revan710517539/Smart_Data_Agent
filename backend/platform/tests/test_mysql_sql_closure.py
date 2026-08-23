@@ -6,6 +6,8 @@ import subprocess
 import sys
 import unittest
 
+from backend.platform.database.mysql import _checksum_matches
+
 
 ROOT = Path(__file__).resolve().parents[3]
 REPO_MYSQL = ROOT / "backend" / "platform" / "database" / "mysql"
@@ -16,6 +18,13 @@ IMAGE_MYSQL_PATHS = (
 
 
 class MySQLSQLClosureTest(unittest.TestCase):
+    def test_only_known_pre_compatibility_checksums_are_accepted(self) -> None:
+        self.assertTrue(_checksum_matches("0001", "7c65ac31c6878bb1b11f0095887903251e29ceddae1f85d3328a4c512afbdf3d", "current"))
+        self.assertTrue(_checksum_matches("0029", "a0ad5a5c7c8ed85def743ba5c4a22f7d8dc1f5a9c839407eae8253d06910df36", "current"))
+        self.assertTrue(_checksum_matches("0031", "b1d0e919ddae36ccc8240bb4d054ada2f40f8dcde08a8c661ffa0888ce4cd35e", "current"))
+        self.assertFalse(_checksum_matches("0032", "unknown", "current"))
+        self.assertFalse(_checksum_matches("0001", "unknown", "current"))
+
     def test_repo_mysql_sql_uses_mysql_8018_datetime_defaults(self) -> None:
         files = sorted(path.relative_to(REPO_MYSQL).as_posix() for path in REPO_MYSQL.rglob("*.sql"))
         self.assertEqual(
@@ -25,6 +34,9 @@ class MySQLSQLClosureTest(unittest.TestCase):
                 "migrations/0029_message_board.sql",
                 "migrations/0030_message_board_status.sql",
                 "migrations/0031_user_interaction_events.sql",
+                "migrations/0032_unified_runtime.sql",
+                "migrations/0033_user_credentials.sql",
+                "migrations/0034_capability_pack_snapshots.sql",
             ],
         )
         for path in REPO_MYSQL.rglob("*.sql"):
@@ -46,11 +58,18 @@ class MySQLSQLClosureTest(unittest.TestCase):
         self.assertIn("MySQL SQL closure ok", completed.stdout)
 
     def test_additive_migrations_keep_expression_defaults_except_datetime(self) -> None:
-        for name in ("0029_message_board.sql", "0031_user_interaction_events.sql"):
+        for name in (
+            "0029_message_board.sql",
+            "0031_user_interaction_events.sql",
+            "0032_unified_runtime.sql",
+            "0033_user_credentials.sql",
+            "0034_capability_pack_snapshots.sql",
+        ):
             text = (REPO_MYSQL / "migrations" / name).read_text(encoding="utf-8")
             self.assertIn("DEFAULT CURRENT_TIMESTAMP(6)", text)
             self.assertNotIn("DEFAULT (UTC_TIMESTAMP(6))", text)
-            self.assertIn("DEFAULT (UUID())", text)
+            if name in {"0029_message_board.sql", "0031_user_interaction_events.sql", "0032_unified_runtime.sql"}:
+                self.assertIn("DEFAULT (UUID())", text)
 
     def test_image_mysql_paths_match_when_installed(self) -> None:
         existing = [path for path in IMAGE_MYSQL_PATHS if path.is_dir()]

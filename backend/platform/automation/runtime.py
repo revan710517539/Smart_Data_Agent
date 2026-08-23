@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import make_msgid
+from pathlib import Path
 from typing import Any, Callable
 from urllib.request import Request
 from uuid import uuid4
@@ -22,6 +23,23 @@ from backend.platform.security import safe_urlopen, validate_outbound_url
 
 AutomationHandler = Callable[[str, dict[str, Any], dict[str, Any], dict[str, Any]], dict[str, Any]]
 
+HANDLER_POOLS = {
+    "analysis.run": "query",
+    "acquisition.run": "query",
+    "topic-data.refresh": "query",
+    "analysis.monitor": "query",
+    "metric.subscription.snapshot": "delivery",
+    "market.evaluate": "query",
+    "memory.extract": "llm",
+    "report.weekly_learning": "llm",
+    "learning.observe_episode": "llm",
+    "learning.draft": "llm",
+    "capability.promote": "llm",
+    "eval.score": "llm",
+    "delivery.fulfill": "delivery",
+    "delivery.sync": "delivery",
+}
+
 
 class AutomationRuntime:
     def __init__(self, store: Any, artifact_content_resolver: Callable[[str, str], tuple[dict[str, Any], bytes]] | None = None) -> None:
@@ -29,9 +47,21 @@ class AutomationRuntime:
         self.artifact_content_resolver = artifact_content_resolver
         self._handlers: dict[str, AutomationHandler] = {}
         self._executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="smart-data-worker")
+        self._pools = {
+            "query": ThreadPoolExecutor(max_workers=5, thread_name_prefix="sda-query"),
+            "sandbox": ThreadPoolExecutor(max_workers=3, thread_name_prefix="sda-sandbox"),
+            "llm": ThreadPoolExecutor(max_workers=4, thread_name_prefix="sda-llm"),
+            "delivery": ThreadPoolExecutor(max_workers=4, thread_name_prefix="sda-delivery"),
+        }
 
     def close(self) -> None:
+        for pool in self._pools.values():
+            pool.shutdown(wait=False, cancel_futures=True)
         self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def _pool_for(self, handler_ref: str) -> ThreadPoolExecutor:
+        name = HANDLER_POOLS.get(str(handler_ref or ""), "")
+        return self._pools.get(name, self._executor)
 
     def register_handler(self, handler_ref: str, handler: AutomationHandler) -> None:
         normalized = str(handler_ref or "").strip()
@@ -109,7 +139,7 @@ class AutomationRuntime:
             "worker_id": worker_id,
             "is_cancelled": lambda: self.store.get_run(tenant_id, run_id)["status"] == "cancelled",
         }
-        future = self._executor.submit(
+        future = self._pool_for(str(task.get("handler_ref") or "")).submit(
             handler,
             tenant_id,
             dict(task["task_config"]),
@@ -292,6 +322,12 @@ def _public_handler_failure(exc: Exception) -> tuple[str, str, bool]:
             )
         return "automation_permission_denied", "当前角色没有执行此任务所需的权限。", False
     if isinstance(exc, (ValueError, KeyError, TypeError, AttributeError, AssertionError)):
+        if "analysis_selected_raw_table_requires_single_source" in message:
+            return (
+                "analysis_single_data_table_required",
+                "一次分析只能使用一张数据表，请重新选择数据表后重试。",
+                False,
+            )
         if "analysis_production_data_table_required" in message:
             return (
                 "analysis_production_data_table_required",
@@ -319,7 +355,13 @@ def _public_handler_failure(exc: Exception) -> tuple[str, str, bool]:
 
 
 class AutomationWorker:
-    def __init__(self, runtime: AutomationRuntime, poll_seconds: float = 0.5, worker_id: str | None = None) -> None:
+    def __init__(
+        self,
+        runtime: AutomationRuntime,
+        poll_seconds: float = 0.5,
+        worker_id: str | None = None,
+        health_path: str | Path | None = None,
+    ) -> None:
         self.runtime = runtime
         self.poll_seconds = max(0.1, min(float(poll_seconds), 10.0))
         self.worker_id = worker_id or f"worker-{uuid4().hex[:12]}"
@@ -328,6 +370,8 @@ class AutomationWorker:
         self._last_heartbeat_at = datetime.now(timezone.utc).isoformat()
         self._last_error_at: str | None = None
         self._last_error_code: str | None = None
+        configured_health_path = str(health_path or os.getenv("SMART_DATA_AGENT_WORKER_HEALTH_FILE", "")).strip()
+        self._health_path = Path(configured_health_path) if configured_health_path else None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -341,6 +385,7 @@ class AutomationWorker:
             self._thread.join(timeout=5)
 
     def run_forever(self) -> None:
+        self._write_health_file()
         while not self._stop.is_set():
             did_work = False
             try:
@@ -353,7 +398,9 @@ class AutomationWorker:
                 did_work = False
                 self._last_error_at = datetime.now(timezone.utc).isoformat()
                 self._last_error_code = type(exc).__name__
+            self._write_health_file()
             self._stop.wait(0.05 if did_work else self.poll_seconds)
+        self._write_health_file(stopped=True)
 
     def health(self) -> dict[str, Any]:
         alive = bool(self._thread and self._thread.is_alive() and not self._stop.is_set())
@@ -365,6 +412,27 @@ class AutomationWorker:
             "last_error_at": self._last_error_at,
             "last_error_code": self._last_error_code,
         }
+
+    def _write_health_file(self, *, stopped: bool = False) -> None:
+        if self._health_path is None:
+            return
+        payload = {
+            "schema_version": "smart-data-agent-worker-health/v1",
+            "ready": not stopped,
+            "worker_id": self.worker_id,
+            "heartbeat_at": datetime.now(timezone.utc).isoformat(),
+            "last_error_at": self._last_error_at,
+            "last_error_code": self._last_error_code,
+        }
+        try:
+            self._health_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._health_path.with_name(f".{self._health_path.name}.{os.getpid()}.tmp")
+            temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            os.replace(temporary, self._health_path)
+        except OSError:
+            # Missing/stale heartbeat is interpreted as unavailable by the API
+            # and container healthcheck. The worker keeps retrying safely.
+            return
 
 
 def _result_refs(result: dict[str, Any]) -> list[dict[str, Any]]:

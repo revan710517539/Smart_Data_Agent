@@ -10,6 +10,7 @@ import type { AccessTenantRole, AccessUser } from "../services/accessControlApi"
 import type { AuthSession } from "../services/authApi";
 import { fetchCurrentSession, logoutSession } from "../services/authApi";
 import { sessionRevalidationEvent } from "../services/apiClient";
+import { runBeforeLogout } from "./beforeLogout";
 import { resetTransientUiStateForNewAuthSession } from "./sessionUiState";
 
 export const authSessionStorageKey = "smart_data_agent_auth_session_v1";
@@ -109,7 +110,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         const selectedSession = {
           ...normalized,
           institution: selected,
-          tenant_id: tenantIdFromInstitution(selected),
+          tenant_id: resolveTenantIdForInstitution(selected, normalized),
         };
         setAuthSession(selectedSession);
         setSelectedInstitutionState(selected);
@@ -188,7 +189,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
     const nextSession = {
       ...normalizedInputSession,
       institution: selected,
-      tenant_id: tenantIdFromInstitution(selected),
+      tenant_id: resolveTenantIdForInstitution(selected, normalizedInputSession),
     };
     setAuthSession(nextSession);
     setIsSessionResolved(true);
@@ -199,12 +200,14 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     sessionMutationVersion.current += 1;
-    resetTransientUiStateForNewAuthSession();
-    void logoutSession().catch(() => undefined);
-    setAuthSession(null);
-    setSelectedInstitutionState(operatingTenantNames[0]);
-    window.localStorage.removeItem(selectedInstitutionStorageKey);
-    window.localStorage.removeItem(authSessionStorageKey);
+    void runBeforeLogout().finally(() => {
+      resetTransientUiStateForNewAuthSession();
+      void logoutSession().catch(() => undefined);
+      setAuthSession(null);
+      setSelectedInstitutionState(operatingTenantNames[0]);
+      window.localStorage.removeItem(selectedInstitutionStorageKey);
+      window.localStorage.removeItem(authSessionStorageKey);
+    });
   };
 
   const currentTenantRoles = authSession
@@ -306,14 +309,19 @@ function sessionHasGlobalTenantAccess(session: AuthSession) {
 
 function normalizeAuthSession(session: AuthSession): AuthSession {
   const { token: _discardedToken, ...safeSession } = session;
-  const sessionInstitutions = normalizeSelectableInstitutions(safeSession.institutions || []);
+  const sessionDirectory = normalizeSessionTenantDirectory(safeSession.tenant_directory || []);
+  const directoryInstitutions = sessionDirectory.map((item) => item.name);
+  const sessionInstitutions = normalizeSelectableInstitutions(
+    directoryInstitutions.length ? directoryInstitutions : safeSession.institutions || [],
+  );
   // “全部机构” is an authorization scope, never a selectable tenant. Older
   // cached super-admin sessions may contain only that scope label, so rebuild
   // their selector from the governed operating-tenant catalog.
   const institutions = sessionHasGlobalTenantAccess(safeSession) && !sessionInstitutions.length
     ? [...operatingTenantNames]
     : sessionInstitutions;
-  const requestedInstitution = normalizeSelectableInstitution(safeSession.institution || safeSession.tenant_id || "");
+  const canonicalInstitution = sessionDirectory.find((item) => item.id === safeSession.tenant_id)?.name || "";
+  const requestedInstitution = normalizeSelectableInstitution(canonicalInstitution || safeSession.institution || "");
   const institution = institutions.includes(requestedInstitution)
     ? requestedInstitution
     : institutions[0] || operatingTenantNames[0];
@@ -321,7 +329,8 @@ function normalizeAuthSession(session: AuthSession): AuthSession {
     ...safeSession,
     institution,
     institutions,
-    tenant_id: resolveTenantIdForInstitution(institution, safeSession),
+    tenant_directory: sessionDirectory,
+    tenant_id: resolveTenantIdForInstitution(institution, { ...safeSession, tenant_directory: sessionDirectory }),
   };
 }
 
@@ -345,7 +354,10 @@ function resolveTenantIdForInstitution(
   catalog: Record<string, string> = {},
 ) {
   const normalized = normalizeSelectableInstitution(institution);
-  const catalogTenantId = normalized ? catalog[normalized] : "";
+  const sessionCatalog = Object.fromEntries(
+    normalizeSessionTenantDirectory(session?.tenant_directory || []).map((item) => [item.name, item.id]),
+  );
+  const catalogTenantId = normalized ? sessionCatalog[normalized] || catalog[normalized] : "";
   if (catalogTenantId) return catalogTenantId;
   if (session?.tenant_id) {
     const sessionInstitution = normalizeSelectableInstitution(session.institution || "");
@@ -354,15 +366,31 @@ function resolveTenantIdForInstitution(
       return session.tenant_id;
     }
   }
-  return tenantIdFromInstitution(institution);
+  // Before authentication the deterministic local identifier is used only for
+  // public/development surfaces.  Authenticated requests never derive a tenant
+  // code from a display label; they keep the backend-issued canonical ID.
+  return session?.tenant_id || tenantIdFromInstitution(institution);
 }
 
 function resolveSessionInstitution(session: AuthSession | null) {
   if (!session) return operatingTenantNames[0];
-  const requested = normalizeSelectableInstitution(session.institution || session.tenant_id || "");
+  const canonical = normalizeSessionTenantDirectory(session.tenant_directory || [])
+    .find((item) => item.id === session.tenant_id)?.name || "";
+  const requested = normalizeSelectableInstitution(canonical || session.institution || "");
   return session.institutions.includes(requested)
     ? requested
     : session.institutions[0] || operatingTenantNames[0];
+}
+
+function normalizeSessionTenantDirectory(values: Array<{ id: string; name: string }>) {
+  const seen = new Set<string>();
+  return values.flatMap((item) => {
+    const id = String(item?.id || "").trim();
+    const name = normalizeSelectableInstitution(String(item?.name || ""));
+    if (!id || !name || seen.has(id)) return [];
+    seen.add(id);
+    return [{ id, name }];
+  });
 }
 
 function normalizeSelectableInstitutions(values: string[]) {

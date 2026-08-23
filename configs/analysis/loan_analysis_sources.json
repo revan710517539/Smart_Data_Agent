@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-22",
+  "policy": {
+    "rawDocumentsCommitted": false,
+    "internalDocumentsUse": "method_abstraction_only",
+    "personalDetailsCopied": false,
+    "institutionIsolation": true
+  },
+  "sources": [
+    {"name": "8月17日金科重点项目双周会.docx", "sha256": "511f22831e400c611ca5c63e4c14438a89ec4df37c979fe6df541e450ee1652b", "classification": "source"},
+    {"name": "5月11日金科重点项目双周会.docx", "sha256": "3d407291f3c4c275a791eb51665e9b36f6d0c22e3020ef5c20c4ecbc7f80f2e4", "classification": "source"},
+    {"name": "内部使用 - 5月11日金科重点项目双周会.docx", "sha256": "cc65b9d7a2bb851953a284dad0e680573924fa3dd6feca31edc2f9cd0e0371c7", "classification": "internal_method_only"},
+    {"name": "5月22日金科重点项目双周会.docx", "sha256": "e8147e1acc38ff231257d34648dec7feef8ba57740d46c25e4593fd4260c1d99", "classification": "source"},
+    {"name": "内部使用 - 5月22日金科重点项目双周会.docx", "sha256": "dac425e36bea82ae70b60137842cc169840852bee0c5d092db5d20797f513546", "classification": "internal_method_only"},
+    {"name": "6月5日金科重点项目双周会.docx", "sha256": "0d73dcd68cf8cd7ccac62893212242fa2a72623e2d25b2e275914aadff1cba1d", "classification": "source"},
+    {"name": "8月3日金科重点项目双周会.docx", "sha256": "d8b16b2996693a9bd1b210076e6a2f70887a53cf71292d15f46a022674535f81", "classification": "source"},
+    {"name": "7月17日金科重点项目双周会.docx", "sha256": "e2758f2d053e87b66f45bb6adc1b7c6f5f1b5f8bb76c50fa8193c6a73f1e08ae", "classification": "source"},
+    {"name": "7月3日金科重点项目双周会 (1).docx", "sha256": "cead41ef92604ecf0da1102e399fdc0c9fa21233b447bfc8dc3212b77157d1fe", "classification": "source"},
+    {"name": "内部使用 - 6月22日金科重点项目双周会.docx", "sha256": "faa304b9c4b31b579b920b4f0e50e5e890a040e3750efd376fc14ca7e37b4f9d", "classification": "internal_method_only"},
+    {"name": "6月22日金科重点项目双周会.docx", "sha256": "161435af2dddf5fba498f6cc2c7175f07559e8138937a47b80cf2fab2075bfdf", "classification": "source"},
+    {"name": "内部使用 - 6月5日金科重点项目双周会.docx", "sha256": "675e03838f6547eba2e1908fa89b1a376de5adf83943e81b5f63eac8492c9a7b", "classification": "internal_method_only"}
+  ]
+}

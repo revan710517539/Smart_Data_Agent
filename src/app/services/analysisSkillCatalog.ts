@@ -44,3 +44,17 @@ export function availableAnalysisSkills(skills: AnalysisSkillAsset[]) {
     (skill) => skill.enabled && (!skill.lifecycleStatus || skill.lifecycleStatus === "active"),
   );
 }
+
+export function analysisSkillDisplayLocation(skill: AnalysisSkillAsset) {
+  return skill.displayLocation === "hidden" ? "hidden" : "intelligent_analysis";
+}
+
+/** Hidden Skills remain available to runtime dispatch but never appear on pages. */
+export function pageVisibleAnalysisSkills(skills: AnalysisSkillAsset[]) {
+  return availableAnalysisSkills(skills).filter(
+    (skill) => analysisSkillDisplayLocation(skill) === "intelligent_analysis",
+  );
+}
+
+/** Backward-compatible name for the intelligent-analysis add menu consumer. */
+export const intelligentAnalysisMenuSkills = pageVisibleAnalysisSkills;

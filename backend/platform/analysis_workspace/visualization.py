@@ -8,7 +8,7 @@ from .models import VisualizationSpec
 
 ALLOWED_CHART_TYPES = {
     "kpi", "line", "area", "bar", "column", "stacked_bar", "combo", "donut",
-    "scatter", "funnel", "treemap", "radar", "table", "pivot",
+    "scatter", "funnel", "treemap", "radar", "table", "pivot", "text",
 }
 
 
@@ -116,6 +116,8 @@ def _field_exists(rows: list[dict[str, Any]], field: str) -> bool:
 
 
 def _chart_is_compatible(chart_type: str, dimensions: list[str], metrics: list[str], point_count: int) -> bool:
+    if chart_type == "text":
+        return True
     if chart_type == "table":
         return point_count > 0
     if chart_type == "pivot":

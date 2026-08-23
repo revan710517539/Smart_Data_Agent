@@ -8,6 +8,7 @@ const Dashboard = lazyNamed(() => import("./components/Dashboard"), "Dashboard")
 const BusinessFunnel = lazyNamed(() => import("./components/BusinessFunnel"), "BusinessFunnel");
 const BusinessSandbox = lazyNamed(() => import("./components/BusinessSandbox"), "BusinessSandbox");
 const InstitutionSupervision = lazyNamed(() => import("./components/InstitutionSupervision"), "InstitutionSupervision");
+const CustomerSegmentAnalysis = lazyNamed(() => import("./components/CustomerSegmentAnalysis"), "CustomerSegmentAnalysis");
 const WeeklyReport = lazyNamed(() => import("./components/WeeklyReport"), "WeeklyReport");
 const EmailDailyReport = lazyNamed(() => import("./components/EmailDailyReport"), "EmailDailyReport");
 const CustomerInsight = lazyNamed(() => import("./components/CustomerInsight"), "CustomerInsight");
@@ -101,6 +102,7 @@ export const router = createBrowserRouter([
       { path: "funnel", Component: withPageSuspense(BusinessFunnel) },
       { path: "sandbox", Component: withPageSuspense(BusinessSandbox) },
       { path: "supervision", Component: withPageSuspense(InstitutionSupervision) },
+      { path: "customer-segment-analysis", Component: withPageSuspense(CustomerSegmentAnalysis) },
       { path: "weekly-report", Component: withPageSuspense(WeeklyReport) },
       { path: "email-daily", Component: withPageSuspense(EmailDailyReport) },
       { path: "customers", Component: withPageSuspense(CustomerInsight) },

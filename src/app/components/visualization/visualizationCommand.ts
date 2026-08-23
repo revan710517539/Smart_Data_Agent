@@ -27,6 +27,63 @@ export function resolveVisualizationVoiceCommand(
   };
 }
 
+export type VisualVoiceSurface = "chart" | "text";
+export type VisualVoiceMode = "chart_control" | "textbox_record" | "textbox_analyze";
+export type VisualAnalysisKind = "descriptive" | "attribution" | "predictive";
+export type VisualVoiceIntent = {
+  mode: VisualVoiceMode;
+  analysisKinds: VisualAnalysisKind[];
+};
+
+export function classifyVisualVoiceIntent(command: string, surface: VisualVoiceSurface): VisualVoiceIntent {
+  if (surface !== "text") {
+    return { mode: "chart_control", analysisKinds: [] };
+  }
+  void command;
+  // Text-card speech is a dictation-only surface. Analysis words are content,
+  // not commands; the sole AI analysis entry is the shared analysis runtime.
+  return { mode: "textbox_record", analysisKinds: [] };
+}
+
+export function insertVisualVoiceText(card: HTMLElement | null, text: string) {
+  if (!card || !text) return false;
+  const active = document.activeElement;
+  if (active instanceof HTMLInputElement && card.contains(active)) {
+    const start = active.selectionStart ?? active.value.length;
+    const end = active.selectionEnd ?? start;
+    const next = `${active.value.slice(0, start)}${text}${active.value.slice(end)}`;
+    const prototype = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+    prototype?.set?.call(active, next);
+    const pos = start + text.length;
+    active.setSelectionRange(pos, pos);
+    active.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }
+  const editable = active instanceof HTMLElement && active.isContentEditable && card.contains(active)
+    ? active
+    : card.querySelector<HTMLElement>("[data-rich-note-editor-id], [data-visual-note-body]");
+  if (editable) {
+    editable.focus();
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount || !editable.contains(selection.anchorNode)) {
+      const range = document.createRange();
+      range.selectNodeContents(editable);
+      range.collapse(false);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+    const inserted = document.execCommand("insertText", false, text);
+    editable.dispatchEvent(new Event("input", { bubbles: true }));
+    return inserted || Boolean(editable.textContent?.includes(text));
+  }
+  const title = card.querySelector<HTMLInputElement>("[data-visual-note-title]");
+  if (title) {
+    title.focus();
+    return insertVisualVoiceText(card, text);
+  }
+  return false;
+}
+
 export function moveVisualizationField(fields: string[], source: string, target: string) {
   const from = fields.indexOf(source);
   const to = fields.indexOf(target);

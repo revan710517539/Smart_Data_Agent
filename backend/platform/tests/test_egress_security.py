@@ -1,11 +1,18 @@
 import socket
+import ssl
 import unittest
 from io import BytesIO
 from urllib.error import HTTPError
 from unittest.mock import patch
 
-from backend.platform.security import EgressPolicyError, validate_outbound_url
+from backend.platform.security import (
+    EgressPolicyError,
+    classify_egress_policy_error,
+    create_governed_websocket_connection,
+    validate_outbound_url,
+)
 from backend.platform.settings import call_model_completion, test_data_connection, test_model_integration, test_speech_integration
+from backend.platform.settings.speech_test import dashscope_api_base_to_fun_asr_endpoint
 from backend.platform.settings.model_test import _classify_model_test_error, _provider_http_error_marker, _request_json_from_candidates
 
 
@@ -156,7 +163,11 @@ class EgressSecurityTest(unittest.TestCase):
         self.assertLessEqual(timeouts[1], 18)
 
     def test_model_integration_reports_unresolvable_domain(self) -> None:
-        with patch(
+        with patch.dict(
+            "os.environ",
+            {"HTTPS_PROXY": "", "https_proxy": "", "ALL_PROXY": "", "all_proxy": "", "SMART_DATA_AGENT_EGRESS_PROXY": ""},
+            clear=False,
+        ), patch(
             "backend.platform.security.egress.socket.getaddrinfo",
             side_effect=socket.gaierror("not found"),
         ):
@@ -173,7 +184,21 @@ class EgressSecurityTest(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertFalse(result["callable"])
         self.assertEqual(result["error_code"], "dns_resolution_failed")
-        self.assertIn("域名无法解析", result["message"])
+        self.assertIn("无法解析", result["message"])
+
+    def test_loopback_proxy_skips_local_dns_for_corporate_relay(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"SMART_DATA_AGENT_ENV": "development", "SMART_DATA_AGENT_EGRESS_PROXY": "http://127.0.0.1:7897"},
+            clear=False,
+        ), patch(
+            "backend.platform.security.egress.socket.getaddrinfo",
+            side_effect=AssertionError("proxy egress must not require local DNS"),
+        ):
+            self.assertEqual(
+                validate_outbound_url("https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net/v1"),
+                "https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net/v1",
+            )
 
     def test_model_integration_classifies_timeout_as_transient(self) -> None:
         with patch(
@@ -281,6 +306,205 @@ class EgressSecurityTest(unittest.TestCase):
             "https://data.example.com/api/query",
         ])
         self.assertTrue(requests[0].get_header("Authorization").startswith("Basic "))
+
+    def test_speech_test_repairs_truncated_maas_host_and_connects(self) -> None:
+        class FakeSocket:
+            def send(self, _payload):
+                return None
+
+            def recv(self):
+                return '{"header":{"event":"task-started"}}'
+
+            def close(self):
+                return None
+
+        public = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("47.94.20.201", 443))]
+        with patch("backend.platform.security.egress.socket.getaddrinfo", return_value=public), patch(
+            "backend.platform.settings.speech_test.create_governed_websocket_connection",
+            return_value=FakeSocket(),
+        ) as connect:
+            result = test_speech_integration(
+                {
+                    "id": "speech_fun_asr",
+                    "name": "Fun-ASR",
+                    "provider": "aliyun_fun_asr",
+                    "source": "阿里云",
+                    "apiBase": "https://ws-nvbkaw0atdgdbvv7.cn-beijing.maas",
+                    "apiKey": "sk-real-key",
+                }
+            )
+        self.assertTrue(result["callable"])
+        self.assertEqual(result["status"], "connected")
+        self.assertIn("鉴权和任务启动成功", result["message"])
+        self.assertEqual(
+            result["endpoint"],
+            "wss://ws-nvbkaw0atdgdbvv7.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+        )
+        self.assertEqual(connect.call_args.args[0], result["endpoint"])
+
+    def test_websocket_ignores_ambient_proxy_without_governed_proxy(self) -> None:
+        direct_socket = object()
+        connected = object()
+        public = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("47.94.20.201", 443))]
+        with patch.dict(
+            "os.environ",
+            {"SMART_DATA_AGENT_EGRESS_PROXY": "", "SMART_DATA_AGENT_EGRESS_DIRECT_HOSTS": "", "https_proxy": "http://127.0.0.1:7897"},
+            clear=False,
+        ), patch("backend.platform.security.egress.socket.getaddrinfo", return_value=public), patch(
+            "backend.platform.security.egress._open_direct_websocket_socket", return_value=direct_socket,
+        ) as direct, patch(
+            "backend.platform.security.egress._websocket_create_connection", return_value=connected,
+        ) as create:
+            result = create_governed_websocket_connection(
+                "wss://ws-example.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+                timeout=8,
+                header=["Authorization: Bearer redacted"],
+            )
+        self.assertIs(result, connected)
+        direct.assert_called_once()
+        self.assertIs(create.call_args.kwargs["socket"], direct_socket)
+        self.assertNotIn("http_proxy_host", create.call_args.kwargs)
+
+    def test_websocket_uses_only_explicit_governed_proxy(self) -> None:
+        connected = object()
+        with patch.dict(
+            "os.environ",
+            {"SMART_DATA_AGENT_EGRESS_PROXY": "http://127.0.0.1:7897", "SMART_DATA_AGENT_EGRESS_DIRECT_HOSTS": "", "https_proxy": "http://127.0.0.1:9999"},
+            clear=False,
+        ), patch(
+            "backend.platform.security.egress._open_direct_websocket_socket",
+            side_effect=AssertionError("explicit proxy must own transport"),
+        ), patch(
+            "backend.platform.security.egress._websocket_create_connection", return_value=connected,
+        ) as create:
+            result = create_governed_websocket_connection(
+                "wss://ws-example.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+                timeout=8,
+                header=["Authorization: Bearer redacted"],
+            )
+        self.assertIs(result, connected)
+        self.assertEqual(create.call_args.kwargs["http_proxy_host"], "127.0.0.1")
+        self.assertEqual(create.call_args.kwargs["http_proxy_port"], 7897)
+
+    def test_explicit_direct_host_bypasses_only_the_governed_proxy(self) -> None:
+        direct_socket = object()
+        connected = object()
+        public = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("47.94.20.201", 443))]
+        with patch.dict(
+            "os.environ",
+            {
+                "SMART_DATA_AGENT_EGRESS_PROXY": "http://127.0.0.1:7897",
+                "SMART_DATA_AGENT_EGRESS_DIRECT_HOSTS": "*.aliyuncs.com",
+            },
+            clear=False,
+        ), patch("backend.platform.security.egress.socket.getaddrinfo", return_value=public), patch(
+            "backend.platform.security.egress._open_direct_websocket_socket", return_value=direct_socket,
+        ), patch(
+            "backend.platform.security.egress._websocket_create_connection", return_value=connected,
+        ) as create:
+            result = create_governed_websocket_connection(
+                "wss://ws-example.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+                timeout=8,
+                header=["Authorization: Bearer redacted"],
+            )
+        self.assertIs(result, connected)
+        self.assertIs(create.call_args.kwargs["socket"], direct_socket)
+        self.assertNotIn("http_proxy_host", create.call_args.kwargs)
+
+    def test_direct_websocket_retries_tls_on_next_resolved_address(self) -> None:
+        class FakeSocket:
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.closed = False
+
+            def settimeout(self, _timeout: float) -> None:
+                return None
+
+            def connect(self, _address) -> None:
+                return None
+
+            def close(self) -> None:
+                self.closed = True
+
+        first = FakeSocket("first")
+        second = FakeSocket("second")
+        wrapped = object()
+        ssl_context = type(
+            "FakeSSLContext",
+            (),
+            {"wrap_socket": lambda self, sock, server_hostname: (_ for _ in ()).throw(ssl.SSLEOFError()) if sock is first else wrapped},
+        )()
+        addresses = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("47.94.20.201", 443)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("101.201.58.201", 443)),
+        ]
+        with patch("backend.platform.security.egress.socket.getaddrinfo", return_value=addresses), patch(
+            "backend.platform.security.egress.socket.socket", side_effect=[first, second],
+        ), patch("backend.platform.security.egress.ssl.create_default_context", return_value=ssl_context):
+            result = __import__(
+                "backend.platform.security.egress", fromlist=["_open_direct_websocket_socket"]
+            )._open_direct_websocket_socket(
+                "wss://ws-example.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+                timeout=8,
+                ca_certs=None,
+            )
+        self.assertIs(result, wrapped)
+        self.assertTrue(first.closed)
+        self.assertFalse(second.closed)
+
+    def test_speech_test_reports_unresolvable_host_instead_of_generic_egress(self) -> None:
+        with patch(
+            "backend.platform.security.egress.socket.getaddrinfo",
+            side_effect=socket.gaierror("not found"),
+        ):
+            result = test_speech_integration(
+                {
+                    "id": "speech_fun_asr",
+                    "name": "Fun-ASR",
+                    "provider": "aliyun_fun_asr",
+                    "source": "阿里云",
+                    "apiBase": "https://does-not-exist.example.invalid/api/v1",
+                    "apiKey": "sk-real-key",
+                }
+            )
+        self.assertFalse(result["callable"])
+        self.assertEqual(result["error_code"], "dns_resolution_failed")
+        self.assertIn("无法解析", result["message"])
+        self.assertNotEqual(result["message"], "Fun-ASR 地址不符合服务端出站安全策略。")
+
+    def test_speech_test_reports_allowlist_rejection_with_host(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"SMART_DATA_AGENT_ENV": "development", "SMART_DATA_AGENT_EGRESS_ALLOWED_HOSTS": "only.example.com"},
+            clear=False,
+        ):
+            result = test_speech_integration(
+                {
+                    "id": "speech_fun_asr",
+                    "name": "Fun-ASR",
+                    "provider": "aliyun_fun_asr",
+                    "source": "阿里云",
+                    "apiBase": "https://ws-nvbkaw0atdgdbvv7.cn-beijing.maas.aliyuncs.com/api/v1",
+                    "apiKey": "sk-real-key",
+                }
+            )
+        self.assertFalse(result["callable"])
+        self.assertEqual(result["error_code"], "egress_policy_rejected")
+        self.assertIn("白名单", result["message"])
+
+    def test_truncated_maas_conversion_matches_complete_host(self) -> None:
+        self.assertEqual(
+            dashscope_api_base_to_fun_asr_endpoint("https://ws-nvbkaw0atdgdbvv7.cn-beijing.maas"),
+            dashscope_api_base_to_fun_asr_endpoint("https://ws-nvbkaw0atdgdbvv7.cn-beijing.maas.aliyuncs.com/api/v1"),
+        )
+
+    def test_classify_egress_policy_error_distinguishes_dns(self) -> None:
+        code, message, transient = classify_egress_policy_error(
+            EgressPolicyError("Outbound hostname cannot be resolved: example.invalid")
+        )
+        self.assertEqual(code, "dns_resolution_failed")
+        self.assertFalse(transient)
+        self.assertIn("无法解析", message)
 
 
 if __name__ == "__main__":

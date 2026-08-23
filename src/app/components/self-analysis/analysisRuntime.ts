@@ -46,11 +46,11 @@ function modelSupportsApplication(model: ModelIntegration, applicationModule: st
 }
 
 export function configuredModelForModule(models: ModelIntegration[], applicationModule: string) {
-  return models.find((model) => modelSupportsApplication(model, applicationModule) && ["available", "draft"].includes(model.status) && (model.testStatus !== "failed" || model.id === "model_default_intelligent_analysis_relay")) || null;
+  return models.find((model) => modelSupportsApplication(model, applicationModule) && model.status === "available" && ["connected", "mock"].includes(model.testStatus || "")) || null;
 }
 
 export function modelsForModule(models: ModelIntegration[], applicationModule: string) {
-  return models.filter((model) => modelSupportsApplication(model, applicationModule) && ["available", "draft"].includes(model.status) && (model.testStatus !== "failed" || model.id === "model_default_intelligent_analysis_relay"));
+  return models.filter((model) => modelSupportsApplication(model, applicationModule) && model.status === "available" && ["connected", "mock"].includes(model.testStatus || ""));
 }
 
 export function modelApplicationSelection(applicationModule: string, model: ModelIntegration | null) {

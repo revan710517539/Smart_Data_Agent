@@ -1,0 +1,41 @@
+{
+  "schema_version": "smart-data-agent-mysql-migrations/v1",
+  "target_mysql_version": "8.0.18",
+  "migrations": [
+    {
+      "version": "0001",
+      "path": "0001_production_schema.sql",
+      "sha256": "93742b07ee8361c385bec87cadf63607e94fd04d12facf428fc5f7fc99c453b1"
+    },
+    {
+      "version": "0029",
+      "path": "migrations/0029_message_board.sql",
+      "sha256": "75b8c19c08ded1f01d25ec61bf0998cabc2622b26ff1da3adad5085e3864ce03"
+    },
+    {
+      "version": "0030",
+      "path": "migrations/0030_message_board_status.sql",
+      "sha256": "aa8cb1d4d4d53fd1e08c5312bf6ae4fa38a643321a73348ccebee1ca8139c9aa"
+    },
+    {
+      "version": "0031",
+      "path": "migrations/0031_user_interaction_events.sql",
+      "sha256": "bcdf4ec1d667a075bf888d575ea2e96c3563cb24c19732572ce543b4251020fd"
+    },
+    {
+      "version": "0032",
+      "path": "migrations/0032_unified_runtime.sql",
+      "sha256": "9d9bc03623c45a43e295cc756aae6d6ec167d6a3bfcad2b070dfd278e3d4c08d"
+    },
+    {
+      "version": "0033",
+      "path": "migrations/0033_user_credentials.sql",
+      "sha256": "bb8d03432c0290663018f05c5de774f5b1c17032c0d1e911a5621d185ed36548"
+    },
+    {
+      "version": "0034",
+      "path": "migrations/0034_capability_pack_snapshots.sql",
+      "sha256": "ff6e5ee6515aeee79824a86077aa0cc61dc597ab87d3485658a9ce54cac09f28"
+    }
+  ]
+}

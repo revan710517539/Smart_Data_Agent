@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { ChevronsDown, ChevronsUp, Image as ImageIcon, MessageSquareText, MoreHorizontal, ThumbsUp } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronsDown, ChevronsUp, Image as ImageIcon, MessageSquarePlus, MessageSquareText, MoreHorizontal, Plus, Save, ThumbsUp, X } from "lucide-react";
 import { readableContextText, type CommentItem, type CommentTarget } from "./domain";
 
 export type CommentPanelEntry =
@@ -91,6 +91,8 @@ export function CommentsPanel({
   activeCommentId,
   activeDraftId,
   railHeight,
+  composerScopeKey,
+  onCreateComment,
   onSave,
   onCommentActivate,
   onResolveComment,
@@ -113,6 +115,8 @@ export function CommentsPanel({
   activeCommentId: string | null;
   activeDraftId: string | null;
   railHeight: number;
+  composerScopeKey: string;
+  onCreateComment: (text: string) => void;
   onSave: (targetId: string) => void;
   onCommentActivate: (commentId: string) => void;
   onResolveComment: (commentId: string) => void;
@@ -122,6 +126,32 @@ export function CommentsPanel({
   onCommentRepliesToggle: (commentId: string, expanded: boolean) => void;
 }) {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [newCommentOpen, setNewCommentOpen] = useState(false);
+  const [newCommentText, setNewCommentText] = useState("");
+  const newCommentInputRef = useRef<HTMLTextAreaElement>(null);
+
+  const closeNewComment = () => {
+    setNewCommentText("");
+    setNewCommentOpen(false);
+  };
+
+  const openNewComment = () => {
+    setNewCommentOpen(true);
+    window.setTimeout(() => newCommentInputRef.current?.focus(), 0);
+  };
+
+  const saveNewComment = () => {
+    const text = newCommentText.trim();
+    if (!text) return;
+    onCreateComment(text);
+    closeNewComment();
+  };
+
+  useEffect(() => {
+    setNewCommentText("");
+    setNewCommentOpen(false);
+  }, [composerScopeKey]);
+
   useEffect(() => {
     if (!openMenuId) return;
 
@@ -169,7 +199,7 @@ export function CommentsPanel({
   const positionedEntries = positionCommentEntries(entries, expandedReplyInputs, expandedCommentReplies, showHeader ? 96 : 12);
 
   return (
-    <div className="relative" data-weekly-comments-panel="true" data-comment-layout={stableFlow ? "stable-flow" : "anchored"} style={{ minHeight: stableFlow ? undefined : railHeight }}>
+    <div className="relative py-2" data-weekly-comments-panel="true" data-comment-layout={stableFlow ? "stable-flow" : "anchored"} style={{ minHeight: stableFlow ? undefined : railHeight }}>
       {showHeader && (
         <div className="sticky top-4 z-30 flex items-start gap-2 bg-white rounded-xl border border-[#f0f0f2] p-4 shadow-sm shadow-black/[0.03]">
           <MessageSquareText className="w-4 h-4 text-[#8a8a8e] mt-0.5" />
@@ -182,7 +212,59 @@ export function CommentsPanel({
         </div>
       )}
 
-      {entries.length === 0 && (
+      <button
+        type="button"
+        onClick={openNewComment}
+        className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#b8cce2] bg-white px-3 py-3 text-[12px] text-[#0a66c2] transition-colors hover:border-[#0a66c2] hover:bg-[#f7fbff]"
+        data-comments-new="true"
+      >
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#edf4fb]"><Plus className="h-3.5 w-3.5" /></span>
+        新增评论
+      </button>
+
+      {newCommentOpen && (
+        <article className="mt-2.5 rounded-xl border border-[#e5e5ea] bg-white" data-comments-new-editor="true">
+          <header className="flex items-center justify-between border-b border-[#f0f0f2] px-3 py-2.5">
+            <div className="flex min-w-0 items-center gap-2 text-[12px] text-[#1d1d1f]">
+              <MessageSquarePlus className="h-4 w-4 shrink-0 text-[#0a66c2]" />
+              <span className="truncate">新增评论</span>
+            </div>
+            <button type="button" onClick={closeNewComment} className="rounded-md p-1 text-[#8a8a8e] hover:bg-[#f2f2f7]" aria-label="关闭评论编辑">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </header>
+          <div className="p-3">
+            <textarea
+              ref={newCommentInputRef}
+              value={newCommentText}
+              onChange={(event) => setNewCommentText(event.target.value)}
+              rows={4}
+              maxLength={2000}
+              placeholder="输入评论内容"
+              className="w-full resize-none rounded-lg border border-[#e5e5ea] bg-transparent px-3 py-2 text-[13px] leading-5 text-[#1d1d1f] outline-none placeholder:text-[#b4b4b8] focus:border-[#8bb7e6]"
+              data-comments-new-input="true"
+            />
+            <div className="mt-2 flex items-center justify-between border-t border-[#f0f0f2] pt-2">
+              <span className="text-[10px] text-[#aeaeb2]">{newCommentText.length}/2000</span>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={closeNewComment} className="h-8 rounded-lg px-3 text-[11px] text-[#636366] hover:bg-[#f2f3f5]">取消</button>
+                <button
+                  type="button"
+                  onClick={saveNewComment}
+                  disabled={!newCommentText.trim()}
+                  className="flex h-8 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 text-[11px] text-white hover:bg-[#2c2c2e] disabled:cursor-not-allowed disabled:opacity-40"
+                  data-comments-new-save="true"
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        </article>
+      )}
+
+      {entries.length === 0 && !newCommentOpen && (
         <div className="mt-3 rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-4 text-[12px] leading-relaxed text-[#8a8a8e]" data-comments-empty-state="true">
           暂无评论。选中文本后会在同一水平位置生成评论输入框。
         </div>

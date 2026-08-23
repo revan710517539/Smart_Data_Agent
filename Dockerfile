@@ -11,9 +11,15 @@ COPY index.html tsconfig.json vite.config.ts postcss.config.mjs ./
 COPY public ./public
 COPY src ./src
 COPY scripts ./scripts
-RUN npm run typecheck && npm run build
+RUN npm run typecheck && npm run build && node scripts/check_frontend_delivery.mjs
 
 FROM python:3.13-slim-bookworm AS runtime-base
+ARG SMART_DATA_AGENT_COMMIT_SHA=unknown
+ARG SMART_DATA_AGENT_BUILD_DATE=unknown
+LABEL org.opencontainers.image.title="Smart Data Agent" \
+    org.opencontainers.image.revision="${SMART_DATA_AGENT_COMMIT_SHA}" \
+    org.opencontainers.image.created="${SMART_DATA_AGENT_BUILD_DATE}" \
+    org.opencontainers.image.source="revan/smart-data-agent"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \

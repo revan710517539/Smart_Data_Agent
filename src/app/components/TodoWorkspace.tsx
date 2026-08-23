@@ -48,6 +48,7 @@ type AgentTodo = {
   relatedOrg?: string;
   relatedMetric?: string;
   confidence?: number;
+  registrationRequestId?: string;
 };
 
 type TodoFormState = {
@@ -65,6 +66,7 @@ type TodoWorkspaceProps = {
   tenantId: string;
   userId: string;
   userName: string;
+  isSuperAdmin?: boolean;
   composerRequest: number;
   toolbarLeftHost: HTMLDivElement | null;
   toolbarRightHost: HTMLDivElement | null;
@@ -113,6 +115,7 @@ export function TodoWorkspace({
   tenantId,
   userId,
   userName,
+  isSuperAdmin = false,
   composerRequest,
   toolbarLeftHost,
   toolbarRightHost,
@@ -268,6 +271,26 @@ export function TodoWorkspace({
     } else {
       setTodos(previous);
       setSyncError("待办任务删除失败，已恢复原记录");
+    }
+  };
+
+  const reviewRegistration = async (todo: AgentTodo, approved: boolean) => {
+    const requestId = todo.registrationRequestId || todo.id.replace(/^todo_reg_/, "");
+    if (!requestId) return;
+    const previous = todos;
+    setTodos((items) => items.filter((item) => item.id !== todo.id));
+    setSyncError("");
+    const synced = await persistTodoAction(
+      tenantId,
+      userId,
+      userName,
+      approved ? "approve_registration" : "reject_registration",
+      { requestId, todoId: todo.id },
+    );
+    if (synced) setTodos(synced);
+    else {
+      setTodos(previous);
+      setSyncError(approved ? "同意注册失败，已恢复原待办" : "拒绝注册失败，已恢复原待办");
     }
   };
 
@@ -603,7 +626,14 @@ export function TodoWorkspace({
           正在加载待办任务...
         </div>
       ) : activeView === "list" ? (
-        <TodoListView todos={filteredTodos} onEdit={openEdit} onDelete={deleteTodo} onChangeStatus={changeStatus} />
+        <TodoListView
+          todos={filteredTodos}
+          canReviewRegistration={isSuperAdmin}
+          onEdit={openEdit}
+          onDelete={deleteTodo}
+          onChangeStatus={changeStatus}
+          onReviewRegistration={reviewRegistration}
+        />
       ) : activeView === "kanban" ? (
         <TodoKanbanView
           todos={filteredTodos}
@@ -613,6 +643,8 @@ export function TodoWorkspace({
           onEdit={openEdit}
           onDelete={deleteTodo}
           onChangeStatus={changeStatus}
+          onReviewRegistration={reviewRegistration}
+          canReviewRegistration={isSuperAdmin}
           onToggleCollapse={toggleTodoCollapsed}
           onDragStart={setDraggingTodoId}
           onDragEnd={() => setDraggingTodoId(null)}
@@ -651,14 +683,18 @@ export function TodoWorkspace({
 
 function TodoListView({
   todos,
+  canReviewRegistration,
   onEdit,
   onDelete,
   onChangeStatus,
+  onReviewRegistration,
 }: {
   todos: AgentTodo[];
+  canReviewRegistration: boolean;
   onEdit: (todo: AgentTodo) => void;
   onDelete: (todoId: string) => void;
   onChangeStatus: (todo: AgentTodo, status: TodoStatus) => void;
+  onReviewRegistration: (todo: AgentTodo, approved: boolean) => void;
 }) {
   const pagination = useClientPagination(todos);
   if (todos.length === 0) return <EmptyTodoState />;
@@ -707,12 +743,18 @@ function TodoListView({
           </div>
           <DueDate todo={todo} />
           <div className="flex justify-end gap-1">
-            <button onClick={() => onEdit(todo)} className="rounded-lg p-2 text-[#8a8a8e] hover:bg-[#f2f2f7]">
-              <PencilLine className="h-3.5 w-3.5" />
-            </button>
-            <button onClick={() => onDelete(todo.id)} className="rounded-lg p-2 text-[#8a8a8e] hover:bg-[#fff1f0] hover:text-[#d92d20]">
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
+            {canReviewRegistration && isRegistrationTodo(todo) ? (
+              <RegistrationReviewButtons todo={todo} onReview={onReviewRegistration} />
+            ) : (
+              <>
+                <button onClick={() => onEdit(todo)} className="rounded-lg p-2 text-[#8a8a8e] hover:bg-[#f2f2f7]">
+                  <PencilLine className="h-3.5 w-3.5" />
+                </button>
+                <button onClick={() => onDelete(todo.id)} className="rounded-lg p-2 text-[#8a8a8e] hover:bg-[#fff1f0] hover:text-[#d92d20]">
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </>
+            )}
           </div>
         </div>
       ))}
@@ -728,6 +770,8 @@ function TodoKanbanView({
   onEdit,
   onDelete,
   onChangeStatus,
+  onReviewRegistration,
+  canReviewRegistration,
   onToggleCollapse,
   onDragStart,
   onDragEnd,
@@ -739,6 +783,8 @@ function TodoKanbanView({
   onEdit: (todo: AgentTodo) => void;
   onDelete: (todoId: string) => void;
   onChangeStatus: (todo: AgentTodo, status: TodoStatus) => void;
+  onReviewRegistration: (todo: AgentTodo, approved: boolean) => void;
+  canReviewRegistration: boolean;
   onToggleCollapse: (todoId: string) => void;
   onDragStart: (todoId: string) => void;
   onDragEnd: () => void;
@@ -790,6 +836,8 @@ function TodoKanbanView({
                   onEdit={onEdit}
                   onDelete={onDelete}
                   onChangeStatus={onChangeStatus}
+                  onReviewRegistration={onReviewRegistration}
+                  canReviewRegistration={canReviewRegistration}
                   onToggleCollapse={onToggleCollapse}
                   onDragStart={onDragStart}
                   onDragEnd={onDragEnd}
@@ -1017,6 +1065,8 @@ function TodoCard({
   onEdit,
   onDelete,
   onChangeStatus,
+  onReviewRegistration,
+  canReviewRegistration = false,
   onToggleCollapse,
   onDragStart,
   onDragEnd,
@@ -1027,6 +1077,8 @@ function TodoCard({
   onEdit: (todo: AgentTodo) => void;
   onDelete: (todoId: string) => void;
   onChangeStatus: (todo: AgentTodo, status: TodoStatus) => void;
+  onReviewRegistration?: (todo: AgentTodo, approved: boolean) => void;
+  canReviewRegistration?: boolean;
   onToggleCollapse: (todoId: string) => void;
   onDragStart?: (todoId: string) => void;
   onDragEnd?: () => void;
@@ -1092,19 +1144,25 @@ function TodoCard({
           <div>{formatMonthDay(todo.dueDate)}</div>
         </div>
         <div className="flex gap-1">
-          <button
-            onClick={() => onChangeStatus(todo, nextStatus)}
-            className="rounded-lg p-2 text-[#8a8a8e] hover:bg-[#f2f2f7]"
-            title={`流转到${statusConfig[nextStatus].label}`}
-          >
-            <ChevronRight className="h-3.5 w-3.5" />
-          </button>
-          <button onClick={() => onEdit(todo)} className="rounded-lg p-2 text-[#8a8a8e] hover:bg-[#f2f2f7]">
-            <PencilLine className="h-3.5 w-3.5" />
-          </button>
-          <button onClick={() => onDelete(todo.id)} className="rounded-lg p-2 text-[#8a8a8e] hover:bg-[#fff1f0] hover:text-[#d92d20]">
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          {canReviewRegistration && isRegistrationTodo(todo) && onReviewRegistration ? (
+            <RegistrationReviewButtons todo={todo} onReview={onReviewRegistration} />
+          ) : (
+            <>
+              <button
+                onClick={() => onChangeStatus(todo, nextStatus)}
+                className="rounded-lg p-2 text-[#8a8a8e] hover:bg-[#f2f2f7]"
+                title={`流转到${statusConfig[nextStatus].label}`}
+              >
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+              <button onClick={() => onEdit(todo)} className="rounded-lg p-2 text-[#8a8a8e] hover:bg-[#f2f2f7]">
+                <PencilLine className="h-3.5 w-3.5" />
+              </button>
+              <button onClick={() => onDelete(todo.id)} className="rounded-lg p-2 text-[#8a8a8e] hover:bg-[#fff1f0] hover:text-[#d92d20]">
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -1282,6 +1340,33 @@ function PriorityBadge({ priority }: { priority: TodoPriority }) {
   );
 }
 
+function RegistrationReviewButtons({
+  todo,
+  onReview,
+}: {
+  todo: AgentTodo;
+  onReview: (todo: AgentTodo, approved: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1" data-registration-review="true">
+      <button
+        type="button"
+        onClick={() => onReview(todo, true)}
+        className="rounded-lg px-2 py-1 text-[11px] text-[#258a3f] hover:bg-[#eef8f1]"
+      >
+        同意
+      </button>
+      <button
+        type="button"
+        onClick={() => onReview(todo, false)}
+        className="rounded-lg px-2 py-1 text-[11px] text-[#d92d20] hover:bg-[#fff1f0]"
+      >
+        拒绝
+      </button>
+    </div>
+  );
+}
+
 function PriorityDot({ priority }: { priority: TodoPriority }) {
   return <span className="mt-1 h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: priorityConfig[priority].color }} />;
 }
@@ -1386,7 +1471,12 @@ function normalizeTodo(value: unknown, currentUserId: string, currentUserName: s
     relatedOrg: String(item.relatedOrg || ""),
     relatedMetric: String(item.relatedMetric || ""),
     confidence: Number(item.confidence || 0),
+    registrationRequestId: String(item.registrationRequestId || "").replace(/^todo_reg_/, "") || (String(item.id || "").startsWith("todo_reg_") ? String(item.id).slice("todo_reg_".length) : ""),
   };
+}
+
+function isRegistrationTodo(todo: AgentTodo) {
+  return Boolean(todo.registrationRequestId) || todo.labels.includes("注册审批") || todo.id.startsWith("todo_reg_");
 }
 
 function normalizeStatus(value: unknown): TodoStatus {

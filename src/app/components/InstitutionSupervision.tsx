@@ -22,8 +22,8 @@ import { fetchOperatingSnapshot, type OperatingSnapshot } from "../services/oper
 import { replaceVisualAnalysisSourceGroup, updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
 import { boundedVisualRows } from "./analysis-workspace/visualAnalysisScope";
 import { pageDataToSelection } from "./self-analysis/domain";
-import { PAGE_DATA_PAGE_GUTTER_CLASS, PageDataModeToggle, PageDataVisualizationModules, usePageDataComposer, type PageDataComposerController } from "./page-data/PageDataComposer";
-import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
+import { PAGE_DATA_PAGE_GUTTER_CLASS, PageDataVisualizationModules, usePageDataComposer, type PageDataComposerController } from "./page-data/PageDataComposer";
+import { StandardAnalysisPageHeader, StandardAnalysisPageStickyNote } from "./page-data/StandardAnalysisPage";
 import { useStickyNote } from "./notes/useStickyNote";
 
 type ProductFilter = "all" | "consumer" | "business";
@@ -100,7 +100,7 @@ export function InstitutionSupervision() {
     runApplicationAction({ tenantId, userId, moduleKey: "institution_supervision", action, payload }).catch(() => undefined);
 
   if (pageData.loading && !pageData.assets.length) return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} stickyNote={stickyNote} /><SupervisionState message="正在读取机构督导页面数据…" embedded /></div>;
-  return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} stickyNote={stickyNote} /><StickyNotePanel className="mb-4" note={stickyNote.note} editing={stickyNote.editing} onChange={stickyNote.updateItems} onFinishEdit={stickyNote.finishEdit} onStartEdit={() => stickyNote.setEditing(true)} onHide={stickyNote.hide} uploadContext={stickyNote.uploadContext} />{pageData.visibleAssets.length > 0 && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} showAssetPicker />}{!pageData.loading && pageData.visibleAssets.length === 0 && <SupervisionState message={notice || "请先在数据管理的「单机构页面」中把数据集放到机构督导。"} embedded />}</div>;
+  return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} stickyNote={stickyNote} /><StandardAnalysisPageStickyNote stickyNote={stickyNote} />{pageData.visibleAssets.length > 0 && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} showAssetPicker />}{!pageData.loading && pageData.visibleAssets.length === 0 && <SupervisionState message={notice || "请先在站内数据的「单机构页面」中把数据集放到机构督导。"} embedded />}</div>;
 }
 
 
@@ -141,7 +141,7 @@ function relativeRadar(selected: BranchFacts, branches: BranchFacts[]) {
 }
 
 function SupervisionHeader({ controller, canEditLayout, stickyNote }: { controller: PageDataComposerController; canEditLayout: boolean; stickyNote: ReturnType<typeof useStickyNote> }) {
-  return <div className="mb-6 flex items-start justify-between gap-3"><div><h2 className="text-[18px] text-[#1d1d1f] tracking-tight">机构督导</h2><p className="mt-1 text-[13px] text-[#aeaeb2]">展示数据管理「单机构页面」中放到机构督导的数据集</p></div><div className="flex items-center gap-2"><StickyNoteButton onClick={stickyNote.show} />{canEditLayout && <PageDataModeToggle controller={controller} />}</div></div>;
+  return <StandardAnalysisPageHeader title="机构督导" description="展示站内数据「单机构页面」中放到机构督导的数据集" stickyNote={stickyNote} editController={controller} canEditLayout={canEditLayout} headerDataAttribute="institution-supervision" />;
 }
 
 function SupervisionState({ message, embedded = false }: { message: string; embedded?: boolean }) {

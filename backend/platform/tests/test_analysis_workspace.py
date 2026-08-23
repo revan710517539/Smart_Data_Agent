@@ -59,6 +59,72 @@ class AnalysisWorkspaceTest(unittest.TestCase):
         threads = self.service.threads("tenant-a", "user-a", workspace["workspace_id"])
         self.assertEqual(next(item for item in threads if item["thread_id"] == branch["thread_id"])["status"], "merged")
 
+    def test_new_root_thread_keeps_previous_turns_across_reensure(self) -> None:
+        workspace = self.service.ensure_workspace("tenant-a", "user-a", "self-analysis", AnalysisWorkspaceContext(page_key="self-analysis"))
+        root = self.service.threads("tenant-a", "user-a", workspace["workspace_id"])[0]
+        self.service.append_turn(
+            "tenant-a", "user-a", root["thread_id"],
+            {"question": "分析一下这个数据", "answer": "经营贷逾期上行", "status": "completed"},
+        )
+        fresh = self.service.branch(
+            "tenant-a", "user-a", workspace["workspace_id"],
+            parent_thread_id=None, title="新分析", anchor={"command": "new"},
+        )
+        self.assertIsNone(fresh["parent_thread_id"])
+        restored = self.service.ensure_workspace("tenant-a", "user-a", "self-analysis", AnalysisWorkspaceContext(page_key="self-analysis"))
+        threads = self.service.threads("tenant-a", "user-a", restored["workspace_id"])
+        self.assertEqual(restored["workspace_id"], workspace["workspace_id"])
+        self.assertEqual(len(threads), 2)
+        self.assertEqual(next(item for item in threads if item["thread_id"] == root["thread_id"])["turns"][0]["answer"], "经营贷逾期上行")
+        self.assertEqual(next(item for item in threads if item["thread_id"] == fresh["thread_id"])["turns"], [])
+
+    def test_new_presentation_session_starts_empty_and_preserves_prior_conclusion(self) -> None:
+        first = self.service.ensure_workspace(
+            "tenant-a", "user-a", "dashboard:analysis_session_first", AnalysisWorkspaceContext(page_key="dashboard")
+        )
+        first_root = self.service.threads("tenant-a", "user-a", first["workspace_id"])[0]
+        self.service.append_turn(
+            "tenant-a", "user-a", first_root["thread_id"],
+            {"question": "为什么五月份降下来了", "answer": "结论已存档", "status": "completed"},
+        )
+
+        second = self.service.ensure_workspace(
+            "tenant-a", "user-a", "dashboard:analysis_session_second", AnalysisWorkspaceContext(page_key="dashboard")
+        )
+        second_threads = self.service.threads("tenant-a", "user-a", second["workspace_id"])
+        archived_threads = self.service.threads("tenant-a", "user-a", first["workspace_id"])
+
+        self.assertNotEqual(first["workspace_id"], second["workspace_id"])
+        self.assertEqual(second_threads[0]["turns"], [])
+        self.assertEqual(archived_threads[0]["turns"][0]["answer"], "结论已存档")
+
+    def test_archive_thread_hides_history_but_keeps_last_root(self) -> None:
+        workspace = self.service.ensure_workspace("tenant-a", "user-a", "self-analysis", AnalysisWorkspaceContext(page_key="self-analysis"))
+        root = self.service.threads("tenant-a", "user-a", workspace["workspace_id"])[0]
+        branch = self.service.branch(
+            "tenant-a", "user-a", workspace["workspace_id"],
+            parent_thread_id=root["thread_id"], title="主分析视图 · 条形图", anchor={},
+        )
+        archived = self.service.archive_thread("tenant-a", "user-a", branch["thread_id"])
+        self.assertEqual(archived["status"], "archived")
+        with self.assertRaisesRegex(ValueError, "last_active"):
+            self.service.archive_thread("tenant-a", "user-a", root["thread_id"])
+        remaining = [item for item in self.service.threads("tenant-a", "user-a", workspace["workspace_id"]) if item["status"] != "archived"]
+        self.assertEqual([item["thread_id"] for item in remaining], [root["thread_id"]])
+
+    def test_same_page_key_is_isolated_per_user(self) -> None:
+        first = self.service.ensure_workspace("tenant-a", "user-a", "self-analysis", AnalysisWorkspaceContext(page_key="self-analysis"))
+        second = self.service.ensure_workspace("tenant-a", "user-b", "self-analysis", AnalysisWorkspaceContext(page_key="self-analysis"))
+        self.assertNotEqual(first["workspace_id"], second["workspace_id"])
+        self.assertEqual(first["workspace_key"], "self-analysis")
+        self.assertEqual(second["workspace_key"], "self-analysis:user-b")
+        self.service.append_turn(
+            "tenant-a", "user-a", self.service.threads("tenant-a", "user-a", first["workspace_id"])[0]["thread_id"],
+            {"question": "owner question", "answer": "owner answer", "status": "completed"},
+        )
+        other_threads = self.service.threads("tenant-a", "user-b", second["workspace_id"])
+        self.assertEqual(other_threads[0]["turns"], [])
+
     def test_cross_user_and_cross_workspace_operations_fail_closed(self) -> None:
         first = self.service.ensure_workspace("tenant-a", "user-a", "dashboard", self.context)
         second = self.service.ensure_workspace("tenant-a", "user-a", "dashboard:other", AnalysisWorkspaceContext(page_key="dashboard"))
@@ -589,7 +655,7 @@ class AnalysisWorkspaceTest(unittest.TestCase):
         finally:
             services.close()
 
-    def test_rail_brief_follow_up_returns_short_summary_and_chart_spec(self) -> None:
+    def test_rail_concise_follow_up_returns_short_summary_and_runtime_chain(self) -> None:
         services = build_local_platform()
         try:
             result = run_analysis(
@@ -600,7 +666,7 @@ class AnalysisWorkspaceTest(unittest.TestCase):
                 page_context={
                     "visual_analysis_scope": "chart",
                     "chart_bound_source": True,
-                    "analysis_policy": {"resultFormat": "brief_visual", "resultDelivery": "data_first"},
+                    "analysis_policy": {"resultFormat": "concise_visual", "resultDelivery": "planned_analysis"},
                     "selected_data_point": {
                         "targetType": "chart",
                         "targetId": "chart-1",
@@ -628,7 +694,14 @@ class AnalysisWorkspaceTest(unittest.TestCase):
             self.assertTrue(spec.get("chart_type"))
             self.assertTrue(spec.get("x") or spec.get("y"))
             invocation = result["intelligent_analysis"]["model_invocation"]
-            self.assertEqual(invocation.get("reason"), "brief_visual_follow_up")
+            self.assertEqual(invocation.get("status"), "skipped")
+            self.assertIn("未选择模型", invocation.get("message", ""))
+            runtime = result["intelligent_analysis"]["runtime_chain"]
+            self.assertEqual(runtime["engine"], "IntelligentAnalysisEngine")
+            self.assertEqual(runtime["dataset_scope"], "chart")
+            self.assertEqual([item["code"] for item in runtime["stages"]], [
+                "scene_intent", "analysis_plan", "skill_dispatch", "memory_fusion", "evidence_query", "result_synthesis",
+            ])
         finally:
             services.close()
 

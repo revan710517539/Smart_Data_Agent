@@ -1,0 +1,13 @@
+{
+  "skill_id": "data.analysis.predictive",
+  "skill_name": "预测分析",
+  "skill_type": "analysis_method",
+  "description": "检查时序质量后生成短期统计基线、区间、假设与失效条件。",
+  "input_schema": {"data": "array", "analysis_plan": "object", "semantic_info": "object"},
+  "output_schema": {"analysis_method": "object"},
+  "permission_scope": ["analysis:run"],
+  "runtime_type": "python",
+  "risk_level": "low",
+  "version": "1.0.0",
+  "owner": "smart-data-agent"
+}

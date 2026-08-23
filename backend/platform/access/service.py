@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Any
 
 from backend.authz import SUPER_ADMIN_ROLE_ID, SUPER_ADMIN_USER_ID, normalize_tenant_id, tenant_role_id
@@ -18,6 +19,7 @@ PERMISSION_MENU_LABELS = [
     "经营分析",
     "经营周报",
     "机构督导",
+    "分客群分析",
     "市场洞察",
     "客群分析",
     "竞品分析",
@@ -31,7 +33,7 @@ PERMISSION_MENU_LABELS = [
     "数据资产",
     "指标字典",
     "知识记忆",
-    "数据管理",
+    "站内数据",
     "质量监控",
     "推送与订阅",
     "预警规则",
@@ -59,9 +61,10 @@ PERMISSION_DATA_SCOPES = [
 _MENU_LABEL_TO_KEYS = {
     "多机构分析": {"dashboard"},
     "管理驾驶舱": {"dashboard"},
-    "经营分析": {"business-analysis", "business-analysis.weekly-report", "business-analysis.supervision"},
+    "经营分析": {"business-analysis", "business-analysis.weekly-report", "business-analysis.supervision", "business-analysis.customer-segment"},
     "经营周报": {"business-analysis.weekly-report"},
     "机构督导": {"business-analysis.supervision"},
+    "分客群分析": {"business-analysis.customer-segment"},
     "市场洞察": {"market-customer", "market-customer.segment", "market-customer.competition"},
     "市场与客户洞察": {"market-customer", "market-customer.segment", "market-customer.competition"},
     "客群分析": {"market-customer.segment"},
@@ -78,6 +81,7 @@ _MENU_LABEL_TO_KEYS = {
     "数据资产": {"data-assets", "data-assets.metrics", "data-assets.knowledge", "data-assets.data-management", "data-assets.quality"},
     "指标字典": {"data-assets.metrics"},
     "知识记忆": {"data-assets.knowledge"},
+    "站内数据": {"data-assets.data-management"},
     "数据管理": {"data-assets.data-management"},
     "质量监控": {"data-assets.quality"},
     "推送与订阅": {"notifications", "notifications.alerts", "notifications.subscriptions", "notifications.history"},
@@ -149,13 +153,15 @@ class AccessControlService:
             if role.level == RoleLevel.SUPER_ADMIN or role.tenant_id in (context.tenant_id, None, "*")
         ]
 
-    def login_by_email(self, email: str, tenant_hint: str | None = None) -> dict[str, Any]:
-        email = email.strip().lower()
-        if not email:
+    def login_by_email(self, email: str, tenant_hint: str | None = None, *, password: str | None = None) -> dict[str, Any]:
+        contact = str(email or "").strip()
+        if not contact:
             raise ValueError("email is required.")
-        profile = self.user_store.get_profile_by_email(email)
+        profile = self.find_profile_by_contact(contact)
         if profile is None or profile.status != "active":
             raise ValueError("用户不存在或已停用。")
+        if password is not None and not self.verify_password(profile.user_id, password):
+            raise ValueError("invalid_login_credentials")
         profile = UserProfile(
             user_id=profile.user_id,
             name=profile.name,
@@ -204,6 +210,182 @@ class AccessControlService:
             [RoleAssignment(saved.user_id, tenant_id, operator_role.role_id, granted_by=saved.user_id)],
         )
         return self._session_payload_for_profile(saved, tenant_hint=tenant_id)
+
+    def submit_registration_request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("user must be an object.")
+        email = str(payload.get("email") or "").strip().lower()
+        phone = _normalize_phone(payload.get("phone") or payload.get("mobile") or "")
+        if not email and _looks_like_email(str(payload.get("contact") or payload.get("account") or "")):
+            email = str(payload.get("contact") or payload.get("account") or "").strip().lower()
+        if not phone:
+            phone = _normalize_phone(payload.get("contact") or payload.get("account") or "")
+        if email and not _looks_like_email(email):
+            if not phone:
+                phone = _normalize_phone(email)
+            email = ""
+        if not email and not phone:
+            raise ValueError("registration_contact_required")
+        institution = str(payload.get("institution") or payload.get("tenant") or "").strip()
+        known = _known_tenant_labels(self.policy_repository.list_roles())
+        if not institution:
+            raise ValueError("registration_institution_required")
+        if institution not in known:
+            raise ValueError("registration_institution_unknown")
+        tenant_id = _tenant_id_from_label(institution)
+        operator_role = self._find_role_by_name(tenant_id, "操作员")
+        if operator_role is None:
+            raise ValueError(f"机构默认操作员角色不存在，请检查：{institution}")
+        contact_email = email or _phone_contact_email(phone)
+        name = str(payload.get("name") or "").strip() or _default_registration_name(contact_email, phone)
+        existing = self.find_profile_by_contact(email or phone)
+        if existing is not None:
+            if existing.status == "invited":
+                raise ValueError("registration_already_pending")
+            if existing.status == "active":
+                raise ValueError("用户邮箱已存在，请直接登录或由管理员授权。")
+        profile = UserProfile(
+            user_id=existing.user_id if existing is not None else _allocate_user_id(self.user_store, contact_email),
+            name=name,
+            department=institution,
+            email=contact_email,
+            status="invited",
+            last_login="未登录",
+        )
+        saved = self._upsert_profile(profile)
+        self.set_account_password(saved.user_id, payload.get("password"))
+        return {
+            "status": "pending_approval",
+            "request_id": saved.user_id,
+            "institution": institution,
+            "tenant_id": tenant_id,
+            "contact": email or phone,
+            "name": saved.name,
+            "role": "操作员",
+            "message": "注册申请已提交，请等待超级管理员在待办任务中同意。同意后将开通所选机构操作员权限；如需管理员权限，请联系超级管理员。",
+        }
+
+    def list_pending_registrations(self) -> list[dict[str, Any]]:
+        pending: list[dict[str, Any]] = []
+        for profile in self.user_store.list_profiles():
+            if profile.status != "invited":
+                continue
+            pending.append(self._registration_record(profile))
+        return sorted(pending, key=lambda item: item["name"])
+
+    def review_registration(self, context: ExecutionContext, request_id: str, *, approved: bool) -> dict[str, Any]:
+        if not self._is_super_admin(context.user_id):
+            raise PermissionError("global_super_admin_required")
+        user_id = str(request_id or "").strip().removeprefix("todo_reg_")
+        if not user_id:
+            raise ValueError("registration_not_found")
+        profile = self.user_store.get_profile(user_id)
+        if profile is None or profile.status != "invited":
+            raise ValueError("registration_not_pending")
+        institution = str(profile.department or "").strip()
+        tenant_id = _tenant_id_from_label(institution)
+        if approved:
+            operator_role = self._find_role_by_name(tenant_id, "操作员")
+            if operator_role is None:
+                raise ValueError(f"机构默认操作员角色不存在，请检查：{institution}")
+            activated = self._upsert_profile(
+                UserProfile(
+                    user_id=profile.user_id,
+                    name=profile.name,
+                    department=profile.department,
+                    email=profile.email,
+                    status="active",
+                    last_login="未登录",
+                )
+            )
+            self.policy_repository.replace_user_assignments(
+                activated.user_id,
+                [RoleAssignment(activated.user_id, tenant_id, operator_role.role_id, granted_by=context.user_id)],
+            )
+            return {
+                "status": "approved",
+                "request_id": activated.user_id,
+                "user": self._session_payload_for_profile(activated, tenant_hint=tenant_id),
+                "message": "已同意注册申请，账号已开通所选机构操作员权限。",
+            }
+        self._upsert_profile(
+            UserProfile(
+                user_id=profile.user_id,
+                name=profile.name,
+                department=profile.department,
+                email=profile.email,
+                status="inactive",
+                last_login=profile.last_login,
+            )
+        )
+        return {
+            "status": "rejected",
+            "request_id": profile.user_id,
+            "message": "已拒绝注册申请，该账号不会开通。",
+        }
+
+    def find_profile_by_contact(self, contact: str) -> Any:
+        text = str(contact or "").strip()
+        if not text:
+            return None
+        if _looks_like_email(text):
+            return self.user_store.get_profile_by_email(text.lower())
+        phone = _normalize_phone(text)
+        if not phone:
+            return self.user_store.get_profile_by_email(text.lower())
+        by_phone_email = self.user_store.get_profile_by_email(_phone_contact_email(phone))
+        if by_phone_email is not None:
+            return by_phone_email
+        return self.user_store.get_profile_by_email(text.lower())
+
+    def registration_todos(self) -> list[dict[str, Any]]:
+        return [self._registration_todo(item) for item in self.list_pending_registrations()]
+
+    def _registration_record(self, profile: UserProfile) -> dict[str, Any]:
+        institution = str(profile.department or "").strip()
+        contact = profile.email
+        if contact.endswith("@users.sda.invalid"):
+            contact = contact.split("@", 1)[0].removeprefix("phone.")
+        return {
+            "request_id": profile.user_id,
+            "name": profile.name,
+            "email": profile.email,
+            "contact": contact,
+            "institution": institution,
+            "tenant_id": _tenant_id_from_label(institution),
+            "role": "操作员",
+            "status": "invited",
+        }
+
+    def _registration_todo(self, record: dict[str, Any]) -> dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        institution = str(record.get("institution") or "")
+        name = str(record.get("name") or "")
+        contact = str(record.get("contact") or record.get("email") or "")
+        return {
+            "id": f"todo_reg_{record['request_id']}",
+            "title": f"注册申请：{name}（{institution}）",
+            "description": (
+                f"{name}申请加入{institution}，联系方式为{contact}。"
+                "同意后开通该机构操作员权限；拒绝则申请失败。"
+                "如需管理员或其他角色，请申请人联系超级管理员。"
+            ),
+            "status": "todo",
+            "priority": "high",
+            "dueDate": now[:10],
+            "assignee": "超级管理员",
+            "assigneeUserId": SUPER_ADMIN_USER_ID,
+            "listName": "注册审批",
+            "labels": ["注册审批"],
+            "source": "system",
+            "ownerUserId": SUPER_ADMIN_USER_ID,
+            "createdBy": SUPER_ADMIN_USER_ID,
+            "createdAt": now,
+            "updatedAt": now,
+            "relatedOrg": institution,
+            "suggestion": "同意则开通操作员；拒绝则注册失败。",
+            "registrationRequestId": record["request_id"],
+        }
 
     def list_role_permissions(self, context: ExecutionContext) -> list[dict[str, Any]]:
         self._require_tenant_manager(context, context.tenant_id)
@@ -355,6 +537,42 @@ class AccessControlService:
         for assignment in self.policy_repository.list_user_assignments():
             grouped[assignment.user_id].append(assignment)
         return grouped
+
+    def verify_password(self, user_id: str, password: str) -> bool:
+        from .passwords import DEFAULT_ACCOUNT_PASSWORD, hash_password, verify_password
+
+        stored = self.user_store.get_password_hash(user_id)
+        if stored:
+            return verify_password(stored, password)
+        if str(password or "") != DEFAULT_ACCOUNT_PASSWORD:
+            return False
+        self.user_store.set_password_hash(user_id, hash_password(DEFAULT_ACCOUNT_PASSWORD))
+        return True
+
+    def set_account_password(self, user_id: str, password: Any = None) -> None:
+        from .passwords import DEFAULT_ACCOUNT_PASSWORD, MIN_PASSWORD_LENGTH, hash_password
+
+        text = str(password or "").strip() or DEFAULT_ACCOUNT_PASSWORD
+        if len(text) < MIN_PASSWORD_LENGTH:
+            raise ValueError("password_new_too_short")
+        self.user_store.set_password_hash(user_id, hash_password(text))
+
+    def change_password(self, user_id: str, current_password: str, new_password: str) -> None:
+        from .passwords import MIN_PASSWORD_LENGTH, hash_password
+
+        current = str(current_password or "")
+        incoming = str(new_password or "").strip()
+        if not current:
+            raise ValueError("password_current_required")
+        if not incoming:
+            raise ValueError("password_new_required")
+        if len(incoming) < MIN_PASSWORD_LENGTH:
+            raise ValueError("password_new_too_short")
+        if incoming == current:
+            raise ValueError("password_new_same_as_current")
+        if not self.verify_password(user_id, current):
+            raise ValueError("password_current_incorrect")
+        self.user_store.set_password_hash(user_id, hash_password(incoming))
 
     def _upsert_profile(self, profile: UserProfile) -> UserProfile:
         try:
@@ -906,6 +1124,32 @@ def _merge_user_assignments(
     incoming_tenants = {assignment.tenant_id for assignment in incoming}
     preserved = [assignment for assignment in existing if assignment.tenant_id not in incoming_tenants]
     return _dedupe_assignments([*preserved, *incoming])
+
+
+def _looks_like_email(value: str) -> bool:
+    text = str(value or "").strip()
+    if "@" not in text or text.startswith("@") or text.endswith("@"):
+        return False
+    local, _, domain = text.partition("@")
+    return bool(local) and "." in domain
+
+
+def _normalize_phone(value: Any) -> str:
+    digits = re.sub(r"\D+", "", str(value or ""))
+    if 7 <= len(digits) <= 15:
+        return digits
+    return ""
+
+
+def _phone_contact_email(phone: str) -> str:
+    return f"phone.{phone}@users.sda.invalid"
+
+
+def _default_registration_name(email: str, phone: str) -> str:
+    if phone:
+        return f"用户{phone[-4:]}"
+    local = email.split("@", 1)[0].strip()
+    return local or "新用户"
 
 
 def _user_id_from_email(email: str) -> str:

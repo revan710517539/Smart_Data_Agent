@@ -43,14 +43,5 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.lock
       - run: python -m pip install -c requirements.lock -e '.[dev]'
-      - run: npm run typecheck
-      - run: python scripts/check_frontend_module_size.py
-      - run: python scripts/check_server_deployment_contract.py
-      - run: python scripts/generate_api_client.py --check
-      - run: npm run build
-      - run: python -m unittest discover backend -p 'test_*.py' -v
-      - run: node scripts/frontend-permission-smoke.mjs
-      - run: python scripts/generate_database_schema.py --check
-      - run: python scripts/check_mysql_sql_closure.py
-      - run: python -m pip_audit -r requirements.lock
-      - run: docker build -t smart-data-agent:${{ github.sha }} .
+      - run: ./scripts/release-gate.sh
+      - run: ./scripts/build-image.sh ${{ github.sha }}

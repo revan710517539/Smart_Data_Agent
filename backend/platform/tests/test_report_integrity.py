@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 
 from backend.platform.api.server import create_server
 from backend.platform.bootstrap import build_local_platform
+from backend.platform.orchestration import AnalysisTask
 from backend.platform.reports import WeeklyReportLearningEngine
 from backend.platform.reports.store import CommentRevisionConflict
 
@@ -315,6 +316,98 @@ class ReportIntegrityTest(unittest.TestCase):
                 )
                 self.assertEqual(approved[0], 200)
                 self.assertEqual(approved[1]["learning_candidate"]["status"], "applied")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+
+    def test_http_saved_analysis_accepts_text_cards_and_save_weekly(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/platform.sqlite")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                task = AnalysisTask(
+                    question="分析华兴数据",
+                    task_type="simple_metric_query",
+                    tenant_id="tenant_demo",
+                    user_id="u_super_admin",
+                    status="completed",
+                    execution_mode="real",
+                    skill_results=[{
+                        "data": [{"branch": "华兴", "amount": 12}],
+                        "semantic_info": {"execution_mode": "selected_raw_csv"},
+                    }],
+                )
+                server.services.task_repository.save_task(task)
+                port = server.server_address[1]
+                saved = _request(
+                    port,
+                    "POST",
+                    "/api/reports/analysis-result",
+                    {
+                        "result": {
+                            "id": "analysis_weekly_text",
+                            "title": "华兴数据分析",
+                            "query": "分析华兴数据",
+                            "plan": "按机构看趋势",
+                            "summary": "放款回升。",
+                            "visualTypes": {"primary": "column", "secondary": "table"},
+                            "savedAt": "2026-08-22 14:04:00",
+                            "analysisTaskId": task.task_id,
+                            "visualizations": [
+                                {"id": "primary", "key": "primary", "title": "主分析视图 · 柱状图", "type": "column"},
+                                {"id": "secondary", "key": "secondary", "title": "补充分析视图 · 多维表格", "type": "table"},
+                                {
+                                    "id": "note-1",
+                                    "title": "结论",
+                                    "type": "text",
+                                    "config": {
+                                        "metricFields": [],
+                                        "dimensionFields": [],
+                                        "filters": {},
+                                        "filterGroups": [],
+                                        "sumFilteredRows": False,
+                                        "comboLineFields": [],
+                                        "noteTitle": "结论",
+                                        "noteBody": "放款回升。",
+                                    },
+                                },
+                            ],
+                        }
+                    },
+                    "u_super_admin",
+                )
+                self.assertEqual(saved[0], 200, saved[1])
+                self.assertEqual(saved[1]["result"]["visualizations"][2]["type"], "text")
+                weekly = _request(
+                    port,
+                    "POST",
+                    "/api/reports/analysis-result/save-weekly",
+                    {"result_id": "analysis_weekly_text"},
+                    "u_super_admin",
+                )
+                self.assertEqual(weekly[0], 200, weekly[1])
+                self.assertTrue(weekly[1]["result"]["weeklyReportEligible"])
+                rejected = _request(
+                    port,
+                    "POST",
+                    "/api/reports/analysis-result",
+                    {
+                        "result": {
+                            "id": "analysis_weekly_bad",
+                            "title": "无效图表",
+                            "analysisTaskId": task.task_id,
+                            "visualizations": [{"id": "visual-1", "type": "unsupported"}],
+                        }
+                    },
+                    "u_super_admin",
+                )
+                self.assertEqual(rejected[0], 400)
+                self.assertEqual(rejected[1]["error"], "invalid_request")
+                self.assertIn("图表", rejected[1]["message"])
+                self.assertNotEqual(rejected[1]["message"], "The request failed validation.")
             finally:
                 server.shutdown()
                 server.server_close()

@@ -13,7 +13,7 @@ from urllib.parse import urlparse, urlunparse
 from urllib.request import Request
 
 import certifi
-from backend.platform.security import EgressPolicyError, safe_urlopen
+from backend.platform.security import EgressPolicyError, classify_egress_policy_error, safe_urlopen
 
 # Runtime integration check; do not let pytest collect the public helper merely
 # because this compatibility module ends in ``_test.py``.
@@ -316,26 +316,26 @@ def _result(
 
 
 def _classify_egress_policy_error(exc: EgressPolicyError) -> tuple[str, str, bool]:
-    detail = str(exc).strip()
-    if "cannot be resolved" in detail:
+    code, message, transient = classify_egress_policy_error(exc)
+    if code == "dns_resolution_failed":
+        if "cannot be resolved" in str(exc):
+            return (
+                code,
+                "模型地址域名无法解析：默认中转站是企业内部域名，后端需要走本机 Clash 代理（HTTPS_PROXY=http://127.0.0.1:7897）或企业 DNS/VPN。",
+                transient,
+            )
         return (
-            "dns_resolution_failed",
-            "模型地址域名无法解析：运行 Smart Data Agent 后端的服务器无法解析该地址。请在该服务器接入企业 DNS/VPN，或改用该服务器可解析的企业网关 API 地址后重试。",
-            False,
-        )
-    if "has no resolved address" in detail:
-        return (
-            "dns_resolution_failed",
+            code,
             "运行 Smart Data Agent 后端的服务器未获得模型地址的解析结果。请检查企业 DNS/VPN 或网关地址后重试。",
-            False,
+            transient,
         )
-    if "scheme must be" in detail:
-        return "egress_policy_rejected", "模型地址协议不符合服务端出站安全策略，请使用允许的 http/https 地址。", False
-    if "blocked address" in detail:
-        return "egress_policy_rejected", "模型地址解析到内网或受限地址，已被服务端出站安全策略拦截。", False
-    if "not allowlisted" in detail:
-        return "egress_policy_rejected", "模型地址不在服务端出站白名单内。", False
-    return "egress_policy_rejected", "模型地址不符合服务端出站安全策略。", False
+    if "scheme must be" in str(exc):
+        return code, "模型地址协议不符合服务端出站安全策略，请使用允许的 http/https 地址。", transient
+    if "blocked address" in str(exc):
+        return code, "模型地址解析到内网或受限地址，已被服务端出站安全策略拦截。", transient
+    if "not allowlisted" in str(exc):
+        return code, "模型地址不在服务端出站白名单内。", transient
+    return code, "模型地址不符合服务端出站安全策略。", transient
 
 
 def _egress_policy_message(exc: EgressPolicyError) -> str:
@@ -535,6 +535,7 @@ def _request_json(
             timeout=request_timeout,
             context=ssl.create_default_context(cafile=certifi.where()),
             allowed_schemes=_model_allowed_schemes(),
+            private_host_exceptions=("*.qihoo.net",),
         ) as response:
             raw = response.read(256_000)
     except HTTPError as exc:
@@ -656,6 +657,8 @@ def _classify_model_test_error(exc: Exception) -> tuple[str, str, bool]:
     if any(f"provider_http_{code}" in detail for code in range(500, 600)):
         return "provider_unavailable", "模型服务暂时不可用，请稍后重试；已保留上次成功配置。", True
     if "provider_unreachable" in detail:
+        if os.getenv("SMART_DATA_AGENT_EGRESS_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("https_proxy"):
+            return "provider_unreachable", "无法经本机企业代理连接模型地址。请确认 Clash 已开启，或检查中转站地址后重试；已保留上次成功配置。", True
         return "provider_unreachable", "模型服务当前无法连接，请检查网络后重试；已保留上次成功配置。", True
     if "provider_http_404" in detail:
         return "endpoint_not_found", "模型 API 地址未找到兼容的模型列表或对话接口，请检查地址。", False

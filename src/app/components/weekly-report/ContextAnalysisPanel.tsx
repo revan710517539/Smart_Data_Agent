@@ -161,7 +161,7 @@ export function WeeklyContextAnalysisPanel({
     setAnalysisError("");
     setActiveResultTab("thinking");
     setCollapsed(false);
-    if (!target?.selectedText?.trim()) window.setTimeout(() => inputRef.current?.focus(), 0);
+    if (!target?.selectedText?.trim()) window.setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 0);
   }, [target?.id, overallPrompt]);
 
   useEffect(() => {

@@ -8,6 +8,7 @@ from typing import Any, Iterator
 
 from backend.platform.database.identity import PostgreSQLIdentityResolver
 from backend.platform.database.postgresql import PostgreSQLConnectionPool
+from backend.platform.memory.fusion import MEMORY_ASSET_TYPES, prepare_asset_fusion
 
 from .store import (
     ASSET_BUNDLE_KEYS,
@@ -95,6 +96,16 @@ class PostgreSQLDataAssetStore:
     def seed_defaults(self, tenant_id: str, updated_by: str = "development_seed") -> None:
         raise RuntimeError("production_data_assets_must_be_explicitly_imported_and_reviewed")
 
+    def seed_missing_defaults(self, tenant_id: str, updated_by: str = "u_super_admin") -> None:
+        from .store import PLATFORM_ANALYSIS_SKILL_IDS, analysis_skill_template
+
+        for skill_id in PLATFORM_ANALYSIS_SKILL_IDS:
+            if self.get_item(tenant_id, "analysis_skill", skill_id) is not None:
+                continue
+            template = analysis_skill_template(skill_id)
+            if template:
+                self.upsert_item(tenant_id, "analysis_skill", template, updated_by=updated_by, lifecycle_status="active")
+
     def upsert_item(
         self,
         tenant_id: str,
@@ -102,8 +113,18 @@ class PostgreSQLDataAssetStore:
         item: dict[str, Any],
         updated_by: str | None = None,
         lifecycle_status: str | None = None,
+        *,
+        consolidate_existing: bool = False,
     ) -> dict[str, Any]:
-        normalized = _normalize_item(item_type, item, updated_by)
+        bundle_key = ASSET_BUNDLE_KEYS.get(item_type, "") if item_type in MEMORY_ASSET_TYPES else ""
+        current_items = self._bundle(tenant_id, published=False).get(bundle_key, []) if bundle_key else []
+        fusion = prepare_asset_fusion(
+            item_type,
+            item,
+            current_items,
+            consolidate_existing=consolidate_existing,
+        )
+        normalized = _normalize_item(item_type, fusion.item, updated_by)
         _validate_asset_schema(item_type, normalized)
         status = _asset_status(lifecycle_status)
         if not updated_by:
@@ -146,6 +167,27 @@ class PostgreSQLDataAssetStore:
                 )
                 returned_item = cursor.fetchone()
                 item_key = _value(returned_item, "asset_item_id", 0)
+                for duplicate_id in fusion.duplicate_ids:
+                    cursor.execute(
+                        """
+                        UPDATE platform_data_asset_items
+                        SET status = 'archived', updated_at = now(), lock_version = lock_version + 1
+                        WHERE tenant_id = %s AND item_type = %s AND item_code = %s
+                          AND status <> 'archived'
+                        RETURNING asset_item_id
+                        """,
+                        (tenant_key, item_type, duplicate_id),
+                    )
+                    duplicate = cursor.fetchone()
+                    if duplicate:
+                        cursor.execute(
+                            """
+                            UPDATE platform_data_asset_versions
+                            SET status = 'archived', updated_at = now(), lock_version = lock_version + 1
+                            WHERE asset_item_id = %s AND status IN ('draft', 'review', 'active')
+                            """,
+                            (_value(duplicate, "asset_item_id", 0),),
+                        )
                 if status == "active" and item_type == "topic_table":
                     self._publish_topic_table(
                         connection,
@@ -197,7 +239,7 @@ class PostgreSQLDataAssetStore:
             tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
             rows = self._rows(
                 connection,
-                "i.tenant_id = %s AND i.item_type = %s AND i.item_code = %s",
+                "i.tenant_id = %s AND i.item_type = %s AND i.item_code = %s AND i.status <> 'archived'",
                 (tenant_key, item_type, item_id),
                 published=False,
             )

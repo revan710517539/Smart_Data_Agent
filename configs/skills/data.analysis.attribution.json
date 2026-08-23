@@ -1,0 +1,13 @@
+{
+  "skill_id": "data.analysis.attribution",
+  "skill_name": "归因分析",
+  "skill_type": "analysis_method",
+  "description": "建立对比基线并拆解维度贡献，明确区分贡献、相关与因果。",
+  "input_schema": {"data": "array", "analysis_plan": "object", "semantic_info": "object"},
+  "output_schema": {"analysis_method": "object"},
+  "permission_scope": ["analysis:run"],
+  "runtime_type": "python",
+  "risk_level": "low",
+  "version": "1.0.0",
+  "owner": "smart-data-agent"
+}

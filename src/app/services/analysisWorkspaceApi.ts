@@ -126,6 +126,14 @@ export async function appendAnalysisTurn(
   });
 }
 
+export async function archiveAnalysisThread(threadId: string, context: ApiContextParams) {
+  return apiRequest<{ thread: AnalysisThread }>("/api/analysis/threads/archive", {
+    method: "POST",
+    context,
+    body: { thread_id: threadId },
+  });
+}
+
 export async function mergeAnalysisThreads(
   targetThreadId: string,
   sourceThreadIds: string[],

@@ -17,6 +17,15 @@ MYSQL_SCHEMA_VERSION = "0001"
 MYSQL_SCHEMA_PATH = Path(__file__).resolve().parent / "mysql" / "0001_production_schema.sql"
 MYSQL_ADDITIVE_MIGRATION_DIR = Path(__file__).resolve().parent / "mysql" / "migrations"
 MYSQL_MIGRATION_LOCK = "smart_data_agent_schema_migration"
+# These exact hashes were applied by the immediately preceding repository
+# revision before MySQL 8.0.18-compatible datetime defaults were corrected.
+# They are schema-equivalent for already-created databases. Unknown drift still
+# fails closed, and new installations always record the current file hashes.
+MYSQL_COMPATIBLE_LEGACY_CHECKSUMS = {
+    "0001": frozenset({"7c65ac31c6878bb1b11f0095887903251e29ceddae1f85d3328a4c512afbdf3d"}),
+    "0029": frozenset({"a0ad5a5c7c8ed85def743ba5c4a22f7d8dc1f5a9c839407eae8253d06910df36"}),
+    "0031": frozenset({"b1d0e919ddae36ccc8240bb4d054ada2f40f8dcde08a8c661ffa0888ce4cd35e"}),
+}
 
 
 class MySQLMigrationError(RuntimeError):
@@ -219,7 +228,7 @@ def apply_mysql_schema(
             row = cursor.fetchone()
             baseline_applied = False
             if row:
-                if str(_value(row, "checksum", 0)) != checksum:
+                if not _checksum_matches(MYSQL_SCHEMA_VERSION, str(_value(row, "checksum", 0)), checksum):
                     raise MySQLMigrationError("mysql_schema_checksum_drift")
             else:
                 cursor.execute(
@@ -275,7 +284,7 @@ def _apply_mysql_additive_migrations(cursor: Any) -> None:
         cursor.execute("SELECT checksum FROM platform_schema_migrations WHERE version=%s", (version,))
         row = cursor.fetchone()
         if row:
-            if str(_value(row, "checksum", 0)) != checksum:
+            if not _checksum_matches(version, str(_value(row, "checksum", 0)), checksum):
                 raise MySQLMigrationError(f"mysql_schema_checksum_drift:{version}")
             continue
         started = time.perf_counter()
@@ -285,6 +294,10 @@ def _apply_mysql_additive_migrations(cursor: Any) -> None:
             "INSERT INTO platform_schema_migrations(version,name,checksum,execution_ms) VALUES(%s,%s,%s,%s)",
             (version, path.stem, checksum, max(0, round((time.perf_counter() - started) * 1000))),
         )
+
+
+def _checksum_matches(version: str, stored: str, current: str) -> bool:
+    return stored == current or stored in MYSQL_COMPATIBLE_LEGACY_CHECKSUMS.get(str(version), frozenset())
 
 
 def split_mysql_statements(ddl: str) -> list[str]:

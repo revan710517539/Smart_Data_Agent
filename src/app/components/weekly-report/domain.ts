@@ -182,6 +182,18 @@ export type CommentTarget = {
   annotationKind?: "comment" | "analysis";
 };
 
+export function makePageCommentTarget(pageKey: string, pageTitle: string): CommentTarget {
+  const normalizedKey = pageKey.trim() || "current-page";
+  return {
+    id: `page:${normalizedKey}`,
+    contextTargetId: `page:${normalizedKey}`,
+    label: pageTitle.trim() || "当前页面",
+    type: "文本",
+    targetKind: "paragraph",
+    anchorTop: 12,
+  };
+}
+
 export function commentTargetFromRailReveal(target: {
   targetId: string;
   targetType: "chart" | "table" | "metric" | "institution" | "text";

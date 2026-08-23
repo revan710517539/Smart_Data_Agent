@@ -100,6 +100,12 @@ function routeDataTasks(path: string, { tenantId, userId }: RouteDataContext): A
   if (path.startsWith("/supervision")) {
     return [fetchPageDataWorkspace({ tenantId, userId, pageCode: "institution_supervision" })];
   }
+  if (path.startsWith("/customer-segment-analysis")) {
+    return [
+      fetchApplicationModule({ tenantId, userId, moduleKey: "customer_segment_analysis" }),
+      fetchPageDataWorkspace({ tenantId, userId, pageCode: "customer_segment_analysis" }),
+    ];
+  }
 
   const moduleKey = applicationModuleForPath(path);
   return moduleKey ? [fetchApplicationModule({ tenantId, userId, moduleKey })] : [];
@@ -109,6 +115,7 @@ function applicationModuleForPath(path: string): ApplicationModuleKey | null {
   if (path === "/dashboard") return "dashboard";
   if (path.startsWith("/weekly-report")) return "weekly_report";
   if (path.startsWith("/supervision")) return "institution_supervision";
+  if (path.startsWith("/customer-segment-analysis")) return "customer_segment_analysis";
   if (path.startsWith("/customers")) return "customer_insight";
   if (path.startsWith("/competition")) return "competition_analysis";
   if (path.startsWith("/agent/todos")) return "agent_workspace";

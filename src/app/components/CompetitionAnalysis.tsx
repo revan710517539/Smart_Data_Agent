@@ -21,6 +21,15 @@ import { apiErrorMessage } from "../services/apiClient";
 import { fetchMarketBundle, type MarketBundle, type MarketEntity, type MarketObservation } from "../services/marketApi";
 import { runApplicationAction } from "../services/applicationApi";
 import { updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
+import { useStickyNote } from "./notes/useStickyNote";
+import { PAGE_DATA_PAGE_GUTTER_CLASS } from "./page-data/PageDataComposer";
+import {
+  StandardAnalysisPageGrid,
+  StandardAnalysisPageHeader,
+  StandardAnalysisPageStickyNote,
+  useStandardAnalysisPageLayout,
+  type StandardAnalysisVisualDefinition,
+} from "./page-data/StandardAnalysisPage";
 
 type ProductView = "consumer" | "business";
 type Competitor = {
@@ -53,12 +62,25 @@ const EMPTY_MARKET: MarketBundle = {
   events: [],
 };
 
+const COMPETITION_VISUAL_DEFINITIONS: StandardAnalysisVisualDefinition[] = [
+  { id: "competitors", label: "竞品概览", defaultSpan: 12, defaultHeight: 280 },
+  { id: "radar", label: "综合竞争力", defaultSpan: 6, defaultHeight: 390 },
+  { id: "market-share", label: "市场份额对比", defaultSpan: 6, defaultHeight: 390 },
+  { id: "insights", label: "监控洞察", defaultSpan: 12, defaultHeight: 320 },
+];
+
 export function CompetitionAnalysis() {
-  const { tenantId, userId } = usePlatformContext();
+  const { tenantId, userId, isSuperAdmin } = usePlatformContext();
   const [productView, setProductView] = useState<ProductView>("consumer");
   const [market, setMarket] = useState(EMPTY_MARKET);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
+  const stickyNote = useStickyNote("competition_analysis", "competition_analysis");
+  const pageLayout = useStandardAnalysisPageLayout({ tenantId, userId, moduleKey: "competition_analysis", definitions: COMPETITION_VISUAL_DEFINITIONS });
+
+  useEffect(() => {
+    if (!isSuperAdmin) pageLayout.editController.setMode("browse");
+  }, [isSuperAdmin, pageLayout.editController.setMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,116 +128,62 @@ export function CompetitionAnalysis() {
     });
   }, [competitors, latestObservedAt, market.entities, market.observations, productView, radarData, relevantEvents]);
 
+  const productSwitch = <div
+    className="flex w-fit shrink-0 gap-px rounded-lg bg-[#f2f2f7] p-0.5"
+    role="group"
+    aria-label="竞品产品类型"
+    data-competition-product-switch="true"
+  >
+    {([
+      { key: "consumer", label: "消费贷竞品", icon: CreditCard },
+      { key: "business", label: "经营贷竞品", icon: Landmark },
+    ] as const).map((tab) => (
+      <button
+        key={tab.key}
+        type="button"
+        aria-pressed={productView === tab.key}
+        onClick={() => {
+          setProductView(tab.key);
+          void runApplicationAction({
+            tenantId,
+            userId,
+            moduleKey: "competition_analysis",
+            action: "select_product_view",
+            payload: { productView: tab.key },
+          }).catch(() => setNotice("产品视图已在当前页面切换，但服务端偏好同步失败。"));
+        }}
+        className={`flex items-center gap-1.5 rounded-md px-4 py-[6px] text-[13px] transition-all ${productView === tab.key ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e]"}`}
+      >
+        <tab.icon className="h-3.5 w-3.5" /> {tab.label}
+      </button>
+    ))}
+  </div>;
+
+  const modules = competitors.length > 0 ? [
+    {
+      id: "competitors",
+      content: <div className={`grid h-full content-start gap-3 overflow-y-auto rounded-xl ${competitors.length <= 4 ? "grid-cols-4" : "grid-cols-5"}`}>{competitors.map((competitor) => <CompetitorCard key={competitor.id} competitor={competitor} productView={productView} />)}</div>,
+    },
+    {
+      id: "radar",
+      content: <div className="flex h-full min-h-0 flex-col rounded-xl border border-[#f0f0f2] bg-white p-5"><h3 className="mb-1 shrink-0 text-[13px] text-[#1d1d1f]">{productView === "consumer" ? "消费贷" : "经营贷"}综合竞争力</h3><div className="mb-2 shrink-0 text-[10px] text-[#c7c7cc]">仅对同批真实观测做 0–100 相对归一，不代表绝对评级。</div><div className="min-h-0 flex-1">{radarData.length > 0 ? <ResponsiveContainer width="100%" height="100%"><RadarChart data={radarData}><PolarGrid stroke="#f0f0f2" /><PolarAngleAxis dataKey="metric" tick={{ fontSize: 10, fill: "#aeaeb2" }} /><PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />{competitors.slice(0, 4).map((competitor, index) => <Radar key={competitor.id} name={competitor.name} dataKey={competitor.id} stroke={competitor.self ? "#3a3a3c" : ["#8e8e93", "#c7c7cc", "#636366"][index % 3]} fill={competitor.self ? "#3a3a3c" : "none"} fillOpacity={competitor.self ? 0.06 : 0} strokeWidth={competitor.self ? 2 : 1} strokeDasharray={competitor.self ? undefined : "4 4"} />)}<Legend wrapperStyle={{ fontSize: 10 }} /></RadarChart></ResponsiveContainer> : <ChartEmpty text="观测字段不足，无法计算相对雷达。" />}</div></div>,
+    },
+    {
+      id: "market-share",
+      content: <div className="flex h-full min-h-0 flex-col rounded-xl border border-[#f0f0f2] bg-white p-5"><h3 className="mb-4 shrink-0 text-[13px] text-[#1d1d1f]">市场份额对比</h3><div className="min-h-0 flex-1">{competitors.some((item) => item.share !== undefined) ? <ResponsiveContainer width="100%" height="100%"><BarChart data={competitors.filter((item) => item.share !== undefined).map((item) => ({ id: item.id, name: item.name, 份额: item.share, self: item.self }))} layout="vertical" margin={{ left: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="#f5f5f5" horizontal={false} /><XAxis type="number" tick={{ fontSize: 10, fill: "#c7c7cc" }} stroke="transparent" tickLine={false} unit="%" /><YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: "#636366" }} stroke="transparent" tickLine={false} width={65} /><Tooltip contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #f0f0f2" }} /><Bar dataKey="份额" radius={[0, 4, 4, 0]} barSize={20}>{competitors.filter((item) => item.share !== undefined).map((item) => <Cell key={item.id} fill={item.self ? "#3a3a3c" : "#d1d1d6"} />)}</Bar></BarChart></ResponsiveContainer> : <ChartEmpty text="暂无市场份额观测。" />}</div></div>,
+    },
+    {
+      id: "insights",
+      content: <div className="h-full overflow-y-auto rounded-xl border border-[#f0f0f2] bg-white p-5"><div className="flex items-center gap-2 mb-4"><Sparkles className="w-4 h-4 text-[#aeaeb2]" /><h3 className="text-[13px] text-[#1d1d1f]">{productView === "consumer" ? "消费贷" : "经营贷"}监控洞察</h3></div>{relevantEvents.length > 0 ? <div className="grid grid-cols-3 gap-4">{relevantEvents.slice(0, 3).map((event) => <div key={event.market_event_id} className="p-4 bg-[#fafbfc] rounded-lg"><div className="flex items-center gap-1.5 mb-2">{event.severity === "critical" || event.severity === "error" ? <AlertTriangle className="w-3.5 h-3.5 text-[#8a8a8e]" /> : <Target className="w-3.5 h-3.5 text-[#8a8a8e]" />}<span className="text-[12px] text-[#636366]">{event.severity} · {event.status}</span></div><p className="text-[11px] text-[#8a8a8e] leading-[1.7]">{event.event_summary}</p><div className="text-[10px] text-[#c7c7cc] mt-2">证据 {String(event.evidence.evidence_hash || "").slice(0, 12) || "—"} · {formatTime(event.detected_at)}</div></div>)}</div> : <ChartEmpty text="暂无由已审批规则产生的证据型监控洞察。" />}</div>,
+    },
+  ] : [];
+
   return (
-    <div className="p-7">
-      <div className="mb-6">
-        <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">竞品分析</h2>
-        <p className="text-[13px] text-[#aeaeb2] mt-1">消费贷/经营贷分产品竞品对标 · AI竞争策略建议</p>
-        <p className="mt-1 text-[10px] text-[#c7c7cc]">
-          {loading ? "正在读取已授权市场证据…" : competitors.length > 0
-            ? `真实观测 ${competitors.reduce((sum, item) => sum + item.evidenceCount, 0)} 条 · 来源 ${publishers.join("、") || "未标注"} · 最近 ${formatTime(latestObservedAt)}`
-            : "当前租户暂无已授权、带证据的市场观测；页面不会使用内置竞品数字补位。"}
-        </p>
-      </div>
-
-      {notice && <div className="mb-4 rounded-lg border border-[#e5e5ea] bg-white px-4 py-3 text-[12px] text-[#636366]">{notice}</div>}
-
-      <div className="flex gap-px bg-[#f2f2f7] rounded-lg p-0.5 w-fit mb-6">
-        {([
-          { key: "consumer", label: "消费贷竞品", icon: CreditCard },
-          { key: "business", label: "经营贷竞品", icon: Landmark },
-        ] as const).map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => {
-              setProductView(tab.key);
-              void runApplicationAction({
-                tenantId,
-                userId,
-                moduleKey: "competition_analysis",
-                action: "select_product_view",
-                payload: { productView: tab.key },
-              }).catch(() => setNotice("产品视图已在当前页面切换，但服务端偏好同步失败。"));
-            }}
-            className={`px-4 py-[6px] rounded-md text-[13px] transition-all flex items-center gap-1.5 ${productView === tab.key ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e]"}`}
-          >
-            <tab.icon className="w-3.5 h-3.5" /> {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {competitors.length > 0 ? (
-        <>
-          <div className={`grid gap-3 mb-6 ${competitors.length <= 4 ? "grid-cols-4" : "grid-cols-5"}`}>
-            {competitors.map((competitor) => (
-              <CompetitorCard key={competitor.id} competitor={competitor} productView={productView} />
-            ))}
-          </div>
-
-          <div className="grid grid-cols-2 gap-5 mb-6">
-            <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
-              <h3 className="text-[13px] text-[#1d1d1f] mb-1">{productView === "consumer" ? "消费贷" : "经营贷"}综合竞争力</h3>
-              <div className="mb-2 text-[10px] text-[#c7c7cc]">仅对同批真实观测做 0–100 相对归一，不代表绝对评级。</div>
-              {radarData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={260}>
-                  <RadarChart data={radarData}>
-                    <PolarGrid stroke="#f0f0f2" />
-                    <PolarAngleAxis dataKey="metric" tick={{ fontSize: 10, fill: "#aeaeb2" }} />
-                    <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
-                    {competitors.slice(0, 4).map((competitor, index) => (
-                      <Radar
-                        key={competitor.id}
-                        name={competitor.name}
-                        dataKey={competitor.id}
-                        stroke={competitor.self ? "#3a3a3c" : ["#8e8e93", "#c7c7cc", "#636366"][index % 3]}
-                        fill={competitor.self ? "#3a3a3c" : "none"}
-                        fillOpacity={competitor.self ? 0.06 : 0}
-                        strokeWidth={competitor.self ? 2 : 1}
-                        strokeDasharray={competitor.self ? undefined : "4 4"}
-                      />
-                    ))}
-                    <Legend wrapperStyle={{ fontSize: 10 }} />
-                  </RadarChart>
-                </ResponsiveContainer>
-              ) : <ChartEmpty text="观测字段不足，无法计算相对雷达。" />}
-            </div>
-            <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
-              <h3 className="text-[13px] text-[#1d1d1f] mb-4">市场份额对比</h3>
-              {competitors.some((item) => item.share !== undefined) ? (
-                <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={competitors.filter((item) => item.share !== undefined).map((item) => ({ id: item.id, name: item.name, 份额: item.share, self: item.self }))} layout="vertical" margin={{ left: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f5f5f5" horizontal={false} />
-                    <XAxis type="number" tick={{ fontSize: 10, fill: "#c7c7cc" }} stroke="transparent" tickLine={false} unit="%" />
-                    <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: "#636366" }} stroke="transparent" tickLine={false} width={65} />
-                    <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #f0f0f2" }} />
-                    <Bar dataKey="份额" radius={[0, 4, 4, 0]} barSize={20}>
-                      {competitors.filter((item) => item.share !== undefined).map((item) => <Cell key={item.id} fill={item.self ? "#3a3a3c" : "#d1d1d6"} />)}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : <ChartEmpty text="暂无市场份额观测。" />}
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
-            <div className="flex items-center gap-2 mb-4"><Sparkles className="w-4 h-4 text-[#aeaeb2]" /><h3 className="text-[13px] text-[#1d1d1f]">{productView === "consumer" ? "消费贷" : "经营贷"}监控洞察</h3></div>
-            {relevantEvents.length > 0 ? (
-              <div className="grid grid-cols-3 gap-4">
-                {relevantEvents.slice(0, 3).map((event) => (
-                  <div key={event.market_event_id} className="p-4 bg-[#fafbfc] rounded-lg">
-                    <div className="flex items-center gap-1.5 mb-2">
-                      {event.severity === "critical" || event.severity === "error" ? <AlertTriangle className="w-3.5 h-3.5 text-[#8a8a8e]" /> : <Target className="w-3.5 h-3.5 text-[#8a8a8e]" />}
-                      <span className="text-[12px] text-[#636366]">{event.severity} · {event.status}</span>
-                    </div>
-                    <p className="text-[11px] text-[#8a8a8e] leading-[1.7]">{event.event_summary}</p>
-                    <div className="text-[10px] text-[#c7c7cc] mt-2">证据 {String(event.evidence.evidence_hash || "").slice(0, 12) || "—"} · {formatTime(event.detected_at)}</div>
-                  </div>
-                ))}
-              </div>
-            ) : <ChartEmpty text="暂无由已审批规则产生的证据型监控洞察。" />}
-          </div>
-        </>
-      ) : !loading && (
+    <div className={PAGE_DATA_PAGE_GUTTER_CLASS} data-competition-page="true">
+      <StandardAnalysisPageHeader title="竞品分析" description="消费贷/经营贷分产品竞品对标 · AI竞争策略建议" metadata={loading ? "正在读取已授权市场证据…" : competitors.length > 0 ? `真实观测 ${competitors.reduce((sum, item) => sum + item.evidenceCount, 0)} 条 · 来源 ${publishers.join("、") || "未标注"} · 最近 ${formatTime(latestObservedAt)}` : undefined} stickyNote={stickyNote} editController={pageLayout.editController} canEditLayout={isSuperAdmin} leadingActions={productSwitch} headerDataAttribute="competition" />
+      <StandardAnalysisPageStickyNote stickyNote={stickyNote} />
+      {(notice || pageLayout.notice) && <div className="mb-4 rounded-lg border border-[#e5e5ea] bg-white px-4 py-3 text-[12px] text-[#636366]">{notice || pageLayout.notice}</div>}
+      {loading ? <CompetitionState message="正在读取已授权市场证据…" /> : competitors.length > 0 ? <StandardAnalysisPageGrid moduleKey="competition_analysis" definitions={COMPETITION_VISUAL_DEFINITIONS} modules={modules} layout={pageLayout.layout} hiddenDefinitions={pageLayout.hiddenDefinitions} editable={isSuperAdmin && pageLayout.mode === "edit"} onHide={pageLayout.hide} onRestore={pageLayout.restore} onMove={pageLayout.move} /> : (
         <div className="rounded-xl border border-[#f0f0f2] bg-white px-6 py-16 text-center text-[12px] text-[#aeaeb2]">
           请先将已获授权的市场来源 CSV 放入项目 Origin_Data 文件夹，写入实体与不可变观测证据后，再配置市场监控规则。
         </div>
@@ -248,6 +216,10 @@ function MetricRow({ label, value }: { label: string; value: string }) {
 
 function ChartEmpty({ text }: { text: string }) {
   return <div className="flex h-[260px] items-center justify-center text-[11px] text-[#c7c7cc]">{text}</div>;
+}
+
+function CompetitionState({ message }: { message: string }) {
+  return <div className="rounded-xl border border-[#f0f0f2] bg-white px-6 py-16 text-center text-[12px] text-[#aeaeb2]">{message}</div>;
 }
 
 function buildCompetitors(view: ProductView, entities: MarketEntity[], observations: MarketObservation[]): Competitor[] {

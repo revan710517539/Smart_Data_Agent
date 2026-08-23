@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [layout, routes, builder, library, cards, visualCard, visualNote, contextRail, selfAnalysis, dataTablePicker, analysisRoute, reportsRoute, application, applicationRoute, productionAssetStore, featuredReports, domain, dashboard, supervision, weekly, richNote, noteModel, stickyNote, stickyHook] = await Promise.all([
+const [layout, routes, builder, library, cards, visualCard, visualNote, contextRail, selfAnalysis, dataTablePicker, analysisRoute, reportsRoute, application, applicationRoute, productionAssetStore, featuredReports, domain, dashboard, supervision, weekly, richNote, noteModel, stickyNote, stickyHook, pageDataComposer, standardAnalysisPage] = await Promise.all([
   readFile("src/app/components/Layout.tsx", "utf8"),
   readFile("src/app/routes.ts", "utf8"),
   readFile("src/app/components/VisualReportBuilder.tsx", "utf8"),
@@ -26,6 +26,8 @@ const [layout, routes, builder, library, cards, visualCard, visualNote, contextR
   readFile("src/app/components/notes/richNote.ts", "utf8"),
   readFile("src/app/components/notes/StickyNote.tsx", "utf8"),
   readFile("src/app/components/notes/useStickyNote.ts", "utf8"),
+  readFile("src/app/components/page-data/PageDataComposer.tsx", "utf8"),
+  readFile("src/app/components/page-data/StandardAnalysisPage.tsx", "utf8"),
 ]);
 
 assert.ok(layout.indexOf('label: "可视化报表"') < layout.indexOf('label: "智能分析"'), "可视化报表必须位于智能分析上方");
@@ -38,6 +40,8 @@ assert.match(builder, /useState<"browse" \| "edit">\("browse"\)/, "报表必须�
 assert.match(builder, /useState<"landing" \| "editor">\("landing"\)/, "可视化报表路由必须先进入落地页");
 assert.match(builder, /placeholder="搜索曾经创建过的报表"/);
 assert.match(builder, /data-new-visual-report="true"/);
+assert.match(builder, /data-visual-report-list-loading="true"/, "已有报表慢请求必须降级为局部加载提示");
+assert.match(builder, /data-report-list-loading=\{reportLoading \? "true" : "false"\}/, "新建报表画布不得被已有报表列表请求阻塞");
 assert.match(builder, /title="最近创建"/);
 assert.match(builder, /title="推荐使用"/);
 assert.match(builder, /openReport\(newVisualReport\(\), "edit"\)/, "新建报表必须直接进入编辑态");
@@ -90,8 +94,9 @@ assert.match(noteModel, /gap-\[10px\]/, "段落间距必须为 10px");
 assert.match(noteModel, /p-5/, "文本框内边距必须为 20px");
 assert.match(stickyNote, /data-sticky-note-delete="true"/, "便签右键必须提供删除");
 assert.match(stickyHook, /const hide = /, "便签删除必须把面板从页面上收起");
-assert.match(dashboard, /onHide=\{stickyNote.hide\}/, "多机构分析便签必须支持右键删除收起");
-assert.match(supervision, /onHide=\{stickyNote.hide\}/, "机构督导便签必须支持右键删除收起");
+assert.match(standardAnalysisPage, /onHide=\{stickyNote.hide\}/, "标准分析页面便签必须支持右键删除收起");
+assert.match(dashboard, /StandardAnalysisPageStickyNote stickyNote=\{stickyNote\}/, "多机构分析必须复用标准便签删除收起能力");
+assert.match(supervision, /StandardAnalysisPageStickyNote stickyNote=\{stickyNote\}/, "机构督导必须复用标准便签删除收起能力");
 assert.match(weekly, /onHide=\{stickyNote.hide\}/, "经营周报便签必须支持右键删除收起");
 assert.match(builder, /onHide=\{stickyNote.hide\}/, "可视化报表便签必须支持右键删除收起");
 assert.match(selfAnalysis, /onHide=\{analysisSticky.hide\}/, "智能分析便签必须支持右键删除收起");
@@ -100,14 +105,22 @@ assert.match(application, /_sanitize_note_html/, "便签加粗 HTML 必须在保
 assert.match(domain, /type: "text", label: "文本框"/, "文本框必须作为标准可视化样式出现在样式菜单中");
 assert.match(visualCard, /disabled=\{isTextCard\}/, "文本框样式下条件必须灰显");
 assert.match(visualCard, /data-visual-operation-toggle="true"/, "文本框可视化必须提供可展开收起的操作按钮");
-assert.match(dashboard, /StickyNoteButton onClick=\{stickyNote.show\}/, "多机构分析必须在编辑按钮左侧提供便签");
-assert.match(supervision, /StickyNoteButton onClick=\{stickyNote.show\}/, "机构督导必须在编辑按钮左侧提供便签");
+assert.doesNotMatch(pageDataComposer, /canDeleteOwnVisualCopy\([^\n]+&& <div className="mb-1 flex h-7 shrink-0 items-center justify-end/, "文本框上方不得保留重复的移除按钮");
+assert.match(pageDataComposer, /onDelete=\{canDeleteOwnVisualCopy\([^\n]+\? \(\) => removeNote\(note\.id\) : undefined\}/, "文本框必须保留更多菜单中的所有者范围删除能力");
+assert.match(standardAnalysisPage, /StickyNoteButton onClick=\{stickyNote.show\}[\s\S]*PageDataModeToggle/, "标准分析页必须在编辑按钮左侧提供便签");
+assert.match(dashboard, /StandardAnalysisPageHeader[\s\S]*stickyNote=\{stickyNote\}/, "多机构分析必须复用标准标题栏便签");
+assert.match(supervision, /StandardAnalysisPageHeader[\s\S]*stickyNote=\{stickyNote\}/, "机构督导必须复用标准标题栏便签");
 assert.match(weekly, /StickyNoteButton onClick=\{stickyNote.show\}/, "经营周报必须在编辑按钮左侧提供便签");
 assert.match(weekly, /一、业绩与业务波动[\s\S]*StickyNotePanel/, "经营周报便签必须出现在业绩与业务波动标题下、可视化图表上方");
 assert.match(builder, /StickyNoteButton onClick=\{stickyNote.show\}/, "可视化报表必须在存周报和保存之间提供便签");
 assert.ok(builder.indexOf('<DestinationButton label="存周报"') < builder.indexOf("<StickyNoteButton onClick={stickyNote.show}") && builder.indexOf("<StickyNoteButton onClick={stickyNote.show}") < builder.indexOf("data-visual-report-mode-toggle"), "可视化报表便签必须位于存周报右侧、保存左侧");
 assert.match(selfAnalysis, /StickyNoteButton size="compact" onClick=\{analysisSticky.show\}/, "智能分析必须在存周报和导出之间提供便签");
-assert.ok(selfAnalysis.indexOf('<BookmarkPlus className="w-3 h-3" /> 存周报') < selfAnalysis.indexOf('StickyNoteButton size="compact"') && selfAnalysis.indexOf('StickyNoteButton size="compact"') < selfAnalysis.indexOf('<Download className="w-3 h-3" /> 导出'), "智能分析便签必须位于存周报右侧、导出左侧");
+assert.ok(selfAnalysis.includes('label: "源数据"') && selfAnalysis.includes('label: "图表"') && selfAnalysis.includes('label: "AI总结"'), "智能分析结果页签必须使用源数据、图表和 AI 总结");
+assert.ok(selfAnalysis.includes('label: "存报表"') && !selfAnalysis.includes(' /> 存我的'), "智能分析保存入口必须把存我的改成存报表");
+assert.ok(selfAnalysis.indexOf('label: "存报表"') < selfAnalysis.indexOf('label: "存经验"') && selfAnalysis.indexOf('label: "存经验"') < selfAnalysis.indexOf('label: "存周报"') && selfAnalysis.indexOf('label: "存周报"') < selfAnalysis.indexOf('StickyNoteButton size="compact"') && selfAnalysis.indexOf('StickyNoteButton size="compact"') < selfAnalysis.indexOf("导出"), "智能分析便签必须位于存周报右侧、导出左侧");
+assert.ok(selfAnalysis.includes("justify-between") && selfAnalysis.includes("whitespace-nowrap rounded px-2 py-1"), "结果工具栏保存入口必须右对齐，并用紧凑滑块避免变形");
+assert.ok(!selfAnalysis.includes('demoFallbackDisabledMessage("分析结果保存")'), "存报表/存周报失败不得再套 demo fallback 文案");
+assert.match(selfAnalysis, /isSelfAnalysisNoticeFailure\(saveMessage\)/, "保存失败提示不得再用成功绿色");
 assert.match(application, /set_page_sticky_note/, "应用模块必须提供统一便签保存动作");
 assert.match(visualCard, /\{showFollowUp && <button[\s\S]*data-visual-follow-up="true"/, "追问按钮显示应由标准图表契约控制");
 for (const label of ["评论", "AI 分析", "留言板"]) assert.ok(contextRail.includes(label), `追问右侧栏必须保留${label}`);
@@ -125,7 +138,11 @@ assert.match(featuredReports, /export function defaultMyReportsTab/);
 assert.match(featuredReports, /hasFeatured \? "featured" : "analysis"/);
 assert.match(featuredReports, /smart_data_agent_featured_reports_v1/);
 assert.ok(!featuredReports.includes("sample_report"), "精选列表不得写入样例报表");
-assert.match(dataTablePicker, /label: `多机构页面 \$\{pageDataTables\.length\}`/, "智能分析的数据表选择器必须提供多机构页面");
+assert.match(dataTablePicker, /type="radio"/, "智能分析数据表必须使用单选控件");
+assert.match(dataTablePicker, /onChange\(\[table\]\)/, "选择新表必须替换而不是追加已有数据源");
+assert.doesNotMatch(dataTablePicker, /多机构页面|pageDataTables|pageDataToSelection/, "智能分析数据表弹窗不得显示多机构页面");
+assert.match(domain, /singleAnalysisDataTableSelection[\s\S]*tables\.at\(-1\)/, "历史或外部多选状态必须收敛到最新一张数据表");
+assert.match(selfAnalysis, /singleAnalysisDataTableSelection\(forcedDataTables \?\? selectedDataTables\)/, "每次分析提交前必须再次收敛单表契约");
 assert.match(analysisRoute, /consumer="self_analysis"/, "智能分析必须通过受治理的多机构页面读取接口取数");
 assert.match(builder, />多机构页面 \{pageDataTables\.length\}<\/button>/, "可视化报表弹窗必须提供多机构页面");
 assert.match(builder, /pageCode: "visual_report"/, "可视化报表编辑器必须按自身消费者身份读取多机构页面");

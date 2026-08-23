@@ -103,6 +103,50 @@ class PostgreSQLReportStoreProjectionTests(unittest.TestCase):
 
         self.assertEqual(normalized["visualizations"][0]["type"], "stacked_bar")
 
+    def test_text_visualization_and_note_aliases_are_persisted(self) -> None:
+        normalized = _normalize_analysis_result({
+            "id": "text_visual",
+            "title": "文本总结",
+            "analysisTaskId": "task_1",
+            "visualizations": [{
+                "id": "primary",
+                "key": "primary",
+                "title": "文本总结",
+                "type": "text",
+                "config": {
+                    "metricFields": [],
+                    "dimensionFields": [],
+                    "filters": {},
+                    "filterGroups": [],
+                    "sumFilteredRows": False,
+                    "comboLineFields": [],
+                    "noteTitle": "结论",
+                    "noteBody": "本周放款回升。",
+                    "noteTitleHidden": False,
+                    "noteItems": [{"id": "p1", "type": "paragraph", "text": "本周放款回升。"}],
+                    "layoutSpan": 2,
+                },
+            }, {
+                "id": "secondary",
+                "type": "textbox",
+            }],
+        })
+
+        self.assertEqual(normalized["visualizations"][0]["type"], "text")
+        self.assertEqual(normalized["visualizations"][0]["config"]["noteBody"], "本周放款回升。")
+        self.assertEqual(normalized["visualizations"][0]["config"]["layoutSpan"], 2)
+        self.assertEqual(normalized["visualizations"][1]["type"], "text")
+
+    def test_pie_alias_is_normalized_to_donut(self) -> None:
+        normalized = _normalize_analysis_result({
+            "id": "pie_visual",
+            "title": "结构图",
+            "analysisTaskId": "task_1",
+            "visualizations": [{"id": "visual-1", "type": "pie"}],
+        })
+
+        self.assertEqual(normalized["visualizations"][0]["type"], "donut")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -69,6 +69,7 @@ SYSTEM_CONFIG_SCOPE_PREFIX = "system:"
 GLOBAL_SYSTEM_CONFIG_TENANT = "__global__"
 
 DEFAULT_SYSTEM_PARAMS = [
+    {"id": "data_refresh_frequency", "name": "数据刷新频率", "value": "T+1（每日凌晨06:00）", "category": "data", "description": "经营主题数据同步节奏。"},
     {"id": "acquisition_max_rows", "name": "单次采集最大行数", "value": "50000", "category": "data", "description": "数据获取任务单次允许写入的最大行数。"},
     {"id": "acquisition_freshness_sla_seconds", "name": "默认新鲜度阈值（秒）", "value": "86400", "category": "data", "description": "采集任务未单独设置时使用的新鲜度 SLA。"},
     {"id": "analysis_user_concurrency_limit", "name": "AI分析并发上限", "value": "2", "category": "system", "description": "单用户异步智能分析任务并发上限。"},

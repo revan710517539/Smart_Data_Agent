@@ -114,6 +114,7 @@ export type SpeechIntegrationTestResult = {
   message: string;
   endpoint: string;
   response_preview: string;
+  error_code?: string;
   tested_at: string;
 };
 

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "activation": {"canonicalTopicSkills": "active", "institutionSkillCopies": "forbidden", "institutionMemories": "candidate"},
+  "commonMemories": [
+    {"kind": "business_equations", "title": "信贷经营核心等式", "content": "规模变化要拆为客户数、频次、客单价、转化和风险；比例指标必须同时核对分子、分母。"},
+    {"kind": "evidence_ladder", "title": "分析证据等级", "content": "事实、贡献、相关、机制和因果是不同证据等级；没有反事实证据时不得升级为因果。"},
+    {"kind": "chart_question_mapping", "title": "图表与问题映射", "content": "总量和结构用表格或柱图，趋势用时序图，漏斗看阶段损耗，归因看基线与贡献，预测必须带区间。"},
+    {"kind": "writing_template", "title": "经营分析表达模板", "content": "按核心结论、主要异常、数据证据、原因边界、经营建议、风险提示和后续动作组织表达。"},
+    {"kind": "prediction_discipline", "title": "预测纪律", "content": "预测要披露历史长度、模型基线、区间、关键假设和失效条件；历史不足时明确拒绝点预测。"}
+  ],
+  "institutions": [
+    {"tenantId": "tenant:华兴银行", "institution": "华兴银行", "slug": "huaxing", "focus": "分支机构集中度、授权与漏斗、频次乘客单价、机会池", "attribution": "按机构和漏斗阶段拆贡献，交叉验证授权、转化和动支", "prediction": "围绕机会池转化与分支产能做滚动情景预测", "guardrail": "集中度高时同时披露头部依赖和尾部改善空间"},
+    {"tenantId": "tenant:广州银行", "institution": "广州银行", "slug": "guangzhou", "focus": "人员、培训、拜访、新增与续贷经营", "attribution": "用前后对比和匹配组思路评估培训与拜访，不把同期变化直接归因", "prediction": "分别预测新增、续贷和客户经理产能", "guardrail": "组织动作效果必须标注样本、周期和对照边界"},
+    {"tenantId": "tenant:兰州银行", "institution": "兰州银行", "slug": "lanzhou", "focus": "量价收入风险、券补贴与监管约束", "attribution": "按量、价、结构和风险成本拆解收入变化", "prediction": "在券成本、定价和监管情景下给出区间", "guardrail": "收入改善不能脱离风险成本和合规约束"},
+    {"tenantId": "tenant:汉口银行", "institution": "汉口银行", "slug": "hankou", "focus": "活动质量、真实转化与上游虚高指标", "attribution": "从触达、响应、申请、审批、动支逐级定位质量损耗", "prediction": "仅用有效漏斗而非曝光量预测产出", "guardrail": "曝光、点击等上游指标不得替代真实业务结果"},
+    {"tenantId": "tenant:石嘴山银行", "institution": "石嘴山银行", "slug": "shizuishan", "focus": "双产品漏斗、上线准备度与爬坡门槛", "attribution": "分别拆产品漏斗和准备度阻塞", "prediction": "按上线、试运行、爬坡阶段设置门槛预测", "guardrail": "准备度未过门时不输出规模承诺"},
+    {"tenantId": "tenant:郑州银行", "institution": "郑州银行", "slug": "zhengzhou", "focus": "客户生命周期、再捕获和目标差距", "attribution": "按新增、活跃、流失、再捕获与目标差距拆解", "prediction": "基于存量生命周期和再捕获率滚动预测", "guardrail": "目标差距与自然趋势、可执行动作分开表达"},
+    {"tenantId": "tenant:临商银行", "institution": "临商银行", "slug": "linshang", "focus": "多维交叉、价格乘数量与流程ROI", "attribution": "使用价格乘数量、机构产品交叉和流程投入产出拆解", "prediction": "对价格、数量和流程效率分别做敏感性情景", "guardrail": "交叉维度过细时披露样本量和稳定性"},
+    {"tenantId": "tenant:瑞丰银行", "institution": "瑞丰银行", "slug": "ruifeng", "focus": "数据来源、目标进度与低置信度管理", "attribution": "先核对数据血缘和目标口径，再拆进度偏差", "prediction": "数据不完整时只给低置信度区间和补数要求", "guardrail": "来源或口径不明时停止形成确定性结论"},
+    {"tenantId": "tenant:南京银行", "institution": "南京银行", "slug": "nanjing", "focus": "人员、客户、市场、价格与流程超时", "attribution": "按人、客、场、价、流程五层定位瓶颈", "prediction": "结合处理时长和客户转化预测交付能力", "guardrail": "流程超时要区分积压、产能和规则原因"},
+    {"tenantId": "tenant:三峡银行", "institution": "三峡银行", "slug": "sanxia", "focus": "小样本、失败编码与爬坡门槛", "attribution": "先做失败原因编码，再按样本量输出贡献", "prediction": "用阶段门槛和区间描述爬坡，不外推小样本", "guardrail": "小样本只形成风险提示和待验证假设"},
+    {"tenantId": "tenant:兴业消金", "institution": "兴业消金", "slug": "xingye_consumer", "focus": "渠道、活动、系统、监管与产能", "attribution": "按渠道、活动、系统限制、监管约束和产能拆解", "prediction": "在渠道容量、系统吞吐和监管约束下做情景预测", "guardrail": "规模机会必须同时校验系统和合规容量"}
+  ]
+}

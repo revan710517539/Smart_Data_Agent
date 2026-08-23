@@ -21,15 +21,9 @@ function legacyStorageKey(tenantId: string, userId: string) {
 }
 
 function candidateNames(model: ModelIntegration) {
-  const names = model.enabledModels?.length
-    ? model.enabledModels
-    : model.availableModels?.length
-      ? model.availableModels
-      : model.selectedModelName
-        ? [model.selectedModelName]
-        : model.modelName
-          ? [model.modelName]
-          : [];
+  // Discovery and activation are distinct: availableModels is the provider
+  // catalog, while enabledModels is the account administrator's allow-list.
+  const names = model.enabledModels || [];
   return Array.from(new Set(names.map((name) => name.trim()).filter(Boolean)));
 }
 
@@ -39,7 +33,7 @@ function candidateNames(model: ModelIntegration) {
  */
 export function configuredTextModelOptions(models: ModelIntegration[]): TextModelOption[] {
   return models
-    .filter((model) => ["available", "draft"].includes(model.status) && Boolean(model.id))
+    .filter((model) => model.status === "available" && ["connected", "mock"].includes(model.testStatus || "") && Boolean(model.id))
     .flatMap((model) => candidateNames(model).map((selectedModelName) => ({
       id: `${model.id}::${selectedModelName}`,
       integrationId: model.id,

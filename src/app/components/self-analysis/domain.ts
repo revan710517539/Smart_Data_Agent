@@ -127,6 +127,11 @@ export type KnowledgeFileAttachment = {
   lastModified: number;
   contentPreview?: string;
   detectedInstitutions?: string[];
+  classification?: "data_source" | "text_document" | "unsupported_media";
+  classifyMessage?: string;
+  extractedText?: string;
+  contentHash?: string;
+  parsedTable?: Record<string, unknown>;
 };
 export type AnalysisDataTableSelection = {
   id: string;
@@ -151,6 +156,11 @@ export type AnalysisDataTableSelection = {
   relativePath?: string;
   sourceKey?: string;
 };
+
+export function singleAnalysisDataTableSelection(tables: AnalysisDataTableSelection[] | null | undefined) {
+  const latest = Array.isArray(tables) ? tables.at(-1) : undefined;
+  return latest ? [latest] : [];
+}
 export type AnalysisRow = {
   branch: string;
   productLine: string;
@@ -869,6 +879,8 @@ export type AnalysisModelGroup = {
   options: AnalysisModelOption[];
 };
 
+const DEFAULT_RELAY_MODEL_ID = "model_default_intelligent_analysis_relay";
+
 export function displayAnalysisModelName(value: string) {
   const normalized = value.trim().replace(/_/g, "-").replace(/\s+/g, "-");
   if (!normalized) return "未命名";
@@ -889,11 +901,7 @@ export function analysisModelValues(model: ModelIntegration) {
   const enabled = (model.enabledModels || [])
     .map((value) => value.trim())
     .filter(Boolean);
-  const available = (model.availableModels || [])
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const values = enabled.length ? enabled : available;
-  return Array.from(new Set(values));
+  return Array.from(new Set(enabled));
 }
 
 export function groupAnalysisModelOptions(models: ModelIntegration[]): AnalysisModelGroup[] {
@@ -913,6 +921,11 @@ export function groupAnalysisModelOptions(models: ModelIntegration[]): AnalysisM
       return;
     }
     otherOptions.push(...options);
+  });
+  relayGroups.sort((left, right) => {
+    const leftDefault = left.id === DEFAULT_RELAY_MODEL_ID ? 0 : 1;
+    const rightDefault = right.id === DEFAULT_RELAY_MODEL_ID ? 0 : 1;
+    return leftDefault - rightDefault || left.category.localeCompare(right.category, "zh-CN");
   });
   if (otherOptions.length) {
     relayGroups.push({ id: "other", category: "其他", options: otherOptions });
@@ -1043,6 +1056,12 @@ export function inferVisualTypes(
 export function visualizationLabel(type: VisualizationType) {
   if (type === "text") return "文本框";
   return visualizationOptions.find((option) => option.type === type)?.label ?? "图表";
+}
+
+export function isSelfAnalysisNoticeFailure(notice: string) {
+  const text = notice.trim();
+  if (!text || /^已/.test(text) || /中\.\.\.$/.test(text)) return false;
+  return /失败|错误|不能|请先|校验|validation|超时|未开启|无法/.test(text);
 }
 
 export function createAnalysisPlan(question: string, visualTypes: Record<ResultVisualKey, VisualizationType>) {

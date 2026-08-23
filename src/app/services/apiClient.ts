@@ -240,6 +240,7 @@ export function apiErrorMessage(error: unknown, fallback: string) {
       network_error: "无法连接 Data Agent API，请确认本地 API 服务已启动。",
       request_timeout: "Data Agent API 请求超时，请稍后重试。",
       invalid_json_response: "Data Agent API 返回了无效响应，请稍后重试。",
+      analysis_single_data_table_required: "一次分析只能使用一张数据表，请重新选择后重试。",
     };
     return knownMessages[error.code] || fallback;
   }

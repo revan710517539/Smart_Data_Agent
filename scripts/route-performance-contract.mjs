@@ -13,6 +13,8 @@ const settings = fs.readFileSync("src/app/components/SystemSettings.tsx", "utf8"
 const automationApi = fs.readFileSync("src/app/services/automationApi.ts", "utf8");
 const capabilitiesApi = fs.readFileSync("src/app/services/capabilitiesApi.ts", "utf8");
 const accessApi = fs.readFileSync("src/app/services/accessControlApi.ts", "utf8");
+const dataAssetApi = fs.readFileSync("src/app/services/dataAssetApi.ts", "utf8");
+const dashboard = fs.readFileSync("src/app/components/Dashboard.tsx", "utf8");
 
 const checks = [
   [preload.includes("warmVisibleRoutePaths"), "可见页面必须支持空闲预热"],
@@ -26,7 +28,7 @@ const checks = [
   [preload.includes('path.startsWith("/agent/message-board")'), "留言板页面必须纳入统一预热映射"],
   [layout.includes('navigationStatus !== "ready"'), "权限导航未就绪时不得启动页面预热"],
   [layout.includes("visibleMenuItems.flatMap"), "只能预热当前用户可见的页面"],
-  [layout.includes("return warmVisibleRoutePaths(visiblePaths, location.pathname)"), "路由变化必须清理并重建剩余预热队列"],
+  [layout.includes("cancelCodeWarmup = warmVisibleRoutePaths(visiblePaths, location.pathname)") && layout.includes("cancelCodeWarmup();"), "路由变化必须清理并重建剩余预热队列"],
   [(layout.match(/preloadRoutePath\(/g) || []).length >= 4, "一级和二级页面入口都必须保留悬停和聚焦即时预热"],
   [(layout.match(/preloadRouteDataPath\(/g) || []).length >= 4, "一级和二级页面入口必须按目标页预取业务数据"],
   [(layout.match(/onPointerDown=/g) || []).length >= 2, "鼠标与触屏点击必须在路由提交前启动代码和数据预取"],
@@ -58,6 +60,10 @@ const checks = [
   [apiClient.includes("sessionRefreshRequest") && apiClient.includes("refreshSessionOnce"), "并发 401 必须合并为一次会话刷新，避免旋转 refresh token 互相失效"],
   [visualCards.includes('data-visual-report-data-loading="true"') && visualCards.includes("!rows.length && !errorsByDataset[card.dataset.id]"), "真实数据投影完成前不得把标准图表挂载为空态"],
   [dataPreload.includes('fetchPageDataWorkspace({ tenantId, userId, pageCode: "dashboard" })') && dataPreload.includes('pageCode: "weekly_report"') && dataPreload.includes('pageCode: "institution_supervision"'), "经营页必须预取页面数据工作区而不是整包资产目录"],
+  [layout.includes('preloadRouteDataPath("/dashboard", { tenantId, userId })') && layout.includes('visiblePaths.includes("/dashboard")') && layout.includes("requestIdleCallback(warmDashboardData"), "多机构分析工作区必须在授权导航空闲时提前准备"],
+  [dataAssetApi.includes('return `${tenantId}:${userId}:${pageCode}`') && dataAssetApi.includes("pageDataWorkspaceMemoryKey(tenantId, userId, pageCode)"), "页面工作区内存必须同时隔离租户、用户与页面"],
+  [!dataAssetApi.match(/page-data-workspace:\$\{pageCode\}`\][^\n]*forceRefresh/), "工作区预取与页面挂载不得被强制刷新拆成重复请求"],
+  [!dashboard.includes("fetchOperatingSnapshot") && !dashboard.includes("buildDashboardModel"), "多机构页面不得并行加载已退出展示主链的旧经营快照"],
   [visualCards.includes("speculative") || visualCards.includes("Promise.all(report.cards.map"), "可视化报表必须与目录并行拉取已知数据集，不得等目录完成后再串行读数"],
   [visualBuilder.includes("reportLoading") && visualBuilder.includes("catalogLoading"), "报表框架与数据目录必须渐进加载"],
   [visualBuilder.includes('if (view !== "editor" || catalogLoadedRef.current) return;') && visualBuilder.indexOf("fetchVisualReports({ tenantId, userId })") < visualBuilder.indexOf('fetchDataAssets({ tenantId, userId, scope: "visualization" })'), "可视化报表落地页必须仅读取报表骨架，进入编辑器后再准备专用目录"],

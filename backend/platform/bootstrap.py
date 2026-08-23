@@ -4,6 +4,7 @@ import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from backend.authz import (
     AuthEnforcer,
@@ -121,6 +122,9 @@ LOCAL_RBAC_EXTENSION_MENU_OBJECTS = frozenset({
     "menu:settings.audit",
     "menu:settings.config",
     "skill:data.analysis.profile",
+    "skill:data.analysis.descriptive",
+    "skill:data.analysis.attribution",
+    "skill:data.analysis.predictive",
     "skill:data.governance.assess",
     "skill:conclusion.generate",
     "skill:bi.report.generate",
@@ -195,6 +199,7 @@ class PlatformServices:
     analysis_governance_store: InMemoryAnalysisGovernanceStore | MySQLAnalysisGovernanceStore
     non_structured_store: ShardedJSONStore
     primary_database_pool: PostgreSQLConnectionPool | MySQLConnectionPool | MySQLStoreConnectionPool | None = None
+    runtime_kernel: Any = None
 
     def close(self) -> None:
         policy_repository = self.permission_broker.enforcer.repository
@@ -223,6 +228,8 @@ class PlatformServices:
             self.oidc_client,
             self.semantic_service,
             self.rate_limiter,
+            self.skill_executor,
+            self.runtime_kernel,
             self.primary_database_pool,
         ):
             close = getattr(resource, "close", None)
@@ -530,6 +537,7 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         non_structured_store=non_structured_store,
         primary_database_pool=mysql_pool,
     )
+    _bind_runtime_kernel(services)
     automation_runtime.platform_services = services
     if runtime_config.environment in {"development", "test"} and db_path is not None:
         for tenant_id in [normalize_tenant_id(tenant) for tenant in OPERATING_TENANTS] + [LEGACY_TENANT_ID]:
@@ -766,7 +774,14 @@ def _build_mysql_production_platform(runtime_config: RuntimeConfig) -> PlatformS
             non_structured_store=non_structured_store,
             primary_database_pool=pool,
         )
+        _bind_runtime_kernel(services)
         automation_runtime.platform_services = services
+        if runtime_config.environment in {"development", "test"}:
+            for tenant_id in [normalize_tenant_id(tenant) for tenant in OPERATING_TENANTS] + [LEGACY_TENANT_ID]:
+                try:
+                    data_asset_store.seed_missing_defaults(tenant_id, updated_by=SUPER_ADMIN_USER_ID)
+                except Exception:
+                    pass
         return services
     except BaseException:
         pool.close()
@@ -1020,6 +1035,40 @@ def _register_automation_handlers(
     runtime.register_handler("report.weekly_learning", report_learning_handler)
     runtime.register_handler("market.evaluate", market_evaluate_handler)
     runtime.register_handler("memory.extract", memory_extraction_handler)
+
+
+def _bind_runtime_kernel(services: PlatformServices) -> None:
+    from backend.platform.analysis_profiles import (
+        prepare_loan_analysis_capabilities,
+        verify_loan_analysis_capabilities,
+    )
+    from backend.platform.kernel.jobs import register_runtime_jobs
+    from backend.platform.kernel.kernel import build_runtime_kernel
+
+    capability_import_actor = os.getenv(
+        "SMART_DATA_AGENT_CAPABILITY_IMPORT_ACTOR",
+        "system" if services.runtime_config.is_production else SUPER_ADMIN_USER_ID,
+    ).strip()
+    if not capability_import_actor:
+        raise RuntimeConfigurationError("SMART_DATA_AGENT_CAPABILITY_IMPORT_ACTOR must not be empty")
+    capability_mode = os.getenv(
+        "SMART_DATA_AGENT_CAPABILITY_MODE",
+        "verify" if services.runtime_config.is_production else "seed",
+    ).strip().lower()
+    if capability_mode == "seed":
+        prepare_loan_analysis_capabilities(
+            services.data_asset_store,
+            services.memory_store,
+            import_actor=capability_import_actor,
+        )
+    elif capability_mode == "verify":
+        verify_loan_analysis_capabilities(services.data_asset_store, services.memory_store)
+    else:
+        raise RuntimeConfigurationError("SMART_DATA_AGENT_CAPABILITY_MODE must be seed or verify")
+    kernel = build_runtime_kernel(services)
+    services.runtime_kernel = kernel
+    services.workflow.runtime_kernel = kernel
+    register_runtime_jobs(services.automation_runtime, kernel)
 
 
 def _ensure_topic_data_batch_task(runtime: AutomationRuntime, tenant_id: str, owner_user_id: str) -> None:
@@ -1322,6 +1371,9 @@ def _platform_runtime_policies(
             [
                 PermissionPolicy(role_id, tenant_id, "skill:supersonic.query", "execute"),
                 PermissionPolicy(role_id, tenant_id, "skill:data.analysis.profile", "execute"),
+                PermissionPolicy(role_id, tenant_id, "skill:data.analysis.descriptive", "execute"),
+                PermissionPolicy(role_id, tenant_id, "skill:data.analysis.attribution", "execute"),
+                PermissionPolicy(role_id, tenant_id, "skill:data.analysis.predictive", "execute"),
                 PermissionPolicy(role_id, tenant_id, "skill:data.governance.assess", "execute"),
                 PermissionPolicy(role_id, tenant_id, "skill:conclusion.generate", "execute"),
                 PermissionPolicy(role_id, tenant_id, "skill:bi.report.generate", "execute"),

@@ -77,14 +77,13 @@ def list_models_for_application(
     seen: set[tuple[str, str]] = set()
     for model in models:
         model_module = normalize_application_module(model.get("applicationModule"))
+        enabled_models = [str(item).strip() for item in model.get("enabledModels") or [] if str(item).strip()]
         if (
             model_module != module_key
             and not (model_module == "global_text_model" and module_key not in VOICE_APPLICATION_MODULES)
-            or str(model.get("status") or "available") not in {"available", "draft"}
-            or (
-                str(model.get("testStatus") or "").strip().lower() == "failed"
-                and str(model.get("id") or "") != DEFAULT_RELAY_MODEL_ID
-            )
+            or str(model.get("status") or "available") != "available"
+            or str(model.get("testStatus") or "").strip().lower() not in {"connected", "mock"}
+            or not enabled_models
         ):
             continue
         identity = (str(model.get("id") or ""), module_key)
@@ -104,8 +103,9 @@ def list_models_for_application(
         for model in account_models:
             if (
                 str(model.get("applicationModule") or "").strip()
-                or str(model.get("status") or "available") not in {"available", "draft"}
-                or str(model.get("testStatus") or "") != "connected"
+                or str(model.get("status") or "available") != "available"
+                or str(model.get("testStatus") or "") not in {"connected", "mock"}
+                or not any(str(item).strip() for item in model.get("enabledModels") or [])
             ):
                 continue
             identity = (str(model.get("id") or ""), module_key)

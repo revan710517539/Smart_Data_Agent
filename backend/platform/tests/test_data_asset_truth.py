@@ -107,7 +107,13 @@ class DataAssetTruthTest(unittest.TestCase):
                 for item in store.list_bundle("tenant_a")["analysis_skills"]
                 if item.get("category") == "场景"
             },
-            set(),
+            {
+                "scene-analysis-intent",
+                "scene-chart-followup",
+                "scene-page-rail",
+                "scene-textbox-voice",
+                "scene-self-analysis",
+            },
         )
         self.assertTrue(store.delete_item("tenant_a", "analysis_skill", "scene-weekly-report"))
         store.seed_missing_defaults("tenant_a")

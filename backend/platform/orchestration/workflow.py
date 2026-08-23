@@ -54,6 +54,7 @@ class AnalysisWorkflow:
         self.agent_runtime = agent_runtime
         self.learning_service = learning_service
         self.metric_semantic_catalog = metric_semantic_catalog
+        self.runtime_kernel: Any | None = None
 
     def create_task(self, context: ExecutionContext, question: str) -> AnalysisTask:
         intent_rule = self._select_intent_rule(context, question)
@@ -233,11 +234,7 @@ class AnalysisWorkflow:
                     },
                 },
             )
-        result = (
-            self.agent_runtime.execute_skill("data_query", skill_request)
-            if self.agent_runtime
-            else self.skill_executor.execute(skill_request)
-        )
+        result = self._execute_product_skill("data_query", skill_request)
         if self.agent_runtime:
             semantic_info = result.output.get("semantic_info", {})
             self.agent_runtime.complete_gate(
@@ -275,8 +272,15 @@ class AnalysisWorkflow:
 
         if not task.skill_results:
             return task
+        method_kinds = _analysis_method_kinds(context.page_context)
+        method_skill_ids = tuple(
+            f"data.analysis.{kind}"
+            for kind in method_kinds
+            if kind in {"descriptive", "attribution", "predictive"}
+        )
         required_skill_ids = (
             "data.analysis.profile",
+            *method_skill_ids,
             "data.governance.assess",
             "conclusion.generate",
             "bi.report.generate",
@@ -323,6 +327,21 @@ class AnalysisWorkflow:
             ),
         )
         profile = dict(profile_result.output["analysis_profile"])
+        analysis_methods: list[dict[str, Any]] = []
+        for method_skill_id in method_skill_ids:
+            method_result = self._execute_product_skill(
+                "data_analysis",
+                SkillRequest(
+                    skill_id=method_skill_id,
+                    context=context,
+                    inputs={
+                        "data": rows,
+                        "analysis_plan": task.analysis_plan,
+                        "semantic_info": semantic_info,
+                    },
+                ),
+            )
+            analysis_methods.append(dict(method_result.output["analysis_method"]))
         governance_result = self._execute_product_skill(
             "data_governance",
             SkillRequest(
@@ -369,6 +388,7 @@ class AnalysisWorkflow:
         task.skill_results[0] = {
             **result,
             "analysis_profile": profile,
+            "analysis_methods": analysis_methods,
             "governance_assessment": governance,
             "conclusion_contract": conclusion_result.output["conclusion_contract"],
             "bi_report_spec": report_result.output["report_spec"],
@@ -377,6 +397,17 @@ class AnalysisWorkflow:
         task.plan.extend(
             [
                 AgentStep("DataAnalysisAgent", "data.analysis.profile", {"profile_hash": profile["profile_hash"]}),
+                *[
+                    AgentStep(
+                        "DataAnalysisAgent",
+                        str(method.get("skill_id") or ""),
+                        {
+                            "kind": method.get("kind"),
+                            "claim_level": (method.get("evidence_boundary") or {}).get("claim_level"),
+                        },
+                    )
+                    for method in analysis_methods
+                ],
                 AgentStep(
                     "DataGovernanceAgent",
                     "data.governance.assess",
@@ -400,6 +431,23 @@ class AnalysisWorkflow:
         return task
 
     def _execute_product_skill(self, agent_id: str, request: SkillRequest):
+        if self.runtime_kernel is not None:
+            if self.agent_runtime:
+                self.agent_runtime.require_operation(agent_id, request.skill_id)
+            envelope = self.runtime_kernel.executor.execute(
+                request.context,
+                request.skill_id,
+                request.inputs,
+                agent_id=agent_id,
+                approval_id=request.approval_id,
+            )
+            from backend.platform.skills import SkillResult
+
+            return SkillResult(
+                skill_id=request.skill_id,
+                output=dict(envelope.get("output") or {}),
+                audit={"runtime_entry": "unified_executor"},
+            )
         if self.agent_runtime:
             return self.agent_runtime.execute_skill(agent_id, request)
         return self.skill_executor.execute(request)
@@ -417,6 +465,23 @@ class AnalysisWorkflow:
                 dimensions=tuple(page_hint["dimensions"]),
                 chart_types=tuple(page_hint["chart_types"] or base.chart_types),
                 analysis_angles=tuple(page_hint["analysis_angles"] or base.analysis_angles),
+            )
+        runtime_route = context.page_context.get("runtime_route") if isinstance(context.page_context, dict) else {}
+        if (
+            isinstance(runtime_route, dict)
+            and runtime_route.get("capability_ids")
+            and runtime_route.get("dataset_id")
+            and runtime_route.get("metrics")
+        ):
+            return AnalysisIntentRule(
+                rule_id=str(runtime_route.get("intent_rule_id") or base.rule_id),
+                task_type=base.task_type,
+                terms=(),
+                dataset_id=str(runtime_route["dataset_id"]),
+                metrics=tuple(str(item) for item in runtime_route.get("metrics") or () if str(item).strip()),
+                dimensions=tuple(str(item) for item in runtime_route.get("dimensions") or () if str(item).strip()) or base.dimensions,
+                chart_types=tuple(str(item) for item in runtime_route.get("chart_types") or () if str(item).strip()) or base.chart_types,
+                analysis_angles=base.analysis_angles,
             )
         asset_context = context.page_context.get("asset_context")
         tables = asset_context.get("selected_data_tables") if isinstance(asset_context, dict) else []
@@ -503,6 +568,8 @@ class AnalysisWorkflow:
                 tenant_id=context.tenant_id,
                 subject=task.question,
                 content={
+                    "memoryTopic": task.question,
+                    "memoryAction": task.task_type,
                     "task_type": task.task_type,
                     "analysis_plan": task.analysis_plan,
                     "used_skills": ["supersonic.query"],
@@ -969,13 +1036,15 @@ def _build_temporary_raw_table_plan(
         "sort": {"metric": metrics[0]["code"], "direction": "desc"},
         "chart_types": ["line", "table"] if any(field["is_time"] for field in dimensions) else ["column", "table"],
         "analysis_angles": [
-            "仅使用用户明确选择的当前机构原始 CSV",
+            "仅使用用户本次上传的文件作为数据源，不调度系统数据表"
+            if str(table.get("relativePath") or "").startswith("upload://")
+            else "仅使用用户明确选择的当前机构原始 CSV",
             "指标口径由字段类型确定性生成并标记为临时口径",
             "临时口径不写回指标字典，需用户结合业务定义复核",
         ],
         "business_focus": f"分析用户选择的原始表“{table.get('tableNameCn') or table.get('name') or dataset_id}”",
         "temporary_metric_semantics": True,
-        "temporary_metric_source": "selected_raw_csv",
+        "temporary_metric_source": "uploaded_file" if str(table.get("relativePath") or "").startswith("upload://") else "selected_raw_csv",
         "synthetic_row_count_metric": synthetic_count,
     })
     return plan
@@ -1051,6 +1120,28 @@ def _apply_page_analysis_context(plan: dict[str, Any], page_context: Any) -> dic
             "tenant_override_allowed": False,
         },
     }
+
+
+def _analysis_method_kinds(page_context: dict[str, Any]) -> tuple[str, ...]:
+    scene = page_context.get("analysis_scene") if isinstance(page_context.get("analysis_scene"), dict) else {}
+    kinds = [
+        str(item).strip()
+        for item in scene.get("analysis_kinds") or []
+        if str(item).strip() in {"descriptive", "attribution", "predictive"}
+    ]
+    if not kinds:
+        skill_ids = {
+            str(item.get("id") or "").strip()
+            for item in page_context.get("analysis_context_skills") or []
+            if isinstance(item, dict)
+        }
+        mapping = {
+            "topic-descriptive": "descriptive",
+            "topic-attribution": "attribution",
+            "topic-predictive": "predictive",
+        }
+        kinds = [kind for skill_id, kind in mapping.items() if skill_id in skill_ids]
+    return tuple(dict.fromkeys(kinds or ["descriptive"]))
 
 
 def _task_execution_mode(semantic_info: dict[str, Any]) -> str:

@@ -11,6 +11,8 @@ import type { VisualizationCardConfig } from "./visualization/visualizationDataM
 import { VisualReportCards } from "./visual-report/VisualReportCards";
 import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
 import { useStickyNote } from "./notes/useStickyNote";
+import { PAGE_DATA_PAGE_GUTTER_CLASS } from "./page-data/PageDataComposer";
+import { DEFAULT_REPORT_PAGE_TEMPLATE } from "./page-data/StandardAnalysisPage";
 import { isPageDataDataset, rowsFromPageVisualDataset, rowsFromRawVisualDataset, rowsFromTopicVisualDataset, visualReportDatasetReference, type VisualReportDataset } from "./visual-report/reportData";
 
 const emptyConfig: VisualizationCardConfig = {
@@ -239,7 +241,7 @@ export function VisualReportBuilder() {
   }
 
   return (
-    <div className="p-4 md:p-7" data-visual-report-builder="true" data-visual-report-mode={mode}>
+    <div className={PAGE_DATA_PAGE_GUTTER_CLASS} data-visual-report-builder="true" data-visual-report-mode={mode} data-default-report-page-template={DEFAULT_REPORT_PAGE_TEMPLATE}>
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <button type="button" onClick={() => setView("landing")} className="mb-2 inline-flex items-center gap-1 text-[10px] text-[#7d8781] hover:text-[#178a53]" data-visual-report-back="true"><ArrowLeft className="h-3 w-3" />返回报表首页</button>
@@ -277,10 +279,7 @@ export function VisualReportBuilder() {
 
       {notice && <div className="mb-4 rounded-lg border border-[#d7efd9] bg-[#eef8f1] px-3 py-2 text-[11px] text-[#258a3f]" role="status">{notice}</div>}
       {error && <div className="mb-4 rounded-lg border border-[#ffd0d0] bg-[#fff5f5] px-3 py-2 text-[11px] text-[#c84034]" role="alert">{error}</div>}
-      {reportLoading ? (
-        <div className="rounded-xl border border-dashed border-[#dfe7e2] bg-white px-5 py-20 text-center text-[12px] text-[#9ba29e]">正在读取可视化报表…</div>
-      ) : (
-        <div className="min-h-[620px] rounded-xl border border-[#eef1ef] bg-white p-4 md:p-5" data-visual-report-canvas="true">
+      <div className="min-h-[620px] rounded-xl border border-[#eef1ef] bg-white p-4 md:p-5" data-visual-report-canvas="true" data-report-list-loading={reportLoading ? "true" : "false"}>
           <StickyNotePanel className="mb-4" note={stickyNote.note} editing={stickyNote.editing} onChange={stickyNote.updateItems} onFinishEdit={stickyNote.finishEdit} onStartEdit={() => stickyNote.setEditing(true)} onHide={stickyNote.hide} uploadContext={stickyNote.uploadContext} />
           <VisualReportCards report={report} editable={mode === "edit"} onChange={setReport} railPageKey="visual-reports" />
           {mode === "edit" && (
@@ -290,8 +289,7 @@ export function VisualReportBuilder() {
             </button>
           )}
           {mode === "browse" && !report.cards.length && <div className="flex min-h-[560px] items-center justify-center text-center"><div><Table2 className="mx-auto h-8 w-8 text-[#d0d5d2]" /><div className="mt-3 text-[12px] text-[#8f9692]">当前报表还是空白页</div><div className="mt-1 text-[10px] text-[#b1b6b3]">点击右上角“编辑”后新增图表</div></div></div>}
-        </div>
-      )}
+      </div>
       {saving && <div className="mt-2 text-right text-[10px] text-[#9aa19d]">正在保存…</div>}
       {modalOpen && <VisualChartModal rawTables={rawTables} topicTables={topicTables} pageDataTables={pageDataTables} tenantId={tenantId} userId={userId} reportId={report.id} drafts={visualChartDrafts} draftRevision={visualChartDraftRevision} onDraftChange={updateVisualChartDraft} onRestore={resetVisualChartDrafts} onCancel={() => setModalOpen(false)} onSave={addCard} />}
     </div>
@@ -310,6 +308,8 @@ function VisualReportLanding({ loading, error, search, onSearch, onCreate, onOpe
   recommendedReports: VisualReport[];
 }) {
   const searching = Boolean(search.trim());
+  const hasLoadedReports = searchResults.length > 0 || recentReports.length > 0 || recommendedReports.length > 0;
+  const showCollections = !loading || hasLoadedReports;
   return <div className="p-4 md:p-7" data-visual-report-landing="true">
     <div className="mb-6">
       <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">可视化报表</h2>
@@ -323,14 +323,15 @@ function VisualReportLanding({ loading, error, search, onSearch, onCreate, onOpe
       <button type="button" onClick={onCreate} className="inline-flex h-11 shrink-0 items-center gap-2 rounded-xl bg-[#178a53] px-4 text-[12px] text-white shadow-sm hover:bg-[#117847]" data-new-visual-report="true"><Plus className="h-4 w-4" />新建报表</button>
     </div>
     {error && <div className="mb-4 rounded-lg border border-[#ffd0d0] bg-[#fff5f5] px-3 py-2 text-[11px] text-[#c84034]" role="alert">{error}</div>}
-    {loading ? <div className="rounded-xl border border-dashed border-[#dfe7e2] bg-white px-5 py-20 text-center text-[12px] text-[#9ba29e]">正在读取可视化报表…</div> : searching ? (
+    {loading && <div className="mb-4 rounded-xl border border-dashed border-[#dfe7e2] bg-white px-5 py-4 text-center text-[11px] text-[#9ba29e]" role="status" data-visual-report-list-loading="true">正在读取已有报表，新建报表可立即使用…</div>}
+    {showCollections && (searching ? (
       <ReportCollection title="搜索结果" subtitle={`找到 ${searchResults.length} 份报表`} icon={Search} reports={searchResults} onOpen={onOpen} emptyText="没有找到匹配的可视化报表" dataKey="search" />
     ) : (
       <div className="grid gap-5 lg:grid-cols-2">
         <ReportCollection title="最近创建" subtitle="按最近编辑时间排列" icon={Clock3} reports={recentReports} onOpen={onOpen} emptyText="还没有创建过可视化报表" dataKey="recent" />
         <ReportCollection title="推荐使用" subtitle="优先推荐内容完整且常用的报表" icon={Sparkles} reports={recommendedReports} onOpen={onOpen} emptyText="有图表内容后会出现在推荐列表" dataKey="recommended" />
       </div>
-    )}
+    ))}
   </div>;
 }
 

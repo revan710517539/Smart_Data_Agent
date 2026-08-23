@@ -36,10 +36,21 @@ class UserDirectoryStore(Protocol):
     def delete_profile(self, user_id: str) -> bool:
         ...
 
+    def get_password_hash(self, user_id: str) -> str | None:
+        ...
+
+    def set_password_hash(self, user_id: str, password_hash: str) -> None:
+        ...
+
 
 class InMemoryUserDirectoryStore:
     def __init__(self, profiles: list[UserProfile] | None = None) -> None:
         self._profiles = {profile.user_id: profile for profile in profiles or []}
+        self._password_hashes: dict[str, str] = {}
+        from .passwords import default_password_hash
+
+        for profile in self._profiles.values():
+            self._password_hashes[profile.user_id] = default_password_hash()
 
     def list_profiles(self) -> list[UserProfile]:
         return sorted(self._profiles.values(), key=lambda profile: profile.user_id)
@@ -60,10 +71,28 @@ class InMemoryUserDirectoryStore:
 
     def upsert_profile(self, profile: UserProfile) -> UserProfile:
         self._profiles[profile.user_id] = profile
+        if profile.user_id not in self._password_hashes:
+            from .passwords import default_password_hash
+
+            self._password_hashes[profile.user_id] = default_password_hash()
         return profile
 
     def delete_profile(self, user_id: str) -> bool:
+        self._password_hashes.pop(user_id, None)
         return self._profiles.pop(user_id, None) is not None
+
+    def get_password_hash(self, user_id: str) -> str | None:
+        hashed = self._password_hashes.get(str(user_id or "").strip())
+        return str(hashed) if hashed else None
+
+    def set_password_hash(self, user_id: str, password_hash: str) -> None:
+        key = str(user_id or "").strip()
+        digest = str(password_hash or "").strip()
+        if not key or not digest:
+            raise ValueError("password_hash_required")
+        if key not in self._profiles:
+            raise KeyError("user_not_provisioned")
+        self._password_hashes[key] = digest
 
 
 class SQLiteUserDirectoryStore:
@@ -95,6 +124,15 @@ class SQLiteUserDirectoryStore:
 
             CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_user_profiles_email
                 ON platform_user_profiles(lower(email));
+
+            CREATE TABLE IF NOT EXISTS platform_user_credentials (
+                user_id TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                password_updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES platform_user_profiles(user_id) ON DELETE CASCADE
+            );
             """
         )
         self._conn.commit()
@@ -117,6 +155,42 @@ class SQLiteUserDirectoryStore:
                     profile.last_login,
                 ),
             )
+        self._ensure_default_password(profile.user_id)
+
+    def get_password_hash(self, user_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT password_hash FROM platform_user_credentials WHERE user_id = ?",
+            (str(user_id or "").strip(),),
+        ).fetchone()
+        if row is None:
+            return None
+        hashed = str(row["password_hash"] if isinstance(row, sqlite3.Row) else row[0] or "").strip()
+        return hashed or None
+
+    def set_password_hash(self, user_id: str, password_hash: str) -> None:
+        key = str(user_id or "").strip()
+        digest = str(password_hash or "").strip()
+        if not key or not digest:
+            raise ValueError("password_hash_required")
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO platform_user_credentials(user_id, password_hash, password_updated_at, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    password_hash = excluded.password_hash,
+                    password_updated_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (key, digest),
+            )
+
+    def _ensure_default_password(self, user_id: str) -> None:
+        if self.get_password_hash(user_id):
+            return
+        from .passwords import default_password_hash
+
+        self.set_password_hash(user_id, default_password_hash())
 
     def list_profiles(self) -> list[UserProfile]:
         rows = self._conn.execute(
@@ -179,6 +253,8 @@ class SQLiteUserDirectoryStore:
                     profile.last_login,
                 ),
             )
+        if self.get_password_hash(profile.user_id) is None:
+            self._ensure_default_password(profile.user_id)
         return profile
 
     def delete_profile(self, user_id: str) -> bool:

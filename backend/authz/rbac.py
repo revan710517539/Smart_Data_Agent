@@ -30,6 +30,7 @@ DEFAULT_TENANT_ADMIN_MENU_KEYS = (
     "business-analysis.sandbox",
     "business-analysis.funnel",
     "business-analysis.supervision",
+    "business-analysis.customer-segment",
     "business-analysis.email-daily",
     "self-analysis",
     "self-analysis.visual-reports",

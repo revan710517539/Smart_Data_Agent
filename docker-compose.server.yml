@@ -1,35 +1,117 @@
+x-sda-runtime: &sda-runtime
+  image: "${SMART_DATA_AGENT_IMAGE:?set an immutable 40-character SHA image tag}"
+  env_file:
+    - path: .env.production
+      required: true
+  environment: &sda-environment
+    SMART_DATA_AGENT_ENV: production
+    SMART_DATA_AGENT_AUTH_MODE: strict
+    SMART_DATA_AGENT_AUTH_SECRET: "${SMART_DATA_AGENT_AUTH_SECRET:?set protected auth secret}"
+    SMART_DATA_AGENT_CORS_ORIGINS: "${SMART_DATA_AGENT_PUBLIC_ORIGIN:?set public HTTPS origin}"
+    SMART_DATA_AGENT_DATABASE_URL: "${SMART_DATA_AGENT_DATABASE_URL:?set protected MySQL 8.0.18 URL with TLS}"
+    SMART_DATA_AGENT_DB_POOL_MIN: "${SMART_DATA_AGENT_DB_POOL_MIN:-2}"
+    SMART_DATA_AGENT_DB_POOL_MAX: "${SMART_DATA_AGENT_DB_POOL_MAX:-20}"
+    SMART_DATA_AGENT_AUTO_MIGRATE: "false"
+    SMART_DATA_AGENT_DATA_WAREHOUSE: csv
+    SMART_DATA_AGENT_DATA_CRAWLER_ROOT: /app/data
+    SMART_DATA_AGENT_SECRET_PROVIDER: kms
+    SMART_DATA_AGENT_KMS_COMMAND: "${SMART_DATA_AGENT_KMS_COMMAND:?set audited KMS provider command}"
+    SMART_DATA_AGENT_OBJECT_STORE: s3
+    SMART_DATA_AGENT_OBJECT_BUCKET: "${SMART_DATA_AGENT_OBJECT_BUCKET:?set object bucket}"
+    SMART_DATA_AGENT_OBJECT_REGION: "${SMART_DATA_AGENT_OBJECT_REGION:?set object region}"
+    SMART_DATA_AGENT_OBJECT_ENDPOINT: "${SMART_DATA_AGENT_OBJECT_ENDPOINT:-}"
+    SMART_DATA_AGENT_OBJECT_PREFIX: "${SMART_DATA_AGENT_OBJECT_PREFIX:-smart-data-agent}"
+    SMART_DATA_AGENT_OBJECT_KMS_KEY_ID: "${SMART_DATA_AGENT_OBJECT_KMS_KEY_ID:-}"
+    SMART_DATA_AGENT_REDIS_URL: "${SMART_DATA_AGENT_REDIS_URL:?set rediss URL}"
+    SMART_DATA_AGENT_EGRESS_ALLOWED_HOSTS: "${SMART_DATA_AGENT_EGRESS_ALLOWED_HOSTS:?set outbound allowlist}"
+    SMART_DATA_AGENT_EGRESS_PRIVATE_HOSTS: "${SMART_DATA_AGENT_EGRESS_PRIVATE_HOSTS:-}"
+    SMART_DATA_AGENT_EGRESS_DIRECT_HOSTS: "${SMART_DATA_AGENT_EGRESS_DIRECT_HOSTS:-}"
+    SMART_DATA_AGENT_CLAMAV_HOST: "${SMART_DATA_AGENT_CLAMAV_HOST:?set ClamAV host}"
+    SMART_DATA_AGENT_CLAMAV_PORT: "${SMART_DATA_AGENT_CLAMAV_PORT:-3310}"
+    SMART_DATA_AGENT_OIDC_ISSUER: "${SMART_DATA_AGENT_OIDC_ISSUER:?set OIDC issuer}"
+    SMART_DATA_AGENT_OIDC_CLIENT_ID: "${SMART_DATA_AGENT_OIDC_CLIENT_ID:?set OIDC client id}"
+    SMART_DATA_AGENT_OIDC_CLIENT_SECRET: "${SMART_DATA_AGENT_OIDC_CLIENT_SECRET:?set OIDC client secret}"
+    SMART_DATA_AGENT_OIDC_AUTHORIZATION_ENDPOINT: "${SMART_DATA_AGENT_OIDC_AUTHORIZATION_ENDPOINT:?set OIDC authorize endpoint}"
+    SMART_DATA_AGENT_OIDC_TOKEN_ENDPOINT: "${SMART_DATA_AGENT_OIDC_TOKEN_ENDPOINT:?set OIDC token endpoint}"
+    SMART_DATA_AGENT_OIDC_JWKS_URI: "${SMART_DATA_AGENT_OIDC_JWKS_URI:?set OIDC JWKS URI}"
+    SMART_DATA_AGENT_OIDC_REDIRECT_URI: "${SMART_DATA_AGENT_OIDC_REDIRECT_URI:?set OIDC redirect URI}"
+    SMART_DATA_AGENT_POST_LOGIN_URL: /
+    SMART_DATA_AGENT_STATIC_ROOT: /app/dist
+    SMART_DATA_AGENT_EMBEDDED_WORKER: "false"
+    SMART_DATA_AGENT_WORKER_HEALTH_FILE: /app/runtime/worker-health.json
+    SMART_DATA_AGENT_CAPABILITY_IMPORT_ACTOR: "${SMART_DATA_AGENT_CAPABILITY_IMPORT_ACTOR:-system}"
+    SMART_DATA_AGENT_CAPABILITY_MODE: verify
+    SMART_DATA_AGENT_DEFAULT_MODEL_API_BASE: "${SMART_DATA_AGENT_DEFAULT_MODEL_API_BASE:-}"
+    SMART_DATA_AGENT_DEFAULT_MODEL_API_KEY: "${SMART_DATA_AGENT_DEFAULT_MODEL_API_KEY:-}"
+    AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+    AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+    AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN:-}"
+  volumes:
+    - "${SMART_DATA_AGENT_DATA_CRAWLER_HOST_ROOT:-/opt/palywright/examples/data-crawler/runtime-data}:/app/data:ro"
+    - "${SMART_DATA_AGENT_MYSQL_CA_HOST_PATH:-/var/lib/mysql80/ca.pem}:/run/secrets/mysql_ca.pem:ro"
+    - "${SMART_DATA_AGENT_KMS_PROVIDER_HOST_PATH:?set audited KMS provider host path}:/run/secrets/sda-kms-provider:ro"
+    - smart-data-agent-runtime:/app/runtime
+    - smart-data-agent-topic-data:/app/Topic_Data
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  init: true
+
 services:
-  smart-data-agent:
-    build:
-      context: .
-      target: runtime
-    ports:
-      - "${SMART_DATA_AGENT_HTTP_PORT:-8787}:8787"
+  migration:
+    <<: *sda-runtime
+    command: ["python", "/app/scripts/migrate_mysql.py"]
+    restart: "no"
+
+  capabilities:
+    <<: *sda-runtime
     environment:
-      SMART_DATA_AGENT_ENV: development
-      SMART_DATA_AGENT_AUTH_MODE: development
-      SMART_DATA_AGENT_AUTH_SECRET: "${SMART_DATA_AGENT_AUTH_SECRET:?set SMART_DATA_AGENT_AUTH_SECRET in the protected environment}"
-      SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD: "${SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD:?set SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD in the protected environment}"
-      SMART_DATA_AGENT_CORS_ORIGINS: "${SMART_DATA_AGENT_CORS_ORIGINS:?set the public HTTPS origin}"
-      SMART_DATA_AGENT_DATABASE_URL: "${SMART_DATA_AGENT_DATABASE_URL:?set the protected MySQL URL}"
-      SMART_DATA_AGENT_DB_POOL_MIN: "${SMART_DATA_AGENT_DB_POOL_MIN:-2}"
-      SMART_DATA_AGENT_DB_POOL_MAX: "${SMART_DATA_AGENT_DB_POOL_MAX:-20}"
-      SMART_DATA_AGENT_AUTO_MIGRATE: "${SMART_DATA_AGENT_AUTO_MIGRATE:-true}"
-      SMART_DATA_AGENT_DATA_WAREHOUSE: csv
-      SMART_DATA_AGENT_DATA_CRAWLER_ROOT: /app/data
-      SMART_DATA_AGENT_OBJECT_STORE: local
-      SMART_DATA_AGENT_OBJECT_ROOT: /app/runtime/artifacts
-      SMART_DATA_AGENT_NON_STRUCTURED_ROOT: /app/runtime/non_structured
-      SMART_DATA_AGENT_STATIC_ROOT: /app/dist
-      SMART_DATA_AGENT_EMBEDDED_WORKER: "${SMART_DATA_AGENT_EMBEDDED_WORKER:-true}"
-    network_mode: bridge
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - "${SMART_DATA_AGENT_DATA_CRAWLER_HOST_ROOT:-/opt/smart-data-agent/src/app/data}:/app/data:ro"
-      - "${SMART_DATA_AGENT_MYSQL_CA_HOST_PATH:-/var/lib/mysql80/ca.pem}:/run/secrets/mysql_ca.pem:ro"
-      - smart-data-agent-runtime:/app/runtime
-      - smart-data-agent-topic-data:/app/Topic_Data
+      <<: *sda-environment
+      SMART_DATA_AGENT_CAPABILITY_MODE: seed
+    command: ["python", "/app/scripts/provision_production_capabilities.py"]
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+    restart: "no"
+
+  api:
+    <<: *sda-runtime
+    command: ["smart-data-agent-asgi", "--host", "0.0.0.0", "--port", "8787", "--workers", "1", "--static-root", "/app/dist"]
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      capabilities:
+        condition: service_completed_successfully
+      worker:
+        condition: service_healthy
+    ports:
+      - "${SMART_DATA_AGENT_HTTP_BIND:-127.0.0.1}:${SMART_DATA_AGENT_HTTP_PORT:-8787}:8787"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/api/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+    restart: unless-stopped
+
+  worker:
+    <<: *sda-runtime
+    command: ["smart-data-agent-worker", "--worker-id", "${SMART_DATA_AGENT_WORKER_ID:-automation-worker-1}", "--poll-seconds", "0.5"]
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      capabilities:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/check_worker_health.py", "/app/runtime/worker-health.json"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
     restart: unless-stopped
 
 volumes:

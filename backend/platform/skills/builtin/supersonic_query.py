@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from backend.platform.intelligent_analysis.uploaded_source import is_uploaded_analysis_table
 from backend.platform.semantic import SemanticQueryRequest, SemanticQueryService
 from backend.platform.skills.models import SkillRequest, SkillResult, SkillSpec
 
@@ -75,20 +76,23 @@ def _query_selected_csv(csv_source: Any | None, request: SkillRequest) -> SkillR
     selected = context.get("selected_raw_table") if isinstance(context, dict) else None
     if not isinstance(selected, dict) or not selected:
         return None
-    if csv_source is None:
-        raise RuntimeError("selected_csv_source_unavailable")
 
     requested_id = str(selected.get("id") or "").strip()
     requested_path = str(selected.get("relativePath") or "").strip()
     if not requested_id or not requested_path:
         raise ValueError("selected_csv_reference_invalid")
-    if requested_path == f"page-data://{requested_id}" and str(selected.get("kind") or "") == "page_data":
+    inline_selected = _is_inline_selected_table(selected)
+    if inline_selected:
         authorized = selected
         source_rows = [dict(row) for row in selected.get("previewRows", []) if isinstance(row, dict)]
         headers = [str(field.get("fieldNameEn") or "") for field in selected.get("fields", []) if isinstance(field, dict)]
         if not source_rows or not headers:
-            raise PermissionError("selected_multi_page_data_not_resolved")
+            if str(selected.get("kind") or "") == "page_data":
+                raise PermissionError("selected_multi_page_data_not_resolved")
+            raise PermissionError("selected_uploaded_source_not_resolved")
     else:
+        if csv_source is None:
+            raise RuntimeError("selected_csv_source_unavailable")
         tenant_source = csv_source.for_tenant(request.context.tenant_id)
         authorized = next(
             (
@@ -104,10 +108,12 @@ def _query_selected_csv(csv_source: Any | None, request: SkillRequest) -> SkillR
         headers, source_rows = tenant_source.read_rows(requested_path, max_rows=50_000)
     fields = [field for field in authorized.get("fields") or [] if isinstance(field, dict)]
     page_data_selected = str(authorized.get("kind") or "") == "page_data"
+    uploaded_selected = _is_uploaded_analysis_table(authorized)
+    inline_lookup = page_data_selected or uploaded_selected
     code_to_header = {
         str(field.get("fieldNameEn") or "").strip(): (
             str(field.get("fieldNameEn") or "").strip()
-            if page_data_selected
+            if inline_lookup
             else str(field.get("fieldNameCn") or field.get("fieldNameEn") or "").strip()
         )
         for field in fields
@@ -195,6 +201,12 @@ def _query_selected_csv(csv_source: Any | None, request: SkillRequest) -> SkillR
         )
         for code in dict.fromkeys([*dimensions, *metrics])
     }
+    if uploaded_selected:
+        field_labels = {
+            str(field.get("fieldNameEn") or ""): str(field.get("fieldNameCn") or field.get("fieldNameEn") or "")
+            for field in fields
+            if str(field.get("fieldNameEn") or "").strip()
+        }
     sql = _csv_query_statement(dataset_id, metrics, dimensions, definitions)
     source_snapshot = {
         "table_id": requested_id,
@@ -228,8 +240,16 @@ def _query_selected_csv(csv_source: Any | None, request: SkillRequest) -> SkillR
         },
         "semantic_info": {
             "dataset_id": dataset_id,
-            "data_source": "governed_multi_institution_page_data" if page_data_selected else "tenant_selected_raw_csv",
-            "execution_mode": "selected_multi_page_data" if page_data_selected else "selected_raw_csv",
+            "data_source": (
+                "governed_multi_institution_page_data" if page_data_selected
+                else "uploaded_file" if uploaded_selected
+                else "tenant_selected_raw_csv"
+            ),
+            "execution_mode": (
+                "selected_multi_page_data" if page_data_selected
+                else "uploaded_file" if uploaded_selected
+                else "selected_raw_csv"
+            ),
             "sql_executed": False,
             "policy_enforced_at_source": True,
             "publishable": bool(page_data_selected),
@@ -244,7 +264,11 @@ def _query_selected_csv(csv_source: Any | None, request: SkillRequest) -> SkillR
                 metric: str((definitions.get(metric) or {}).get("version") or "temporary")
                 for metric in metrics
             },
-            "metric_definition_source": "governed_page_data_schema" if page_data_selected else "temporary_table_schema",
+            "metric_definition_source": (
+                "governed_page_data_schema" if page_data_selected
+                else "uploaded_file_schema" if uploaded_selected
+                else "temporary_table_schema"
+            ),
             "aggregation_semantics_complete": True,
             "totals": totals,
             "full_group_count": full_group_count,
@@ -264,6 +288,19 @@ def _query_selected_csv(csv_source: Any | None, request: SkillRequest) -> SkillR
             "temporary_metric_semantics": True,
         },
     )
+
+
+def _is_uploaded_analysis_table(table: dict[str, Any]) -> bool:
+    return is_uploaded_analysis_table(table)
+
+
+def _is_inline_selected_table(table: dict[str, Any]) -> bool:
+    table_id = str(table.get("id") or "").strip()
+    path = str(table.get("relativePath") or "").strip()
+    kind = str(table.get("kind") or "").strip().lower()
+    if is_uploaded_analysis_table(table):
+        return True
+    return bool(table_id) and path == f"page-data://{table_id}" and kind == "page_data"
 
 
 def _csv_number(value: Any) -> float | None:

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import os
+import re
 from dataclasses import asdict, replace
 from http import HTTPStatus
 from datetime import datetime, timezone
@@ -18,9 +21,16 @@ from backend.platform.analysis_workspace.service import (
     safe_cache_key,
 )
 from backend.platform.analysis_workspace.visualization import VisualizationPlanner
-from backend.platform.api.support import send_route_exception
+from backend.platform.api.support import MAX_UPLOAD_BODY_BYTES, send_route_exception
 from backend.platform.intelligent_analysis import IntelligentAnalysisEngine
 from backend.platform.intelligent_analysis.engine import IntelligentAnalysisRequest
+from backend.platform.intelligent_analysis.uploaded_source import (
+    build_uploaded_document_summary,
+    classify_uploaded_source,
+    public_classify_payload,
+    remember_uploaded_source,
+    resolve_uploaded_analysis_sources,
+)
 from backend.platform.observability import RuntimeEvent
 from backend.platform.repository import serialize_task
 from backend.platform.security import validate_read_only_sql_candidate
@@ -53,6 +63,28 @@ def handle_analysis_run(handler: Any) -> None:
         )
         handler._send_json(result)
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def handle_analysis_uploaded_source(handler: Any) -> None:
+    try:
+        payload = handler._read_json(max_bytes=MAX_UPLOAD_BODY_BYTES)
+        context = handler._request_context(payload=payload)
+        handler.services.permission_broker.require_skill(context.to_execution_context(), "supersonic.query")
+        encoded = str(payload.get("content_base64") or payload.get("contentBase64") or "").strip()
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("invalid_content_base64") from exc
+        result = classify_uploaded_source(
+            str(payload.get("file_name") or payload.get("fileName") or payload.get("name") or ""),
+            content,
+            str(payload.get("content_type") or payload.get("contentType") or payload.get("type") or ""),
+        )
+        if result.get("classification") == "data_source" and result.get("content_hash"):
+            remember_uploaded_source(str(result.get("content_hash") or ""), result)
+        handler._send_json({"tenant_id": context.tenant_id, "source": public_classify_payload(result)})
+    except Exception as exc:  # pragma: no cover - HTTP boundary.
         send_route_exception(handler, exc)
 
 
@@ -285,7 +317,6 @@ def run_analysis(
 
     progress("context_understanding", 10, "running", "理解问题与装载上下文", "正在识别机构、业务问题、技能、文件和已选数据表。")
     requested_context = dict(page_context or {})
-    requested_context = _resolve_analysis_extensions(services, tenant_id, requested_context)
     request_id = str(requested_context.get("request_id") or "").strip()
     if request_id:
         existing = services.task_repository.get_task_by_request(tenant_id, request_id)
@@ -321,6 +352,7 @@ def run_analysis(
     planning_question = _visual_follow_up_planning_question(requested_context, question)
     if planning_question != question:
         requested_context["analysis_planning_question"] = planning_question
+    requested_context = _apply_scene_and_resolve_skills(services, tenant_id, question, requested_context)
 
     trace_id = services.trace_recorder.start_trace()
     started_at = perf_counter()
@@ -368,17 +400,31 @@ def run_analysis(
                 asset_context = _reused_visual_asset_context(requested_context, parent)
             else:
                 raise ValueError("analysis_selected_table_semantics_not_registered")
-        elif _requires_selected_production_source(services, requested_context, asset_context):
+        elif (
+            _requires_selected_production_source(services, requested_context, asset_context)
+            and not (isinstance(asset_context, dict) and asset_context.get("uploaded_document_summary"))
+        ):
             raise ValueError("analysis_production_data_table_required")
     context = ExecutionContext(
         user_id=user_id,
         tenant_id=tenant_id,
         page_context={
             "trace_id": trace_id,
+            "question": question,
             **requested_context,
             "asset_context": asset_context,
         },
     )
+    kernel = getattr(services, "runtime_kernel", None)
+    if kernel is not None:
+        try:
+            kernel.bind_request(context)
+        except Exception as exc:
+            services.trace_recorder.add_span(
+                "runtime.bind",
+                status="error",
+                error_code=type(exc).__name__,
+            )
     workspace_binding = _validate_workspace_binding(
         services,
         tenant_id=tenant_id,
@@ -450,9 +496,11 @@ def run_analysis(
         use_skill_solution_plan = any(
             str(skill.get("analysisMethod") or "").strip()
             for skill in _list_of_dicts(requested_context.get("analysis_context_skills"))
+            if str(skill.get("id") or "") not in _planner_skill_ids()
         )
         analysis_policy = _dict_or_empty(requested_context.get("analysis_policy"))
         data_first_mode = str(analysis_policy.get("resultDelivery") or analysis_policy.get("result_delivery") or "") == "data_first"
+        rail_model_runtime = _is_rail_brief_context(requested_context)
 
         def selected_model_planning_hook(server_plan: dict[str, Any]) -> dict[str, Any]:
             nonlocal planning_result
@@ -489,12 +537,19 @@ def run_analysis(
             progress("data_query", 30, "running", "查询业务数据", "正在执行受权限控制的语义查询并获取明细数据。")
             return planning_result
 
-        if selected_model and not use_skill_solution_plan and not data_first_mode and not use_reused_visual:
+        uploaded_document_summary = bool(isinstance(asset_context, dict) and asset_context.get("uploaded_document_summary"))
+        uploaded_document_analysis = None
+        if selected_model and (rail_model_runtime or not use_skill_solution_plan) and not data_first_mode and not use_reused_visual and not uploaded_document_summary:
             progress("model_planning", 20, "running", "生成分析方案", "正在将问题转换为指标、维度、查询和可视化方案。")
         else:
-            planning_source = "当前页面可视化数据" if visual_scope == "page" else "当前图表已查询数据"
-            progress("model_planning", 20, "skipped", "生成分析方案", f"已使用{planning_source}，先查询数据并减少一次模型等待。" if not use_reused_visual else "已复用当前可视化绑定的查询结果，不再重新选表。")
-            progress("data_query", 30, "running", "查询业务数据", "正在执行受权限控制的语义查询并获取明细数据。" if not use_reused_visual else "正在装载当前可视化已绑定的数据。")
+            if uploaded_document_summary:
+                planning_source = "上传文档文本"
+            elif visual_scope == "page":
+                planning_source = "当前页面可视化数据"
+            else:
+                planning_source = "当前图表已查询数据"
+            progress("model_planning", 20, "skipped", "生成分析方案", f"已使用{planning_source}，先查询数据并减少一次模型等待。" if not use_reused_visual and not uploaded_document_summary else ("上传文档改为文本总结，不查询系统数据表。" if uploaded_document_summary else "已复用当前可视化绑定的查询结果，不再重新选表。"))
+            progress("data_query", 30, "running", "查询业务数据", "正在整理上传文档文字。" if uploaded_document_summary else ("正在执行受权限控制的语义查询并获取明细数据。" if not use_reused_visual else "正在装载当前可视化已绑定的数据。"))
         if use_reused_visual and reused_visual is not None:
             if reused_plan:
                 task.analysis_plan = dict(reused_plan)
@@ -502,12 +557,28 @@ def run_analysis(
             query_result.pop("intelligent_analysis", None)
             query_result.pop("_analysis_plan", None)
             task.skill_results = [query_result]
+        elif uploaded_document_summary:
+            documents = [
+                {"name": str(item.get("name") or item.get("file_name") or "文档"), "extracted_text": str(item.get("extractedText") or item.get("extracted_text") or item.get("contentPreview") or "")}
+                for item in _list_of_dicts(requested_context.get("files"))
+            ]
+            sources = resolve_uploaded_analysis_sources(requested_context)
+            if sources.documents:
+                documents = sources.documents
+            query_result, uploaded_plan, uploaded_document_analysis = build_uploaded_document_summary(
+                question,
+                documents,
+                selected_model,
+            )
+            task.analysis_plan = uploaded_plan
+            planning_result = uploaded_plan
+            task.skill_results = [query_result]
         else:
             task = services.workflow.run(
                 context,
                 question,
                 task=task,
-                planning_hook=selected_model_planning_hook if selected_model and not use_skill_solution_plan and not data_first_mode else None,
+                planning_hook=selected_model_planning_hook if selected_model and (rail_model_runtime or not use_skill_solution_plan) and not data_first_mode else None,
             )
             query_result = dict(task.skill_results[0]) if task.skill_results else {}
         _raise_if_cancelled(cancellation_check)
@@ -532,17 +603,19 @@ def run_analysis(
                 inferred_metrics, inferred_dimensions = _infer_chart_fields(chart_rows)
                 chart_metrics = chart_metrics or inferred_metrics
                 chart_dimensions = chart_dimensions or inferred_dimensions
-            query_result["visualization_spec"] = VisualizationPlanner().plan(
-                question=question,
-                rows=chart_rows,
-                dimensions=chart_dimensions,
-                metrics=chart_metrics,
-                intent=analysis_plan,
-                proposed_chart_types=_string_list([chart_spec.get("type")]),
-                requested_chart_types=_string_list(_dict_or_empty(requested_context.get("visualization_preferences")).get("chart_types")),
-            ).payload()
+            if not uploaded_document_summary:
+                query_result["visualization_spec"] = VisualizationPlanner().plan(
+                    question=question,
+                    rows=chart_rows,
+                    dimensions=chart_dimensions,
+                    metrics=chart_metrics,
+                    intent=analysis_plan,
+                    proposed_chart_types=_string_list([chart_spec.get("type")]),
+                    requested_chart_types=_string_list(_dict_or_empty(requested_context.get("visualization_preferences")).get("chart_types")),
+                ).payload()
             task.skill_results[0] = query_result
-            services.workflow.enrich_with_data_product_skills(context, task, question)
+            if not uploaded_document_summary:
+                services.workflow.enrich_with_data_product_skills(context, task, question)
             query_result = dict(task.skill_results[0])
         task.trace_id = services.trace_recorder.trace_id
         services.task_repository.save_task(task)
@@ -553,7 +626,9 @@ def run_analysis(
             "succeeded",
             "查询业务数据",
             (
-                "已返回 0 行结果，当前没有可分析数据；将跳过模型结论，避免无效等待。"
+                "已从上传文档提取文字，正在生成文本总结。"
+                if uploaded_document_summary
+                else "已返回 0 行结果，当前没有可分析数据；将跳过模型结论，避免无效等待。"
                 if row_count == 0
                 else f"已返回 {row_count} 行结果，可先查看数据与可视化；模型将继续生成结论。"
             ),
@@ -586,10 +661,11 @@ def run_analysis(
                 query_result=query_result,
             )
         if not planning_result:
+            skip_model_planning = data_first_mode or (use_skill_solution_plan and not rail_model_runtime)
             planning_result = intelligent_engine.plan(
-                replace(final_request, model=None) if use_skill_solution_plan or data_first_mode else final_request
+                replace(final_request, model=None) if skip_model_planning else final_request
             )
-            if use_skill_solution_plan or data_first_mode:
+            if skip_model_planning:
                 planning_result["planning_invocation"] = {
                     "status": "skipped",
                     "callable": False,
@@ -601,23 +677,28 @@ def run_analysis(
                     "prompt_template_id": "data_first.server_plan.v1" if data_first_mode else "skill_solution.server_plan.v1",
                 }
         brief_follow_up = _is_rail_brief_context(requested_context)
-        if row_count == 0:
+        if uploaded_document_summary:
+            progress("model_conclusion", 50, "running", "生成文本总结", "正在根据上传文档生成文本总结。")
+        elif row_count == 0:
             progress("model_conclusion", 50, "skipped", "生成分析结论", "实际查询返回 0 行，跳过无数据情况下的模型结论调用。")
         elif brief_follow_up:
-            progress("model_conclusion", 50, "running", "归纳数据结论", "正在用两三句话概括当前图表数据。")
+            progress("model_conclusion", 50, "running", "生成精简分析结论", "正在融合分析规划、Skill、Memory 与当前证据生成精简结论。")
         else:
             progress("model_conclusion", 50, "running", "生成分析结论", "正在基于已执行的数据证据归纳发现、原因边界与建议。")
-        intelligent_analysis = intelligent_engine.analyze(
-            final_request,
-            planning_result,
-        )
-        if row_count != 0:
+        if uploaded_document_summary and isinstance(uploaded_document_analysis, dict):
+            intelligent_analysis = uploaded_document_analysis
+        else:
+            intelligent_analysis = intelligent_engine.analyze(
+                final_request,
+                planning_result,
+            )
+        if row_count != 0 or uploaded_document_summary:
             progress(
                 "model_conclusion",
                 50,
                 "succeeded",
-                "归纳数据结论" if brief_follow_up else "生成分析结论",
-                "已生成短结论并配一张聚焦图表。" if brief_follow_up else "已生成基于实际查询证据的分析摘要与关键发现。",
+                "生成精简分析结论" if brief_follow_up else "生成分析结论",
+                "已生成从总到分的可视化建议与精简数字结论。" if brief_follow_up else "已生成基于实际查询证据的分析摘要与关键发现。",
                 {"finding_count": len(intelligent_analysis.get("metric_findings") or [])},
             )
         _raise_if_cancelled(cancellation_check)
@@ -741,6 +822,16 @@ def run_analysis(
             "分析结果、可视化与思考阶段已全部就绪。",
             {"task_id": task.task_id, "publishable": task.status == "completed"},
         )
+        if kernel is not None:
+            try:
+                kernel.finish_request(context, task, status="ok" if task.status == "completed" else str(task.status or "ok"))
+                payload.update(kernel.public_analysis_fields(context))
+            except Exception as exc:
+                services.trace_recorder.add_span(
+                    "runtime.finish",
+                    status="error",
+                    error_code=type(exc).__name__,
+                )
         return payload
     except Exception as exc:
         if current_progress:
@@ -783,12 +874,57 @@ def run_analysis(
         )
         services.task_repository.save_task(task)
         services.task_repository.save_trace_spans(services.trace_recorder.spans())
+        if kernel is not None:
+            try:
+                kernel.finish_request(context, task, status="cancelled" if was_cancelled else "error")
+            except Exception:
+                pass
         raise
 
 
 def _raise_if_cancelled(cancellation_check: Any | None) -> None:
     if callable(cancellation_check) and bool(cancellation_check()):
         raise RuntimeError("analysis_cancelled")
+
+
+def _planner_skill_ids() -> frozenset[str]:
+    ids = {"scene-analysis-intent"}
+    try:
+        from backend.platform.kernel.scene import PLANNER_SKILL_IDS
+
+        ids.update(PLANNER_SKILL_IDS)
+    except Exception:
+        pass
+    try:
+        from backend.platform.assets.store import PLATFORM_VISIBLE_ANALYSIS_SKILL_IDS
+
+        ids.update(PLATFORM_VISIBLE_ANALYSIS_SKILL_IDS)
+    except Exception:
+        pass
+    return frozenset(ids)
+
+
+def _apply_scene_and_resolve_skills(
+    services: PlatformServices,
+    tenant_id: str,
+    question: str,
+    page_context: dict[str, Any],
+) -> dict[str, Any]:
+    page_context = _resolve_analysis_extensions(services, tenant_id, page_context)
+    catalog: list[dict[str, Any]] = []
+    store = getattr(services, "data_asset_store", None)
+    if store is not None:
+        try:
+            catalog = list((store.list_published_bundle(tenant_id) or {}).get("analysis_skills") or [])
+        except Exception:
+            catalog = []
+    try:
+        from backend.platform.kernel.scene import apply_analysis_scene
+
+        page_context = apply_analysis_scene(question, page_context, catalog)
+    except Exception:
+        return page_context
+    return _resolve_analysis_extensions(services, tenant_id, page_context)
 
 
 def _resolve_analysis_extensions(
@@ -852,7 +988,7 @@ def _resolve_analysis_extensions(
         "page-email-daily": ("邮件日报页面追问", "复核当前日报来源版本、发布门禁和投递状态。"),
         "page-my-reports": ("我的报告页面追问", "基于当前报告快照和重新执行的证据继续分析。"),
         "page-metric-management": ("指标管理页面追问", "基于当前指标语义版本检查口径和影响范围。"),
-        "page-data-management": ("数据管理页面追问", "基于当前数据资产版本检查 Schema、语义关系和影响范围。"),
+        "page-data-management": ("站内数据页面追问", "基于当前数据资产版本检查 Schema、语义关系和影响范围。"),
         "page-weekly-core": ("经营周报三指标结论", "基于当前机构已载入的周报三指标和重新执行的数据证据形成结论，不依赖其他机构的 Skill 目录。"),
     }
     for reference in requested[:12]:
@@ -860,6 +996,13 @@ def _resolve_analysis_extensions(
         if not skill_id or skill_id in seen:
             continue
         configured = skill_by_id.get(skill_id) or skill_by_id.get(legacy_skill_ids.get(skill_id, ""))
+        if configured is None:
+            try:
+                from backend.platform.assets.store import analysis_skill_template
+
+                configured = analysis_skill_template(legacy_skill_ids.get(skill_id, skill_id))
+            except Exception:
+                configured = None
         if configured is None:
             if skill_id in page_skills:
                 name, description = page_skills[skill_id]
@@ -1115,6 +1258,10 @@ def _visual_analysis_scope(requested_context: dict[str, Any]) -> str:
     requested = str(requested_context.get("visual_analysis_scope") or "").strip()
     if requested in {"chart", "page"}:
         return requested
+    # A manual revision or explicit execution continuation is scoped to its
+    # parent execution even when the caller does not repeat chart metadata.
+    if str(requested_context.get("parent_task_id") or requested_context.get("parent_execution_id") or "").strip():
+        return "chart"
     return "chart" if _is_visual_follow_up(requested_context) else "page"
 
 
@@ -1122,7 +1269,9 @@ def _is_rail_brief_context(requested_context: dict[str, Any]) -> bool:
     policy = _dict_or_empty(requested_context.get("analysis_policy"))
     if str(policy.get("resultFormat") or policy.get("result_format") or "").strip() == "brief_visual":
         return True
-    return str(requested_context.get("visual_analysis_scope") or "").strip() in {"chart", "page"}
+    scene = _dict_or_empty(requested_context.get("analysis_scene"))
+    hint = str(requested_context.get("analysis_scene_hint") or scene.get("surface") or "").strip()
+    return hint in {"chart_followup", "page_rail"}
 
 
 def _infer_chart_fields(rows: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
@@ -1415,14 +1564,27 @@ def _build_asset_context(
     *,
     user_id: str = "",
 ) -> dict[str, Any]:
+    uploaded = resolve_uploaded_analysis_sources(page_context if isinstance(page_context, dict) else {})
+    if uploaded.media_blocked:
+        raise ValueError("analysis_uploaded_media_unsupported")
+    if uploaded.data_tables:
+        return {
+            "selected_data_tables": uploaded.data_tables[:1],
+            "topics": [],
+            "uploaded_data_source": True,
+        }
     store = getattr(services, "data_asset_store", None)
     if store is None:
+        if uploaded.documents:
+            return {"selected_data_tables": [], "topics": [], "uploaded_document_summary": True}
         return {}
     try:
         bundle = store.list_published_bundle(tenant_id)
     except KeyError as exc:
         if exc.args != ("tenant_not_provisioned",):
             raise
+        if uploaded.documents:
+            return {"selected_data_tables": [], "topics": [], "uploaded_document_summary": True}
         return {}
 
     selected_topic = page_context.get("selected_topic") if isinstance(page_context, dict) else None
@@ -1500,7 +1662,11 @@ def _build_asset_context(
                 },
             }
         selected_data_tables.append(matched)
-    if not selected_data_tables and isinstance(metric_preset.get("selected_table"), dict):
+    if (
+        not selected_data_tables
+        and not uploaded.documents
+        and isinstance(metric_preset.get("selected_table"), dict)
+    ):
         # Only a published dictionary metric with an explicit table mapping may
         # supply this preset. Never choose the first available tenant table.
         selected_data_tables.append(metric_preset["selected_table"])
@@ -1559,6 +1725,16 @@ def _build_asset_context(
         for experience in bundle.get("analysis_experiences", [])
         if str(experience.get("id") or "") in experience_ids
     ]
+    related_memories = _relevant_analysis_memories(question, published_memories)
+    selected_memory_ids = {str(item.get("id") or "") for item in selected_memories}
+    for memory in [*matched_intents, *experiences, *related_memories]:
+        memory_id = str(memory.get("id") or "") if isinstance(memory, dict) else ""
+        if not memory_id or memory_id in selected_memory_ids:
+            continue
+        selected_memories.append(_bounded_extension_asset(memory))
+        selected_memory_ids.add(memory_id)
+        if len(selected_memories) >= 12:
+            break
     metric_dictionary_definitions = _metric_dictionary_context(
         services,
         tenant_id,
@@ -1585,7 +1761,43 @@ def _build_asset_context(
         "raw_table_count": len(raw_tables),
         "multi_institution_page_data_count": len(multi_page_tables),
         "knowledge_file_count": len(bundle.get("knowledge_files", [])),
+        "uploaded_document_summary": bool(uploaded.documents and not selected_data_tables),
     }
+
+
+def _relevant_analysis_memories(question: str, memories: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = str(question or "").casefold()
+    if not normalized:
+        return []
+    ranked: list[tuple[int, str, dict[str, Any]]] = []
+    for memory in memories:
+        if not isinstance(memory, dict) or memory.get("enabled") is False:
+            continue
+        score = 0
+        keywords = _memory_terms(memory.get("keywords"))
+        metrics = _memory_terms(memory.get("relatedMetrics") or memory.get("related_metrics"))
+        titles = _memory_terms([memory.get("title"), memory.get("name"), memory.get("scenario"), memory.get("purpose")])
+        descriptions = _memory_terms([memory.get("description"), memory.get("behaviorDetail"), memory.get("habitType")])
+        score += sum(5 for term in keywords if term in normalized)
+        score += sum(4 for term in metrics if term in normalized)
+        score += sum(3 for term in titles if term in normalized)
+        score += sum(1 for term in descriptions if term in normalized)
+        if score:
+            ranked.append((score, str(memory.get("updatedAt") or memory.get("id") or ""), memory))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [item[2] for item in ranked[:8]]
+
+
+def _memory_terms(value: Any) -> list[str]:
+    values = value if isinstance(value, list) else [value]
+    result: list[str] = []
+    for item in values:
+        text = str(item or "").casefold()
+        for term in re.split(r"[\s,，;；、|/]+", text):
+            term = term.strip("：:。.!！?？()（）[]【】")
+            if len(term) >= 2 and term not in result:
+                result.append(term)
+    return result[:24]
 
 
 def _multi_page_data_analysis_table(item: dict[str, Any]) -> dict[str, Any]:

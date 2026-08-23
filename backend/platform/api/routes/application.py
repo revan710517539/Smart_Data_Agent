@@ -6,11 +6,13 @@ from urllib.parse import parse_qs
 
 from backend.platform.api.support import first_query_value, send_route_exception
 from backend.platform.api.routes.assets import (
+    CUSTOMER_SEGMENT_PAGE_DATA_SCOPE,
     MULTI_INSTITUTION_PAGE_DATA_SCOPE,
     _page_data_scope,
     _visualization_topic_tables,
 )
 from backend.platform.application.store import ApplicationActionUnavailable, UnsupportedApplicationAction
+from backend.platform.settings import ensure_default_models_for_account
 
 
 def handle_application_module_get(handler: Any, query: str) -> None:
@@ -22,6 +24,7 @@ def handle_application_module_get(handler: Any, query: str) -> None:
             raise ValueError("module_key is required.")
         handler._require_application_permission(context, "read")
         module = handler.services.application_store.get_module(context.tenant_id, module_key, actor_user_id=context.user_id)
+        _attach_registration_todos(handler, context, module_key, module)
         handler._send_json(module)
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
         send_route_exception(handler, exc)
@@ -53,7 +56,7 @@ def handle_application_action_post(handler: Any) -> None:
                     task_payload["ownerUserId"] = context.user_id
                     task_payload["createdBy"] = context.user_id
                 action_payload["task"] = task_payload
-        if action == "set_page_data_layout" and module_key in {"dashboard", "weekly_report", "institution_supervision"}:
+        if action == "set_page_data_layout" and module_key in {"dashboard", "weekly_report", "institution_supervision", "customer_segment_analysis"}:
             action_payload = dict(action_payload or {})
             if not handler.services.permission_broker.enforcer.has_super_admin_role(
                 context.user_id, context.tenant_id,
@@ -70,14 +73,24 @@ def handle_application_action_post(handler: Any) -> None:
                 and (
                     (_page_data_scope(item) == MULTI_INSTITUTION_PAGE_DATA_SCOPE)
                     if module_key == "dashboard"
-                    else (_page_data_scope(item) != MULTI_INSTITUTION_PAGE_DATA_SCOPE)
+                    else (_page_data_scope(item) == CUSTOMER_SEGMENT_PAGE_DATA_SCOPE)
+                    if module_key == "customer_segment_analysis"
+                    else (_page_data_scope(item) not in {MULTI_INSTITUTION_PAGE_DATA_SCOPE, CUSTOMER_SEGMENT_PAGE_DATA_SCOPE})
                 )
             }
             normalized_ids = [str(asset_id or "").strip() for asset_id in requested_ids]
             if len(normalized_ids) != len(set(normalized_ids)) or any(asset_id not in allowed_ids for asset_id in normalized_ids):
                 raise PermissionError("page_data_layout_asset_unavailable")
             action_payload["assetIds"] = normalized_ids
-        if action == "set_page_data_notes" and module_key in {"dashboard", "weekly_report", "institution_supervision"}:
+        if action == "set_page_visual_layout" and module_key in {"customer_insight", "competition_analysis"}:
+            action_payload = dict(action_payload or {})
+            if not handler.services.permission_broker.enforcer.has_super_admin_role(
+                context.user_id, context.tenant_id,
+            ):
+                raise PermissionError("global_super_admin_required_for_page_layout")
+            if not isinstance(action_payload.get("items"), list):
+                raise ValueError("page_visual_layout_invalid")
+        if action == "set_page_data_notes" and module_key in {"dashboard", "weekly_report", "institution_supervision", "customer_segment_analysis"}:
             action_payload = dict(action_payload or {})
             published = handler.services.data_asset_store.list_published_bundle(context.tenant_id)
             allowed_ids = {
@@ -87,7 +100,9 @@ def handle_application_action_post(handler: Any) -> None:
                 and (
                     (_page_data_scope(item) == MULTI_INSTITUTION_PAGE_DATA_SCOPE)
                     if module_key == "dashboard"
-                    else (_page_data_scope(item) != MULTI_INSTITUTION_PAGE_DATA_SCOPE)
+                    else (_page_data_scope(item) == CUSTOMER_SEGMENT_PAGE_DATA_SCOPE)
+                    if module_key == "customer_segment_analysis"
+                    else (_page_data_scope(item) not in {MULTI_INSTITUTION_PAGE_DATA_SCOPE, CUSTOMER_SEGMENT_PAGE_DATA_SCOPE})
                 )
             }
             notes = action_payload.get("notes")
@@ -116,6 +131,38 @@ def handle_application_action_post(handler: Any) -> None:
             action_payload = dict(action_payload or {})
             _authorize_visual_report_delete(handler, context, str(action_payload.get("reportId") or action_payload.get("id") or ""))
         handler._require_application_permission(context, "execute")
+        if module_key == "agent_workspace" and action in {"approve_registration", "reject_registration"}:
+            reviewed = _review_registration(handler, context, action, action_payload or {})
+            module = handler.services.application_store.get_module(
+                context.tenant_id, module_key, actor_user_id=context.user_id
+            )
+            _attach_registration_todos(handler, context, module_key, module)
+            handler._write_audit(
+                context,
+                f"application.{action}",
+                "application_module",
+                target_id=module_key,
+                detail={"payload": action_payload or {}, "result": reviewed},
+            )
+            handler._send_json(
+                {
+                    "tenant_id": context.tenant_id,
+                    "module_key": module_key,
+                    "action": {
+                        "id": f"act_{action}",
+                        "moduleKey": module_key,
+                        "action": action,
+                        "status": "completed",
+                        "payload": action_payload or {},
+                        "result": reviewed,
+                        "createdBy": context.user_id,
+                        "createdAt": module.get("updated_at") or "",
+                    },
+                    "result": reviewed,
+                    "module": module,
+                }
+            )
+            return
         result = handler.services.application_store.run_action(
             context.tenant_id,
             module_key,
@@ -143,6 +190,48 @@ def handle_application_action_post(handler: Any) -> None:
         )
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
         send_route_exception(handler, exc)
+
+
+def _review_registration(handler: Any, context: Any, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if not handler.services.access_service._is_super_admin(context.user_id):
+        raise PermissionError("global_super_admin_required")
+    request_id = str(
+        payload.get("requestId")
+        or payload.get("registrationRequestId")
+        or payload.get("todoId")
+        or payload.get("id")
+        or ""
+    ).strip()
+    reviewed = handler.services.access_service.review_registration(
+        context.to_execution_context(),
+        request_id,
+        approved=action == "approve_registration",
+    )
+    if action == "approve_registration":
+        session = reviewed.get("user") if isinstance(reviewed.get("user"), dict) else {}
+        user = session.get("user") if isinstance(session.get("user"), dict) else {}
+        user_id = str(user.get("id") or "")
+        if user_id:
+            ensure_default_models_for_account(
+                handler.services.system_config_store,
+                user_id,
+                updated_by=context.user_id,
+            )
+    return reviewed
+
+
+def _attach_registration_todos(handler: Any, context: Any, module_key: str, module: dict[str, Any]) -> None:
+    if module_key != "agent_workspace" or not handler.services.access_service._is_super_admin(context.user_id):
+        return
+    state = module.get("state") if isinstance(module.get("state"), dict) else {}
+    todos = [item for item in (state.get("todos") or []) if isinstance(item, dict)]
+    existing = {str(item.get("id") or "") for item in todos}
+    for todo in handler.services.access_service.registration_todos():
+        todo_id = str(todo.get("id") or "")
+        if todo_id and todo_id not in existing:
+            todos.insert(0, todo)
+    state["todos"] = todos
+    module["state"] = state
 
 
 def _bind_visual_report_payload(handler: Any, context: Any, payload: dict[str, Any]) -> dict[str, Any]:

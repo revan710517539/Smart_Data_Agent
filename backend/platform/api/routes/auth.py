@@ -3,19 +3,22 @@ from __future__ import annotations
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 import hashlib
-import hmac
 import os
 from typing import Any
 from urllib.parse import parse_qs
+from uuid import uuid4
 
-from backend.platform.api.support import send_route_exception
+from backend.authz import SUPER_ADMIN_USER_ID
+from backend.platform.api.support import APIRequestContext, send_route_exception
 from backend.platform.security import AuthenticationError, make_session_token
-from backend.platform.settings import ensure_default_models_for_account
 
 
 def handle_auth_login(handler: Any) -> None:
+    payload: dict[str, Any] = {}
     try:
+        payload = handler._read_json()
         if handler.services.runtime_config.auth_mode != "development":
+            _best_effort_login_survey(handler, None, payload)
             handler._send_json(
                 {
                     "error": "external_identity_required",
@@ -24,17 +27,20 @@ def handle_auth_login(handler: Any) -> None:
                 HTTPStatus.FORBIDDEN,
             )
             return
-        payload = handler._read_json()
         email = str(payload.get("email") or "").strip()
         password = str(payload.get("password") or "")
-        expected_password = os.getenv("SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD", "")
-        if not expected_password:
-            raise ValueError("development_login_password_unconfigured")
-        if not hmac.compare_digest(password, expected_password):
+        if not password:
             raise ValueError("invalid_login_credentials")
         tenant_hint = str(payload.get("tenant_id") or payload.get("institution") or "").strip() or None
-        session = handler.services.access_service.login_by_email(email, tenant_hint=tenant_hint)
+        try:
+            session = handler.services.access_service.login_by_email(email, tenant_hint=tenant_hint, password=password)
+        except Exception:
+            _best_effort_login_survey(handler, None, payload)
+            raise
+        survey_submission = _best_effort_login_survey(handler, session, payload)
         response, cookies = _issue_session(handler, session)
+        if survey_submission:
+            response["survey_submission"] = survey_submission
         user = session.get("user") if isinstance(session.get("user"), dict) else {}
         try:
             handler.services.interaction_event_store.write(
@@ -57,6 +63,144 @@ def handle_auth_login(handler: Any) -> None:
         send_route_exception(handler, exc)
 
 
+def handle_auth_login_survey(handler: Any) -> None:
+    try:
+        payload = handler._read_json()
+        message = _create_login_survey_if_present(handler, None, payload)
+        handler._send_json(
+            {"status": "saved" if message else "ignored_empty", "survey_submission": message},
+            HTTPStatus.CREATED if message else HTTPStatus.OK,
+        )
+    except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def _best_effort_login_survey(
+    handler: Any,
+    session: dict[str, Any] | None,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    try:
+        return _create_login_survey_if_present(handler, session, payload)
+    except Exception:
+        # Survey persistence is additive. It must never change the existing
+        # login success/failure behavior or prevent enterprise login fallback.
+        return None
+
+
+def _create_login_survey_if_present(
+    handler: Any,
+    session: dict[str, Any] | None,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    survey = payload.get("survey")
+    if survey is None:
+        return None
+    if not isinstance(survey, dict):
+        raise ValueError("login_survey_invalid")
+    needed_metrics = _login_survey_answer(survey.get("needed_metrics") or survey.get("neededMetrics"))
+    report_usage = _login_survey_answer(survey.get("report_usage") or survey.get("reportUsage"))
+    if not needed_metrics and not report_usage:
+        return None
+    session_payload = session if isinstance(session, dict) else {}
+    user = session_payload.get("user") if isinstance(session_payload.get("user"), dict) else {}
+    tenant_id = str(session_payload.get("tenant_id") or "").strip() or _login_survey_tenant_id(handler, payload, survey)
+    account_hint = str(payload.get("email") or payload.get("account") or survey.get("account") or "").strip()
+    profile = handler.services.access_service.find_profile_by_contact(account_hint) if account_hint else None
+    user_id = str(user.get("id") or getattr(profile, "user_id", "") or "").strip()
+    if not user_id:
+        # Production message-board rows require a provisioned technical author.
+        # The visible author remains "登录页访客" and the content/audit detail
+        # explicitly marks the identity as unverified.
+        user_id = SUPER_ADMIN_USER_ID
+    author_name = str(user.get("name") or getattr(profile, "name", "") or "登录页访客").strip()
+    if not user_id or not tenant_id:
+        raise ValueError("login_survey_identity_required")
+    message_id = str(survey.get("message_id") or survey.get("messageId") or f"mb_{uuid4().hex}").strip()
+    verified = bool(session)
+    trigger = _login_survey_trigger(survey.get("trigger"))
+    content = (
+        f"你需要什么指标？\n{needed_metrics or '（未填写）'}\n\n"
+        f"你平时怎么用报表？\n{report_usage or '（未填写）'}\n\n"
+        f"采集方式：{trigger}\n"
+        f"身份状态：{'账号已通过登录验证' if verified else '登录前自动保存，填写账号尚未验证'}"
+    )
+    masked_account = _mask_login_account(account_hint)
+    if masked_account:
+        content += f"\n填写账号：{masked_account}"
+    message = handler.services.message_board_service.create_login_survey(
+        tenant_id,
+        user_id,
+        author_name,
+        {
+            "message_id": message_id,
+            "content": content,
+        },
+    )
+    context = APIRequestContext(user_id=user_id, tenant_id=tenant_id)
+    handler._write_audit(
+        context,
+        "message_board.login_survey.create",
+        "message_board_entry",
+        message["message_id"],
+        {
+            "page_key": "login-survey",
+            "question_count": int(bool(needed_metrics)) + int(bool(report_usage)),
+            "trigger": trigger,
+            "verified": verified,
+            "storage_surrogate": not bool(user) and profile is None,
+        },
+    )
+    return {"message_id": message["message_id"], "status": message["status"], "verified": verified}
+
+
+def _login_survey_answer(value: Any) -> str:
+    text = str(value or "").strip()
+    if len(text) > 1000:
+        raise ValueError("login_survey_answer_too_long")
+    return text
+
+
+def _login_survey_tenant_id(handler: Any, payload: dict[str, Any], survey: dict[str, Any]) -> str:
+    from backend.platform.api.routes.tenants import _active_tenants
+
+    candidate = str(
+        payload.get("tenant_id")
+        or payload.get("institution")
+        or survey.get("tenant_id")
+        or survey.get("tenantId")
+        or survey.get("institution")
+        or ""
+    ).strip()
+    for tenant in _active_tenants(handler):
+        tenant_id = str(tenant.get("id") or "").strip()
+        tenant_name = str(tenant.get("name") or "").strip()
+        if candidate in {tenant_id, tenant_name}:
+            return tenant_id
+    raise ValueError("login_survey_institution_invalid")
+
+
+def _login_survey_trigger(value: Any) -> str:
+    return {
+        "login": "点击登录",
+        "cancel": "点击取消",
+        "pagehide": "关闭或离开登录页",
+    }.get(str(value or "login").strip().lower(), "登录页自动保存")
+
+
+def _mask_login_account(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "@" in text:
+        local, domain = text.split("@", 1)
+        visible = local[:2]
+        return f"{visible}{'*' * max(2, min(6, len(local) - len(visible)))}@{domain}"
+    if len(text) <= 4:
+        return "*" * len(text)
+    return f"{text[:3]}{'*' * max(3, len(text) - 7)}{text[-4:]}"
+
+
 def handle_auth_register(handler: Any) -> None:
     try:
         if handler.services.runtime_config.auth_mode != "development":
@@ -69,20 +213,24 @@ def handle_auth_register(handler: Any) -> None:
             )
             return
         payload = handler._read_json()
-        session = handler.services.access_service.register_operator_by_email(payload)
-        user = session.get("user") if isinstance(session.get("user"), dict) else {}
-        ensure_default_models_for_account(
-            handler.services.system_config_store,
-            str(user.get("id") or ""),
-            updated_by="system",
-        )
-        response, cookies = _issue_session(handler, session)
-        handler._send_json(
-            response,
-            HTTPStatus.CREATED,
-            headers={"Set-Cookie": cookies},
-        )
+        result = handler.services.access_service.submit_registration_request(payload)
+        handler._send_json(result, HTTPStatus.ACCEPTED)
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def handle_auth_password_change(handler: Any) -> None:
+    try:
+        context = handler._request_context()
+        payload = handler._read_json()
+        handler.services.access_service.change_password(
+            context.user_id,
+            str(payload.get("current_password") or payload.get("currentPassword") or ""),
+            str(payload.get("new_password") or payload.get("newPassword") or ""),
+        )
+        handler._write_audit(context, "auth.password.change", "user", context.user_id)
+        handler._send_json({"status": "password_changed"})
+    except Exception as exc:  # pragma: no cover - HTTP boundary.
         send_route_exception(handler, exc)
 
 
@@ -118,9 +266,12 @@ def handle_auth_refresh(handler: Any) -> None:
             refresh_token,
             access_ttl_seconds=_access_ttl_seconds(),
         )
-        session = handler.services.access_service.session_for_user(
-            grant.user_id,
-            tenant_hint=grant.primary_tenant_id,
+        session = _session_with_tenant_directory(
+            handler,
+            handler.services.access_service.session_for_user(
+                grant.user_id,
+                tenant_hint=grant.primary_tenant_id,
+            ),
         )
         token = _token_for_grant(grant, is_super_admin=bool(session.get("is_super_admin")))
         handler._send_json(
@@ -143,7 +294,10 @@ def handle_auth_me(handler: Any, query: str = "") -> None:
         if not cookies.get("sda_session") and not authorization.lower().startswith("bearer "):
             raise AuthenticationError("authentication token is required.")
         context = handler._request_context()
-        session = handler.services.access_service.session_for_user(context.user_id, tenant_hint=context.tenant_id)
+        session = _session_with_tenant_directory(
+            handler,
+            handler.services.access_service.session_for_user(context.user_id, tenant_hint=context.tenant_id),
+        )
         handler._send_json(session)
     except Exception as exc:  # pragma: no cover - HTTP boundary.
         send_route_exception(handler, exc)
@@ -188,11 +342,12 @@ def handle_auth_oidc_callback(handler: Any, query: str = "") -> None:
 
 
 def _issue_session(handler: Any, session: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    session = _session_with_tenant_directory(handler, session)
     user = session.get("user") if isinstance(session.get("user"), dict) else {}
     tenant_ids = tuple(
-        _tenant_id_from_label(institution)
-        for institution in session.get("institutions", [])
-        if str(institution or "").strip()
+        str(item.get("id") or "").strip()
+        for item in session.get("tenant_directory", [])
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
     )
     grant = handler.services.session_store.issue(
         str(user.get("id") or ""),
@@ -210,6 +365,57 @@ def _issue_session(handler: Any, session: dict[str, Any]) -> tuple[dict[str, Any
     response["session_idle_expires_at"] = grant.idle_expires_at
     response["session_absolute_expires_at"] = grant.absolute_expires_at
     return response, _session_cookies(token, grant.refresh_token, handler.services.runtime_config.is_production)
+
+
+def _session_with_tenant_directory(handler: Any, session: dict[str, Any]) -> dict[str, Any]:
+    """Attach the authoritative tenant-code/display-name directory to a session.
+
+    Access assignments intentionally store canonical tenant codes.  UI labels
+    come from ``platform_tenants`` (or the deterministic local catalog), never
+    from string manipulation of a display name.  Keeping both values in the
+    session response gives login, restore, refresh and tenant switching one
+    normalization contract.
+    """
+
+    from backend.platform.api.routes.tenants import _active_tenants
+
+    user = session.get("user") if isinstance(session.get("user"), dict) else {}
+    tenant_roles = user.get("tenantRoles") if isinstance(user.get("tenantRoles"), list) else []
+    is_super_admin = bool(session.get("is_super_admin")) or any(
+        isinstance(role, dict) and (role.get("tenantId") == "*" or role.get("role") == "超级管理员")
+        for role in tenant_roles
+    )
+    authorized_ids = {
+        str(role.get("tenantId") or "").strip()
+        for role in tenant_roles
+        if isinstance(role, dict) and str(role.get("tenantId") or "").strip() not in {"", "*"}
+    }
+    current_id = str(session.get("tenant_id") or "").strip()
+    if current_id:
+        authorized_ids.add(current_id)
+    directory = [
+        {"id": str(item.get("id") or "").strip(), "name": str(item.get("name") or "").strip()}
+        for item in _active_tenants(handler)
+        if isinstance(item, dict)
+        and str(item.get("id") or "").strip()
+        and (is_super_admin or str(item.get("id") or "").strip() in authorized_ids)
+    ]
+    by_id = {item["id"]: item for item in directory}
+    if current_id and current_id not in by_id:
+        # Fail closed on authorization, but retain a bounded display fallback
+        # for a just-provisioned tenant whose catalog transaction is not yet
+        # visible.  The ID remains the backend-issued canonical value.
+        fallback_name = str(session.get("institution") or "").strip() or current_id
+        directory.append({"id": current_id, "name": fallback_name})
+        by_id[current_id] = directory[-1]
+    selected = by_id.get(current_id)
+    return {
+        **session,
+        "tenant_id": current_id,
+        "institution": str((selected or {}).get("name") or session.get("institution") or ""),
+        "institutions": [item["name"] for item in directory],
+        "tenant_directory": directory,
+    }
 
 
 def _token_for_grant(grant: Any, *, is_super_admin: bool = False) -> str:

@@ -241,3 +241,87 @@ class CSVFolderSourceTest(unittest.TestCase):
             self.assertEqual(tenant_source.table_assets()[0]["previewRows"][0]["机构"], "华兴银行")
             with self.assertRaises(FileNotFoundError):
                 tenant_source.read("csv/source_zhengzhou/2026-08-14/20260814_100000_郑州日报.csv")
+
+    def test_production_manifest_is_exact_tenant_and_file_boundary(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            institution = root / "华兴银行"
+            institution.mkdir()
+            approved = institution / "经营日报.csv"
+            approved.write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            # A stale file present on the mount is not part of the signed
+            # delivery and therefore cannot enter the runtime catalog.
+            (institution / "旧文件.csv").write_text("机构,金额\n华兴银行,999\n", encoding="utf-8")
+            self._write_manifest(root, "tenant:华兴银行", "华兴银行", approved)
+
+            with patch.dict(os.environ, {"SMART_DATA_AGENT_ENV": "production"}, clear=False):
+                source = CSVFolderSource(root).for_tenant("tenant:华兴银行")
+                snapshot = source.snapshot(force=True)
+
+            self.assertEqual(snapshot["contract_status"], "validated")
+            self.assertEqual(snapshot["contract_error"], "")
+            self.assertEqual([item["file_name"] for item in snapshot["files"]], ["经营日报.csv"])
+            self.assertEqual(snapshot["tenant_id"], "tenant:华兴银行")
+
+    def test_production_manifest_missing_and_wrong_tenant_fail_closed(self) -> None:
+        with TemporaryDirectory() as tmpdir, patch.dict(
+            os.environ, {"SMART_DATA_AGENT_ENV": "production"}, clear=False
+        ):
+            root = Path(tmpdir)
+            (root / "华兴银行").mkdir()
+            (root / "华兴银行" / "经营日报.csv").write_text("机构,金额\nA,1\n", encoding="utf-8")
+            missing = CSVFolderSource(root).for_tenant("tenant:华兴银行").snapshot(force=True)
+            self.assertEqual(missing["contract_status"], "invalid")
+            self.assertEqual(missing["contract_error"], "crawler_manifest_missing")
+            self.assertEqual(missing["files"], [])
+
+            approved = root / "华兴银行" / "经营日报.csv"
+            self._write_manifest(root, "tenant:华兴银行", "华兴银行", approved)
+            wrong = CSVFolderSource(root).for_tenant("tenant:郑州银行").snapshot(force=True)
+            self.assertEqual(wrong["contract_status"], "invalid")
+            self.assertEqual(wrong["contract_error"], "crawler_tenant_directory_mapping_missing")
+            self.assertEqual(wrong["files"], [])
+
+    def test_production_manifest_checksum_mismatch_fails_closed(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            institution = root / "华兴银行"
+            institution.mkdir()
+            approved = institution / "经营日报.csv"
+            approved.write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            self._write_manifest(root, "tenant:华兴银行", "华兴银行", approved)
+            approved.write_text("机构,金额\n华兴银行,2\n", encoding="utf-8")
+
+            with patch.dict(os.environ, {"SMART_DATA_AGENT_ENV": "production"}, clear=False):
+                snapshot = CSVFolderSource(root).for_tenant("tenant:华兴银行").snapshot(force=True)
+
+            self.assertEqual(snapshot["contract_status"], "invalid")
+            self.assertEqual(snapshot["contract_error"], "crawler_manifest_file_checksum_mismatch")
+            self.assertEqual(snapshot["files"], [])
+
+    @staticmethod
+    def _write_manifest(root: Path, tenant_id: str, directory: str, file_path: Path) -> None:
+        content = file_path.read_bytes()
+        (root / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "smart-data-crawler-manifest/v1",
+                    "generated_at": "2026-08-22T00:00:00+00:00",
+                    "tenants": [
+                        {
+                            "tenant_id": tenant_id,
+                            "institution_directory": directory,
+                            "schema_version": "crawler-tenant/v1",
+                            "files": [
+                                {
+                                    "path": file_path.relative_to(root / directory).as_posix(),
+                                    "sha256": hashlib.sha256(content).hexdigest(),
+                                }
+                            ],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )

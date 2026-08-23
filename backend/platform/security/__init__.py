@@ -1,4 +1,10 @@
-from .egress import EgressPolicyError, safe_urlopen, validate_outbound_url
+from .egress import (
+    EgressPolicyError,
+    classify_egress_policy_error,
+    create_governed_websocket_connection,
+    safe_urlopen,
+    validate_outbound_url,
+)
 from .session import (
     AuthenticationError,
     AuthMode,
@@ -17,6 +23,8 @@ __all__ = [
     "AuthenticationError",
     "AuthMode",
     "EgressPolicyError",
+    "classify_egress_policy_error",
+    "create_governed_websocket_connection",
     "ManualSQLValidationError",
     "InMemorySessionStore",
     "InMemoryOIDCTransactionStore",

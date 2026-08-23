@@ -26,10 +26,10 @@ import {
   type TopicDataReference,
   type TopicTableAsset,
 } from "../services/dataAssetApi";
-import { availableAnalysisSkills as selectAvailableAnalysisSkills } from "../services/analysisSkillCatalog";
+import { intelligentAnalysisMenuSkills as selectAvailableAnalysisSkills } from "../services/analysisSkillCatalog";
 import { resolveMetricPreset, type MetricPreset } from "./self-analysis/metricPreset";
 import { apiErrorMessage, getApiBaseUrl } from "../services/apiClient";
-import { demoFallbackDisabledMessage, isDemoFallbackEnabled } from "../services/apiContext";
+import { isDemoFallbackEnabled } from "../services/apiContext";
 import { modelApplicationModuleLabel } from "../data/modelApplicationModules";
 import { runApplicationAction } from "../services/applicationApi";
 import { fetchAnalysisRuntimeConfig, fetchSystemConfig, type FunAsrRuntimeIntegration, type ModelIntegration } from "../services/systemConfigApi";
@@ -39,7 +39,10 @@ import { AnalysisVisualCard, RawDataTable, type VisualizationCardConfig } from "
 import { AnalysisModelSelector } from "./self-analysis/AnalysisModelSelector";
 import { AnalysisTopicShortcuts } from "./self-analysis/AnalysisTopicShortcuts";
 import { AnalysisScriptEditor } from "./self-analysis/AnalysisScriptEditor";
-import { defaultVisualizationCards, type VisualCardInstance } from "./self-analysis/visualCards";
+import { defaultVisualizationCards, documentSummaryCards, type VisualCardInstance } from "./self-analysis/visualCards";
+import { ingestAnalysisUploads, uploadedAnalysisGate, UPLOADED_MEDIA_UNSUPPORTED_MESSAGE } from "./self-analysis/uploadedSource";
+import { completedRoundFromAnalysis } from "./self-analysis/topicTablePrecipitation";
+import { useTopicTablePrecipitation } from "./self-analysis/useTopicTablePrecipitation";
 import { ResizableVisualizationGrid } from "./self-analysis/ResizableVisualizationGrid";
 import { visualDuplicateLayout } from "./self-analysis/visualGridLayout";
 import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
@@ -67,6 +70,7 @@ import {
   type KnowledgeFileAttachment,
   detectAttachmentInstitutions,
   type AnalysisDataTableSelection,
+  singleAnalysisDataTableSelection,
   type AnalysisRow,
   type AudioContextConstructorLike,
   type FunAsrContextMessage,
@@ -125,6 +129,7 @@ import {
   inferVisualTypes,
   visualizationPreferencesFromQuestion,
   visualizationLabel,
+  isSelfAnalysisNoticeFailure,
   createAnalysisPlan,
   backendDisplayValue,
   appendMetricReferences,
@@ -138,7 +143,6 @@ import {
   loadSavedAnalysisResults,
   downloadCsv,
   csvCell,
-  readKnowledgeAttachment,
   detectedAnalysisInstitution,
 } from "./self-analysis/domain";
 import { DataTablePickerModal } from "./self-analysis/DataTablePickerModal";
@@ -246,7 +250,12 @@ export function SelfAnalysis() {
   const [availableRawTables, setAvailableRawTables] = useState<RawTableAsset[]>([]);
   const [availableTopicTables, setAvailableTopicTables] = useState<TopicTableAsset[]>([]);
   const [availablePageDataTables, setAvailablePageDataTables] = useState<PageDataAsset[]>([]);
-  const [selectedDataTables, setSelectedDataTables] = useState<AnalysisDataTableSelection[]>([]);
+  const [selectedDataTables, setSelectedDataTablesState] = useState<AnalysisDataTableSelection[]>([]);
+  const setSelectedDataTables = (
+    next: AnalysisDataTableSelection[] | ((current: AnalysisDataTableSelection[]) => AnalysisDataTableSelection[]),
+  ) => setSelectedDataTablesState((current) => singleAnalysisDataTableSelection(
+    typeof next === "function" ? next(current) : next,
+  ));
   const [dataTablePickerOpen, setDataTablePickerOpen] = useState(false);
   const [selectedTopic, setSelectedTopic] = useState<TopicTableAsset | null>(null);
   const [conversationSessionId, setConversationSessionId] = useState("");
@@ -295,7 +304,30 @@ export function SelfAnalysis() {
     ...availableTopicTables.map(topicTableToSelection),
     ...availablePageDataTables.map(pageDataToSelection),
   ];
-  const metricPresetNotice = activeMetricPreset?.message
+  const topicPrecipitation = useTopicTablePrecipitation();
+  const rememberTopicRound = (
+    question: string,
+    response: BackendAnalysisResponse,
+    tables: AnalysisDataTableSelection[],
+    rows: AnalysisRow[],
+    resolvedViaMetricPreset = false,
+  ) => {
+    topicPrecipitation.rememberCompletedRound(completedRoundFromAnalysis({
+      tenantId,
+      userId,
+      question,
+      response,
+      tables,
+      rows,
+      knowledgeFiles,
+      resolvedViaMetricPreset,
+      fallbackScript: sqlScriptFromBackend(response),
+    }));
+  };
+  const uploadedGate = uploadedAnalysisGate(knowledgeFiles);
+  const metricPresetNotice = uploadedGate.hasDataSource || uploadedGate.hasTextDocument
+    ? ""
+    : activeMetricPreset?.message
     ? activeMetricPreset.status === "none"
       ? "目前没有与问题匹配的已登记指标，请明确说明需要分析的具体指标，或添加需要分析的数据表。"
       : activeMetricPreset.status === "suggestions"
@@ -816,25 +848,31 @@ export function SelfAnalysis() {
   };
   const uploadKnowledgeFiles = async (files: File[]) => {
     if (!files.length) return;
-    const nextFiles = await Promise.all(files.map(readKnowledgeAttachment));
-    setKnowledgeFiles((current) => [...current, ...nextFiles]);
-    await Promise.all(
-      nextFiles.map((file) =>
-        runApplicationAction({
-          tenantId,
-          userId,
-          moduleKey: "self_analysis",
-          action: "upload_knowledge_file",
-          payload: {
-            id: file.id,
-            name: file.name,
-            type: file.type,
-            size: file.size,
-            lastModified: file.lastModified,
-          },
-        }).catch(() => undefined),
-      ),
-    );
+    const { accepted, rejectedMessage } = await ingestAnalysisUploads(files, { tenantId, userId });
+    if (rejectedMessage) setAnalysisError(rejectedMessage);
+    else if (accepted.length) setAnalysisError("");
+    if (accepted.length) {
+      setKnowledgeFiles((current) => [...current, ...accepted]);
+      setActiveMetricPreset(null);
+      await Promise.all(
+        accepted.map((file) =>
+          runApplicationAction({
+            tenantId,
+            userId,
+            moduleKey: "self_analysis",
+            action: "upload_knowledge_file",
+            payload: {
+              id: file.id,
+              name: file.name,
+              type: file.type,
+              size: file.size,
+              lastModified: file.lastModified,
+              classification: file.classification,
+            },
+          }).catch(() => undefined),
+        ),
+      );
+    }
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
   const chooseFiles = async (files: FileList | null) => {
@@ -947,7 +985,8 @@ export function SelfAnalysis() {
     isAnalyzingRef.current = true;
     setIsAnalyzing(true);
     setQuery(pending.question);
-    setSelectedDataTables(pending.selectedDataTables);
+    const pendingTables = singleAnalysisDataTableSelection(pending.selectedDataTables);
+    setSelectedDataTables(pendingTables);
     setShowResult(true);
     setResultMode("thinking");
     setAnalysisError("");
@@ -966,15 +1005,15 @@ export function SelfAnalysis() {
       onRun: (run) => {
         if (analysisGeneration !== analysisGenerationRef.current || controller.signal.aborted) return;
         handleAnalysisRunProgress(run, analysisGeneration);
-        savePendingAnalysisRun(tenantId, userId, { ...pending, runId: run.automation_run_id });
+        savePendingAnalysisRun(tenantId, userId, { ...pending, selectedDataTables: pendingTables, runId: run.automation_run_id });
       },
     }).then((response) => {
       if (analysisGeneration !== analysisGenerationRef.current || controller.signal.aborted) return;
       const restoredQuery = response.question || pending.question;
-      const fallbackVisualTypes = inferVisualTypes(restoredQuery, pending.selectedDataTables);
+      const fallbackVisualTypes = inferVisualTypes(restoredQuery, pendingTables);
       setAnalysisTaskId(response.task_id);
       setAnalysisPlan(formatBackendPlan(restoredQuery, response.analysis_plan) || createAnalysisPlan(restoredQuery, fallbackVisualTypes));
-      setAnalysisRows(mapBackendRows(response, restoredQuery, selectedDataTables));
+      setAnalysisRows(mapBackendRows(response, restoredQuery, pendingTables));
       setAnalysisSummary(
         response.intelligent_analysis?.analysis_summary?.trim()
         || response.conclusions?.filter((item) => item.trim()).join("\n")
@@ -986,6 +1025,12 @@ export function SelfAnalysis() {
       setPythonScript(pythonScriptFromBackend(response));
       setAnalysisProgressSteps(completedProgressSteps(response));
       setResultMode("visual");
+      rememberTopicRound(
+        restoredQuery,
+        response,
+        pendingTables,
+        mapBackendRows(response, restoredQuery, pendingTables),
+      );
     }).catch((error) => {
       if (analysisGeneration !== analysisGenerationRef.current) return;
       if (isAnalysisNavigationAbort(error)) return;
@@ -1015,6 +1060,7 @@ export function SelfAnalysis() {
       setAnalysisError("请输入明确的分析问题后再执行");
       return;
     }
+    void topicPrecipitation.prepareQuestionSwitch(nextQuery);
     const realtimeVoiceTrigger = isRealtimeVoiceTrigger(trigger);
     const preserveRealtimeQueryInput = funAsrInputTargetRef.current === "query" && (
       realtimeVoiceActiveRef.current || realtimeVoiceReconnectTimerRef.current !== null
@@ -1037,11 +1083,18 @@ export function SelfAnalysis() {
       ...selectedManualSkills,
       ...nextQuerySkillReferences.map((reference) => reference.skill),
     ]);
-    let effectiveDataTables = forcedDataTables ?? selectedDataTables;
-    if (!effectiveDataTables.length && !topic) {
+    let effectiveDataTables = singleAnalysisDataTableSelection(forcedDataTables ?? selectedDataTables);
+    let resolvedViaMetricPreset = false;
+    const uploadGate = uploadedAnalysisGate(knowledgeFiles);
+    if (uploadGate.mediaOnly) {
+      setAnalysisError(UPLOADED_MEDIA_UNSUPPORTED_MESSAGE);
+      return;
+    }
+    if (!effectiveDataTables.length && !topic && !uploadGate.hasDataSource && !uploadGate.hasTextDocument) {
       const preset = resolveMetricPreset(nextQuery, availableMetrics, availableAnalysisTables);
       if (preset.table) {
         effectiveDataTables = [preset.table];
+        resolvedViaMetricPreset = true;
         setSelectedDataTables(effectiveDataTables);
       } else {
         setActiveMetricPreset(preset);
@@ -1164,6 +1217,7 @@ export function SelfAnalysis() {
         },
         pageContext: {
           route: "self-analysis/query",
+          analysis_scene_hint: "self_analysis",
           selected_institution: selectedInstitution,
           analysis_trigger: trigger,
           model_application_module: modelApplicationModule,
@@ -1211,7 +1265,14 @@ export function SelfAnalysis() {
       const backendPython = pythonScriptFromBackend(response);
       setAnalysisError(modelInvocationIssue(response, routedModel));
       setAnalysisTaskId(response.task_id);
-      setVisualTypes(backendVisualTypes);
+      const documentMode = String(response.skill_results?.[0]?.semantic_info?.execution_mode || "") === "uploaded_document_summary";
+      if (documentMode) {
+        visualCardsTaskRef.current = response.task_id;
+        setVisualTypes({ primary: "text", secondary: "text" });
+        setVisualCards(documentSummaryCards(backendSummary));
+      } else {
+        setVisualTypes(backendVisualTypes);
+      }
       setAnalysisPlan(backendPlan);
       setAnalysisRows(backendRows);
       setAnalysisSummary(backendSummary);
@@ -1221,7 +1282,9 @@ export function SelfAnalysis() {
       setResultMode("visual");
       partialAnalysisResponseRef.current = response;
       const resolvedTables = resolveVisualAnalysisTables(response.asset_context?.selected_data_tables, effectiveDataTables);
-      if (resolvedTables.length) setSelectedDataTables(resolvedTables);
+      const catalogTables = resolvedTables.filter((table) => !String(table.relativePath || "").startsWith("upload://"));
+      if (catalogTables.length) setSelectedDataTables(catalogTables);
+      rememberTopicRound(nextQuery, response, catalogTables.length ? catalogTables : effectiveDataTables, backendRows, resolvedViaMetricPreset);
       addConversationTurn(
         makeConversationTurn("assistant", backendSummary, {
           query: nextQuery,
@@ -1437,6 +1500,7 @@ export function SelfAnalysis() {
         },
         pageContext: {
           route: "self-analysis/query",
+          analysis_scene_hint: "self_analysis",
           selected_institution: selectedInstitution,
           analysis_trigger: "manual",
           model_application_module: modelApplicationModule,
@@ -1508,6 +1572,7 @@ export function SelfAnalysis() {
       partialAnalysisResponseRef.current = response;
       const resolvedTables = resolveVisualAnalysisTables(response.asset_context?.selected_data_tables, selectedDataTables);
       if (resolvedTables.length) setSelectedDataTables(resolvedTables);
+      rememberTopicRound(nextQuery, response, resolvedTables.length ? resolvedTables : selectedDataTables, backendRows);
       setSaveMessage("已重跑");
       addConversationTurn(
         makeConversationTurn("assistant", backendSummary, {
@@ -1561,6 +1626,7 @@ export function SelfAnalysis() {
     }
   };
   const restoreInitialAnalysisWorkspace = () => {
+    void topicPrecipitation.flush();
     const runId = activeAnalysisRunIdRef.current || loadPendingAnalysisRun(tenantId, userId)?.runId || "";
     analysisGenerationRef.current += 1;
     analysisWaitAbortRef.current?.abort();
@@ -1823,6 +1889,10 @@ export function SelfAnalysis() {
     }
   };
   const saveAnalysisResult = async (saveToWeekly = false) => {
+    if (!analysisTaskId) {
+      setSaveMessage("请先完成一次分析后再保存。");
+      return;
+    }
     const title = query || "未命名分析结果";
     const result: SavedAnalysisResult = {
       id: `analysis_${Date.now()}`,
@@ -1833,7 +1903,7 @@ export function SelfAnalysis() {
       visualTypes,
       visualizations: visualCards.map((card) => ({ id: card.id, key: card.key, title: card.title, type: card.type, config: card.config })),
       savedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
-      rows: analysisRows,
+      rows: [],
       analysisTaskId,
       sql: sqlScript,
       pythonScript,
@@ -1850,7 +1920,6 @@ export function SelfAnalysis() {
       const saved = saveToWeekly
         ? (await saveAnalysisResultToWeeklyReport({ tenantId, userId, resultId: response.result.id })).result as SavedAnalysisResult
         : response.result as SavedAnalysisResult;
-      await saveAsTopicTable(false);
       setSavedAnalysisResults((current) => [saved, ...current.filter((item) => item.id !== saved.id)].slice(0, 50));
       window.dispatchEvent(new CustomEvent("smart-data-agent-analysis-saved", { detail: saved }));
       setSaveMessage(saveToWeekly ? "已保存到我的报告和经营周报，数据、结论、图表配置与脚本已关联 Topic_Data 最新快照。" : "已保存到我的报告，问题、分析结果和当前全部可视化配置已完整保留。");
@@ -1863,62 +1932,18 @@ export function SelfAnalysis() {
         setSaveMessage(`已保存到 demo 本地缓存，后端同步失败：${apiErrorMessage(error, "未知错误")}`);
         return;
       }
-      setSaveMessage(`${demoFallbackDisabledMessage("分析结果保存")} ${apiErrorMessage(error, "未知错误")}`);
+      setSaveMessage(apiErrorMessage(error, "分析结果保存失败，请稍后重试。"));
     }
   };
   const downloadAnalysisRows = async () => {
     downloadCsv("自助分析原始数据.csv", analysisRows);
-  };
-  const saveAsTopicTable = async (announce = true) => {
-    const title = scriptPlanName || query || "智能分析主题";
-    const topic = {
-      id: `topic_analysis_${(analysisTaskId || title).replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 96)}`,
-      name: title,
-      code: title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || `topic_${Date.now()}`,
-      description: analysisSummary.split("\n")[0]?.replace("核心结论：", "") || "由智能分析结果沉淀的主题表。",
-      sql: sqlScript,
-      fields: analysisRows.length
-        ? Object.keys(analysisRows[0].raw).map((fieldName) => ({
-            fieldNameEn: fieldName,
-            fieldNameCn: analysisRows[0].fieldLabels?.[fieldName] || fieldName,
-            type: typeof analysisRows[0].raw[fieldName] === "number" ? "decimal" : "string",
-            explanation: "来自已执行分析结果；业务语义需在数据资产复核时确认。",
-            exampleUsage: "智能分析、经营周报、主题表复用",
-          }))
-        : [],
-      fieldExplanations: "字段来自服务端已执行结果，需在数据资产审核中补充业务语义。",
-      applicableScene: "智能分析, 经营周报",
-      relatedIntent: selectedTopic?.relatedIntent || "智能分析沉淀",
-      relatedExperience: "",
-      quickDisplay: false,
-      reportReference: "经营周报",
-      source: "智能分析页面",
-      analysisTaskId,
-      analysisScripts: {
-        sql: sqlScript,
-        python: pythonScript,
-        metricScenarios: analysisScenarios,
-        plan: analysisPlan,
-        summary: analysisSummary,
-        visualTypes,
-      },
-      selectedDataTables,
-      updatedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
-    };
-    if (announce) setSaveMessage("保存主题表中...");
-    try {
-      await saveDataAssetItem({ tenantId, itemType: "topic_table", item: topic });
-      if (announce) setSaveMessage("主题表版本已提交数据资产复核；批准发布后才会进入智能分析复用");
-    } catch (error) {
-      if (announce) setSaveMessage(`${demoFallbackDisabledMessage("主题表保存")} ${apiErrorMessage(error, "未知错误")}`);
-      throw error;
-    }
   };
   const saveAsAnalysisExperience = async () => {
     const title = scriptPlanName || query || "智能分析经验";
     const experience = {
       id: `exp_${Date.now()}`,
       name: title,
+      memoryTopic: selectedTopic?.code || query || title,
       relatedTopic: selectedTopic?.code || "",
       relatedIntent: selectedTopic?.relatedIntent || "智能分析沉淀",
       steps: analysisPlan,
@@ -1936,10 +1961,9 @@ export function SelfAnalysis() {
     setSaveMessage("保存分析经验中...");
     try {
       await saveDataAssetItem({ tenantId, itemType: "analysis_experience", item: experience });
-      await saveAsTopicTable(false);
-      setSaveMessage("分析经验已提交复核，并已同步保存对应 SQL 到主题表。");
+      setSaveMessage("分析经验已提交复核。");
     } catch (error) {
-      setSaveMessage(`${demoFallbackDisabledMessage("分析经验保存")} ${apiErrorMessage(error, "未知错误")}`);
+      setSaveMessage(apiErrorMessage(error, "分析经验保存失败，请稍后重试。"));
     }
   };
   const handleSaveTarget = (target: SaveTarget) => {
@@ -2228,6 +2252,7 @@ export function SelfAnalysis() {
   };
   const viewExecution = (task: BackendAnalysisResponse) => {
     const restoredQuery = task.question || "历史分析";
+    void topicPrecipitation.prepareQuestionSwitch(restoredQuery);
     setQuery(restoredQuery);
     setAnalysisTaskId(task.task_id);
     setAnalysisPlan(formatBackendPlan(restoredQuery, task.analysis_plan) || "历史执行未保存分析计划。");
@@ -2246,6 +2271,7 @@ export function SelfAnalysis() {
     setShowResult(true);
     setResultMode("visual");
     setExecutionHistoryOpen(false);
+    rememberTopicRound(restoredQuery, task, historyTables.length ? historyTables : selectedDataTables, mapBackendRows(task, restoredQuery, historyTables.length ? historyTables : selectedDataTables));
   };
   const toggleExecutionDetails = async (task: BackendAnalysisResponse) => {
     if (expandedExecutionTaskId === task.task_id) {
@@ -2300,6 +2326,8 @@ export function SelfAnalysis() {
                       <span key={file.id} className="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-[#e5e5ea] bg-[#fafbfc] px-2 py-1 text-[11px] text-[#636366]">
                         <Upload className="h-3 w-3 shrink-0 text-[#8a8a8e]" />
                         <span className="truncate">{file.name}</span>
+                        {file.classification === "data_source" && <span className="shrink-0 text-[10px] text-[#258a3f]">数据源</span>}
+                        {file.classification === "text_document" && <span className="shrink-0 text-[10px] text-[#636366]">文档</span>}
                         {file.detectedInstitutions?.length === 1 && (
                           <span className="shrink-0 rounded bg-[#eef4ff] px-1 py-0.5 text-[10px] text-[#2466b0]" title="仅用于提示，不会切换当前机构或扩大数据权限">
                             识别：{file.detectedInstitutions[0]}
@@ -2607,22 +2635,24 @@ export function SelfAnalysis() {
           ) : (
             <div className="space-y-5">
               <div className="bg-white rounded-xl border border-[#f0f0f2] p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-[#aeaeb2]" />
-                    <h3 className="text-[13px] text-[#1d1d1f]">分析结果</h3>
-                    <div className="flex gap-px bg-[#f2f2f7] rounded-md p-0.5 ml-1">
+                <div className="mb-4 flex min-w-0 items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto">
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Sparkles className="h-4 w-4 shrink-0 text-[#aeaeb2]" />
+                      <h3 className="whitespace-nowrap text-[13px] text-[#1d1d1f]">分析结果</h3>
+                    </div>
+                    <div className="flex shrink-0 gap-px rounded-md bg-[#f2f2f7] p-0.5">
                       {[
                         { key: "thinking", label: "思考链" },
-                        { key: "data", label: "查看数据" },
-                        { key: "visual", label: "可视化分析" },
-                        { key: "summary", label: "AI分析总结" },
+                        { key: "data", label: "源数据" },
+                        { key: "visual", label: "图表" },
+                        { key: "summary", label: "AI总结" },
                       ].map((tab) => (
                         <button
                           key={tab.key}
                           type="button"
                           onClick={() => setResultMode(tab.key as ResultMode)}
-                          className={`px-2.5 py-1 rounded text-[11px] transition-all ${
+                          className={`whitespace-nowrap rounded px-2 py-1 text-[11px] transition-all ${
                             resultMode === tab.key ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:text-[#636366]"
                           }`}
                         >
@@ -2631,36 +2661,34 @@ export function SelfAnalysis() {
                       ))}
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleSaveTarget("mine")}
-                      className="flex items-center gap-1 px-3 py-1.5 border border-[#e5e5ea] rounded-lg text-[11px] text-[#636366] hover:bg-[#f2f2f7]"
-                    >
-                      <BookmarkPlus className="w-3 h-3" /> 存我的
-                    </button>
-                    <button
-                      onClick={() => handleSaveTarget("experience")}
-                      className="flex items-center gap-1 px-3 py-1.5 border border-[#e5e5ea] rounded-lg text-[11px] text-[#636366] hover:bg-[#f2f2f7]"
-                    >
-                      <Lightbulb className="w-3 h-3" /> 存经验
-                    </button>
-                    <button
-                      onClick={() => handleSaveTarget("report")}
-                      className="flex items-center gap-1 px-3 py-1.5 border border-[#e5e5ea] rounded-lg text-[11px] text-[#636366] hover:bg-[#f2f2f7]"
-                    >
-                      <BookmarkPlus className="w-3 h-3" /> 存周报
-                    </button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <div className="flex shrink-0 gap-px rounded-md bg-[#f2f2f7] p-0.5">
+                      {[
+                        { key: "mine" as const, label: "存报表" },
+                        { key: "experience" as const, label: "存经验" },
+                        { key: "report" as const, label: "存周报" },
+                      ].map((action) => (
+                        <button
+                          key={action.key}
+                          type="button"
+                          onClick={() => handleSaveTarget(action.key)}
+                          className="whitespace-nowrap rounded px-2 py-1 text-[11px] text-[#8a8a8e] transition-all hover:bg-white hover:text-[#1d1d1f] hover:shadow-sm"
+                        >
+                          {action.label}
+                        </button>
+                      ))}
+                    </div>
                     <StickyNoteButton size="compact" onClick={analysisSticky.show} />
                     <button
                       onClick={() => void downloadAnalysisRows()}
-                      className="flex items-center gap-1 px-3 py-1.5 border border-[#e5e5ea] rounded-lg text-[11px] text-[#636366] hover:bg-[#f2f2f7]"
+                      className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-[11px] text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#636366]"
                     >
                       <Download className="w-3 h-3" /> 导出
                     </button>
                   </div>
                 </div>
                 {saveMessage && (
-                  <div className="mb-4 rounded-lg border border-[#d7efd9] bg-[#eef8f1] px-3 py-2 text-[12px] text-[#258a3f]">
+                  <div className={`mb-4 rounded-lg border px-3 py-2 text-[12px] ${isSelfAnalysisNoticeFailure(saveMessage) ? "border-[#f4d0d0] bg-[#fdeeee] text-[#c83a3a]" : "border-[#d7efd9] bg-[#eef8f1] text-[#258a3f]"}`}>
                     {saveMessage}
                   </div>
                 )}
@@ -2670,7 +2698,7 @@ export function SelfAnalysis() {
                   <div className="rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-4">
                     <div className="mb-2 flex items-center gap-2 text-[12px] text-[#1d1d1f]">
                       <Lightbulb className="w-3.5 h-3.5 text-[#aeaeb2]" />
-                      AI分析总结
+                      AI总结
                       {isAnalyzing && <span className="text-[11px] text-[#aeaeb2]">后端分析中...</span>}
                       {analysisTaskId && <span className="text-[11px] text-[#aeaeb2]">任务 {analysisTaskId}</span>}
                     </div>
@@ -2956,7 +2984,6 @@ export function SelfAnalysis() {
         <DataTablePickerModal
           rawTables={availableRawTables}
           topicTables={availableTopicTables}
-          pageDataTables={availablePageDataTables}
           selectedTables={selectedDataTables}
           onChange={setSelectedDataTables}
           onClose={() => setDataTablePickerOpen(false)}

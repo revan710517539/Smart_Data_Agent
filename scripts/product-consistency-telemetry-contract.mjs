@@ -26,7 +26,10 @@ const [visualReport, selfAnalysis, dataAssets, relationships, login, pagination,
 assert.ok(!visualReport.includes('label="存主题"'), "可视化报表不得显示存主题按钮");
 assert.ok(!selfAnalysis.includes('handleSaveTarget("topic")'), "智能分析不得显示存主题入口");
 assert.match(visualReport, /if \(destination !== "topic"\) await saveAsTopic\(/, "三个可视化报表保存入口必须自动沉淀 SQL");
-assert.match(selfAnalysis, /await saveAsTopicTable\(false\)/, "智能分析保存结果必须自动沉淀 SQL");
+assert.ok(!selfAnalysis.includes("await saveAsTopicTable(false)"), "存报表/存周报/存经验不得再顺带存主题表");
+assert.match(selfAnalysis, /useTopicTablePrecipitation/, "智能分析必须在换问题和退出时自动沉淀主题表");
+assert.match(selfAnalysis, /prepareQuestionSwitch/, "切换分析问题时必须先沉淀上一轮可存主题表的 SQL");
+assert.match(platformContext, /runBeforeLogout/, "退出登录前必须有机会沉淀最新一轮主题表 SQL");
 
 assert.match(dataAssets, /onClick=\{\(\) => setRawUploadOpen\(true\)\}[\s\S]*?上传Excel文件/, "上传 Excel 按钮必须打开上传弹窗");
 assert.match(dataAssets, /createPortal\(<div[\s\S]*?data-static-workbook-modal-overlay="true"[\s\S]*?<section role="dialog"[\s\S]*?data-static-workbook-dialog="true"[\s\S]*?document\.body\)/, "上传必须使用 Portal 弹窗而非页面跳转");
@@ -41,15 +44,31 @@ assert.match(relationships, /saving \? "正在保存中……"/);
 assert.match(relationships, /onChanged\(saved\)/, "表关系保存后必须用返回值更新列表，不能强制全量重载");
 assert.match(dataAssets, /upsertTableRelationship/);
 
-assert.match(login, /data-registration-placeholder="true"[\s\S]*?onClick=\{\(\) => setNotice\(registrationNotice\)\}[\s\S]*?注册新用户/, "登录页必须显示不可注册但可反馈的注册占位按钮");
-assert.match(login, /aria-disabled="true"[\s\S]*?cursor-not-allowed/, "注册占位按钮必须使用灰显的不可用语义和样式");
-assert.match(login, /registrationNotice = "建设中……"/, "注册占位按钮必须反馈建设中状态");
+assert.match(login, /data-registration-entry="true"[\s\S]*?注册新用户/, "登录页必须开放注册新用户入口");
+assert.match(login, /mode === "register"/, "登录页必须提供注册界面");
+assert.match(login, /手机号或邮箱/, "注册界面必须允许录入手机号或邮箱");
+assert.ok(!login.includes("建设中……"), "注册入口不得再显示建设中占位");
+assert.ok(!login.includes('data-registration-placeholder="true"'), "注册入口不得再使用不可用占位按钮");
 assert.match(login, /data-login-primary-actions="true"/, "取消和登录按钮必须保持右侧操作组");
 assert.match(login, /const \[password, setPassword\] = useState\(""\)/, "登录页密码必须默认留空");
 assert.match(login, /setPassword\(""\)/, "取消登录必须清空密码");
+assert.match(login, /data-login-survey="true"/, "登录页左侧必须提供数据使用调查");
+assert.match(login, /你需要什么指标？/, "登录调查必须询问用户所需指标");
+assert.match(login, /你平时怎么用报表？/, "登录调查必须询问报表使用方式");
+assert.ok(!login.includes("提交问卷并登录"), "登录调查区不得保留独立提交按钮");
+assert.match(login, /loginSurveyDraft\("login"/, "点击登录必须携带当前问卷草稿");
+assert.match(login, /loginSurveyDraft\("cancel"/, "点击取消必须触发问卷自动保存");
+assert.match(login, /loginSurveyDraft\("pagehide"/, "关闭或离开页面必须触发问卷卸载回传");
+assert.match(login, /sendLoginSurveyBeacon/, "页面关闭必须使用浏览器卸载回传能力");
+assert.match(login, /setNeededMetrics\(""\)[\s\S]*?setReportUsage\(""\)/, "问卷成功提交或取消后必须恢复为空白");
+assert.match(authRoute, /page_key": "login-survey"/, "登录问卷必须写入既有留言板权威存储");
+assert.match(authRoute, /message_board\.login_survey\.create/, "登录问卷必须产生独立审计事件");
+assert.match(authRoute, /_best_effort_login_survey/, "问卷保存不得改变原有登录成功或失败行为");
 assert.ok(!login.includes("123456"), "登录页源码不得包含可用的默认密码");
-assert.match(authRoute, /os\.getenv\("SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD", ""\)/, "开发登录密码缺失时必须失败关闭");
+assert.match(authRoute, /login_by_email\([\s\S]*password=password/, "开发登录必须校验当前账号自己的密码");
+assert.ok(!authRoute.includes("SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD"), "认证路由不得再使用全员共享的环境登录密码");
 assert.ok(!authRoute.includes('"123456"'), "认证路由不得保留历史密码兜底");
+assert.match(layout, /data-account-password-toggle="true"/, "登录后必须提供修改本人密码入口");
 assert.match(systemSettings, /institutionOptions=\{visibleInstitutions\}/, "新增用户只能选择权威目录中已登记的机构");
 assert.match(systemSettings, /tenantId: tenantIdForInstitution\(nextTenant\)/, "新增用户必须把稳定 tenant ID 与显示名分开提交");
 assert.ok(!systemSettings.includes("institutionOptions={isSuperAdmin ? operatingTenantNames"), "超级管理员也不得向未登记静态机构授权");
@@ -92,6 +111,7 @@ assert.match(migration, /CREATE TABLE platform_user_interaction_events/);
 
 const wheelHandler = visualCard.match(/const passWheelToPage = \(event:[\s\S]*?\n  \};/)?.[0] || "";
 assert.match(wheelHandler, /scrollOwner\.scrollBy/);
+assert.match(wheelHandler, /data-visual-table-scroll/);
 assert.ok(!wheelHandler.includes("event.preventDefault("), "图表滚轮不得触发 passive preventDefault 错误");
 
 console.log("product consistency and telemetry contract passed");

@@ -38,6 +38,7 @@ import {
   type TopicTableAsset,
 } from "../services/dataAssetApi";
 import { fetchMetricDictionary } from "../services/metricDictionaryApi";
+import { pageVisibleAnalysisSkills } from "../services/analysisSkillCatalog";
 import type { MetricDictionaryItem } from "../data/metricDictionary";
 import { fetchSystemConfig, type ModelIntegration } from "../services/systemConfigApi";
 import { fetchPlatformCapabilities, type PlatformCapabilityResponse } from "../services/capabilitiesApi";
@@ -172,7 +173,7 @@ function getAgentSection(pathname: string): AgentSection {
 
 export function DataAgentWorkspace() {
   const location = useLocation();
-  const { tenantId, userId, userName } = usePlatformContext();
+  const { tenantId, userId, userName, isSuperAdmin } = usePlatformContext();
   const activeTab = getAgentSection(location.pathname);
   const [todoComposerRequest, setTodoComposerRequest] = useState(0);
   const [todoToolbarLeftHost, setTodoToolbarLeftHost] = useState<HTMLDivElement | null>(null);
@@ -245,7 +246,7 @@ export function DataAgentWorkspace() {
       if (cancelled) return;
       setKnowledgeFiles(assets.status === "fulfilled" ? assets.value.knowledge_files || [] : []);
       setTopicTables(assets.status === "fulfilled" ? assets.value.topic_tables || [] : []);
-      setAnalysisSkills(assets.status === "fulfilled" ? assets.value.analysis_skills || [] : []);
+      setAnalysisSkills(assets.status === "fulfilled" ? pageVisibleAnalysisSkills(assets.value.analysis_skills || []) : []);
       setAnalysisModels(settings.status === "fulfilled" ? settings.value.models || [] : []);
       setMetricDictionary(metrics.status === "fulfilled" ? metrics.value.metrics || [] : []);
     };
@@ -432,6 +433,7 @@ export function DataAgentWorkspace() {
           tenantId={tenantId}
           userId={userId}
           userName={userName}
+          isSuperAdmin={isSuperAdmin}
           composerRequest={todoComposerRequest}
           toolbarLeftHost={todoToolbarLeftHost}
           toolbarRightHost={todoToolbarRightHost}
@@ -1271,10 +1273,10 @@ function buildAutomaticAnalysisModelChoices(models: ModelIntegration[]) {
   const seen = new Set<string>();
   models
     .filter((model) => (model.applicationModule === "automatic_analysis" || model.applicationModule === "global_text_model")
-      && ["available", "draft"].includes(model.status)
-      && (model.testStatus !== "failed" || model.id === "model_default_intelligent_analysis_relay"))
+      && model.status === "available"
+      && ["connected", "mock"].includes(model.testStatus || ""))
     .forEach((model) => {
-      const names = (model.enabledModels?.length ? model.enabledModels : model.availableModels?.length ? model.availableModels : model.selectedModelName ? [model.selectedModelName] : [])
+      const names = (model.enabledModels || [])
         .map((name) => String(name).trim())
         .filter(Boolean);
       names.forEach((selectedModelName) => {

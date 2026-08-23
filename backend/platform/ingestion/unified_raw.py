@@ -119,6 +119,46 @@ class UnifiedTenantRawTableSource:
             rows.append({header: "" if source_row.get(header) is None else str(source_row.get(header)) for header in headers})
         return headers, rows
 
+    def read_rows_matching_values(
+        self,
+        relative_path: str,
+        *,
+        key_field: str,
+        values: list[str],
+        max_matches: int = 20_000,
+    ) -> tuple[list[str], list[dict[str, str]]]:
+        table = self._static_table_for_path(relative_path)
+        if table is None:
+            return self.crawler_source.read_rows_matching_values(
+                relative_path,
+                key_field=key_field,
+                values=values,
+                max_matches=max_matches,
+            )
+        requested = {str(value or "").strip() for value in values if str(value or "").strip()}
+        limit = max(1, min(int(max_matches), 50_000))
+        if len(requested) > limit:
+            raise ValueError("csv_source_match_limit_exceeded")
+        content = self.read(relative_path).decode("utf-8-sig")
+        reader = csv.DictReader(io.StringIO(content, newline=""))
+        headers = [str(header or "").strip() for header in (reader.fieldnames or [])]
+        normalized_key = str(key_field or "").strip()
+        if not normalized_key or normalized_key not in headers:
+            raise ValueError("csv_source_match_key_missing")
+        rows: list[dict[str, str]] = []
+        found: set[str] = set()
+        for source_row in reader:
+            key = str(source_row.get(normalized_key) or "").strip()
+            if not key or key not in requested:
+                continue
+            if key in found:
+                raise ValueError("customer_segment_source_customer_key_duplicate")
+            found.add(key)
+            rows.append({header: "" if source_row.get(header) is None else str(source_row.get(header)) for header in headers})
+            if len(found) == len(requested):
+                break
+        return headers, rows
+
     def resolve_path(self, relative_path: str) -> Path:
         table = self._static_table_for_path(relative_path)
         if table is None:

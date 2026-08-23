@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BookOpen, ChevronRight, Pencil, Plus, Trash2, Wrench, X } from "lucide-react";
+import { BookOpen, ChevronRight, Eye, EyeOff, Pencil, Plus, Trash2, Wrench, X } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
 import {
   deleteDataAssetItem,
@@ -9,8 +9,20 @@ import {
   type ExternalToolAsset,
 } from "../services/dataAssetApi";
 import { apiErrorMessage } from "../services/apiClient";
-import { displayedAnalysisSkills } from "../services/analysisSkillCatalog";
+import { analysisSkillDisplayLocation, displayedAnalysisSkills } from "../services/analysisSkillCatalog";
+import { operatingTenantNames } from "../data/operatingTenants";
 import { DataPageSelector, useClientPagination } from "./ui/DataPageSelector";
+
+const coreTopicSkills = [
+  { id: "topic-descriptive", label: "描述性分析" },
+  { id: "topic-attribution", label: "归因分析" },
+  { id: "topic-predictive", label: "预测分析" },
+] as const;
+
+function canonicalCoreTopicId(name: string) {
+  const normalized = name.trim();
+  return coreTopicSkills.find(({ label }) => normalized === label || operatingTenantNames.some((institution) => normalized === `${institution}${label}`))?.id || "";
+}
 
 const emptySkill = (category: "场景" | "主题"): AnalysisSkillAsset => ({
   id: "",
@@ -25,6 +37,7 @@ const emptySkill = (category: "场景" | "主题"): AnalysisSkillAsset => ({
   viewpointStrategy: "",
   recommendedSkillIds: [],
   enabled: true,
+  displayLocation: "intelligent_analysis",
   sortOrder: 999,
 });
 
@@ -78,6 +91,12 @@ export function SkillPluginManager() {
       setNotice("请填写 Skill 名称和用途说明。");
       return;
     }
+    const canonicalTopicId = draft.category === "主题" ? canonicalCoreTopicId(draft.name) : "";
+    if (canonicalTopicId && draft.id !== canonicalTopicId) {
+      const canonical = coreTopicSkills.find((item) => item.id === canonicalTopicId);
+      setNotice(`${canonical?.label || "该分析方法"}已存在，请编辑通用 Skill；机构差异应沉淀到 Memory，不再新增机构 Skill。`);
+      return;
+    }
     try {
       await saveDataAssetItem({
         tenantId,
@@ -129,7 +148,7 @@ export function SkillPluginManager() {
 
         <div className="mt-5 overflow-hidden rounded-2xl border border-[#e5e5ea] bg-white">
           <div className="flex items-center justify-between border-b border-[#f0f0f2] bg-[#fafbfc] px-5 py-2">
-            <div className="grid flex-1 grid-cols-[minmax(220px,1.2fr)_minmax(260px,1.5fr)_minmax(220px,1fr)_120px] text-[11px] text-[#8a8a8e]"><span>Skill名称</span><span>解决方案定位</span><span>关联能力</span><span className="text-right">操作</span></div>
+            <div className="grid flex-1 grid-cols-[minmax(220px,1.2fr)_minmax(260px,1.5fr)_minmax(190px,1fr)_100px_120px] items-center gap-4 text-[11px] text-[#8a8a8e]"><span>Skill名称</span><span>解决方案定位</span><span>关联能力</span><span>展示</span><span className="text-right">操作</span></div>
             {skillPagination.paginated && <DataPageSelector page={skillPagination.page} totalPages={skillPagination.totalPages} shownCount={skillPagination.items.length} totalCount={skillPagination.total} onChange={skillPagination.setPage} ariaLabel="Skill分页" compact />}
           </div>
           {loading ? <div className="px-5 py-14 text-center text-[12px] text-[#aeaeb2]">正在读取 Skill 解决方案…</div> : null}
@@ -137,7 +156,8 @@ export function SkillPluginManager() {
           {skillPagination.items.map((skill) => {
             const availableMemoryCount = skill.memoryRefs.length;
             const availableToolCount = skill.toolRefs.filter((id) => tools.some((tool) => tool.id === id && tool.enabled)).length;
-            return <div key={skill.id} className="grid grid-cols-[minmax(220px,1.2fr)_minmax(260px,1.5fr)_minmax(220px,1fr)_120px] items-center gap-4 border-b border-[#f5f5f7] px-5 py-4 last:border-b-0">
+            const isPageVisible = analysisSkillDisplayLocation(skill) === "intelligent_analysis";
+            return <div key={skill.id} className="grid grid-cols-[minmax(220px,1.2fr)_minmax(260px,1.5fr)_minmax(190px,1fr)_100px_120px] items-center gap-4 border-b border-[#f5f5f7] px-5 py-4 last:border-b-0">
               <div className="min-w-0">
                 <div className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${skill.enabled ? "bg-[#34c759]" : "bg-[#c7c7cc]"}`} /><span className="truncate text-[13px] text-[#1d1d1f]">{skill.name}</span></div>
                 <div className="mt-1 truncate text-[11px] text-[#aeaeb2]">{skill.id} · v{skill.assetVersion || 1}</div>
@@ -147,6 +167,9 @@ export function SkillPluginManager() {
                 <div className="flex items-center gap-1.5"><BookOpen className="h-3 w-3" />{availableMemoryCount} 项记忆</div>
                 <div className="flex items-center gap-1.5"><Wrench className="h-3 w-3" />{availableToolCount} 个工具</div>
               </div>
+              <span className={`inline-flex w-fit items-center gap-1 rounded-full px-2.5 py-1 text-[10px] ${isPageVisible ? "bg-[#eef8f1] text-[#258a3f]" : "bg-[#f2f2f7] text-[#8a8a8e]"}`} data-skill-display-status={skill.id}>
+                {isPageVisible ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}{isPageVisible ? "展示" : "不展示"}
+              </span>
               <div className="flex justify-end gap-1">
                 <button type="button" onClick={() => setDraft(normalizeDraftReferences(skill, memoryOptions, tools))} className="rounded-md p-2 text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f]" aria-label={`编辑${skill.name}`}><Pencil className="h-3.5 w-3.5" /></button>
                 <button type="button" onClick={() => void remove(skill)} className="rounded-md p-2 text-[#8a8a8e] hover:bg-[#fff1f0] hover:text-[#d93025]" aria-label={`删除${skill.name}`}><Trash2 className="h-3.5 w-3.5" /></button>
@@ -202,7 +225,10 @@ function SkillEditor({
           {draft.category === "场景" ? <Field label="格式要求" value={draft.outputFormat} multiline onChange={(value) => onChange({ ...draft, outputFormat: value })} /> : null}
           <Field label="观点生成策略" value={draft.viewpointStrategy} multiline onChange={(value) => onChange({ ...draft, viewpointStrategy: value })} />
           {draft.category === "场景" ? <ReferencePicker label="建议调用主题" value={draft.recommendedSkillIds} options={themeOptions} emptyText="暂无可建议的主题 Skill" onChange={(recommendedSkillIds) => onChange({ ...draft, recommendedSkillIds })} /> : null}
-          <label className="flex items-center gap-2 text-[12px] text-[#3a3a3c]"><input type="checkbox" checked={draft.enabled} onChange={(event) => onChange({ ...draft, enabled: event.target.checked })} />在智能分析中启用</label>
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+            <label className="flex items-center gap-2 text-[12px] text-[#3a3a3c]"><input type="checkbox" checked={draft.enabled} onChange={(event) => onChange({ ...draft, enabled: event.target.checked })} data-skill-runtime-enabled={draft.id || "new"} />启用 Skill 运行时能力</label>
+            <label className="flex items-center gap-2 text-[12px] text-[#3a3a3c]"><input type="checkbox" checked={analysisSkillDisplayLocation(draft) === "intelligent_analysis"} onChange={(event) => onChange({ ...draft, displayLocation: event.target.checked ? "intelligent_analysis" : "hidden" })} data-skill-intelligent-analysis-visible={draft.id || "new"} />展示在智能分析页面</label>
+          </div>
         </div>
         <div className="flex justify-end gap-2 border-t border-[#f0f0f2] bg-white px-6 py-4"><button type="button" onClick={onClose} className="h-9 rounded-lg border border-[#e5e5ea] px-4 text-[12px] text-[#636366]">取消</button><button type="button" onClick={onSave} className="h-9 rounded-lg bg-[#1d1d1f] px-5 text-[12px] text-white">保存</button></div>
       </div>

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -18,6 +19,7 @@ IMAGE_MYSQL_PATHS = (
     Path("/usr/local/lib/python3.13/site-packages/backend/platform/database/mysql"),
 )
 FORBIDDEN_DATETIME_DEFAULT = "DEFAULT (UTC_TIMESTAMP(6))"
+CHECKSUM_MANIFEST = ROOT / "configs" / "deployment" / "mysql-migration-checksums.json"
 
 
 def mysql_sql_checksums(root: Path) -> dict[str, str]:
@@ -54,6 +56,34 @@ def assert_generated_mysql_schema_matches_repo() -> None:
         raise SystemExit(completed.stderr.strip() or completed.stdout.strip() or "mysql_schema_generator_drift")
 
 
+def assert_versioned_checksum_manifest() -> None:
+    try:
+        payload = json.loads(CHECKSUM_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit("mysql_migration_checksum_manifest_invalid") from exc
+    if payload.get("schema_version") != "smart-data-agent-mysql-migrations/v1":
+        raise SystemExit("mysql_migration_checksum_manifest_version_invalid")
+    if payload.get("target_mysql_version") != "8.0.18":
+        raise SystemExit("mysql_migration_target_version_invalid")
+    actual = mysql_sql_checksums(REPO_MYSQL)
+    declared = {
+        str(item.get("path") or ""): str(item.get("sha256") or "")
+        for item in payload.get("migrations", [])
+        if isinstance(item, dict)
+    }
+    if actual != declared:
+        missing = sorted(set(actual) - set(declared))
+        retired = sorted(set(declared) - set(actual))
+        drifted = sorted(path for path in set(actual) & set(declared) if actual[path] != declared[path])
+        raise SystemExit(
+            "mysql_migration_checksum_manifest_drift:"
+            + json.dumps({"missing": missing, "retired": retired, "drifted": drifted}, sort_keys=True)
+        )
+    versions = [str(item.get("version") or "") for item in payload.get("migrations", []) if isinstance(item, dict)]
+    if len(versions) != len(set(versions)) or versions != sorted(versions):
+        raise SystemExit("mysql_migration_versions_not_unique_and_sorted")
+
+
 def assert_image_mysql_sql_identical() -> None:
     existing = [path for path in IMAGE_MYSQL_PATHS if path.is_dir()]
     if len(existing) < 2:
@@ -74,6 +104,7 @@ def main() -> None:
     repo = mysql_sql_checksums(REPO_MYSQL)
     if not repo:
         raise SystemExit("mysql_sql_files_missing")
+    assert_versioned_checksum_manifest()
     assert_image_mysql_sql_identical()
     print(f"MySQL SQL closure ok ({len(repo)} files)")
 

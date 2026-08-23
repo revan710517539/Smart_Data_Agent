@@ -82,6 +82,22 @@ def handle_analysis_turn_append(handler: Any) -> None:
         send_route_exception(handler, exc)
 
 
+def handle_analysis_thread_archive(handler: Any) -> None:
+    try:
+        payload = handler._read_json()
+        context = handler._request_context(payload=payload)
+        handler.services.permission_broker.require_skill(context.to_execution_context(), "supersonic.query")
+        thread = handler.services.analysis_workspace_service.archive_thread(
+            context.tenant_id,
+            context.user_id,
+            str(payload.get("thread_id") or ""),
+        )
+        handler._write_audit(context, "analysis.thread.archive", "analysis_thread", str(thread["thread_id"]), {"workspace_id": thread.get("workspace_id")})
+        handler._send_json({"thread": thread})
+    except Exception as exc:
+        send_route_exception(handler, exc)
+
+
 def handle_analysis_threads_merge(handler: Any) -> None:
     try:
         payload = handler._read_json()

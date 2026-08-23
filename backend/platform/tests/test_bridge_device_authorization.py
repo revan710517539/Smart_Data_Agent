@@ -14,7 +14,9 @@ from backend.platform.database import apply_migrations
 from backend.platform.integrations.bridge_auth import InMemoryBridgeAuthStore, SQLiteBridgeAuthStore
 from backend.platform.security import AuthenticationError
 
-TEST_DEVELOPMENT_LOGIN_PASSWORD = "test-only-explicit-login-secret"
+from backend.platform.access.passwords import DEFAULT_ACCOUNT_PASSWORD
+
+TEST_DEVELOPMENT_LOGIN_PASSWORD = DEFAULT_ACCOUNT_PASSWORD
 
 
 def _request(

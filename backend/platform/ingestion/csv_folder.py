@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .crawler_manifest import CrawlerManifestError, resolve_crawler_tenant
+
 
 _DELIVERY_TIMESTAMP_PREFIX_RE = re.compile(
     r"^(?P<year>(?:19|20)\d{2})(?P<month>\d{2})(?P<day>\d{2})"
@@ -54,6 +56,8 @@ class CSVFolderSource:
         max_files: int = default_max_files,
         additional_roots: tuple[str | Path, ...] = (),
         catalog_root: str | Path | None = None,
+        contract: dict[str, Any] | None = None,
+        contract_error: str = "",
     ) -> None:
         self.root = Path(root).expanduser().resolve()
         self._catalog_root = Path(catalog_root).expanduser().resolve() if catalog_root else self.root
@@ -68,6 +72,8 @@ class CSVFolderSource:
         self._catalog_lock = threading.RLock()
         self._catalog_ready = threading.Event()
         self._tenant_sources: dict[str, "CSVFolderSource"] = {}
+        self._contract = dict(contract or {})
+        self._contract_error = str(contract_error or "")
 
     @classmethod
     def from_environment(cls) -> "CSVFolderSource":
@@ -101,18 +107,33 @@ class CSVFolderSource:
         is absent, the caller receives an empty catalog rather than another
         institution's files.
         """
-        directory = _tenant_directory_name(tenant_id)
+        required_manifest = os.getenv("SMART_DATA_AGENT_ENV", "development").strip().lower() == "production"
+        contract: dict[str, Any] | None = None
+        contract_error = ""
+        try:
+            contract = resolve_crawler_tenant(self.root, str(tenant_id).strip(), required=required_manifest)
+        except CrawlerManifestError as exc:
+            contract_error = str(exc)
+        directory = str(contract.get("institution_directory") or "") if contract else _tenant_directory_name(tenant_id)
+        if contract_error:
+            directory = f".unmapped-{hashlib.sha256(str(tenant_id).encode('utf-8')).hexdigest()[:16]}"
         with self._catalog_lock:
-            source = self._tenant_sources.get(directory)
+            cache_key = f"{tenant_id}:{directory}:{contract_error}"
+            source = self._tenant_sources.get(cache_key)
             if source is None:
                 source = CSVFolderSource(
                     self.root / directory,
                     max_file_bytes=self.max_file_bytes,
                     max_files=self.max_files,
-                    additional_roots=self._crawler_source_roots(directory),
+                    # A versioned production manifest is the complete delivery
+                    # boundary. Legacy source-id folders remain a development
+                    # compatibility path only and cannot widen that boundary.
+                    additional_roots=() if contract else self._crawler_source_roots(directory),
                     catalog_root=self.root,
+                    contract=contract,
+                    contract_error=contract_error,
                 )
-                self._tenant_sources[directory] = source
+                self._tenant_sources[cache_key] = source
                 threading.Thread(target=source.prime_catalog, name=f"csv-catalog-{directory}", daemon=True).start()
             return source
 
@@ -160,6 +181,9 @@ class CSVFolderSource:
     def catalog_ready(self) -> bool:
         return self._catalog_ready.is_set()
 
+    def wait_until_ready(self, timeout: float = 30.0) -> bool:
+        return self._catalog_ready.wait(timeout=max(0.0, float(timeout)))
+
     def snapshot(self, *, force: bool = False) -> dict[str, Any]:
         with self._catalog_lock:
             if not force and self._snapshot_cache is not None and self._cache_is_fresh():
@@ -174,10 +198,26 @@ class CSVFolderSource:
 
     def _build_snapshot(self) -> dict[str, Any]:
         candidates: list[dict[str, Any]] = []
+        source_root_exists = False
+        source_permission_denied = False
+        manifest_files = {
+            str(item.get("path") or "").strip()
+            for item in self._contract.get("files", [])
+            if isinstance(item, dict) and str(item.get("path") or "").strip()
+        }
         for source_root in self._roots:
             if not source_root.is_dir():
                 continue
-            for path in sorted(source_root.rglob("*.csv")):
+            source_root_exists = True
+            if not os.access(source_root, os.R_OK | os.X_OK):
+                source_permission_denied = True
+                continue
+            try:
+                paths = sorted(source_root.rglob("*.csv"))
+            except (OSError, PermissionError):
+                source_permission_denied = True
+                continue
+            for path in paths:
                 if len(candidates) >= self.max_files:
                     break
                 if path.is_symlink() or not path.is_file():
@@ -186,20 +226,32 @@ class CSVFolderSource:
                     resolved = path.resolve()
                     if not any(resolved == root or root in resolved.parents for root in self._roots):
                         continue
+                    if manifest_files and self._relative_path(resolved) not in manifest_files:
+                        continue
                     if self._is_auxiliary_artifact(resolved):
                         continue
                     stat = resolved.stat()
                     if stat.st_size > self.max_file_bytes:
                         continue
                     candidates.append(self._file_metadata(resolved, stat.st_mtime_ns, stat.st_size))
+                except PermissionError:
+                    source_permission_denied = True
+                    continue
                 except (OSError, UnicodeError, ValueError):
                     continue
         files, superseded = self._latest_files_only(candidates)
+        source_available = source_root_exists and not source_permission_denied
+        source_error = (
+            self._contract_error
+            or ("source_permission_denied" if source_permission_denied else "")
+            or ("source_root_missing" if not source_root_exists else "")
+            or ("no_files" if not files else "")
+        )
         return {
             "mode": "csv_folder",
             "source_read_only": True,
             "root": str(self.root),
-            "available": any(root.is_dir() for root in self._roots),
+            "available": source_available,
             "file_count": len(files),
             "files": files,
             "physical_file_count": len(candidates),
@@ -208,6 +260,13 @@ class CSVFolderSource:
             # archival/deletion policy, but cannot accidentally re-enter
             # data-management, self-analysis, or the daily topic batch.
             "selection_policy": "latest_per_source_identity",
+            "contract_status": "invalid" if self._contract_error else "validated" if self._contract else "legacy_local",
+            "contract_error": source_error,
+            "tenant_id": str(self._contract.get("tenant_id") or ""),
+            "institution_directory": str(self._contract.get("institution_directory") or self.root.name),
+            "manifest_schema_version": str(self._contract.get("schema_version") or ""),
+            "tenant_schema_version": str(self._contract.get("tenant_schema_version") or ""),
+            "manifest_generated_at": str(self._contract.get("generated_at") or ""),
             "scanned_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -284,6 +343,46 @@ class CSVFolderSource:
             if len(rows) >= max(1, min(int(max_rows), self.default_max_files * 1000)):
                 break
             rows.append({header: "" if source_row.get(header) is None else str(source_row.get(header)) for header in headers})
+        return headers, rows
+
+    def read_rows_matching_values(
+        self,
+        relative_path: str,
+        *,
+        key_field: str,
+        values: list[str],
+        max_matches: int = 20_000,
+    ) -> tuple[list[str], list[dict[str, str]]]:
+        """Scan the complete bounded source while retaining only requested keys.
+
+        Customer-list analysis cannot sample the first N rows: a requested
+        customer may occur anywhere in the authoritative CSV.  The file size
+        limit remains the capacity boundary and only matching rows are kept in
+        memory.
+        """
+
+        requested = {str(value or "").strip() for value in values if str(value or "").strip()}
+        limit = max(1, min(int(max_matches), 50_000))
+        if len(requested) > limit:
+            raise ValueError("csv_source_match_limit_exceeded")
+        content = self.read(relative_path)
+        reader = csv.DictReader(io.StringIO(_decode_csv_text(content), newline=""))
+        headers = [str(header or "").strip() for header in (reader.fieldnames or [])]
+        normalized_key = str(key_field or "").strip()
+        if not normalized_key or normalized_key not in headers:
+            raise ValueError("csv_source_match_key_missing")
+        rows: list[dict[str, str]] = []
+        found: set[str] = set()
+        for source_row in reader:
+            key = str(source_row.get(normalized_key) or "").strip()
+            if not key or key not in requested:
+                continue
+            if key in found:
+                raise ValueError("customer_segment_source_customer_key_duplicate")
+            found.add(key)
+            rows.append({header: "" if source_row.get(header) is None else str(source_row.get(header)) for header in headers})
+            if len(found) == len(requested):
+                break
         return headers, rows
 
     def _file_metadata(self, path: Path, modified_ns: int, size_bytes: int) -> dict[str, Any]:

@@ -82,13 +82,13 @@ import {
   updateRawTableExternalReference,
   uploadRawDataFile,
 } from "../services/dataAssetApi";
-import { PageDataAssetList, PageDataCreateButton, PageDataCreateModal } from "./data-assets/PageDataAssets";
+import { customerDetailTableKey, PageDataAssetList, PageDataCreateButton, PageDataCreateModal } from "./data-assets/PageDataAssets";
 import { pageDataScope } from "./page-data/assignment";
 import { TableRelationshipWorkspace } from "./data-assets/TableRelationshipBuilder";
 import { DataPageSelector } from "./ui/DataPageSelector";
 
 type DataAssetSection = "metrics" | "knowledge" | "data-management" | "quality";
-type DataManagementTab = "raw" | "single_page" | "multi_page" | "topic";
+type DataManagementTab = "raw" | "single_page" | "multi_page" | "customer_segment_page" | "topic";
 type KnowledgeMemoryTab = "all" | "intent" | "files" | "experience";
 type MetricForm = MetricDictionaryItem;
 type MetricDataSource = "backend" | "local" | "syncing" | "unavailable";
@@ -132,7 +132,7 @@ const sectionCopy: Record<
     searchPlaceholder: "搜索意图、知识文件、分析经验或用户行为习惯",
   },
   "data-management": {
-    title: "数据管理",
+    title: "站内数据",
     subtitle: "原始表仅读取当前机构 Data Crawler 文件夹中的 CSV；主题表和分析结果统一复用 Topic_Data 中的最新数据资产",
     searchPlaceholder: "搜索原始表、主题表、字段或 SQL",
   },
@@ -1205,7 +1205,7 @@ function useDataAssetBundle(tenantId: string, userId: string, scope?: "knowledge
         }
         if (!cancelled) {
           setBundle(response);
-          setNotice(`已连接后端资产配置 · 原始表 ${response.raw_tables.length} 张 · 主题表 ${response.topic_tables.length} 个`);
+          setNotice("");
         }
       } catch (error) {
         if (!cancelled) {
@@ -1283,6 +1283,7 @@ function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { search
   const [rawPage, setRawPage] = useState(1);
   const [singlePageDataPage, setSinglePageDataPage] = useState(1);
   const [multiPageDataPage, setMultiPageDataPage] = useState(1);
+  const [customerSegmentPage, setCustomerSegmentPage] = useState(1);
   const [topicPage, setTopicPage] = useState(1);
   const [createType, setCreateType] = useState<"topic" | null>(null);
   const [rawUploadOpen, setRawUploadOpen] = useState(false);
@@ -1299,23 +1300,28 @@ function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { search
   const topicTables = bundle.topic_tables.filter((item) => assetMatches(item, keyword)).sort(sortAssetNewestFirst);
   const singlePageDataAssets = bundle.page_data.filter((item) => pageDataScope(item) === "single_institution" && assetMatches(item, keyword)).sort(sortAssetNewestFirst);
   const multiPageDataAssets = bundle.page_data.filter((item) => pageDataScope(item) === "multi_institution" && assetMatches(item, keyword)).sort(sortAssetNewestFirst);
+  const customerSegmentPageDataAssets = bundle.page_data.filter((item) => pageDataScope(item) === "customer_segment" && assetMatches(item, keyword)).sort(sortAssetNewestFirst);
+  const customerDetailTables = bundle.raw_tables.filter((item) => Boolean(customerDetailTableKey(item)));
   const rawPageCount = Math.max(1, Math.ceil(rawTables.length / dataTablePageSize));
   const topicPageCount = Math.max(1, Math.ceil(topicTables.length / dataTablePageSize));
   const singlePageDataPageCount = Math.max(1, Math.ceil(singlePageDataAssets.length / dataTablePageSize));
   const multiPageDataPageCount = Math.max(1, Math.ceil(multiPageDataAssets.length / dataTablePageSize));
+  const customerSegmentPageCount = Math.max(1, Math.ceil(customerSegmentPageDataAssets.length / dataTablePageSize));
   const pagedRawTables = rawTables.slice((Math.min(rawPage, rawPageCount) - 1) * dataTablePageSize, Math.min(rawPage, rawPageCount) * dataTablePageSize);
   const pagedTopicTables = topicTables.slice((Math.min(topicPage, topicPageCount) - 1) * dataTablePageSize, Math.min(topicPage, topicPageCount) * dataTablePageSize);
   const pagedSinglePageDataAssets = singlePageDataAssets.slice((Math.min(singlePageDataPage, singlePageDataPageCount) - 1) * dataTablePageSize, Math.min(singlePageDataPage, singlePageDataPageCount) * dataTablePageSize);
   const pagedMultiPageDataAssets = multiPageDataAssets.slice((Math.min(multiPageDataPage, multiPageDataPageCount) - 1) * dataTablePageSize, Math.min(multiPageDataPage, multiPageDataPageCount) * dataTablePageSize);
-  const currentPage = activeTab === "raw" ? Math.min(rawPage, rawPageCount) : activeTab === "single_page" ? Math.min(singlePageDataPage, singlePageDataPageCount) : activeTab === "multi_page" ? Math.min(multiPageDataPage, multiPageDataPageCount) : Math.min(topicPage, topicPageCount);
-  const currentPageCount = activeTab === "raw" ? rawPageCount : activeTab === "single_page" ? singlePageDataPageCount : activeTab === "multi_page" ? multiPageDataPageCount : topicPageCount;
-  const currentTotal = activeTab === "raw" ? rawTables.length : activeTab === "single_page" ? singlePageDataAssets.length : activeTab === "multi_page" ? multiPageDataAssets.length : topicTables.length;
-  const setCurrentPage = activeTab === "raw" ? setRawPage : activeTab === "single_page" ? setSinglePageDataPage : activeTab === "multi_page" ? setMultiPageDataPage : setTopicPage;
+  const pagedCustomerSegmentPageDataAssets = customerSegmentPageDataAssets.slice((Math.min(customerSegmentPage, customerSegmentPageCount) - 1) * dataTablePageSize, Math.min(customerSegmentPage, customerSegmentPageCount) * dataTablePageSize);
+  const currentPage = activeTab === "raw" ? Math.min(rawPage, rawPageCount) : activeTab === "single_page" ? Math.min(singlePageDataPage, singlePageDataPageCount) : activeTab === "multi_page" ? Math.min(multiPageDataPage, multiPageDataPageCount) : activeTab === "customer_segment_page" ? Math.min(customerSegmentPage, customerSegmentPageCount) : Math.min(topicPage, topicPageCount);
+  const currentPageCount = activeTab === "raw" ? rawPageCount : activeTab === "single_page" ? singlePageDataPageCount : activeTab === "multi_page" ? multiPageDataPageCount : activeTab === "customer_segment_page" ? customerSegmentPageCount : topicPageCount;
+  const currentTotal = activeTab === "raw" ? rawTables.length : activeTab === "single_page" ? singlePageDataAssets.length : activeTab === "multi_page" ? multiPageDataAssets.length : activeTab === "customer_segment_page" ? customerSegmentPageDataAssets.length : topicTables.length;
+  const setCurrentPage = activeTab === "raw" ? setRawPage : activeTab === "single_page" ? setSinglePageDataPage : activeTab === "multi_page" ? setMultiPageDataPage : activeTab === "customer_segment_page" ? setCustomerSegmentPage : setTopicPage;
 
   useEffect(() => {
     setRawPage(1);
     setSinglePageDataPage(1);
     setMultiPageDataPage(1);
+    setCustomerSegmentPage(1);
     setTopicPage(1);
   }, [activeTab, keyword, tenantId]);
 
@@ -1336,7 +1342,8 @@ function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { search
     try {
       const response = await saveDataAssetItem({ tenantId, userId, itemType: "page_data", item });
       upsertPageData(response.item as PageDataAsset);
-      setNotice(`${pageDataScope(response.item as PageDataAsset) === "multi_institution" ? "多机构" : "单机构"}页面数据已保存并进入对应页面的数据下拉框；原始 CSV 保持只读。`);
+      const savedScope = pageDataScope(response.item as PageDataAsset);
+      setNotice(`${savedScope === "multi_institution" ? "多机构" : savedScope === "customer_segment" ? "分客群" : "单机构"}页面数据已保存并进入对应页面的数据下拉框；原始 CSV 保持只读。`);
     } catch (error) {
       setNotice(`页面数据保存失败：${apiErrorMessage(error, "未知错误")}`);
       throw error;
@@ -1439,7 +1446,7 @@ function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { search
       <AssetNotice notice={notice} />
       <div className="rounded-xl border border-[#f0f0f2] bg-white p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
-          <h3 className="shrink-0 text-[14px] leading-8 text-[#1d1d1f]">数据管理</h3>
+          <h3 className="shrink-0 text-[14px] leading-8 text-[#1d1d1f]">站内数据</h3>
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
             <div className="flex max-w-full flex-nowrap items-center gap-2 overflow-x-auto [&>*]:shrink-0" data-data-management-control-row="true">
               {activeTab === "raw" && (
@@ -1477,13 +1484,15 @@ function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { search
               )}
               {isSuperAdmin && activeTab === "single_page" && <PageDataCreateButton scope="single_institution" onClick={() => void openPageDataEditor("single_institution")} />}
               {isSuperAdmin && activeTab === "multi_page" && <PageDataCreateButton scope="multi_institution" onClick={() => void openPageDataEditor("multi_institution")} />}
+              {isSuperAdmin && activeTab === "customer_segment_page" && <PageDataCreateButton scope="customer_segment" onClick={() => void openPageDataEditor("customer_segment")} />}
               <SegmentedTabs
                 tabs={[
                   { key: "raw", label: `原始表 ${rawTables.length}` },
                   { key: "single_page", label: `单机构页面 ${singlePageDataAssets.length}` },
-                  { key: "multi_page", label: `多机构页面 ${multiPageDataAssets.length}` },
-                  { key: "topic", label: `主题表 ${topicTables.length}` },
                   { key: "relationships", label: `表关系 ${bundle.table_relationships.length}` },
+                  { key: "multi_page", label: `多机构页面 ${multiPageDataAssets.length}` },
+                  { key: "customer_segment_page", label: `分客群页面 ${customerSegmentPageDataAssets.length}` },
+                  { key: "topic", label: `主题表 ${topicTables.length}` },
                 ]}
                 activeKey={activeTab}
                 onChange={(key) => setActiveTab(key as DataManagementTab | "relationships")}
@@ -1543,6 +1552,20 @@ function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { search
               setNotice("多机构页面数据配置已删除；多机构分析会在下次读取时移除该入口。");
             }}
           />
+        ) : activeTab === "customer_segment_page" ? (
+          <PageDataAssetList
+            assets={pagedCustomerSegmentPageDataAssets}
+            keyword={keyword}
+            scope="customer_segment"
+            canManage={isSuperAdmin}
+            onEdit={(asset) => void openPageDataEditor("customer_segment", asset)}
+            onPageChange={async () => undefined}
+            onDelete={async (asset) => {
+              await deleteDataAssetItem({ tenantId, userId, itemType: "page_data", itemId: asset.id });
+              removeTable("page_data", asset.id);
+              setNotice("分客群页面数据配置已删除；分客群分析会在下次读取时移除该入口。");
+            }}
+          />
         ) : activeTab === "topic" ? (
           <div className="space-y-3">
             {pagedTopicTables.map((topic) => (
@@ -1581,7 +1604,7 @@ function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { search
       )}
       {pageDataEditor && <PageDataCreateModal
         scope={pageDataEditor.scope}
-        rawTables={rawTables}
+        rawTables={pageDataEditor.scope === "customer_segment" ? customerDetailTables : rawTables}
         multiInstitutionCandidates={multiInstitutionCandidates}
         candidatesLoading={multiCandidatesLoading}
         candidatesError={multiCandidatesError}
@@ -2173,7 +2196,7 @@ function DataTableDeleteConfirm({
             <h3 className="text-[14px] text-[#1d1d1f]">你正在删除这条记录</h3>
             <p className="mt-1.5 text-[12px] leading-[1.7] text-[#636366]">{itemName}</p>
             <p className="mt-1 text-[11px] leading-[1.6] text-[#aeaeb2]">
-              {protectedAsset ? "该主题表是系统内置资产，关联经营周报和智能分析，不能删除。" : "确认后将从数据管理列表和后端资产配置中删除，操作不可撤销。"}
+              {protectedAsset ? "该主题表是系统内置资产，关联经营周报和智能分析，不能删除。" : "确认后将从站内数据列表和后端资产配置中删除，操作不可撤销。"}
             </p>
           </div>
         </div>
@@ -3290,6 +3313,7 @@ function AssetMiniField({ label, value }: { label: string; value: string }) {
 }
 
 function AssetNotice({ notice }: { notice: string }) {
+  if (!notice) return null;
   return (
     <div className="rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[12px] text-[#636366]">
       {notice}

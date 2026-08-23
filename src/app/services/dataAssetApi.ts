@@ -154,6 +154,11 @@ export type IntentAsset = DataAssetGovernanceFields & {
 
 export type AnalysisExperienceAsset = DataAssetGovernanceFields & {
   id: string;
+  memoryTopic?: string;
+  memoryAction?: string;
+  memoryMergeKey?: string;
+  occurrenceCount?: number;
+  mergedFromIds?: string[];
   title?: string;
   name: string;
   description?: string;
@@ -184,6 +189,11 @@ export type AnalysisExperienceAsset = DataAssetGovernanceFields & {
 
 export type BehaviorHabitAsset = DataAssetGovernanceFields & {
   id: string;
+  memoryTopic?: string;
+  memoryAction?: string;
+  memoryMergeKey?: string;
+  occurrenceCount?: number;
+  mergedFromIds?: string[];
   title: string;
   habitType: "分析习惯" | "运营习惯" | "汇报习惯";
   description: string;
@@ -213,6 +223,8 @@ export type KnowledgeFileAsset = DataAssetGovernanceFields & {
   tags: string;
 };
 
+export type AnalysisSkillDisplayLocation = "intelligent_analysis" | "hidden";
+
 export type AnalysisSkillAsset = DataAssetGovernanceFields & {
   id: string;
   name: string;
@@ -226,6 +238,7 @@ export type AnalysisSkillAsset = DataAssetGovernanceFields & {
   viewpointStrategy: string;
   recommendedSkillIds: string[];
   enabled: boolean;
+  displayLocation?: AnalysisSkillDisplayLocation;
   sortOrder: number;
   learningOrigin?: string;
   learningKind?: string;
@@ -257,9 +270,9 @@ export type AnalysisShortcutAsset = DataAssetGovernanceFields & {
   ownerUserId: string;
 };
 
-export type PageDataPageCode = "dashboard" | "weekly_report" | "institution_supervision";
+export type PageDataPageCode = "dashboard" | "weekly_report" | "institution_supervision" | "customer_segment_analysis";
 export type PageDataConsumerCode = PageDataPageCode | "self_analysis" | "visual_report" | "my_reports";
-export type PageDataInstitutionScope = "single_institution" | "multi_institution";
+export type PageDataInstitutionScope = "single_institution" | "multi_institution" | "customer_segment";
 
 export type MultiInstitutionPageDataSource = {
   nodeId?: string;
@@ -351,6 +364,7 @@ export type PageDataAsset = DataAssetGovernanceFields & {
   institutionScope?: PageDataInstitutionScope;
   relationshipGroupId?: string;
   institutionSources?: MultiInstitutionPageDataSource[];
+  customerKeyField?: string;
 };
 
 export type DataAssetBundle = {
@@ -495,6 +509,11 @@ export type PageDataRows = {
   row_count: number;
   rows: Array<Record<string, string>>;
   bounded: true;
+  customer_segment?: {
+    customer_count: number;
+    matched_count: number;
+    content_hash: string;
+  };
 };
 
 export async function fetchPageDataRows({
@@ -523,16 +542,16 @@ export type PageDataWorkspace = {
 
 const pageDataWorkspaceMemory = new Map<string, PageDataWorkspace>();
 
-export function pageDataWorkspaceMemoryKey(tenantId: string, pageCode: PageDataPageCode) {
-  return `${tenantId}:${pageCode}`;
+export function pageDataWorkspaceMemoryKey(tenantId: string, userId: string, pageCode: PageDataPageCode) {
+  return `${tenantId}:${userId}:${pageCode}`;
 }
 
-export function readPageDataWorkspaceMemory(tenantId: string, pageCode: PageDataPageCode) {
-  return pageDataWorkspaceMemory.get(pageDataWorkspaceMemoryKey(tenantId, pageCode)) || null;
+export function readPageDataWorkspaceMemory(tenantId: string, userId: string, pageCode: PageDataPageCode) {
+  return pageDataWorkspaceMemory.get(pageDataWorkspaceMemoryKey(tenantId, userId, pageCode)) || null;
 }
 
-export function writePageDataWorkspaceMemory(tenantId: string, pageCode: PageDataPageCode, workspace: PageDataWorkspace) {
-  pageDataWorkspaceMemory.set(pageDataWorkspaceMemoryKey(tenantId, pageCode), workspace);
+export function writePageDataWorkspaceMemory(tenantId: string, userId: string, pageCode: PageDataPageCode, workspace: PageDataWorkspace) {
+  pageDataWorkspaceMemory.set(pageDataWorkspaceMemoryKey(tenantId, userId, pageCode), workspace);
 }
 
 export async function fetchPageDataWorkspace({
@@ -544,9 +563,12 @@ export async function fetchPageDataWorkspace({
   const workspace = await apiRequest<PageDataWorkspace>(`/api/data-assets/page-data/workspace?${params.toString()}`, {
     method: "GET",
     context: { tenantId, userId },
+    // Pointer/focus/down preloads and the route mount must share one governed
+    // request. A short cache still revalidates changes promptly, while failed
+    // reads are never cached by apiRequest.
     readCache: { ttlMs: 8_000, tags: ["page-data", `page-data-workspace:${pageCode}`] },
   });
-  writePageDataWorkspaceMemory(tenantId, pageCode, workspace);
+  writePageDataWorkspaceMemory(tenantId, userId, pageCode, workspace);
   return workspace;
 }
 

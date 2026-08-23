@@ -75,7 +75,7 @@ const navigationActions = [
   { id: "skills", label: "打开 Skill 管理", description: "查看系统 Skill 与运行状态", path: "/agent/skills" },
   { id: "metrics", label: "打开指标管理", description: "查看并维护已保存的指标字典", path: "/data-assets/metrics" },
   { id: "memory", label: "打开知识记忆", description: "查看知识、经验与行为记忆", path: "/data-assets/knowledge" },
-  { id: "assets", label: "打开数据管理", description: "查看原始表、主题表和数据资产", path: "/data-assets/data-management" },
+  { id: "assets", label: "打开站内数据", description: "查看原始表、主题表和数据资产", path: "/data-assets/data-management" },
   { id: "quality", label: "打开质量监控", description: "查看数据质量监控", path: "/data-assets/quality" },
   { id: "tools", label: "打开工具调用", description: "查看工具调用记录", path: "/data-assets/tools" },
   { id: "alerts", label: "打开预警规则", description: "进入预警规则", path: "/notifications/alerts" },

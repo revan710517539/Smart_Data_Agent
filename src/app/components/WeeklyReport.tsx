@@ -85,6 +85,7 @@ import {
   reportPeriod,
   makeId,
   makeAnalysisSelectionTarget,
+  makePageCommentTarget,
   makeStableIdSegment,
   tableHeaderItemId,
   tableCellItemId,
@@ -138,6 +139,7 @@ import { contextRailRevealEvent, revealContextRail, type ContextRailRevealTarget
 import { AnalysisProgressPanel } from "./self-analysis/AnalysisProgressPanel";
 import { applyWeeklyCoreMetricSnapshot, buildWeeklyCoreMetricRows } from "./weekly-report/CoreMetrics";
 import { downloadWeeklyExport, downloadWeeklyExportPdf, prepareWeeklyExportDocument, weeklyExportFilename, weeklyExportHtml, type WeeklyExportFormat } from "./weekly-report/exportReport";
+import { scheduleWeeklyReportBodyScroll } from "./weekly-report/scrollToReportBody";
 import { PageDataModeToggle, PageDataVisualizationModules, usePageDataComposer } from "./page-data/PageDataComposer";
 import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
 import { NoteParagraphField } from "./notes/RichNoteEditor";
@@ -152,6 +154,7 @@ const WEEKLY_CORE_ANALYSIS_PROMPT = "结合在贷余额、放款金额、新增�
 
 export function WeeklyReport() {
   const reportBodyRef = useRef<HTMLDivElement>(null);
+  const alignedScrollReportIdRef = useRef("");
   const analysisRevisionRef = useRef<Record<string, number>>({});
   const analysisRunRef = useRef<Record<string, string>>({});
   const autoAnalysisStartedRef = useRef<Set<string>>(new Set());
@@ -270,7 +273,7 @@ export function WeeklyReport() {
         kind: "page-data" as const,
         title: asset.name,
         subtitle: `页面数据 · 原始表：${asset.sourceTableName}`,
-        visible: weeklyPageData.layoutIds.includes(asset.id),
+        visible: preferenceById.get(`page-data:${asset.id}`)?.visible ?? weeklyPageData.layoutIds.includes(asset.id),
         deletable: isSuperAdmin,
         sourceId: asset.id,
       })),
@@ -326,6 +329,11 @@ export function WeeklyReport() {
       JSON.stringify({ version: 4, orderCustomized: analysisModuleSettings.orderCustomized, preferences: weeklyDataItems.map(({ id, visible }) => ({ id, visible })) }),
     );
   }, [analysisModuleSettings.orderCustomized, tenantId, userId, weeklyDataItems]);
+
+  useEffect(() => {
+    if (alignedScrollReportIdRef.current !== activeReport.id) alignedScrollReportIdRef.current = "";
+    return scheduleWeeklyReportBodyScroll(activeReport.id, alignedScrollReportIdRef);
+  }, [activeReport.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -784,9 +792,8 @@ export function WeeklyReport() {
   }
 
   function toggleWeeklyDataItem(item: WeeklyDataModule) {
-    if (weeklyPageData.mode !== "edit") return;
     if (item.kind === "page-data") {
-      weeklyPageData.toggleAsset(item.sourceId);
+      setAnalysisModuleSettings((current) => ({ ...current, preferences: weeklyDataItems.map((currentItem) => ({ id: currentItem.id, visible: currentItem.id === item.id ? !item.visible : currentItem.visible })) }));
       return;
     }
     if (item.kind === "visual-report") {
@@ -798,7 +805,6 @@ export function WeeklyReport() {
   }
 
   function moveWeeklyDataItem(sourceId: string, targetId: string) {
-    if (weeklyPageData.mode !== "edit") return;
     if (!sourceId || sourceId === targetId) return;
     const next = weeklyDataItems.map(({ id, visible }) => ({ id, visible }));
     const sourceIndex = next.findIndex((item) => item.id === sourceId);
@@ -810,9 +816,9 @@ export function WeeklyReport() {
   }
 
   async function deleteWeeklyDataItem(item: WeeklyDataModule) {
-    if (!item.deletable) return;
+    if (weeklyPageData.mode !== "edit" || !item.deletable) return;
     if (item.kind === "page-data") {
-      if (weeklyPageData.mode !== "edit") return;
+      setAnalysisModuleSettings((current) => ({ ...current, preferences: weeklyDataItems.map((currentItem) => ({ id: currentItem.id, visible: currentItem.id === item.id ? false : currentItem.visible })) }));
       weeklyPageData.toggleAsset(item.sourceId);
       return;
     }
@@ -1047,6 +1053,16 @@ export function WeeklyReport() {
     const text = commentDrafts[targetId]?.trim();
     const target = draftTargets.find((item) => item.id === targetId);
     if (!text || !target) return;
+    persistComment(target, text);
+  }
+
+  function addPageComment(text: string) {
+    const body = text.trim();
+    if (!body) return;
+    persistComment(makePageCommentTarget("weekly-report", "经营周报"), body);
+  }
+
+  function persistComment(target: CommentTarget, text: string) {
     const clientRequestId = makeId("comment_request");
     const nextComment: CommentItem = {
         id: `pending_${clientRequestId}`,
@@ -1099,10 +1115,10 @@ export function WeeklyReport() {
     }, 1400);
     setCommentDrafts((current) => {
       const next = { ...current };
-      delete next[targetId];
+      delete next[target.id];
       return next;
     });
-    setDraftTargets((current) => current.filter((item) => item.id !== targetId));
+    setDraftTargets((current) => current.filter((item) => item.id !== target.id));
     setSelectedCommentTarget(null);
     setActiveDraftId(null);
   }
@@ -1444,7 +1460,7 @@ export function WeeklyReport() {
 
   return (
     <div className="p-4 md:p-7">
-      <div className="weekly-report-print-hidden flex flex-col gap-4 mb-6 xl:flex-row xl:items-start xl:justify-between">
+      <div className="weekly-report-print-hidden sticky top-0 z-20 -mx-4 mb-6 flex flex-col gap-4 bg-[#f8f8fa] px-4 py-3 md:-mx-7 md:px-7 xl:flex-row xl:items-start xl:justify-between" data-weekly-report-toolbar="true">
         <div>
           <div className="flex items-center gap-2">
             <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">银行经营分析周报工作台</h2>
@@ -1561,7 +1577,7 @@ export function WeeklyReport() {
           </div>
 
           <div className="px-4 pb-5 pt-2 md:px-6">
-            <section className="mb-6 border-t border-[#f0f0f2] pt-2">
+            <section className="mb-6 border-t border-[#f0f0f2] pt-2" data-weekly-report-body-start="true">
               <div className="flex flex-col gap-2 mb-3 md:flex-row md:items-center md:justify-between">
                 <h4 className="text-[14px] text-[#1d1d1f]">一、业绩与业务波动</h4>
                 <div className="weekly-report-print-hidden flex items-center gap-2">
@@ -1647,7 +1663,7 @@ export function WeeklyReport() {
                     {content}
                   </div>;
                 })}
-                {!weeklyDataItems.some((item) => item.visible) ? <div className="rounded-lg border border-dashed border-[#e5e5ea] px-4 py-10 text-center text-[12px] text-[#aeaeb2]">当前未显示周报数据，可切换到编辑后通过右上角按钮重新启用。</div> : null}
+                {!weeklyDataItems.some((item) => item.visible) ? <div className="rounded-lg border border-dashed border-[#e5e5ea] px-4 py-10 text-center text-[12px] text-[#aeaeb2]">当前未显示周报数据，可通过右上角“周报数据”按钮重新启用。</div> : null}
               </div>
             </section>
 
@@ -1748,6 +1764,7 @@ export function WeeklyReport() {
             activeCommentId,
             activeDraftId,
             railHeight: commentRailHeight,
+            onCreateComment: addPageComment,
             onSave: addComment,
             onCommentActivate: (commentId) => { setActiveDraftId(null); setActiveCommentId(commentId); },
             onResolveComment: resolveComment,
@@ -2544,7 +2561,7 @@ function CommentableText({
   onAnnotationClick: (commentId: string, rect?: DOMRect) => void;
 }) {
   const staticRef = useRef<HTMLDivElement>(null);
-  const [editing, setEditing] = useState(!value);
+  const [editing, setEditing] = useState(false);
 
   function openEditor() {
     setEditing(true);

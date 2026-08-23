@@ -24,6 +24,7 @@ class AnalysisWorkspaceStore(Protocol):
     def list_threads(self, tenant_id: str, user_id: str, workspace_id: str) -> list[dict[str, Any]]: ...
     def create_thread(self, tenant_id: str, user_id: str, workspace_id: str, parent_thread_id: str | None, title: str, anchor: dict[str, Any]) -> dict[str, Any]: ...
     def append_turn(self, tenant_id: str, user_id: str, thread_id: str, payload: dict[str, Any]) -> dict[str, Any]: ...
+    def archive_thread(self, tenant_id: str, user_id: str, thread_id: str) -> dict[str, Any]: ...
     def merge_threads(self, tenant_id: str, user_id: str, target_thread_id: str, source_thread_ids: list[str], question: str, answer: str, evidence_refs: list[dict[str, Any]]) -> dict[str, Any]: ...
 
 
@@ -66,6 +67,9 @@ class AnalysisWorkspaceService:
             "status": status,
         }
         return self.store.append_turn(tenant_id, user_id, _required(thread_id, "thread_id"), normalized)
+
+    def archive_thread(self, tenant_id: str, user_id: str, thread_id: str) -> dict[str, Any]:
+        return self.store.archive_thread(tenant_id, user_id, _required(thread_id, "thread_id"))
 
     def merge(self, tenant_id: str, user_id: str, target_thread_id: str, source_thread_ids: list[str], *, question: str, answer: str, evidence_refs: list[dict[str, Any]]) -> dict[str, Any]:
         sources = list(dict.fromkeys(_required(item, "source_thread_id") for item in source_thread_ids))
@@ -174,7 +178,10 @@ class InMemoryAnalysisWorkspaceStore:
         with self._lock:
             existing = next((item for item in self.workspaces.values() if item["tenant_id"] == tenant_id and item["workspace_key"] == workspace_key), None)
             if existing and existing["owner_user_id"] != user_id:
-                raise PermissionError("analysis_workspace_not_owned")
+                workspace_key = f"{workspace_key}:{user_id}"
+                existing = next((item for item in self.workspaces.values() if item["tenant_id"] == tenant_id and item["workspace_key"] == workspace_key), None)
+                if existing and existing["owner_user_id"] != user_id:
+                    raise PermissionError("analysis_workspace_not_owned")
             workspace = existing or {
                 "workspace_id": f"ws_{uuid4().hex}",
                 "tenant_id": tenant_id,
@@ -226,6 +233,19 @@ class InMemoryAnalysisWorkspaceStore:
             thread["updated_at"] = _now()
             return deepcopy(turn)
 
+    def archive_thread(self, tenant_id: str, user_id: str, thread_id: str) -> dict[str, Any]:
+        with self._lock:
+            thread = self._owned_thread(tenant_id, user_id, thread_id)
+            remaining = [
+                item for item in self.threads.values()
+                if item["workspace_id"] == thread["workspace_id"] and item["status"] != "archived" and item["thread_id"] != thread_id
+            ]
+            if not remaining:
+                raise ValueError("analysis_thread_last_active")
+            thread["status"] = "archived"
+            thread["updated_at"] = _now()
+            return deepcopy(thread)
+
     def merge_threads(self, tenant_id: str, user_id: str, target_thread_id: str, source_thread_ids: list[str], question: str, answer: str, evidence_refs: list[dict[str, Any]]) -> dict[str, Any]:
         with self._lock:
             target = self._owned_thread(tenant_id, user_id, target_thread_id)
@@ -256,7 +276,11 @@ class MySQLAnalysisWorkspaceStore:
             cursor.execute("SELECT workspace_id,owner_user_id FROM platform_analysis_workspaces WHERE tenant_id=%s AND workspace_key=%s FOR UPDATE", (tenant_key, workspace_key))
             row = cursor.fetchone()
             if row and str(row["owner_user_id"]) != user_key:
-                raise PermissionError("analysis_workspace_not_owned")
+                workspace_key = f"{workspace_key}:{user_key}"
+                cursor.execute("SELECT workspace_id,owner_user_id FROM platform_analysis_workspaces WHERE tenant_id=%s AND workspace_key=%s FOR UPDATE", (tenant_key, workspace_key))
+                row = cursor.fetchone()
+                if row and str(row["owner_user_id"]) != user_key:
+                    raise PermissionError("analysis_workspace_not_owned")
             workspace_id = str(row["workspace_id"]) if row else str(uuid4())
             payload = _json(context)
             if row:
@@ -320,6 +344,30 @@ class MySQLAnalysisWorkspaceStore:
             cursor.execute("INSERT INTO platform_analysis_turns(turn_id,tenant_id,thread_id,turn_no,actor_user_id,question,answer,intent,execution_plan,artifact_refs,evidence_refs,status,created_by) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", (turn_id, tenant_key, thread_id, turn_no, user_key, payload["question"], payload["answer"], _json(payload["intent"]), _json(payload["execution_plan"]), _json(payload["artifact_refs"]), _json(payload["evidence_refs"]), payload["status"], user_key))
             cursor.execute("UPDATE platform_analysis_threads SET updated_at=UTC_TIMESTAMP(6),lock_version=lock_version+1 WHERE thread_id=%s", (thread_id,))
         return {"turn_id": turn_id, "thread_id": thread_id, "turn_no": turn_no, **payload}
+
+    def archive_thread(self, tenant_id: str, user_id: str, thread_id: str) -> dict[str, Any]:
+        with self.pool.transaction() as connection, connection.cursor() as cursor:
+            tenant_key, user_key = _resolve_identity(cursor, tenant_id, user_id)
+            cursor.execute(
+                "SELECT t.thread_id,t.workspace_id,t.status,w.owner_user_id FROM platform_analysis_threads t JOIN platform_analysis_workspaces w ON w.workspace_id=t.workspace_id WHERE t.thread_id=%s AND t.tenant_id=%s FOR UPDATE",
+                (thread_id, tenant_key),
+            )
+            row = cursor.fetchone()
+            if not row or str(row["owner_user_id"]) != user_key:
+                raise PermissionError("analysis_thread_not_owned")
+            cursor.execute(
+                "SELECT COUNT(*) AS remaining FROM platform_analysis_threads WHERE workspace_id=%s AND status<>'archived' AND thread_id<>%s",
+                (row["workspace_id"], thread_id),
+            )
+            if int(cursor.fetchone()["remaining"] or 0) < 1:
+                raise ValueError("analysis_thread_last_active")
+            cursor.execute(
+                "UPDATE platform_analysis_threads SET status='archived',updated_at=UTC_TIMESTAMP(6),lock_version=lock_version+1 WHERE thread_id=%s",
+                (thread_id,),
+            )
+            cursor.execute("SELECT thread_id,workspace_id,parent_thread_id,root_thread_id,title,anchor,status,merged_into_thread_id,created_at,updated_at FROM platform_analysis_threads WHERE thread_id=%s", (thread_id,))
+            archived = cursor.fetchone()
+        return {**_thread_row(archived), "turns": []}
 
     def merge_threads(self, tenant_id: str, user_id: str, target_thread_id: str, source_thread_ids: list[str], question: str, answer: str, evidence_refs: list[dict[str, Any]]) -> dict[str, Any]:
         with self.pool.transaction() as connection, connection.cursor() as cursor:
@@ -505,6 +553,7 @@ def _merge_snapshot_source(snapshot: dict[str, Any], source: Any) -> None:
         ("schema_fingerprint", ("schema_fingerprint", "schemaFingerprint", "schema_hash", "schema_version", "schemaVersion")),
         ("asset_version", ("asset_version", "assetVersion")),
         ("observed_at", ("observed_at", "generatedAt", "generated_at")),
+        ("latest_partition", ("latest_partition", "latestPartition", "watermark_at", "watermarkAt")),
         ("relative_path", ("relative_path", "relativePath")),
         ("source_key", ("source_key", "sourceKey")),
         ("immutable", ("immutable",)),

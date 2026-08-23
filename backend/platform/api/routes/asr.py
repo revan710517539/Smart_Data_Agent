@@ -3,15 +3,15 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
-import ssl
 import struct
 import threading
 import uuid
 from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any
-from urllib.parse import parse_qs, urlparse, urlunparse
+from urllib.parse import parse_qs
 
 import certifi
 from websocket import (
@@ -19,11 +19,13 @@ from websocket import (
     WebSocketBadStatusException,
     WebSocketConnectionClosedException,
     WebSocketTimeoutException,
-    create_connection,
 )
 
 from backend.platform.api.support import first_query_value, send_route_exception
-from backend.platform.security import EgressPolicyError, validate_outbound_url
+from backend.platform.security import EgressPolicyError, create_governed_websocket_connection
+from backend.platform.settings.speech_test import (
+    dashscope_api_base_to_fun_asr_endpoint as _speech_dashscope_endpoint,
+)
 from backend.platform.settings import (
     DEFAULT_RELAY_MODEL_ID,
     default_relay_model_preset,
@@ -41,6 +43,7 @@ DEFAULT_FUN_ASR_MODEL = "fun-asr-realtime"
 DEFAULT_FUN_ASR_REGION = "cn-beijing"
 DEFAULT_FUN_ASR_SAMPLE_RATE = 16000
 _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -158,13 +161,7 @@ def build_fun_asr_endpoint(workspace_id: str, region: str = DEFAULT_FUN_ASR_REGI
 
 
 def dashscope_api_base_to_fun_asr_endpoint(api_base: str) -> str:
-    parsed = urlparse(api_base.strip())
-    if not parsed.scheme or not parsed.netloc:
-        raise ValueError("DASHSCOPE_API_BASE must be an absolute URL.")
-    if parsed.scheme not in {"http", "https", "ws", "wss"}:
-        raise ValueError("DASHSCOPE_API_BASE must use http, https, ws or wss.")
-    scheme = "wss" if parsed.scheme in {"https", "wss"} else "ws"
-    return urlunparse((scheme, parsed.netloc, "/api-ws/v1/inference", "", "", ""))
+    return _speech_dashscope_endpoint(api_base)
 
 
 def build_run_task_event(
@@ -279,7 +276,13 @@ class FunAsrProxy:
                 if opcode == 0x2:
                     self._forward_audio(payload)
         except Exception as exc:
-            self._send_client_error(_public_fun_asr_error(exc))
+            error_code = _public_fun_asr_error(exc)
+            logger.warning(
+                "Fun-ASR proxy failed error_type=%s error_code=%s",
+                type(exc).__name__,
+                error_code,
+            )
+            self._send_client_error(error_code)
         finally:
             self.stopped.set()
             self._finish_remote()
@@ -320,12 +323,11 @@ class FunAsrProxy:
             f"Authorization: Bearer {config.api_key}",
             "user-agent: SmartDataAgent/1.0 Fun-ASR realtime proxy",
         ]
-        validate_outbound_url(config.endpoint, allowed_schemes=("wss",))
-        self.remote = create_connection(
+        self.remote = create_governed_websocket_connection(
             config.endpoint,
             header=headers,
             timeout=10,
-            sslopt={"cert_reqs": ssl.CERT_REQUIRED, "ca_certs": certifi.where()},
+            ca_certs=certifi.where(),
         )
         self.remote.settimeout(1)
         self._remote_send_json(
@@ -618,6 +620,12 @@ def _public_fun_asr_error(exc: Exception) -> str:
     if "dashscope_api_key_missing" in detail or "fun_asr_configuration_missing" in detail:
         return "fun_asr_configuration_missing"
     if isinstance(exc, EgressPolicyError):
+        if "cannot be resolved" in detail or "no resolved address" in detail:
+            return "fun_asr_dns_failed"
+        if "not allowlisted" in detail:
+            return "fun_asr_egress_rejected"
+        if "blocked address" in detail:
+            return "fun_asr_egress_rejected"
         return "fun_asr_egress_rejected"
     if isinstance(exc, WebSocketBadStatusException):
         status_code = int(getattr(exc, "status_code", 0) or 0)

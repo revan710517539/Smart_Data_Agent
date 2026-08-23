@@ -118,9 +118,9 @@ export function ContextSideRail({
             </button>
           </div>
         </div>
-        <div className="absolute inset-x-0 bottom-0 top-[57px] flex min-h-0 flex-col overflow-y-auto overscroll-contain bg-[#f7f8fa] px-2 pb-2" data-context-rail-scroll="true">
+        <div className={`absolute inset-x-0 bottom-0 top-[57px] flex min-h-0 flex-col overscroll-contain bg-[#f7f8fa] px-2 pb-2 ${activeTab === "analysis" ? "overflow-hidden" : "overflow-y-auto"}`} data-context-rail-scroll="true">
           <div className={activeTab === "comments" ? "min-h-0" : "hidden"}>{comments}</div>
-          <div className={activeTab === "analysis" ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}>{analysis}</div>
+          <div className={activeTab === "analysis" ? "flex h-full min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}>{analysis}</div>
           <div className={activeTab === "message-board" ? "min-h-0" : "hidden"}>{messageBoard}</div>
         </div>
       </aside>

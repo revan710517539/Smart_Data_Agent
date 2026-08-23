@@ -1,0 +1,13 @@
+{
+  "skill_id": "data.analysis.descriptive",
+  "skill_name": "描述性分析",
+  "skill_type": "analysis_method",
+  "description": "对受治理查询结果执行总量、结构、趋势、极值和异常描述，不越界解释因果。",
+  "input_schema": {"data": "array", "analysis_plan": "object", "semantic_info": "object"},
+  "output_schema": {"analysis_method": "object"},
+  "permission_scope": ["analysis:run"],
+  "runtime_type": "python",
+  "risk_level": "low",
+  "version": "1.0.0",
+  "owner": "smart-data-agent"
+}

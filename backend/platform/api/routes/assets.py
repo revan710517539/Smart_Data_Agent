@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from backend.authz import normalize_tenant_id
 from backend.platform.api.support import first_query_value, send_route_exception
+from backend.platform.customer_segment import MAX_CUSTOMER_IDS, customer_ids_for_user
 
 
 RUNTIME_CONFIGURATION_ASSET_TYPES = frozenset({
@@ -29,6 +30,7 @@ VISUALIZATION_ASSET_KEYS = (
 VISUALIZATION_TOPIC_LIFECYCLE_STATUSES = frozenset({"draft", "review", "active"})
 SINGLE_INSTITUTION_PAGE_DATA_SCOPE = "single_institution"
 MULTI_INSTITUTION_PAGE_DATA_SCOPE = "multi_institution"
+CUSTOMER_SEGMENT_PAGE_DATA_SCOPE = "customer_segment"
 MULTI_INSTITUTION_DIMENSION = "__institution_name"
 MULTI_INSTITUTION_RELATIONSHIP_SCOPE = "multi_institution"
 SINGLE_INSTITUTION_RELATIONSHIP_SCOPE = "single_institution"
@@ -38,6 +40,30 @@ _PAGE_DATA_WORKSPACE_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] 
 _PAGE_DATA_WORKSPACE_CACHE_TTL_SECONDS = 20.0
 
 
+def _csv_table_assets(catalog: Any, *, wait_for_catalog: bool) -> list[dict[str, Any]]:
+    """Return CSV tables for one tenant catalog.
+
+    A catalog that is still priming is not a schema change. Page-data reads
+    must wait for that first scan; skipping it makes the first multi-institution
+    dashboard open fail closed with ``multi_institution_page_data_source_schema_changed``.
+    """
+
+    if catalog is None:
+        return []
+    if not getattr(catalog, "catalog_ready", True):
+        if not wait_for_catalog:
+            return []
+        prime = getattr(catalog, "prime_catalog", None)
+        if callable(prime):
+            prime()
+        else:
+            waiter = getattr(catalog, "wait_until_ready", None)
+            if callable(waiter):
+                waiter(30.0)
+    tables = catalog.table_assets() if hasattr(catalog, "table_assets") else []
+    return [dict(item) for item in tables if isinstance(item, dict)]
+
+
 def _authorized_raw_table_catalog(handler: Any, context: Any) -> tuple[dict[str, str], dict[tuple[str, str], dict[str, Any]]]:
     """Return authoritative, permission-filtered tables with server-owned institution labels."""
 
@@ -45,8 +71,6 @@ def _authorized_raw_table_catalog(handler: Any, context: Any) -> tuple[dict[str,
     table_by_ref: dict[tuple[str, str], dict[str, Any]] = {}
     for tenant_id in tenant_labels:
         catalog = handler.services.data_acquisition_service.csv_source.for_tenant(tenant_id)
-        if not getattr(catalog, "catalog_ready", True):
-            continue
         data_asset_store = getattr(handler.services, "data_asset_store", None)
         stored = data_asset_store.list_bundle(tenant_id) if data_asset_store is not None else {"raw_tables": []}
         overlays = {
@@ -54,7 +78,7 @@ def _authorized_raw_table_catalog(handler: Any, context: Any) -> tuple[dict[str,
             for item in stored.get("raw_tables", [])
             if isinstance(item, dict) and item.get("metadataOverlayVersion") == 1 and str(item.get("sourceKey") or "")
         }
-        for raw_table in catalog.table_assets():
+        for raw_table in _csv_table_assets(catalog, wait_for_catalog=True):
             source_key = str(raw_table.get("sourceKey") or "").strip()
             if not source_key:
                 continue
@@ -95,8 +119,6 @@ def _authorized_raw_table_subset(
         if tenant_id not in tenant_labels:
             continue
         catalog = handler.services.data_acquisition_service.csv_source.for_tenant(tenant_id)
-        if not getattr(catalog, "catalog_ready", True):
-            continue
         stored = data_asset_store.list_bundle(tenant_id) if data_asset_store is not None else {"raw_tables": []}
         overlays = {
             str(item.get("sourceKey") or ""): item
@@ -106,7 +128,7 @@ def _authorized_raw_table_subset(
             and str(item.get("sourceKey") or "") in source_keys
         }
         remaining = set(source_keys)
-        for raw_table in catalog.table_assets():
+        for raw_table in _csv_table_assets(catalog, wait_for_catalog=True):
             source_key = str(raw_table.get("sourceKey") or "").strip()
             if source_key not in remaining:
                 continue
@@ -149,6 +171,54 @@ def _relationship_common_fields(nodes: list[dict[str, Any]]) -> list[dict[str, A
     return result
 
 
+def _field_contract(field: dict[str, Any]) -> tuple[str, str, str, bool, bool, bool]:
+    """Return the stable semantic contract for one catalog field.
+
+    A raw-table fingerprint is intentionally stricter than the page consumer:
+    adding an unrelated column changes the fingerprint, but it must not break a
+    page whose selected fields and relationship keys are unchanged.  Labels,
+    physical type and semantic flags remain part of the compatibility gate so a
+    renamed/retyped metric can never be silently rebound.
+    """
+
+    return (
+        str(field.get("fieldNameCn") or field.get("fieldNameEn") or "").strip(),
+        str(field.get("type") or "string").strip().casefold(),
+        str(field.get("semanticRole") or "").strip().casefold(),
+        bool(field.get("isPrimaryKey")),
+        bool(field.get("isMetric")),
+        bool(field.get("isTime")),
+    )
+
+
+def _fields_remain_compatible(
+    saved_fields: Any,
+    current_fields: Any,
+    required_codes: set[str] | None = None,
+) -> bool:
+    saved = {
+        str(field.get("fieldNameEn") or "").strip(): field
+        for field in saved_fields if isinstance(field, dict) and str(field.get("fieldNameEn") or "").strip()
+    } if isinstance(saved_fields, list) else {}
+    current = {
+        str(field.get("fieldNameEn") or "").strip(): field
+        for field in current_fields if isinstance(field, dict) and str(field.get("fieldNameEn") or "").strip()
+    } if isinstance(current_fields, list) else {}
+    required = required_codes if required_codes is not None else set(saved)
+    return bool(required) and all(
+        code in saved and code in current and _field_contract(saved[code]) == _field_contract(current[code])
+        for code in required
+    )
+
+
+def _multi_schema_fingerprint(sources: list[dict[str, Any]]) -> str:
+    identity = "|".join(
+        f"{source.get('tenantId', '')}:{source.get('sourceKey', '')}:{source.get('schemaFingerprint', '')}"
+        for source in sorted(sources, key=lambda item: (str(item.get("tenantId") or ""), str(item.get("sourceKey") or "")))
+    )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
 def _candidate_from_relationship_asset(
     relationship: dict[str, Any],
     tenant_labels: dict[str, str],
@@ -161,7 +231,10 @@ def _candidate_from_relationship_asset(
         tenant_id = _normalized_tenant_id(str(saved_node.get("tenantId") or ""))
         source_key = str(saved_node.get("sourceKey") or "")
         table = table_by_ref.get((tenant_id, source_key))
-        if table is None or str(saved_node.get("schemaFingerprint") or "") != str(table.get("schemaFingerprint") or ""):
+        if table is None:
+            return None
+        schema_changed = str(saved_node.get("schemaFingerprint") or "") != str(table.get("schemaFingerprint") or "")
+        if schema_changed and not _fields_remain_compatible(saved_node.get("fields"), table.get("fields")):
             return None
         rebound_nodes.append({
             **saved_node,
@@ -169,6 +242,7 @@ def _candidate_from_relationship_asset(
             "institutionName": tenant_labels.get(tenant_id, tenant_id),
             "sourceTableId": str(table.get("id") or ""),
             "sourceTableName": str(table.get("tableNameCn") or table.get("tableNameEn") or ""),
+            "schemaFingerprint": str(table.get("schemaFingerprint") or ""),
             "fields": [dict(field) for field in table.get("fields", []) if isinstance(field, dict)],
         })
     tenant_ids = {str(node.get("tenantId") or "") for node in rebound_nodes}
@@ -176,27 +250,24 @@ def _candidate_from_relationship_asset(
     if len(tenant_ids) < 2 or not fields:
         return None
     identity = str(relationship.get("id") or "")
-    schema_identity = "|".join(
-        f"{node['tenantId']}:{node['sourceKey']}:{node['schemaFingerprint']}"
-        for node in sorted(rebound_nodes, key=lambda item: (str(item["tenantId"]), str(item["sourceKey"])))
-    )
+    sources = [
+        {
+            "nodeId": str(node.get("id") or ""),
+            "tenantId": str(node.get("tenantId") or ""),
+            "institutionName": str(node.get("institutionName") or ""),
+            "sourceKey": str(node.get("sourceKey") or ""),
+            "sourceTableId": str(node.get("sourceTableId") or ""),
+            "sourceTableName": str(node.get("sourceTableName") or ""),
+            "schemaFingerprint": str(node.get("schemaFingerprint") or ""),
+        }
+        for node in rebound_nodes
+    ]
     return {
         "id": identity,
         "name": str(relationship.get("name") or "多机构关联数据"),
-        "schemaFingerprint": hashlib.sha256(schema_identity.encode("utf-8")).hexdigest(),
+        "schemaFingerprint": _multi_schema_fingerprint(sources),
         "fields": fields,
-        "sources": [
-            {
-                "nodeId": str(node.get("id") or ""),
-                "tenantId": str(node.get("tenantId") or ""),
-                "institutionName": str(node.get("institutionName") or ""),
-                "sourceKey": str(node.get("sourceKey") or ""),
-                "sourceTableId": str(node.get("sourceTableId") or ""),
-                "sourceTableName": str(node.get("sourceTableName") or ""),
-                "schemaFingerprint": str(node.get("schemaFingerprint") or ""),
-            }
-            for node in rebound_nodes
-        ],
+        "sources": sources,
         "relationshipEdges": [dict(edge) for edge in relationship.get("edges", []) if isinstance(edge, dict)],
         "institutionCount": len(tenant_ids),
         "tableCount": len(rebound_nodes),
@@ -205,10 +276,30 @@ def _candidate_from_relationship_asset(
 
 def _page_data_scope(item: dict[str, Any]) -> str:
     explicit = str(item.get("institutionScope") or "").strip()
-    if explicit in {SINGLE_INSTITUTION_PAGE_DATA_SCOPE, MULTI_INSTITUTION_PAGE_DATA_SCOPE}:
+    if explicit in {SINGLE_INSTITUTION_PAGE_DATA_SCOPE, MULTI_INSTITUTION_PAGE_DATA_SCOPE, CUSTOMER_SEGMENT_PAGE_DATA_SCOPE}:
         return explicit
     pages = {str(page) for page in item.get("targetPages", []) if str(page)}
+    if pages == {"customer_segment_analysis"}:
+        return CUSTOMER_SEGMENT_PAGE_DATA_SCOPE
     return MULTI_INSTITUTION_PAGE_DATA_SCOPE if pages == {"dashboard"} else SINGLE_INSTITUTION_PAGE_DATA_SCOPE
+
+
+def _customer_key_field(table: dict[str, Any]) -> str:
+    fields = [field for field in table.get("fields", []) if isinstance(field, dict)]
+    primary = [field for field in fields if bool(field.get("isPrimaryKey"))]
+    if len(primary) != 1:
+        return ""
+    field = primary[0]
+    code = str(field.get("fieldNameEn") or "").strip()
+    label = str(field.get("fieldNameCn") or "").strip()
+    customer_field = str(table.get("customerField") or "").strip()
+    normalized = "".join(character for character in f"{code}{label}".casefold() if character.isalnum())
+    recognized = (
+        code == customer_field and bool(customer_field)
+        or any(token in normalized for token in ("customerid", "customerno", "custid", "custno", "clientid", "clientno"))
+        or any(token in label.casefold().replace(" ", "") for token in ("客户号", "客户编号", "客户id", "客户代码", "客户标识"))
+    )
+    return code if recognized else ""
 
 
 def _normalized_tenant_id(value: str) -> str:
@@ -1004,7 +1095,7 @@ def read_page_data_workspace_payload(
     user_id: str,
     page_code: str,
 ) -> dict[str, Any]:
-    page_consumers = {"dashboard", "weekly_report", "institution_supervision"}
+    page_consumers = {"dashboard", "weekly_report", "institution_supervision", "customer_segment_analysis"}
     if page_code not in page_consumers:
         raise ValueError("page_data_page_code_invalid")
     bundle = services.data_asset_store.list_published_bundle(tenant_id)
@@ -1022,12 +1113,13 @@ def read_page_data_workspace_payload(
     layout = _resolve_page_data_layout(
         saved_layout,
         available_ids,
-        include_newly_assigned=page_code in {"weekly_report", "institution_supervision"},
+        include_newly_assigned=page_code in {"weekly_report", "institution_supervision", "customer_segment_analysis"},
     )
     workspace_key = (
         tenant_id,
         user_id,
         page_code,
+        str((state.get("customerSegmentList") or {}).get("contentHash") or "") if isinstance(state.get("customerSegmentList"), dict) else "",
         tuple(layout),
         tuple(
             (
@@ -1073,7 +1165,7 @@ def read_page_data_workspace_payload(
         "row_errors": row_errors,
     }
     complete = bool(assets) and bool(layout) and all(asset_id in rows for asset_id in layout)
-    if complete:
+    if complete and page_code != "customer_segment_analysis":
         if len(_PAGE_DATA_WORKSPACE_CACHE) >= 32:
             _PAGE_DATA_WORKSPACE_CACHE.pop(next(iter(_PAGE_DATA_WORKSPACE_CACHE)))
         _PAGE_DATA_WORKSPACE_CACHE[workspace_key] = (monotonic() + _PAGE_DATA_WORKSPACE_CACHE_TTL_SECONDS, deepcopy(payload))
@@ -1098,7 +1190,7 @@ def read_page_data_rows_payload(
     relationship identity, source schemas and institution provenance.
     """
 
-    page_consumers = {"dashboard", "weekly_report", "institution_supervision"}
+    page_consumers = {"dashboard", "weekly_report", "institution_supervision", "customer_segment_analysis"}
     analytical_consumers = {"self_analysis", "visual_report", "my_reports"}
     if consumer not in page_consumers | analytical_consumers:
         raise ValueError("page_data_page_code_invalid")
@@ -1117,7 +1209,12 @@ def read_page_data_rows_payload(
     if consumer in page_consumers:
         if consumer not in page_data.get("targetPages", []):
             raise PermissionError("page_data_unavailable_for_page")
-        if (consumer == "dashboard") != (scope == MULTI_INSTITUTION_PAGE_DATA_SCOPE):
+        expected_scope = (
+            MULTI_INSTITUTION_PAGE_DATA_SCOPE if consumer == "dashboard"
+            else CUSTOMER_SEGMENT_PAGE_DATA_SCOPE if consumer == "customer_segment_analysis"
+            else SINGLE_INSTITUTION_PAGE_DATA_SCOPE
+        )
+        if scope != expected_scope:
             raise PermissionError("page_data_scope_unavailable_for_page")
     elif scope != MULTI_INSTITUTION_PAGE_DATA_SCOPE:
         raise PermissionError("page_data_scope_unavailable_for_analysis")
@@ -1127,6 +1224,13 @@ def read_page_data_rows_payload(
     selected_fields = list(dict.fromkeys([*dimensions, *metrics]))
     if scope == MULTI_INSTITUTION_PAGE_DATA_SCOPE:
         sources = _multi_page_data_source_tables(handler, context, page_data)
+        effective_schema_fingerprint = _multi_schema_fingerprint([
+            {
+                **source,
+                "schemaFingerprint": str(source_table.get("schemaFingerprint") or ""),
+            }
+            for source, source_table in sources
+        ])
         data_fields = [field for field in selected_fields if field != MULTI_INSTITUTION_DIMENSION]
         if not sources or not data_fields or MULTI_INSTITUTION_DIMENSION not in dimensions:
             raise PermissionError("page_data_selected_field_unavailable")
@@ -1135,7 +1239,7 @@ def read_page_data_rows_payload(
             tenant_id,
             page_data_id,
             consumer,
-            str(page_data.get("schemaFingerprint") or ""),
+            effective_schema_fingerprint,
             tuple(selected_fields),
             tuple(sorted(
                 (
@@ -1183,9 +1287,21 @@ def read_page_data_rows_payload(
         }
     else:
         table = _page_data_source_table(handler, tenant_id, page_data)
+        effective_schema_fingerprint = str(table.get("schemaFingerprint") or "")
         available = {str(field.get("fieldNameEn") or "") for field in table.get("fields", [])}
         if not selected_fields or any(field not in available for field in selected_fields):
             raise PermissionError("page_data_selected_field_unavailable")
+        customer_list_metadata: dict[str, Any] | None = None
+        customer_ids: list[str] | None = None
+        if scope == CUSTOMER_SEGMENT_PAGE_DATA_SCOPE:
+            customer_key = _customer_key_field(table)
+            if not customer_key or customer_key != str(page_data.get("customerKeyField") or ""):
+                raise PermissionError("customer_segment_page_data_customer_key_changed")
+            customer_list_metadata, customer_ids = customer_ids_for_user(
+                services,
+                tenant_id=tenant_id,
+                user_id=user_id,
+            )
         cache_key = (
             "single",
             tenant_id,
@@ -1194,20 +1310,49 @@ def read_page_data_rows_payload(
             str(table.get("contentHash") or ""),
             str(table.get("schemaFingerprint") or ""),
             tuple(selected_fields),
+            str((customer_list_metadata or {}).get("contentHash") or ""),
         )
         cached = _page_data_projection_cache_get(cache_key)
         if cached is not None:
             return cached
-        _, source_rows = services.data_acquisition_service.csv_source.for_tenant(tenant_id).read_rows(
-            str(table.get("relativePath") or ""),
-            max_rows=500,
-        )
+        tenant_source = services.data_acquisition_service.csv_source.for_tenant(tenant_id)
+        if customer_ids is None:
+            _, source_rows = tenant_source.read_rows(
+                str(table.get("relativePath") or ""),
+                max_rows=500,
+            )
+        else:
+            _, source_rows = tenant_source.read_rows_matching_values(
+                str(table.get("relativePath") or ""),
+                key_field=str(page_data.get("customerKeyField") or ""),
+                values=customer_ids,
+                max_matches=MAX_CUSTOMER_IDS,
+            )
         labels = {
             str(field.get("fieldNameEn") or ""): str(field.get("fieldNameCn") or field.get("fieldNameEn") or "")
             for field in table.get("fields", [])
             if str(field.get("fieldNameEn") or "") in selected_fields
         }
-        rows = _project_page_data_rows(table, source_rows, selected_fields)
+        if customer_ids is None:
+            rows = _project_page_data_rows(table, source_rows, selected_fields)
+        else:
+            customer_key = str(page_data.get("customerKeyField") or "")
+            source_by_customer = {
+                str(row.get(customer_key) or "").strip(): row
+                for row in source_rows
+                if str(row.get(customer_key) or "").strip()
+            }
+            matched_customer_count = sum(1 for customer_id in customer_ids if customer_id in source_by_customer)
+            rows = [
+                {
+                    field: (
+                        customer_id if field == customer_key
+                        else str(source_by_customer.get(customer_id, {}).get(field) or "")
+                    )
+                    for field in selected_fields
+                }
+                for customer_id in customer_ids
+            ][:MAX_CUSTOMER_IDS]
 
     payload = {
         "tenant_id": tenant_id,
@@ -1216,14 +1361,21 @@ def read_page_data_rows_payload(
         "source_key": str(page_data.get("sourceKey") or ""),
         "relationship_group_id": str(page_data.get("relationshipGroupId") or ""),
         "institution_scope": scope,
-        "schema_fingerprint": str(page_data.get("schemaFingerprint") or ""),
+        "schema_fingerprint": effective_schema_fingerprint,
         "fields": selected_fields,
         "field_labels": labels,
         "row_count": len(rows),
         "rows": rows,
         "bounded": True,
     }
-    _page_data_projection_cache_put(cache_key, payload)
+    if scope == CUSTOMER_SEGMENT_PAGE_DATA_SCOPE:
+        payload["customer_segment"] = {
+            "customer_count": int((customer_list_metadata or {}).get("customerCount") or 0),
+            "matched_count": matched_customer_count,
+            "content_hash": str((customer_list_metadata or {}).get("contentHash") or ""),
+        }
+    if scope != CUSTOMER_SEGMENT_PAGE_DATA_SCOPE:
+        _page_data_projection_cache_put(cache_key, payload)
     return payload
 
 
@@ -1243,6 +1395,8 @@ def _page_data_belongs_to_page(item: dict[str, Any], page_code: str) -> bool:
     targets = [str(page) for page in item.get("targetPages", [])] if isinstance(item.get("targetPages"), list) else []
     if page_code == "dashboard":
         return scope == MULTI_INSTITUTION_PAGE_DATA_SCOPE and "dashboard" in targets
+    if page_code == "customer_segment_analysis":
+        return scope == CUSTOMER_SEGMENT_PAGE_DATA_SCOPE and "customer_segment_analysis" in targets
     if page_code not in {"weekly_report", "institution_supervision"}:
         return False
     assigned = "institution_supervision" if "institution_supervision" in targets else "weekly_report"
@@ -1317,6 +1471,12 @@ def _bind_page_data_asset(handler: Any, context: Any, item: dict[str, Any]) -> d
     )
     if table is None:
         raise PermissionError("page_data_source_unavailable")
+    if scope == CUSTOMER_SEGMENT_PAGE_DATA_SCOPE:
+        customer_key = _customer_key_field(table)
+        if not customer_key:
+            raise PermissionError("customer_segment_detail_table_required")
+    else:
+        customer_key = ""
     if str(item.get("schemaFingerprint") or "") != str(table.get("schemaFingerprint") or ""):
         raise ValueError("page_data_source_schema_changed")
     available = {str(field.get("fieldNameEn") or "") for field in table.get("fields", [])}
@@ -1328,13 +1488,15 @@ def _bind_page_data_asset(handler: Any, context: Any, item: dict[str, Any]) -> d
         raise ValueError("page_data_selected_field_unavailable")
     return {
         **item,
-        "institutionScope": SINGLE_INSTITUTION_PAGE_DATA_SCOPE,
+        "institutionScope": scope,
         "sourceTableId": str(table.get("id") or ""),
         "sourceTableName": str(table.get("tableNameCn") or table.get("tableNameEn") or ""),
         "sourceRelativePath": str(table.get("relativePath") or ""),
         "sourceFields": [dict(field) for field in table.get("fields", [])],
         "schemaFingerprint": str(table.get("schemaFingerprint") or ""),
         "contentHash": str(table.get("contentHash") or ""),
+        "targetPages": ["customer_segment_analysis"] if scope == CUSTOMER_SEGMENT_PAGE_DATA_SCOPE else item.get("targetPages"),
+        "customerKeyField": customer_key,
     }
 
 
@@ -1363,11 +1525,32 @@ def _multi_page_data_source_tables(handler: Any, context: Any, page_data: dict[s
                 if isinstance(source, dict)
             }
         ), None)
-    if candidate is None or str(candidate.get("schemaFingerprint") or "") != str(page_data.get("schemaFingerprint") or ""):
+    if candidate is None:
         raise PermissionError("multi_institution_page_data_source_schema_changed")
     sources = candidate.get("sources")
     if not isinstance(sources, list) or len(sources) < 2:
         raise PermissionError("multi_institution_page_data_sources_unavailable")
+    saved_refs = {
+        (_normalized_tenant_id(str(source.get("tenantId") or "")), str(source.get("sourceKey") or ""))
+        for source in page_data.get("institutionSources", [])
+        if isinstance(source, dict)
+    }
+    current_refs = {
+        (_normalized_tenant_id(str(source.get("tenantId") or "")), str(source.get("sourceKey") or ""))
+        for source in sources if isinstance(source, dict)
+    }
+    selected_fields = {
+        str(field or "").strip()
+        for field in [*page_data.get("dimensionFields", []), *page_data.get("metricFields", [])]
+        if str(field or "").strip() and str(field or "").strip() != MULTI_INSTITUTION_DIMENSION
+    }
+    exact_schema = str(candidate.get("schemaFingerprint") or "") == str(page_data.get("schemaFingerprint") or "")
+    compatible_refresh = (
+        saved_refs == current_refs
+        and _fields_remain_compatible(page_data.get("sourceFields"), candidate.get("fields"), selected_fields)
+    )
+    if not exact_schema and not compatible_refresh:
+        raise PermissionError("multi_institution_page_data_source_schema_changed")
     resolved: list[tuple[dict[str, Any], dict[str, Any]]] = []
     seen_refs: set[tuple[str, str]] = set()
     for raw_source in sources:
@@ -1595,13 +1778,24 @@ def _bind_analysis_asset(handler: Any, context: Any, item_type: str, item: dict[
     semantic = result.get("semantic_info") if isinstance(result.get("semantic_info"), dict) else {}
     evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
     review = task.get("review") if isinstance(task.get("review"), dict) else {}
+    execution_mode = str(semantic.get("execution_mode") or "").strip().lower()
+    if item_type == "topic_table" and execution_mode in {"uploaded_file", "uploaded_document_summary"}:
+        raise ValueError("topic_table_uploaded_source_not_persisted")
+    executed_sql_text = str(evidence.get("executed_sql") or evidence.get("execution_statement") or item.get("sql") or "").strip()
+    has_persistable_select = False
+    try:
+        if executed_sql_text:
+            _detail_query_from_execution(executed_sql_text)
+            has_persistable_select = True
+    except ValueError:
+        has_persistable_select = False
     evidence_ready = bool(
         task.get("status") in {"completed", "review_required"}
-        and str(semantic.get("execution_mode") or "") not in {"", "mock", "demo", "fallback", "unverified"}
+        and execution_mode not in {"", "mock", "demo", "fallback", "unverified"}
         and evidence.get("evidence_id")
         and isinstance(evidence.get("source_snapshot"), dict)
         and evidence.get("source_snapshot")
-        and evidence.get("sql_executed") is True
+        and (evidence.get("sql_executed") is True or has_persistable_select)
     )
     if not evidence_ready:
         raise ValueError("executed_analysis_evidence_required_for_asset_candidate")
@@ -1622,7 +1816,7 @@ def _bind_analysis_asset(handler: Any, context: Any, item_type: str, item: dict[
         "tenantBindingMode": "analysis_task_scoped",
     }
     if item_type == "topic_table":
-        bound["sql"] = _detail_query_from_execution(str(evidence.get("executed_sql") or ""))
+        bound["sql"] = _detail_query_from_execution(executed_sql_text)
         rows = result.get("data") if isinstance(result.get("data"), list) else []
         if rows and isinstance(rows[0], dict):
             requested_fields = bound.get("fields") if isinstance(bound.get("fields"), list) else []

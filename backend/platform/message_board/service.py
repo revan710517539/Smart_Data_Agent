@@ -15,6 +15,36 @@ class MessageBoardService:
         self._validate_attachments(tenant_id, user_id, entry["message_id"], entry["attachment_ids"])
         return self._with_author_name(self.store.create(entry))
 
+    def create_login_survey(
+        self,
+        tenant_id: str,
+        user_id: str,
+        author_name: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create a bounded pre-login survey without requiring an active session.
+
+        The auth route resolves the tenant and the best available author identity.
+        This method deliberately accepts no attachments or arbitrary page metadata,
+        so the public login collector cannot become a general message-board write
+        bypass.
+        """
+
+        entry = {
+            "message_id": _message_id(payload.get("message_id") or payload.get("messageId")),
+            "tenant_id": _text(tenant_id, "tenant_id", 160, required=True),
+            "author_user_id": _text(user_id, "author_user_id", 200, required=True),
+            "author_name": _text(author_name, "author_name", 200, required=True),
+            "page_key": "login-survey",
+            "page_title": "登录页 · 数据使用调查",
+            "page_url": "/login",
+            "content": _text(payload.get("content"), "content", 5000, required=True),
+            "quote_context": {},
+            "attachment_ids": [],
+            "status": "new",
+        }
+        return self._with_author_name(self.store.create(entry))
+
     def update(self, tenant_id: str, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         message_id = _message_id(payload.get("message_id") or payload.get("messageId"))
         content = _text(payload.get("content"), "content", 5000, required=True)
@@ -81,7 +111,12 @@ class MessageBoardService:
         profile = self.user_store.get_profile(author_user_id) if author_user_id else None
         profile_name = str(getattr(profile, "name", "") or "").strip()
         stored_name = str(result.get("author_name") or "").strip()
-        result["author_name"] = profile_name or (stored_name if stored_name and stored_name != author_user_id else "未知用户")
+        preserve_login_visitor = result.get("page_key") == "login-survey" and stored_name == "登录页访客"
+        result["author_name"] = (
+            stored_name
+            if preserve_login_visitor
+            else profile_name or (stored_name if stored_name and stored_name != author_user_id else "未知用户")
+        )
         return result
 
     def _entry(self, tenant_id: str, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:

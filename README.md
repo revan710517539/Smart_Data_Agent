@@ -65,11 +65,10 @@
   The Dokploy application builds the root `Dockerfile` from the private Forgejo
   `main` branch. The checked server contract is `docker-compose.server.yml` and
   the full operator runbook is `docs/server_mysql_deployment.md`. It keeps the
-  existing host-native MySQL and host directory unchanged:
+  existing host-native MySQL and Data Crawler directory unchanged:
 
-  - `/opt/smart-data-agent/src/app/data` is mounted read-only at `/app/data`.
-    An empty mounted directory is valid and produces an empty institution
-    catalog until the independent delivery service creates institution folders.
+  - `/opt/palywright/examples/data-crawler/runtime-data` is mounted read-only at
+    `/app/data`; production requires the versioned Crawler `manifest.json`.
   - `/app/Topic_Data` and `/app/runtime` use persistent writable volumes.
   - `/var/lib/mysql80/ca.pem` is mounted read-only; the MySQL server key is never
     mounted into the application container.
@@ -82,18 +81,16 @@
   Compose, the image or chat:
 
   ```bash
-  SMART_DATA_AGENT_ENV=development
-  SMART_DATA_AGENT_AUTH_MODE=development
+  SMART_DATA_AGENT_ENV=production
+  SMART_DATA_AGENT_AUTH_MODE=strict
   SMART_DATA_AGENT_AUTH_SECRET=<long-random-secret>
-  SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD=<protected-login-secret>
   SMART_DATA_AGENT_CORS_ORIGINS=https://your-sda-host.example
   SMART_DATA_AGENT_DATABASE_URL=mysql+pymysql://sda_app:<url-encoded-password>@172.17.0.1:3306/smart_data_agent?ssl_mode=verify_ca&ssl_ca=/run/secrets/mysql_ca.pem
   SMART_DATA_AGENT_DATA_WAREHOUSE=csv
-  SMART_DATA_AGENT_OBJECT_STORE=local
-  SMART_DATA_AGENT_OBJECT_ROOT=/app/runtime/artifacts
+  SMART_DATA_AGENT_OBJECT_STORE=s3
   SMART_DATA_AGENT_DATA_CRAWLER_ROOT=/app/data
   SMART_DATA_AGENT_CSV_MAX_FILE_BYTES=134217728
-  SMART_DATA_AGENT_EMBEDDED_WORKER=true
+  SMART_DATA_AGENT_EMBEDDED_WORKER=false
   SMART_DATA_AGENT_STATIC_ROOT=/app/dist
   ```
 
@@ -104,7 +101,12 @@
   subject. If the approved local MySQL database has already been migrated in
   full, skip provisioning and verify its migration ledger and row counts.
 
-  This single-instance profile is deployable but is not the full production
-  compliance profile. Strict production additionally requires enterprise OIDC,
-  Redis TLS, KMS, object storage, ClamAV and an egress allowlist.
+  Production Compose separates one-time migration and capability-preparation
+  jobs from the long-running API and Worker. It
+  requires enterprise OIDC, Redis TLS, KMS, object storage, ClamAV and an
+  explicit egress allowlist; copy `.env.production.example` into protected
+  deployment configuration and run the six release/candidate gates documented
+  in `docs/server_mysql_deployment.md`. The complete model-entry, page-routing,
+  scene-recognition, Skill/Memory scheduling and result-expression contract is
+  documented in `docs/production_model_skill_runtime.md`.
   

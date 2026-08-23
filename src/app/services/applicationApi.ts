@@ -9,6 +9,7 @@ export type ApplicationModuleKey =
   | "single_customer_insight"
   | "competition_analysis"
   | "institution_supervision"
+  | "customer_segment_analysis"
   | "email_daily"
   | "agent_workspace"
   | "notifications"

@@ -20,12 +20,31 @@ APPLICATION_MODULE_KEYS = {
     "single_customer_insight",
     "competition_analysis",
     "institution_supervision",
+    "customer_segment_analysis",
     "email_daily",
     "agent_workspace",
     "notifications",
     "weekly_report",
     "self_analysis",
     "platform_shell",
+}
+
+DEFAULT_PAGE_VISUAL_LAYOUTS: dict[str, list[dict[str, Any]]] = {
+    "customer_insight": [
+        {"id": "segments", "span": 12, "height": 220},
+        {"id": "distribution", "span": 4, "height": 340},
+        {"id": "conversion", "span": 4, "height": 340},
+        {"id": "summary", "span": 4, "height": 340},
+        {"id": "trend", "span": 6, "height": 320},
+        {"id": "risk", "span": 6, "height": 320},
+        {"id": "branches", "span": 12, "height": 380},
+    ],
+    "competition_analysis": [
+        {"id": "competitors", "span": 12, "height": 280},
+        {"id": "radar", "span": 6, "height": 390},
+        {"id": "market-share", "span": 6, "height": 390},
+        {"id": "insights", "span": 12, "height": 320},
+    ],
 }
 
 
@@ -41,10 +60,11 @@ REGISTERED_ACTIONS: dict[str, set[str]] = {
     "dashboard": {"select_bank", "select_product", "open_insight_action", "set_page_data_layout", "set_page_data_notes", "set_page_sticky_note"},
     "business_funnel": {"select_bank", "select_product_view", "export"},
     "business_sandbox": {"select_product_view", "run_simulation", "reset_simulation", "export"},
-    "customer_insight": {"select_bank", "select_product_view", "select_segment"},
+    "customer_insight": {"select_bank", "select_product_view", "select_segment", "set_page_visual_layout", "set_page_sticky_note"},
     "single_customer_insight": set(),
-    "competition_analysis": {"select_product_view"},
+    "competition_analysis": {"select_product_view", "set_page_visual_layout", "set_page_sticky_note"},
     "institution_supervision": {"select_product_filter", "select_branch", "export", "set_page_data_layout", "set_page_data_notes", "set_page_sticky_note"},
+    "customer_segment_analysis": {"set_customer_segment_list", "set_page_data_layout", "set_page_data_notes", "set_page_sticky_note"},
     "email_daily": {"generate_daily", "send_daily"},
     "agent_workspace": {
         "open_task", "configure_task", "open_task_composer", "open_todo_composer",
@@ -118,6 +138,8 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
         "exports": [],
         "selectedBank": "全部分行",
         "selectedSegment": 0,
+        "pageVisualLayout": DEFAULT_PAGE_VISUAL_LAYOUTS["customer_insight"],
+        "pageStickyNote": {"visible": False, "items": [], "updatedAt": ""},
     },
     "single_customer_insight": {
         "exports": [],
@@ -126,6 +148,8 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
     "competition_analysis": {
         "exports": [],
         "productView": "consumer",
+        "pageVisualLayout": DEFAULT_PAGE_VISUAL_LAYOUTS["competition_analysis"],
+        "pageStickyNote": {"visible": False, "items": [], "updatedAt": ""},
     },
     "institution_supervision": {
         "exports": [],
@@ -134,6 +158,13 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
         "pageStickyNote": {"visible": False, "items": [], "updatedAt": ""},
         "selectedBranch": None,
         "productFilter": "all",
+    },
+    "customer_segment_analysis": {
+        "customerSegmentList": None,
+        "customerSegmentListsByUser": {},
+        "pageDataLayout": [],
+        "pageDataNotes": [],
+        "pageStickyNote": {"visible": False, "items": [], "updatedAt": ""},
     },
     "email_daily": {
         "status": "draft",
@@ -570,7 +601,48 @@ def _execute_action(
         next_state["historyOpenedAt"] = now
         return {"message": "历史版本已打开。", "drafts": next_state.get("drafts", [])}, next_state
 
-    if action == "set_page_data_layout" and module_key in {"dashboard", "weekly_report", "institution_supervision"}:
+    if action == "set_customer_segment_list" and module_key == "customer_segment_analysis":
+        if not actor_user_id:
+            raise ValueError("customer_segment_list_owner_required")
+        customer_list = payload.get("customerList")
+        if not isinstance(customer_list, dict):
+            raise ValueError("customer_segment_list_metadata_invalid")
+        artifact_id = str(customer_list.get("artifactId") or "").strip()
+        content_hash = str(customer_list.get("contentHash") or "").strip().lower()
+        file_name = str(customer_list.get("fileName") or "").strip()
+        customer_count = int(customer_list.get("customerCount") or 0)
+        if (
+            not artifact_id
+            or len(artifact_id) > 160
+            or len(content_hash) != 64
+            or not file_name
+            or len(file_name) > 240
+            or customer_count < 1
+            or customer_count > 20_000
+        ):
+            raise ValueError("customer_segment_list_metadata_invalid")
+        normalized = {
+            "artifactId": artifact_id,
+            "contentHash": content_hash,
+            "sourceContentHash": str(customer_list.get("sourceContentHash") or "").strip().lower()[:64],
+            "fileName": file_name,
+            "customerCount": customer_count,
+            "duplicateCount": max(0, int(customer_list.get("duplicateCount") or 0)),
+            "blankCount": max(0, int(customer_list.get("blankCount") or 0)),
+            "confirmedAt": str(customer_list.get("confirmedAt") or now).strip()[:40],
+            "ownerUserId": str(actor_user_id),
+        }
+        lists_by_user = {
+            str(owner): dict(value)
+            for owner, value in dict(next_state.get("customerSegmentListsByUser") or {}).items()
+            if str(owner).strip() and isinstance(value, dict)
+        }
+        lists_by_user[str(actor_user_id)] = normalized
+        next_state["customerSegmentListsByUser"] = dict(list(lists_by_user.items())[-500:])
+        next_state["customerSegmentList"] = normalized
+        return {"message": "客群名单已保存。", "customerList": normalized}, next_state
+
+    if action == "set_page_data_layout" and module_key in {"dashboard", "weekly_report", "institution_supervision", "customer_segment_analysis"}:
         asset_ids = payload.get("assetIds")
         if not isinstance(asset_ids, list):
             raise ValueError("page_data_layout_invalid")
@@ -581,7 +653,7 @@ def _execute_action(
         next_state["pageDataNotes"] = _normalize_page_data_notes(payload.get("notes"), set(normalized))
         return {"message": "页面数据布局已保存。", "assetIds": normalized, "notes": next_state["pageDataNotes"]}, next_state
 
-    if action == "set_page_data_notes" and module_key in {"dashboard", "weekly_report", "institution_supervision"}:
+    if action == "set_page_data_notes" and module_key in {"dashboard", "weekly_report", "institution_supervision", "customer_segment_analysis"}:
         layout = {str(asset_id or "").strip() for asset_id in list(next_state.get("pageDataLayout") or []) if str(asset_id or "").strip()}
         if not layout:
             layout = {
@@ -592,7 +664,12 @@ def _execute_action(
         next_state["pageDataNotes"] = _normalize_page_data_notes(payload.get("notes"), layout)
         return {"message": "文本框已保存。", "notes": next_state["pageDataNotes"]}, next_state
 
-    if action == "set_page_sticky_note" and module_key in {"dashboard", "weekly_report", "institution_supervision", "self_analysis"}:
+    if action == "set_page_visual_layout" and module_key in DEFAULT_PAGE_VISUAL_LAYOUTS:
+        layout = _normalize_page_visual_layout(module_key, payload.get("items"))
+        next_state["pageVisualLayout"] = layout
+        return {"message": "页面布局已保存。", "items": layout}, next_state
+
+    if action == "set_page_sticky_note" and module_key in {"dashboard", "weekly_report", "institution_supervision", "customer_segment_analysis", "customer_insight", "competition_analysis", "self_analysis"}:
         note = _normalize_sticky_note(payload.get("note"))
         if module_key == "self_analysis":
             surface = str(payload.get("surface") or "").strip()[:200]
@@ -1077,6 +1154,27 @@ def _normalize_visual_report_config(value: Any) -> dict[str, Any]:
     }
 
 
+def _normalize_page_visual_layout(module_key: str, value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError("page_visual_layout_invalid")
+    allowed_ids = {item["id"] for item in DEFAULT_PAGE_VISUAL_LAYOUTS.get(module_key, [])}
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in value:
+        if not isinstance(raw, dict):
+            raise ValueError("page_visual_layout_invalid")
+        item_id = str(raw.get("id") or "").strip()
+        if not item_id or item_id not in allowed_ids or item_id in seen:
+            raise ValueError("page_visual_layout_invalid")
+        span = _bounded_optional_int(raw.get("span"), 4, 12)
+        height = _bounded_optional_int(raw.get("height"), 240, 1200)
+        if span is None or height is None:
+            raise ValueError("page_visual_layout_invalid")
+        seen.add(item_id)
+        normalized.append({"id": item_id, "span": span, "height": height})
+    return normalized
+
+
 def _normalize_page_data_notes(value: Any, available_ids: set[str]) -> list[dict[str, Any]]:
     notes: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -1174,6 +1272,17 @@ def _bounded_optional_int(value: Any, minimum: int, maximum: int) -> int | None:
 
 def _state_for_actor(module_key: str, state: dict[str, Any], actor_user_id: str | None) -> dict[str, Any]:
     resolved = deepcopy(state)
+    if module_key == "customer_segment_analysis":
+        lists_by_user = resolved.pop("customerSegmentListsByUser", {})
+        legacy = resolved.get("customerSegmentList")
+        resolved["customerSegmentList"] = (
+            dict(lists_by_user.get(actor_user_id) or {})
+            if actor_user_id and isinstance(lists_by_user, dict) and isinstance(lists_by_user.get(actor_user_id), dict)
+            else dict(legacy)
+            if actor_user_id and isinstance(legacy, dict) and str(legacy.get("ownerUserId") or "") == actor_user_id
+            else None
+        )
+        return resolved
     if module_key == "self_analysis" and actor_user_id:
         resolved["visualReports"] = [
             report for report in resolved.get("visualReports", [])

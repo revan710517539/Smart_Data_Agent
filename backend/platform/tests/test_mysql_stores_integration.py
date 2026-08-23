@@ -68,7 +68,7 @@ class MySQLStoresIntegrationTest(postgres_integration.PostgreSQLStoresIntegratio
                 cursor.execute("SELECT version, checksum FROM platform_schema_migrations ORDER BY version")
                 rows = list(cursor.fetchall())
         versions = [str(row["version"] if isinstance(row, dict) else row[0]) for row in rows]
-        self.assertEqual(versions, ["0001", "0029", "0030", "0031"])
+        self.assertEqual(versions, ["0001", "0029", "0030", "0031", "0032"])
         schema_file = Path(__file__).resolve().parents[1] / "database" / "mysql" / "0001_production_schema.sql"
         self.assertEqual(first.checksum, hashlib.sha256(schema_file.read_bytes()).hexdigest())
 

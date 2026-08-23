@@ -17,9 +17,15 @@ from backend.platform.tenancy import ExecutionContext
 
 SAVED_REPORT_VISUAL_TYPES = frozenset({
     "kpi", "line", "area", "column", "bar", "stacked_bar", "combo", "donut",
-    "scatter", "funnel", "treemap", "radar", "table", "pivot",
+    "scatter", "funnel", "treemap", "radar", "table", "pivot", "text",
 })
-SAVED_REPORT_VISUAL_TYPE_ALIASES = {"stackedBar": "stacked_bar", "pie": "donut"}
+SAVED_REPORT_VISUAL_TYPE_ALIASES = {
+    "stackedbar": "stacked_bar",
+    "pie": "donut",
+    "crosstab": "pivot",
+    "note": "text",
+    "textbox": "text",
+}
 
 
 def _institution_label(tenant_id: str) -> str:

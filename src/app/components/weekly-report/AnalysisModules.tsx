@@ -150,16 +150,16 @@ export function WeeklyAnalysisModuleMenu({
     <div ref={menuRef} className="relative">
       <button type="button" aria-label="选择分析数据模块" title="分析数据" onClick={() => setOpen((value) => !value)} className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-colors ${open ? "border-[#c7c7cc] bg-[#f2f2f7] text-[#1d1d1f]" : "border-[#e5e5ea] bg-white text-[#8a8a8e] hover:bg-[#f8f8f8]"}`}><ChevronsDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} /></button>
       {open ? <div className="absolute right-0 z-50 mt-2 w-[360px] max-w-[82vw] rounded-xl border border-[#e5e5ea] bg-white p-2 shadow-xl shadow-black/10">
-        <div className="flex items-center justify-between px-2 pb-2 pt-1"><span className="text-[11px] text-[#636366]">周报数据</span><span className="text-[10px] text-[#aeaeb2]">{editable ? "拖动排序 · 点击显隐" : "切换到编辑后可调整"}</span></div>
+        <div className="flex items-center justify-between px-2 pb-2 pt-1"><span className="text-[11px] text-[#636366]">周报数据</span><span className="text-[10px] text-[#aeaeb2]">{editable ? "拖动排序 · 点击显隐 · 可删除" : "拖动排序 · 点击显隐"}</span></div>
         <div className="max-h-[360px] space-y-1 overflow-y-auto" data-weekly-unified-data-menu="true">
           {loading ? <div className="px-3 py-4 text-center text-[11px] text-[#aeaeb2]">正在读取周报数据…</div> : items.map((item) => <div
             key={item.id}
-            draggable={editable}
-            onDragStart={(event) => { if (!editable) return; setDraggedId(item.id); event.dataTransfer.effectAllowed = "move"; }}
+            draggable
+            onDragStart={(event) => { setDraggedId(item.id); event.dataTransfer.effectAllowed = "move"; }}
             onDragEnd={() => setDraggedId(null)}
-            onDragOver={(event) => { if (editable) event.preventDefault(); }}
-            onDrop={(event) => { event.preventDefault(); if (editable && draggedId) onMove(draggedId, item.id); setDraggedId(null); }}
-            className={`flex w-full items-center rounded-lg border text-left ${editable ? "cursor-grab active:cursor-grabbing" : "cursor-default"} ${item.visible ? "border-[#cdebd5] bg-[#eef8f1]" : "border-transparent bg-[#fafbfc] hover:border-[#e5e5ea] hover:bg-white"} ${draggedId === item.id ? "opacity-45" : ""}`}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => { event.preventDefault(); if (draggedId) onMove(draggedId, item.id); setDraggedId(null); }}
+            className={`flex w-full cursor-grab items-center rounded-lg border text-left active:cursor-grabbing ${item.visible ? "border-[#cdebd5] bg-[#eef8f1]" : "border-transparent bg-[#fafbfc] hover:border-[#e5e5ea] hover:bg-white"} ${draggedId === item.id ? "opacity-45" : ""}`}
             data-weekly-data-item={item.id}
             data-weekly-data-kind={item.kind}
           >
@@ -170,13 +170,12 @@ export function WeeklyAnalysisModuleMenu({
             </span>
             <button
               type="button"
-              disabled={!editable}
               aria-label={`${item.visible ? "隐藏" : "显示"}${item.title}`}
               title={item.visible ? "隐藏" : "显示"}
               onClick={() => onToggle(item)}
-              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${editable ? "text-[#7d8982] hover:bg-white hover:text-[#258a3f]" : "cursor-default text-[#c7c7cc]"}`}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#7d8982] hover:bg-white hover:text-[#258a3f]"
             >{item.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}</button>
-            {item.deletable ? <button type="button" aria-label={`删除${item.title}`} title="删除" onClick={() => onDelete(item)} className="mr-2 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#aeaeb2] hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3.5 w-3.5" /></button> : <span className="mr-2 h-7 w-7 shrink-0" aria-hidden="true" />}
+            {editable && item.deletable ? <button type="button" aria-label={`删除${item.title}`} title="删除" onClick={() => onDelete(item)} className="mr-2 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#aeaeb2] hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3.5 w-3.5" /></button> : <span className="mr-2 h-7 w-7 shrink-0" aria-hidden="true" />}
           </div>)}
           {!loading && !items.length ? <div className="px-3 py-4 text-center text-[11px] text-[#aeaeb2]">暂无可编排的周报数据</div> : null}
           {notice ? <div className="mx-2 mt-1 rounded-md bg-[#f7faf8] px-2 py-1.5 text-[10px] text-[#68736d]">{notice}</div> : null}

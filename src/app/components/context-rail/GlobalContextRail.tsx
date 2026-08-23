@@ -5,7 +5,7 @@ import type { SelectedDataPoint } from "../../services/analysisWorkspaceApi";
 import { AnalysisWorkspacePanel, analysisWorkspaceRevealEvent } from "../analysis-workspace/AnalysisWorkspaceRail";
 import { MessageBoardPanel } from "../message-board/MessageBoardPanel";
 import { CommentsPanel } from "../weekly-report/CommentsPanel";
-import { commentTargetFromRailReveal, type CommentTarget } from "../weekly-report/domain";
+import { commentTargetFromRailReveal, makePageCommentTarget, type CommentTarget } from "../weekly-report/domain";
 import { useInstitutionCommentThread } from "./useInstitutionCommentThread";
 import {
   ContextSideRail,
@@ -19,6 +19,7 @@ const pageDefinitions: Record<string, { pageKey: string; pageTitle: string }> = 
   "/funnel": { pageKey: "funnel", pageTitle: "业务漏斗" },
   "/sandbox": { pageKey: "sandbox", pageTitle: "经营沙盘" },
   "/supervision": { pageKey: "supervision", pageTitle: "机构督导" },
+  "/customer-segment-analysis": { pageKey: "customer-segment-analysis", pageTitle: "分客群分析" },
   "/email-daily": { pageKey: "email-daily", pageTitle: "邮件日报" },
   "/customers": { pageKey: "customers", pageTitle: "客群分析" },
   "/competition": { pageKey: "competition", pageTitle: "竞品分析" },
@@ -26,7 +27,7 @@ const pageDefinitions: Record<string, { pageKey: string; pageTitle: string }> = 
   "/self-analysis/query": { pageKey: "self-analysis", pageTitle: "智能分析" },
   "/self-analysis/reports": { pageKey: "my-reports", pageTitle: "我的报表" },
   "/data-assets/metrics": { pageKey: "metric-management", pageTitle: "指标管理" },
-  "/data-assets/data-management": { pageKey: "data-management", pageTitle: "数据管理" },
+  "/data-assets/data-management": { pageKey: "data-management", pageTitle: "站内数据" },
 };
 
 export function GlobalContextRail() {
@@ -125,6 +126,12 @@ export function GlobalContextRail() {
     setExpandedReplyInputs((current) => ({ ...current, [commentId]: false }));
   };
 
+  const createPageComment = (text: string) => {
+    const pendingId = createComment(makePageCommentTarget(definition.pageKey, definition.pageTitle), text);
+    setActiveDraftId(null);
+    setActiveCommentId(pendingId || null);
+  };
+
   return (
     <div className="hidden h-full min-h-0 shrink-0 bg-[#f8f8fa] lg:flex lg:flex-col" data-global-context-rail="true">
       <ContextSideRail
@@ -150,6 +157,8 @@ export function GlobalContextRail() {
             activeCommentId={activeCommentId}
             activeDraftId={activeDraftId}
             railHeight={720}
+            composerScopeKey={`${tenantId}:${userId}:${reportId}`}
+            onCreateComment={createPageComment}
             onSave={saveComment}
             onCommentActivate={(commentId) => { setActiveCommentId(commentId); setActiveDraftId(null); }}
             onResolveComment={resolveComment}
@@ -159,7 +168,7 @@ export function GlobalContextRail() {
             onCommentRepliesToggle={(commentId, expanded) => setExpandedCommentReplies((current) => ({ ...current, [commentId]: expanded }))}
           />
         )}
-        analysis={<div className="h-full min-h-0"><AnalysisWorkspacePanel revealedDataPoint={selectedDataPoint} wide={wide} onWideChange={setWide} /></div>}
+        analysis={<div className="flex h-full min-h-0 flex-col overflow-hidden"><AnalysisWorkspacePanel revealedDataPoint={selectedDataPoint} wide={wide} onWideChange={setWide} /></div>}
         messageBoard={<MessageBoardPanel tenantId={tenantId} userId={userId} pageKey={definition.pageKey} pageTitle={definition.pageTitle} target={selectedTarget} />}
       />
     </div>

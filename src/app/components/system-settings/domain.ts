@@ -82,11 +82,11 @@ export const roles = [
 
 export const permissionMenuGroups = [
   { label: "多机构分析", children: ["多机构分析"], automatic: true, hint: "用户拥有两个及以上机构时自动显示，不随角色勾选。" },
-  { label: "经营分析", children: ["经营周报", "机构督导"] },
+  { label: "经营分析", children: ["经营周报", "机构督导", "分客群分析"] },
   { label: "市场洞察", children: ["客群分析", "竞品分析"] },
   { label: "自助分析", children: ["智能分析", "我的报告", "分析配置", "skill/插件"] },
   { label: "任务工作台", children: ["待办任务", "自动化任务"] },
-  { label: "数据资产", children: ["指标字典", "知识记忆", "数据管理", "质量监控"] },
+  { label: "数据资产", children: ["指标字典", "知识记忆", "站内数据", "质量监控"] },
   { label: "推送与订阅", children: ["预警规则", "订阅管理", "推送记录"] },
   { label: "系统管理", children: ["用户管理", "角色权限", "审计日志", "系统配置"] },
 ];
@@ -129,7 +129,7 @@ export const fallbackAuditLogs = [
 ];
 
 export const systemConfig = [
-  { id: "data_refresh_frequency", name: "数据刷新频率", value: "T+1（每日凌晨02:00）", category: "data", description: "经营主题数据同步节奏" },
+  { id: "data_refresh_frequency", name: "数据刷新频率", value: "T+1（每日凌晨06:00）", category: "data", description: "经营主题数据同步节奏" },
   { id: "session_timeout", name: "会话超时时间", value: "30分钟", category: "security", description: "前端会话和后端 token 默认有效期" },
   { id: "password_policy", name: "密码复杂度", value: "强（需包含大小写+数字+特殊字符）", category: "security", description: "本地开发保留参数，生产接统一身份源" },
   { id: "ai_concurrency_limit", name: "AI分析并发上限", value: "10个/用户", category: "system", description: "单用户同时运行智能分析任务数量" },
@@ -246,11 +246,11 @@ export const initialPermissionInstitutions: InstitutionPermission[] = operatingT
   return {
     id: `tenant_${index + 1}`,
     institution: tenant,
-    adminMenus: ["经营周报", "机构督导", "智能分析", "我的报告", "分析配置", "skill/插件", "指标字典", "知识记忆", "数据管理", "质量监控", "用户管理", "角色权限", "审计日志", "系统配置"],
+    adminMenus: ["经营周报", "机构督导", "分客群分析", "智能分析", "我的报告", "分析配置", "skill/插件", "指标字典", "知识记忆", "站内数据", "质量监控", "用户管理", "角色权限", "审计日志", "系统配置"],
     adminDataScopes: allPermissionDataScopes,
     operatorSuperMenus: [],
     operatorSuperDataScopes: [],
-    operatorAdminMenus: ["经营周报", "智能分析", "分析配置", "skill/插件", "指标字典", "数据管理"],
+    operatorAdminMenus: ["经营周报", "智能分析", "分析配置", "skill/插件", "指标字典", "站内数据"],
     operatorAdminDataScopes: ["经营指标汇总", "机构周报数据", "业务漏斗数据", "客户画像数据"],
     manageableRoles: ["操作员"],
     customRoles: [],
@@ -268,6 +268,12 @@ export const emptySpeechForm = {
   apiKey: "",
   applicationModule: "global_voice_model",
 };
+
+export function isAccessFailureNotice(notice: string) {
+  const text = notice.trim();
+  if (!text || /^正在/.test(text)) return false;
+  return /失败|不可用|错误|不符合|无法|拦截|超时|解析|未通过|不能为空|不在.*白名单|假 IP|握手失败|鉴权失败/.test(text);
+}
 
 export function maskApiSecret(value: string) {
   const trimmed = value.trim();

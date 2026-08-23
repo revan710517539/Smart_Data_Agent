@@ -11,6 +11,7 @@ from uuid import uuid4
 from backend.platform.storage import connect_sqlite
 
 from .models import MemoryRecord
+from .fusion import FUSIBLE_MEMORY_TYPES, fuse_record_content, memory_identity
 from .policies import should_persist_memory
 
 
@@ -63,13 +64,46 @@ class SQLiteMemoryStore:
     def write(self, record: MemoryRecord, force: bool = False) -> bool:
         if not force and not should_persist_memory(record):
             return False
+        existing_memory_id = self._conn.execute(
+            "SELECT 1 FROM platform_memory_records WHERE tenant_id = ? AND memory_id = ?",
+            (record.tenant_id, record.memory_id),
+        ).fetchone()
+        if existing_memory_id:
+            return False
         memory_type = canonical_memory_type(record.memory_type)
         status = _canonical_status(record.verified_status)
         if status == "active" and not force:
             status = "candidate"
         subject_type = record.subject_type if record.subject_type in {"user", "role", "org", "tenant"} else "tenant"
         subject_id = str(record.subject_id or (record.created_by if subject_type == "user" else record.tenant_id) or record.tenant_id)
-        content_json = _json(record.content)
+        superseded_rows: list[sqlite3.Row] = []
+        content = dict(record.content)
+        if memory_type in FUSIBLE_MEMORY_TYPES:
+            identity = memory_identity(memory_type, content, title=record.title or record.subject)
+            candidates = self._conn.execute(
+                """
+                SELECT memory_id, title, content, status, updated_at
+                FROM platform_memory_records
+                WHERE tenant_id = ? AND memory_type = ? AND subject_type = ?
+                  AND subject_id = ? AND status IN ('candidate','review','active')
+                ORDER BY updated_at, memory_id
+                LIMIT 500
+                """,
+                (record.tenant_id, memory_type, subject_type, subject_id),
+            ).fetchall()
+            superseded_rows = [
+                row
+                for row in candidates
+                if memory_identity(memory_type, _load_json(row["content"], {}), title=str(row["title"])).merge_key
+                == identity.merge_key
+            ]
+            content = fuse_record_content(
+                memory_type,
+                record.title or record.subject,
+                [*(_load_json(row["content"], {}) for row in superseded_rows), content],
+                memory_ids=(str(row["memory_id"]) for row in superseded_rows),
+            )
+        content_json = _json(content)
         content_hash = hashlib.sha256(content_json.encode("utf-8")).hexdigest()
         existing = self._conn.execute(
             """
@@ -108,13 +142,25 @@ class SQLiteMemoryStore:
                     max(0, float(record.weight)),
                     valid_from,
                     record.expires_at,
-                    record.supersedes_memory_id,
+                    record.supersedes_memory_id or (str(superseded_rows[-1]["memory_id"]) if superseded_rows else None),
                     record.source_trace_id,
                     record.created_by,
                     now,
                     now,
                 ),
             )
+            for previous in superseded_rows:
+                previous_status = str(previous["status"])
+                if previous_status in {"candidate", "review"} or status == "active":
+                    self._conn.execute(
+                        """
+                        UPDATE platform_memory_records
+                        SET status = 'superseded', updated_at = ?
+                        WHERE tenant_id = ? AND memory_id = ?
+                          AND status IN ('candidate','review','active')
+                        """,
+                        (now, record.tenant_id, str(previous["memory_id"])),
+                    )
             if record.evidence_type and record.evidence_id and record.evidence_hash:
                 if len(record.evidence_hash) != 64:
                     raise ValueError("memory_evidence_hash_must_be_sha256")

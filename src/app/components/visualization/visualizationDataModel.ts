@@ -28,6 +28,7 @@ export const visualizationFilterOperators: Array<{ value: VisualizationFilterOpe
 export type VisualizationCardConfig = {
   metricFields: string[];
   dimensionFields: string[];
+  mergedDimensionFields?: string[];
   filters: VisualizationFilters;
   filterGroups: VisualizationFilterGroup[];
   sumFilteredRows: boolean;
@@ -138,6 +139,33 @@ export function moveVisualizationFieldWithinGroup(fields: string[], source: stri
 
 export function selectedTableFields(dimensionFields: string[], metricFields: string[]) {
   return [...unique(dimensionFields), ...unique(metricFields.filter((field) => !dimensionFields.includes(field)))];
+}
+
+export function groupRowsForMergedDimensions(rows: AnalysisRow[], dimensionFields: string[], mergedDimensionFields: string[]) {
+  const activeFields = dimensionFields.filter((field) => mergedDimensionFields.includes(field));
+  if (!activeFields.length) return rows;
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((left, right) => {
+      for (const field of activeFields) {
+        const compared = displayValue(left.row.raw[field]).localeCompare(displayValue(right.row.raw[field]), "zh-CN", { numeric: true });
+        if (compared) return compared;
+      }
+      return left.index - right.index;
+    })
+    .map(({ row }) => row);
+}
+
+export function mergedDimensionCellSpan(rows: AnalysisRow[], rowIndex: number, field: string, dimensionFields: string[], mergedDimensionFields: string[]) {
+  const activeFields = dimensionFields.filter((candidate) => mergedDimensionFields.includes(candidate));
+  const activeIndex = activeFields.indexOf(field);
+  if (activeIndex < 0 || rowIndex < 0 || rowIndex >= rows.length) return 1;
+  const groupFields = activeFields.slice(0, activeIndex + 1);
+  const sameGroup = (left: AnalysisRow, right: AnalysisRow) => groupFields.every((candidate) => displayValue(left.raw[candidate]) === displayValue(right.raw[candidate]));
+  if (rowIndex > 0 && sameGroup(rows[rowIndex - 1], rows[rowIndex])) return 0;
+  let span = 1;
+  while (rowIndex + span < rows.length && sameGroup(rows[rowIndex], rows[rowIndex + span])) span += 1;
+  return span;
 }
 
 export function dimensionCombination(row: AnalysisRow, dimensionFields: string[]) {

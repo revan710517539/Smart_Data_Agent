@@ -20,7 +20,7 @@ from .store import (
     _require_module_key,
 )
 
-SHARED_PAGE_LAYOUT_MODULES = frozenset({"dashboard", "institution_supervision", "weekly_report"})
+SHARED_PAGE_LAYOUT_MODULES = frozenset({"dashboard", "institution_supervision", "customer_segment_analysis", "weekly_report", "customer_insight", "competition_analysis"})
 
 
 def _shared_page_layout_module(module_key: str) -> bool:
@@ -62,6 +62,7 @@ class PostgreSQLApplicationStore:
                 shared_state = self._load_state(connection, tenant_key, module_key, None)
                 state["pageDataLayout"] = list(shared_state.get("pageDataLayout") or [])
                 state["pageDataNotes"] = list(shared_state.get("pageDataNotes") or [])
+                state["pageVisualLayout"] = list(shared_state.get("pageVisualLayout") or [])
                 state["pageStickyNote"] = dict(shared_state.get("pageStickyNote") or {})
                 if module_key == "weekly_report":
                     state["weeklyVisualReports"] = list(shared_state.get("weeklyVisualReports") or [])
@@ -99,6 +100,7 @@ class PostgreSQLApplicationStore:
                 shared_state = self._load_state(connection, tenant_key, module_key, None)
                 state["pageDataLayout"] = list(shared_state.get("pageDataLayout") or [])
                 state["pageDataNotes"] = list(shared_state.get("pageDataNotes") or [])
+                state["pageVisualLayout"] = list(shared_state.get("pageVisualLayout") or [])
                 state["pageStickyNote"] = dict(shared_state.get("pageStickyNote") or {})
                 if module_key == "weekly_report":
                     state["weeklyVisualReports"] = list(shared_state.get("weeklyVisualReports") or [])
@@ -128,13 +130,15 @@ class PostgreSQLApplicationStore:
                 handler_ref = "application.automation_draft"
                 self._persist_task_draft(connection, tenant_key, actor_key, action, result)
                 next_state["createdTasks"] = self._tasks(connection, tenant_key, actor_key)
-            if _shared_page_layout_module(module_key) and action in {"set_page_data_layout", "set_page_data_notes", "set_page_sticky_note"}:
+            if _shared_page_layout_module(module_key) and action in {"set_page_data_layout", "set_page_data_notes", "set_page_visual_layout", "set_page_sticky_note"}:
                 shared_state = self._load_state(connection, tenant_key, module_key, None)
                 if action == "set_page_data_layout":
                     shared_state["pageDataLayout"] = list(next_state.get("pageDataLayout") or [])
                     shared_state["pageDataNotes"] = list(next_state.get("pageDataNotes") or [])
                 if action == "set_page_data_notes":
                     shared_state["pageDataNotes"] = list(next_state.get("pageDataNotes") or [])
+                if action == "set_page_visual_layout":
+                    shared_state["pageVisualLayout"] = list(next_state.get("pageVisualLayout") or [])
                 if action == "set_page_sticky_note":
                     shared_state["pageStickyNote"] = dict(next_state.get("pageStickyNote") or {})
                 self._save_non_core_state(

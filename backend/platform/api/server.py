@@ -441,16 +441,21 @@ def _runtime_health(handler: AnalysisAPIHandler) -> dict[str, Any]:
     checks["automation_worker"] = (
         worker.health()
         if worker is not None and callable(getattr(worker, "health", None))
-        else {"ready": True, "mode": "external", "embedded": False}
+        else _external_worker_health(services.runtime_config.is_production)
     )
     limiter_health = getattr(services.rate_limiter, "health", None)
     checks["rate_limiter"] = limiter_health() if callable(limiter_health) else {"ready": False}
     object_store = services.data_acquisition_service.object_store
-    checks["object_store"] = {
-        "ready": True,
-        "adapter": type(object_store).__name__,
-        "durable": getattr(object_store, "_temporary", None) is None,
-    }
+    object_health = getattr(object_store, "health", None)
+    checks["object_store"] = (
+        dict(object_health())
+        if callable(object_health)
+        else {
+            "ready": True,
+            "adapter": type(object_store).__name__,
+            "durable": getattr(object_store, "_temporary", None) is None,
+        }
+    )
     semantic_mock = "mock" in str(services.data_source_mode).lower() or services.semantic_fallback_mode == "explicit_local"
     checks["semantic_runtime"] = {
         "ready": not services.runtime_config.is_production or not semantic_mock,
@@ -458,6 +463,9 @@ def _runtime_health(handler: AnalysisAPIHandler) -> dict[str, Any]:
         "data_source_mode": services.data_source_mode,
         "fallback_mode": services.semantic_fallback_mode,
     }
+    kernel = getattr(services, "runtime_kernel", None)
+    hermes_status = kernel.hermes_status() if kernel is not None and callable(getattr(kernel, "hermes_status", None)) else {"ready": True, "mode": "off", "configured": False}
+    checks["hermes_draft"] = hermes_status
     if services.runtime_config.is_production:
         if type(services.task_repository).__name__.startswith(("SQLite", "InMemory")):
             checks["database"].update(
@@ -478,6 +486,54 @@ def _runtime_health(handler: AnalysisAPIHandler) -> dict[str, Any]:
         "ready": ready,
         "checks": checks,
     }
+
+
+def _external_worker_health(production: bool) -> dict[str, Any]:
+    from datetime import datetime, timezone
+    import json
+    import os
+
+    configured = os.getenv("SMART_DATA_AGENT_WORKER_HEALTH_FILE", "").strip()
+    if not configured:
+        return {
+            "ready": not production,
+            "mode": "external",
+            "embedded": False,
+            **({"error": "external_worker_health_file_required"} if production else {}),
+        }
+    try:
+        payload = json.loads(Path(configured).read_text(encoding="utf-8"))
+        if payload.get("schema_version") != "smart-data-agent-worker-health/v1":
+            raise ValueError("external_worker_health_schema_incompatible")
+        worker_id = str(payload.get("worker_id") or "").strip()
+        if not worker_id:
+            raise ValueError("external_worker_id_required")
+        heartbeat = datetime.fromisoformat(str(payload.get("heartbeat_at") or "").replace("Z", "+00:00"))
+        age_seconds = (datetime.now(timezone.utc) - heartbeat.astimezone(timezone.utc)).total_seconds()
+        timestamp_valid = -5 <= age_seconds <= 30
+        declared_ready = bool(payload.get("ready"))
+        ready = declared_ready and timestamp_valid
+        error = ""
+        if not declared_ready:
+            error = "external_worker_not_ready"
+        elif not timestamp_valid:
+            error = "external_worker_heartbeat_stale"
+        return {
+            "ready": ready,
+            "mode": "external",
+            "embedded": False,
+            "worker_id": worker_id,
+            "heartbeat_age_seconds": round(max(0.0, age_seconds), 3),
+            "last_error_code": payload.get("last_error_code"),
+            **({"error": error} if error else {}),
+        }
+    except Exception:
+        return {
+            "ready": False,
+            "mode": "external",
+            "embedded": False,
+            "error": "external_worker_heartbeat_unavailable",
+        }
 
 
 def create_server(host: str, port: int, test_sqlite_db: str | Path | None = None) -> ThreadingHTTPServer:

@@ -117,6 +117,14 @@ class AutomationRuntimeTest(unittest.TestCase):
         self.assertIn("点击“+”", message)
         self.assertFalse(retryable)
 
+    def test_multiple_selected_tables_have_stable_non_retryable_guidance(self) -> None:
+        code, message, retryable = _public_handler_failure(
+            ValueError("analysis_selected_raw_table_requires_single_source")
+        )
+        self.assertEqual(code, "analysis_single_data_table_required")
+        self.assertIn("只能使用一张数据表", message)
+        self.assertFalse(retryable)
+
     def test_self_analysis_page_requires_explicit_production_table_when_semantic_source_is_unconfigured(self) -> None:
         self.services.semantic_service.client = InMemorySupersonicClient(UnconfiguredDataWarehouse())
         self.services.data_source_mode = "production_data_source_not_configured"

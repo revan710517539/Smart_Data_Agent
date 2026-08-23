@@ -55,6 +55,34 @@ class _MultiCsvSource:
         return self._catalogs.get(tenant_id, _Catalog([]))
 
 
+class _UnreadyCatalog:
+    def __init__(self, tables: list[dict], rows: dict[str, list[dict[str, str]]] | None = None) -> None:
+        self._tables = tables
+        self._rows = rows or {}
+        self.catalog_ready = False
+        self.prime_calls = 0
+
+    def prime_catalog(self) -> None:
+        self.prime_calls += 1
+        self.catalog_ready = True
+
+    def table_assets(self) -> list[dict]:
+        return self._tables if self.catalog_ready else []
+
+    def read_rows(self, relative_path: str, *, max_rows: int = 50_000):
+        rows = [dict(row) for row in self._rows.get(relative_path, [])[:max_rows]]
+        headers = list(rows[0]) if rows else []
+        return headers, rows
+
+
+class _UnreadyMultiCsvSource:
+    def __init__(self, catalogs: dict[str, _UnreadyCatalog]) -> None:
+        self._catalogs = catalogs
+
+    def for_tenant(self, tenant_id: str) -> _UnreadyCatalog:
+        return self._catalogs.get(tenant_id, _UnreadyCatalog([]))
+
+
 class _TrackingMultiCsvSource(_MultiCsvSource):
     def __init__(self, catalogs: dict[str, _Catalog]) -> None:
         super().__init__(catalogs)
@@ -301,6 +329,41 @@ class PageDataAssetTest(unittest.TestCase):
                 actor_user_id="u_admin",
             )
 
+    def test_customer_and_competition_pages_persist_governed_visual_layout_and_sticky_note(self) -> None:
+        applications = InMemoryApplicationStore()
+        customer = applications.run_action(
+            "tenant_a",
+            "customer_insight",
+            "set_page_visual_layout",
+            {"items": [{"id": "distribution", "span": 8, "height": 480}, {"id": "segments", "span": 12, "height": 260}]},
+            actor_user_id="u_admin",
+        )
+        self.assertEqual([item["id"] for item in customer["module"]["state"]["pageVisualLayout"]], ["distribution", "segments"])
+        competition = applications.run_action(
+            "tenant_a",
+            "competition_analysis",
+            "set_page_visual_layout",
+            {"items": [{"id": "market-share", "span": 12, "height": 520}]},
+            actor_user_id="u_admin",
+        )
+        self.assertEqual(competition["module"]["state"]["pageVisualLayout"], [{"id": "market-share", "span": 12, "height": 520}])
+        sticky = applications.run_action(
+            "tenant_a",
+            "competition_analysis",
+            "set_page_sticky_note",
+            {"note": {"visible": True, "items": [{"id": "p1", "type": "paragraph", "text": "竞品观察"}]}},
+            actor_user_id="u_viewer",
+        )
+        self.assertEqual(sticky["module"]["state"]["pageStickyNote"]["items"][0]["text"], "竞品观察")
+        with self.assertRaisesRegex(ValueError, "page_visual_layout_invalid"):
+            applications.run_action(
+                "tenant_a",
+                "competition_analysis",
+                "set_page_visual_layout",
+                {"items": [{"id": "unknown", "span": 12, "height": 320}]},
+                actor_user_id="u_admin",
+            )
+
     def test_multi_institution_candidates_require_explicit_relationship_and_identical_schema(self) -> None:
         context = SimpleNamespace(tenant_id="tenant:a", user_id="u_super_admin")
         candidates = _multi_institution_candidates(self._multi_handler(), context)
@@ -346,6 +409,106 @@ class PageDataAssetTest(unittest.TestCase):
             _multi_page_data_source_tables(self._multi_handler(denied={"tenant:b"}), context, page_data)
         with self.assertRaisesRegex(PermissionError, "multi_institution_page_data_source_schema_changed"):
             _multi_page_data_source_tables(self._multi_handler(second_schema="schema_2"), context, page_data)
+
+    def test_multi_institution_read_waits_for_unready_catalog(self) -> None:
+        context = SimpleNamespace(tenant_id="tenant:a", user_id="u_super_admin")
+        catalogs = {
+            "tenant:a": _UnreadyCatalog([self.table]),
+            "tenant:b": _UnreadyCatalog([{
+                **self.table,
+                "id": "csv_table_2",
+                "sourceKey": "source_2",
+                "relativePath": "reports/weekly_b.csv",
+            }]),
+        }
+        handler = self._multi_handler()
+        handler.services.data_acquisition_service.csv_source = _UnreadyMultiCsvSource(catalogs)
+        candidates = _multi_institution_candidates(handler, context)
+        self.assertEqual(len(candidates), 1)
+        self.assertGreater(catalogs["tenant:a"].prime_calls, 0)
+        self.assertGreater(catalogs["tenant:b"].prime_calls, 0)
+        page_data = {
+            "schemaFingerprint": candidates[0]["schemaFingerprint"],
+            "institutionSources": candidates[0]["sources"],
+        }
+        self.assertEqual(len(_multi_page_data_source_tables(handler, context, page_data)), 2)
+
+    def test_multi_institution_page_accepts_additive_compatible_schema_refresh(self) -> None:
+        fields = [
+            {"fieldNameEn": "report_date", "fieldNameCn": "日期", "type": "string", "semanticRole": "dimension", "isPrimaryKey": True},
+            {"fieldNameEn": "loan_amount", "fieldNameCn": "放款金额", "type": "decimal", "semanticRole": "metric", "isMetric": True},
+        ]
+        table_a = {**self.table, "fields": fields, "schemaFingerprint": "schema_v1"}
+        table_b = {**table_a, "id": "csv_table_b", "sourceKey": "source_b", "relativePath": "reports/b.csv"}
+        store = InMemoryDataAssetStore(seed_defaults=False)
+        catalogs = {
+            "tenant:a": _Catalog([table_a], {"reports/weekly.csv": [{"日期": "2026-08-01", "放款金额": "100"}]}),
+            "tenant:b": _Catalog([table_b], {"reports/b.csv": [{"日期": "2026-08-01", "放款金额": "120"}]}),
+        }
+        handler = SimpleNamespace(services=SimpleNamespace(
+            data_acquisition_service=SimpleNamespace(csv_source=_MultiCsvSource(catalogs)),
+            data_asset_store=store,
+            lineage_store=_Lineage([]),
+            access_service=SimpleNamespace(session_for_user=lambda *_args, **_kwargs: {"institutions": ["a", "b"], "institution": "a"}),
+            permission_broker=SimpleNamespace(enforcer=_Enforcer()),
+        ))
+        context = SimpleNamespace(tenant_id="tenant:a", user_id="u_super_admin")
+        relationship = _bind_table_relationship_asset(handler, context, {
+            "id": "relationship_compatible_refresh",
+            "name": "兼容结构刷新",
+            "nodes": [
+                {"id": "a", "tenantId": "tenant:a", "sourceKey": "source_1", "schemaFingerprint": "schema_v1"},
+                {"id": "b", "tenantId": "tenant:b", "sourceKey": "source_b", "schemaFingerprint": "schema_v1"},
+            ],
+            "edges": [{"sourceNodeId": "a", "sourceField": "report_date", "targetNodeId": "b", "targetField": "report_date"}],
+        })
+        saved_relationship = store.upsert_item("tenant:a", "table_relationship", relationship, updated_by="u_super_admin", lifecycle_status="active")
+        original_candidate = _multi_institution_candidates(handler, context)[0]
+        page_data = _bind_page_data_asset(handler, context, {
+            "id": "page_data_compatible_refresh",
+            "name": "放款趋势",
+            "institutionScope": "multi_institution",
+            "relationshipGroupId": saved_relationship["id"],
+            "targetPages": ["dashboard"],
+            "metricFields": ["loan_amount"],
+            "dimensionFields": ["report_date"],
+            "visualizationType": "line",
+        })
+
+        additive = {"fieldNameEn": "remark", "fieldNameCn": "备注", "type": "string", "semanticRole": "dimension"}
+        current_a = {**table_a, "schemaFingerprint": "schema_v2", "fields": [*fields, additive]}
+        current_b = {**table_b, "schemaFingerprint": "schema_v2", "fields": [*fields, additive]}
+        handler.services.data_acquisition_service.csv_source = _MultiCsvSource({
+            "tenant:a": _Catalog([current_a], {"reports/weekly.csv": [{"日期": "2026-08-01", "放款金额": "100", "备注": "A"}]}),
+            "tenant:b": _Catalog([current_b], {"reports/b.csv": [{"日期": "2026-08-01", "放款金额": "120", "备注": "B"}]}),
+        })
+
+        refreshed_candidate = _multi_institution_candidates(handler, context)[0]
+        self.assertNotEqual(refreshed_candidate["schemaFingerprint"], original_candidate["schemaFingerprint"])
+        payload = read_page_data_rows_payload(
+            handler.services,
+            tenant_id="tenant:a",
+            user_id="u_super_admin",
+            page_data_id=page_data["id"],
+            consumer="dashboard",
+            bundle={"page_data": [page_data]},
+            page_data=page_data,
+        )
+        self.assertEqual(payload["row_count"], 2)
+        self.assertEqual(payload["schema_fingerprint"], refreshed_candidate["schemaFingerprint"])
+
+        incompatible_b = {
+            **current_b,
+            "schemaFingerprint": "schema_v3",
+            "fields": [fields[0], {**fields[1], "fieldNameCn": "放款备注", "type": "string", "semanticRole": "dimension", "isMetric": False}, additive],
+        }
+        handler.services.data_acquisition_service.csv_source = _MultiCsvSource({
+            "tenant:a": _Catalog([current_a]),
+            "tenant:b": _Catalog([incompatible_b]),
+        })
+        self.assertEqual(_multi_institution_candidates(handler, context), [])
+        with self.assertRaisesRegex(PermissionError, "multi_institution_page_data_source_schema_changed"):
+            _multi_page_data_source_tables(handler, context, page_data)
 
     def test_table_relationship_rebinds_labels_and_supports_multiple_tables_per_institution(self) -> None:
         table_a_detail = {
@@ -618,10 +781,24 @@ class PageDataAssetTest(unittest.TestCase):
         handle_application_action_post(denied)
         self.assertEqual(denied.response[1], HTTPStatus.FORBIDDEN)
 
+    def test_customer_and_competition_visual_layout_actions_require_super_admin(self) -> None:
+        for module_key, item_id in (("customer_insight", "segments"), ("competition_analysis", "competitors")):
+            denied = _ApplicationHandler(super_admin=False)
+            denied.payload = {"module_key": module_key, "action": "set_page_visual_layout", "payload": {"items": [{"id": item_id, "span": 12, "height": 320}]}}
+            handle_application_action_post(denied)
+            self.assertEqual(denied.response[1], HTTPStatus.FORBIDDEN)
+
+            allowed = _ApplicationHandler(super_admin=True)
+            allowed.payload = {"module_key": module_key, "action": "set_page_visual_layout", "payload": {"items": [{"id": item_id, "span": 12, "height": 320}]}}
+            handle_application_action_post(allowed)
+            self.assertEqual(allowed.response[1], HTTPStatus.OK)
+
     def test_postgresql_shared_state_contract_is_limited_to_page_layout_modules(self) -> None:
         self.assertTrue(_shared_page_layout_module("dashboard"))
         self.assertTrue(_shared_page_layout_module("institution_supervision"))
         self.assertTrue(_shared_page_layout_module("weekly_report"))
+        self.assertTrue(_shared_page_layout_module("customer_insight"))
+        self.assertTrue(_shared_page_layout_module("competition_analysis"))
 
 
 if __name__ == "__main__":

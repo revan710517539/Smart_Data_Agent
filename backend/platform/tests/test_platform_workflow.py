@@ -39,9 +39,10 @@ from backend.platform.semantic import (
     SupersonicHTTPClient,
 )
 from backend.platform.tenancy import ExecutionContext
+from backend.platform.access.passwords import DEFAULT_ACCOUNT_PASSWORD
 from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse, build_governed_test_warehouse
 
-TEST_DEVELOPMENT_LOGIN_PASSWORD = "test-only-explicit-login-secret"
+TEST_DEVELOPMENT_LOGIN_PASSWORD = DEFAULT_ACCOUNT_PASSWORD
 
 
 def _stateful_test_token(server, user_id: str, tenant_id: str, tenant_ids: tuple[str, ...] | None = None) -> str:
@@ -432,7 +433,7 @@ class PlatformWorkflowTest(unittest.TestCase):
         context = response["intelligent_analysis"]["context"]
         self.assertEqual(
             [skill["name"] for skill in context["skills"]],
-            ["周报分析", "归因分析", "上下文压缩"],
+            ["周报分析", "归因分析", "上下文压缩", "智能分析主查询"],
         )
         self.assertEqual(context["conversation"]["session_id"], "session_test")
         self.assertTrue(context["conversation"]["compression_enabled"])
@@ -769,7 +770,12 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertEqual(response["tenant_id"], tenant_id)
         self.assertEqual(response["skill_results"][0]["parameters"]["tenant_id"], tenant_id)
         self.assertIsNotNone(self.services.task_repository.get_task(response["task_id"]))
-        self.assertEqual(len(self.services.memory_store.search(tenant_id, memory_type="analysis_case")), 1)
+        generated = [
+            item
+            for item in self.services.memory_store.search(tenant_id, memory_type="analysis_case")
+            if item.created_by == "u_lina"
+        ]
+        self.assertEqual(len(generated), 1)
 
     def test_skill_permission_is_checked_before_query(self) -> None:
         with self.assertRaises(PermissionError):
@@ -1821,7 +1827,7 @@ class PlatformWorkflowTest(unittest.TestCase):
 
         self.assertEqual(response.status, 400)
         self.assertEqual(payload["error"], "access_user_email_conflict")
-        self.assertEqual(payload["message"], "该邮箱已绑定其他用户，请检查邮箱或编辑已有用户。")
+        self.assertEqual(payload["message"], "该手机号或邮箱已绑定其他用户，请直接登录或由管理员授权。")
         self.assertIsNotNone(profile)
         self.assertEqual(profile.name, "胥京波")
         self.assertTrue(any(assignment.role_id == SUPER_ADMIN_ROLE_ID for assignment in assignments))
@@ -2179,6 +2185,7 @@ class PlatformWorkflowTest(unittest.TestCase):
                         {
                             "name": "测试操作员",
                             "email": "operator@example.com",
+                            "password": TEST_DEVELOPMENT_LOGIN_PASSWORD,
                             "institution": "郑州银行",
                         },
                         ensure_ascii=False,
@@ -2187,14 +2194,46 @@ class PlatformWorkflowTest(unittest.TestCase):
                 )
                 register_response = register_conn.getresponse()
                 register_payload = json.loads(register_response.read().decode("utf-8"))
-                register_cookie_header = register_response.getheader("Set-Cookie") or ""
-                register_cookie = register_cookie_header.split(";", 1)[0]
+                super_cookie_header = super_login_response.getheader("Set-Cookie") or ""
+                approve_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                approve_conn.request(
+                    "POST",
+                    "/api/application/action",
+                    body=json.dumps(
+                        {
+                            "module_key": "agent_workspace",
+                            "action": "approve_registration",
+                            "payload": {"requestId": register_payload.get("request_id")},
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "Cookie": super_cookie_header},
+                )
+                approve_response = approve_conn.getresponse()
+                approve_payload = json.loads(approve_response.read().decode("utf-8"))
+                login_new_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                login_new_conn.request(
+                    "POST",
+                    "/api/auth/login",
+                    body=json.dumps(
+                        {
+                            "email": "operator@example.com",
+                            "password": TEST_DEVELOPMENT_LOGIN_PASSWORD,
+                            "institution": "郑州银行",
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                login_new_response = login_new_conn.getresponse()
+                login_new_payload = json.loads(login_new_response.read().decode("utf-8"))
+                login_new_cookie = (login_new_response.getheader("Set-Cookie") or "").split(";", 1)[0]
 
                 nav_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
                 nav_conn.request(
                     "GET",
                     "/api/navigation",
-                    headers={"Cookie": register_cookie},
+                    headers={"Cookie": login_new_cookie},
                 )
                 nav_response = nav_conn.getresponse()
                 nav_payload = json.loads(nav_response.read().decode("utf-8"))
@@ -2218,13 +2257,18 @@ class PlatformWorkflowTest(unittest.TestCase):
         self.assertEqual(super_login_payload["user"]["email"], "xujingbo-jk@qifu.com")
         self.assertTrue(super_login_payload["is_super_admin"])
 
-        self.assertEqual(register_response.status, 201)
+        self.assertEqual(register_response.status, 202)
+        self.assertEqual(register_payload["status"], "pending_approval")
+        self.assertEqual(register_payload["role"], "操作员")
+        self.assertEqual(approve_response.status, 200)
+        self.assertEqual(approve_payload["result"]["status"], "approved")
+        self.assertEqual(login_new_response.status, 200)
         self.assertEqual(
-            register_payload["user"]["tenantRoles"],
+            login_new_payload["user"]["tenantRoles"],
             [{"tenant": "郑州银行", "tenantId": normalize_tenant_id("郑州银行"), "role": "操作员"}],
         )
-        self.assertEqual(register_payload["institutions"], ["郑州银行"])
-        self.assertEqual(register_payload["tenant_id"], normalize_tenant_id("郑州银行"))
+        self.assertEqual(login_new_payload["institutions"], ["郑州银行"])
+        self.assertEqual(login_new_payload["tenant_id"], normalize_tenant_id("郑州银行"))
         self.assertEqual(nav_response.status, 200)
         self.assertEqual(nav_payload["user_id"], "u_operator")
         self.assertEqual(nav_payload["tenant_id"], normalize_tenant_id("郑州银行"))

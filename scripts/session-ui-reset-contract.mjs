@@ -18,6 +18,7 @@ const expectedSessionPrefixes = [
   "sda:visual-card:v1:",
   "sda:visual-card:v2:",
   "smart-data-agent:pending-analysis:",
+  "sda:analysis-workspace:active-thread:v1:",
   "smart_data_agent_self_analysis_session_v1:",
 ];
 for (const prefix of expectedSessionPrefixes) {
@@ -32,6 +33,9 @@ assert.ok(workbenchSource.includes(expectedSessionPrefixes[0]), "工作台持久
 assert.ok(visualSource.includes(expectedSessionPrefixes[2]), "当前可视化卡片持久化前缀必须纳入重置注册表");
 assert.ok(pendingSource.includes("smart-data-agent:pending-analysis:"), "待恢复分析前缀必须纳入重置注册表");
 assert.ok(domainSource.includes("smart_data_agent_self_analysis_session_v1"), "当前对话会话前缀必须纳入重置注册表");
+const workspaceSource = await read("src/app/components/analysis-workspace/AnalysisWorkspaceRail.tsx");
+assert.ok(workspaceSource.includes("ensureAnalysisConversationSessionId") && workspaceSource.includes("`${workspaceBaseKey}:${presentationSessionId}`"), "页面 AI 分析必须按当前浏览器展示会话创建独立工作区");
+assert.ok(workspaceSource.includes("window.sessionStorage.getItem(threadStorageKey") && workspaceSource.includes("window.sessionStorage.setItem(threadStorageKey"), "活动分析线程只能保存在当前展示会话中");
 assert.ok(workbenchSource.includes("sessionStorage.getItem") && workbenchSource.includes("sessionStorage.setItem"), "同一登录会话内离开页面后仍须恢复工作台");
 assert.ok(workbenchSource.includes("clearSelfAnalysisWorkbenchPersistence") && workbenchSource.includes("sessionStorage.removeItem"), "页面恢复必须定点删除智能分析工作台快照");
 assert.match(selfAnalysisSource, /data-self-analysis-restore="true"/);

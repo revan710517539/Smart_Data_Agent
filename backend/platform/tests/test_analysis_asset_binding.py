@@ -65,6 +65,51 @@ class AnalysisAssetBindingTests(unittest.TestCase):
             "description": "基于已执行证据生成的候选。",
         })
 
+    def test_csv_execution_statement_can_be_saved_as_topic_table(self) -> None:
+        task = _task()
+        task["skill_results"][0]["evidence"] = {
+            "evidence_id": "evidence_csv",
+            "source_snapshot": {"content_hash": "abc"},
+            "sql_executed": False,
+            "executed_sql": "",
+            "execution_statement": '-- Selected tenant CSV; executed by the bounded read-only CSV adapter.\nSELECT "period", SUM("amount") FROM "loan_daily" GROUP BY "period"',
+        }
+        handler = SimpleNamespace(services=SimpleNamespace(
+            task_repository=SimpleNamespace(get_task=lambda task_id: task),
+        ))
+        context = SimpleNamespace(tenant_id="tenant_demo", user_id="u_super_admin")
+
+        bound = _bind_analysis_asset(handler, context, "topic_table", {
+            "analysisTaskId": "task_1",
+            "fields": [
+                {"fieldNameEn": "period", "fieldNameCn": "期间", "type": "string"},
+                {"fieldNameEn": "amount", "fieldNameCn": "金额", "type": "decimal"},
+            ],
+        })
+
+        self.assertIn("SELECT", bound["sql"])
+        self.assertIn("loan_daily", bound["sql"])
+        _validate_asset_schema("topic_table", {
+            **bound,
+            "id": "topic_csv",
+            "name": "CSV 主题",
+            "code": "topic_csv",
+            "description": "数据管理 CSV 执行沉淀。",
+        })
+
+    def test_uploaded_file_analysis_is_not_persisted_as_topic_table(self) -> None:
+        task = _task(execution_mode="uploaded_file")
+        handler = SimpleNamespace(services=SimpleNamespace(
+            task_repository=SimpleNamespace(get_task=lambda task_id: task),
+        ))
+        context = SimpleNamespace(tenant_id="tenant_demo", user_id="u_super_admin")
+
+        with self.assertRaisesRegex(ValueError, "topic_table_uploaded_source_not_persisted"):
+            _bind_analysis_asset(handler, context, "topic_table", {
+                "analysisTaskId": "task_1",
+                "fields": [{"fieldNameEn": "period"}, {"fieldNameEn": "amount"}],
+            })
+
     def test_demo_execution_cannot_be_saved_as_review_candidate(self) -> None:
         task = _task(execution_mode="demo")
         handler = SimpleNamespace(services=SimpleNamespace(

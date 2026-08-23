@@ -85,20 +85,42 @@ class TenantCatalogIsolationTest(unittest.TestCase):
         isolated = store.list_bundle(shizuishan)
         huaxing_bundle = store.list_bundle(huaxing)
 
-        self.assertEqual([item["name"] for item in isolated["analysis_skills"]], ["石嘴山本地场景"])
+        names = {item["name"] for item in isolated["analysis_skills"]}
+        self.assertIn("场景分析判断", names)
+        self.assertIn("图表追问分析", names)
+        self.assertIn("整页AI分析", names)
+        self.assertIn("文本框实时语音", names)
+        self.assertIn("智能分析主查询", names)
+        self.assertIn("描述性分析", names)
+        self.assertIn("归因分析", names)
+        self.assertIn("预测分析", names)
+        self.assertIn("石嘴山本地场景", names)
+        self.assertNotIn("周报分析", names)
         self.assertEqual(isolated["external_tools"], [])
         self.assertEqual(isolated["analysis_shortcuts"], [])
         self.assertIn("华兴银行经营沙盘数据获取", [item["name"] for item in huaxing_bundle["external_tools"]])
-        self.assertNotIn("归因分析", [item["name"] for item in isolated["analysis_skills"]])
 
     def test_empty_operating_tenant_does_not_receive_cloned_skill_catalog(self) -> None:
         store = InMemoryDataAssetStore(seed_defaults=False)
         shizuishan = normalize_tenant_id("石嘴山银行")
         store.seed_missing_defaults(shizuishan)
-        self.assertEqual(store.list_bundle(shizuishan)["analysis_skills"], [])
+        skill_ids = {item["id"] for item in store.list_bundle(shizuishan)["analysis_skills"]}
+        self.assertEqual(
+            skill_ids,
+            {
+                "scene-analysis-intent",
+                "scene-chart-followup",
+                "scene-page-rail",
+                "scene-textbox-voice",
+                "scene-self-analysis",
+                "topic-descriptive",
+                "topic-attribution",
+                "topic-predictive",
+            },
+        )
         self.assertEqual(store.list_bundle(shizuishan)["external_tools"], [])
         self.assertEqual(store.list_bundle(shizuishan)["analysis_shortcuts"], [])
-        self.assertIsNone(store.get_item(shizuishan, "analysis_skill", "topic-descriptive"))
+        self.assertIsNone(store.get_item(shizuishan, "analysis_skill", "scene-weekly-report"))
 
 
 if __name__ == "__main__":

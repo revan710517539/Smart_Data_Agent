@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { waitForSelfAnalysis, type AnalysisProgressStep } from "../../services/analysisApi";
 import { createClientUuid } from "../../utils/clientUuid";
 import { AnalysisProgressPanel } from "../self-analysis/AnalysisProgressPanel";
 import { WorkspaceFollowUpChart, followUpVisualFromRefs } from "./WorkspaceFollowUpChart";
-import { GitBranch, GitMerge, LoaderCircle, Maximize2, Minimize2, Send, Sparkles } from "lucide-react";
+import { AudioLines, GitBranch, GitMerge, LoaderCircle, Maximize2, Mic, Minimize2, Send, Sparkles } from "lucide-react";
 import { useLocation } from "react-router";
 import { usePlatformContext } from "../../platform/PlatformContext";
 import { apiErrorMessage } from "../../services/apiClient";
 import {
+  archiveAnalysisThread,
   createAnalysisBranch,
   ensureAnalysisWorkspace,
   fetchAnalysisWorkspace,
@@ -18,6 +19,8 @@ import {
   type SelectedDataPoint,
 } from "../../services/analysisWorkspaceApi";
 import { TrustedArtifactPanel } from "./TrustedArtifactPanel";
+import { ensureAnalysisConversationSessionId } from "../self-analysis/domain";
+import { useVisualizationVoiceCommand } from "../visualization/useVisualizationVoiceCommand";
 import {
   mergeVisualAnalysisSourceGroups,
   pageVisualAnalysisContext,
@@ -31,6 +34,7 @@ const pageDefinitions: Record<string, PageDefinition> = {
   "/funnel": { pageKey: "funnel", title: "业务漏斗", prompt: "分析当前转化漏斗的主要断点与影响因素。" },
   "/sandbox": { pageKey: "sandbox", title: "经营沙盘", prompt: "分析当前经营策略、投入产出和情景变化。" },
   "/supervision": { pageKey: "supervision", title: "机构督导", prompt: "分析当前机构表现差异、风险和督导建议。" },
+  "/customer-segment-analysis": { pageKey: "customer-segment-analysis", title: "分客群分析", prompt: "仅基于当前已确认客群名单及其关联明细数据，分析客群结构、指标表现和行动建议。" },
   "/email-daily": { pageKey: "email-daily", title: "邮件日报", prompt: "分析当前日报证据、异常和需要关注的事项。" },
   "/customers": { pageKey: "customers", title: "客群分析", prompt: "分析当前客群结构、价值、转化和风险。" },
   "/competition": { pageKey: "competition", title: "竞品分析", prompt: "分析当前竞品差异、市场位置和行动空间。" },
@@ -39,7 +43,7 @@ const pageDefinitions: Record<string, PageDefinition> = {
   "/self-analysis/reports": { pageKey: "my-reports", title: "我的报表", prompt: "基于当前报表继续追问并固化新的分析结论。" },
   "/weekly-report": { pageKey: "weekly-report", title: "经营周报", prompt: "基于当前周报及关联证据继续追问、分支分析或合并结论。" },
   "/data-assets/metrics": { pageKey: "metric-management", title: "指标管理", prompt: "检查当前指标语义、版本和影响范围。" },
-  "/data-assets/data-management": { pageKey: "data-management", title: "数据管理", prompt: "检查当前数据 Schema、语义关系和版本影响。" },
+  "/data-assets/data-management": { pageKey: "data-management", title: "站内数据", prompt: "检查当前数据 Schema、语义关系和版本影响。" },
 };
 
 export const analysisWorkspaceRevealEvent = "smart-data-agent:analysis-workspace-reveal";
@@ -86,9 +90,40 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
   const [pageContext, setPageContext] = useState<Record<string, unknown>>({});
   const [pendingQuestion, setPendingQuestion] = useState("");
   const [progressSteps, setProgressSteps] = useState<AnalysisProgressStep[]>([]);
+  const [tabMenu, setTabMenu] = useState<{ threadId: string; left: number; top: number } | null>(null);
   const scopeRef = useRef("");
   const pageScopeRef = useRef(false);
   const waitAbortRef = useRef<AbortController | null>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const submitRef = useRef<(prompt: string, trigger: string) => void>(() => undefined);
+  const realtimeVoice = useVisualizationVoiceCommand(
+    (prompt) => submitRef.current(prompt, "realtime_voice_silence"),
+    (text) => setQuestion(text),
+    {
+      applicationModule: "realtime_voice_input",
+      contextText: "银行贷款数据分析问题",
+      silenceMs: 1_000,
+      stopAfterCommand: true,
+    },
+  );
+  const popupVoice = useVisualizationVoiceCommand(
+    (prompt) => submitRef.current(prompt, "popup_voice_silence"),
+    (text) => setQuestion(text),
+    {
+      applicationModule: "popup_voice_input",
+      contextText: "银行贷款数据分析问题",
+      silenceMs: 1_000,
+      stopAfterCommand: true,
+    },
+  );
+  const presentationSessionId = useMemo(
+    () => ensureAnalysisConversationSessionId(tenantId, userId),
+    [tenantId, userId],
+  );
+  const workspaceBaseKey = definition ? (stringValue(pageContext.workspace_key) || definition.pageKey) : "";
+  const workspaceKey = workspaceBaseKey && presentationSessionId
+    ? `${workspaceBaseKey}:${presentationSessionId}`
+    : workspaceBaseKey;
 
   useEffect(() => () => { waitAbortRef.current?.abort(); }, []);
 
@@ -133,41 +168,69 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
   }, [definition?.pageKey]);
 
   useEffect(() => {
-    if (!definition) return;
-    const scope = `${tenantId}:${userId}:${definition.pageKey}`;
+    if (!definition || !workspaceKey) return;
+    const scope = `${tenantId}:${userId}:${workspaceKey}`;
+    const scopeChanged = scopeRef.current !== scope;
     scopeRef.current = scope;
-    setWorkspace(null);
-    setThreads([]);
-    setActiveThreadId("");
-    setSelectedMergeIds([]);
-    setNotice("");
+    if (scopeChanged) {
+      setWorkspace(null);
+      setThreads([]);
+      setActiveThreadId("");
+      setSelectedMergeIds([]);
+      setNotice("");
+    }
+    const latestContext = latestPageContexts.get(definition.pageKey) || {};
     const workspaceContext: AnalysisWorkspaceContext = {
       pageKey: definition.pageKey,
-      artifactId: stringValue(pageContext.artifact_id ?? pageContext.artifactId) || definition.pageKey,
-      datasetSnapshot: objectValue(pageContext.dataset_snapshot ?? pageContext.datasetSnapshot),
-      metricVersions: metricVersionArray(pageContext.metric_versions ?? pageContext.metricVersions),
-      filters: objectValue(pageContext.filters),
+      artifactId: stringValue(latestContext.artifact_id ?? latestContext.artifactId) || definition.pageKey,
+      datasetSnapshot: objectValue(latestContext.dataset_snapshot ?? latestContext.datasetSnapshot),
+      metricVersions: metricVersionArray(latestContext.metric_versions ?? latestContext.metricVersions),
+      filters: objectValue(latestContext.filters),
       selectedDataPoint,
       allowedActions: ["follow_up", "branch", "merge", "trust", "freeze_report", "rerun"],
-      evidenceRefs: evidenceRefArray(pageContext.evidence_refs ?? pageContext.evidenceRefs),
+      evidenceRefs: evidenceRefArray(latestContext.evidence_refs ?? latestContext.evidenceRefs),
     };
-    ensureAnalysisWorkspace(stringValue(pageContext.workspace_key) || definition.pageKey, workspaceContext, { tenantId, userId })
+    ensureAnalysisWorkspace(workspaceKey, workspaceContext, { tenantId, userId })
       .then(async ({ workspace: created }) => {
         if (scopeRef.current !== scope) return;
         setWorkspace(created);
         const loaded = await fetchAnalysisWorkspace(created.workspace_id, { tenantId, userId });
         if (scopeRef.current !== scope) return;
         setThreads(loaded.threads);
-        setActiveThreadId(loaded.threads.find((thread) => thread.status === "active")?.thread_id || loaded.threads[0]?.thread_id || "");
+        setActiveThreadId((current) => pickActiveThreadId(loaded.threads, current || readStoredThreadId(tenantId, userId, workspaceKey)));
       })
       .catch((error) => {
         if (scopeRef.current === scope) setNotice(apiErrorMessage(error, "分析工作区加载失败。"));
       });
-  }, [definition, tenantId, userId, pageContext]);
+  }, [definition, tenantId, userId, workspaceKey]);
+
+  const openThreads = threads.filter((thread) => thread.status !== "archived");
+  const activeThread = openThreads.find((thread) => thread.thread_id === activeThreadId) || openThreads[0];
+  const activeTurnCount = activeThread?.turns.length || 0;
+
+  useEffect(() => {
+    if (activeThreadId && workspaceKey) writeStoredThreadId(tenantId, userId, workspaceKey, activeThreadId);
+  }, [activeThreadId, tenantId, userId, workspaceKey]);
+
+  useLayoutEffect(() => {
+    const node = transcriptRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [activeThreadId, activeTurnCount, busy]);
+
+  useEffect(() => {
+    if (!tabMenu) return;
+    const dismiss = (event: Event) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-analysis-thread-menu='true']")) return;
+      setTabMenu(null);
+    };
+    window.addEventListener("pointerdown", dismiss, true);
+    return () => window.removeEventListener("pointerdown", dismiss, true);
+  }, [tabMenu]);
 
   if (!definition) return <div className="flex h-full items-center justify-center bg-[#f8f8fa] px-6 text-center text-[11px] leading-5 text-[#8a8a8e]" data-analysis-workspace-unavailable="true">当前页面没有可分析的可视化上下文。<br />仍可切换到总管对话操作页面、查询指标、记忆和 Skill。</div>;
-  const activeThread = threads.find((thread) => thread.thread_id === activeThreadId) || threads[0];
-  const visibleThreads = threads.filter((thread, index) => {
+  const visibleThreads = openThreads.filter((thread, index) => {
     const duplicates = threads.filter((candidate) => candidate.title.trim() === thread.title.trim());
     if (duplicates.length < 2) return true;
     return thread.thread_id === activeThread?.thread_id || (!duplicates.some((candidate) => candidate.thread_id === activeThread?.thread_id) && duplicates[0]?.thread_id === thread.thread_id && index >= 0);
@@ -192,6 +255,7 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
   const effectivePageContext: Record<string, unknown> = {
     ...pageContext,
     visual_analysis_scope: chartFollowUp ? "chart" : "page",
+    analysis_scene_hint: chartFollowUp ? "chart_followup" : "page_rail",
     chart_bound_source: chartFollowUp,
     selected_data_tables: selectedTables,
     dataset_snapshot: chartFollowUp && hasChartSnapshot ? chartSnapshot : pageContext.dataset_snapshot,
@@ -204,6 +268,29 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
     if (!workspace) return;
     const loaded = await fetchAnalysisWorkspace(workspace.workspace_id, { tenantId, userId });
     setThreads(loaded.threads);
+    setActiveThreadId((current) => pickActiveThreadId(loaded.threads, current));
+  };
+
+  const closeThread = async (threadId: string) => {
+    if (openThreads.length <= 1) {
+      setNotice("至少保留一个分析对话。");
+      setTabMenu(null);
+      return;
+    }
+    setBusy(true);
+    try {
+      await archiveAnalysisThread(threadId, { tenantId, userId });
+      const remaining = openThreads.filter((thread) => thread.thread_id !== threadId);
+      if (activeThreadId === threadId) setActiveThreadId(remaining[0]?.thread_id || "");
+      setSelectedMergeIds((current) => current.filter((id) => id !== threadId));
+      setTabMenu(null);
+      await reload();
+      setNotice("已关闭该分析对话。");
+    } catch (error) {
+      setNotice(apiErrorMessage(error, "关闭分析对话失败。"));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const createBranch = async () => {
@@ -221,28 +308,50 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
     }
   };
 
-  const submit = async () => {
-    const prompt = question.trim();
-    if (!prompt || !activeThread || busy) return;
-    if (!selectedTables.length && !chartFollowUp && !parentTaskId && !pageSources.length && definition.pageKey === "self-analysis") {
+  const submit = async (promptOverride?: string, analysisTrigger = "manual") => {
+    const prompt = (promptOverride ?? question).trim();
+    if (!prompt || busy) return;
+    const newChat = parseNewChatCommand(prompt);
+    if (!newChat && !activeThread) return;
+    const missingTables = !selectedTables.length && !chartFollowUp && !parentTaskId && !pageSources.length && definition.pageKey === "self-analysis";
+    if (!newChat && missingTables) {
       setNotice("请先在智能分析主输入区选择当前机构的数据表，再发起线程追问。");
       return;
     }
     setBusy(true);
     setNotice("");
-    setPendingQuestion(prompt);
-    setProgressSteps([{
-      step_code: "request_queued",
-      sequence_no: 0,
-      status: "running",
-      output_refs: [{ label: "理解问题", detail: chartFollowUp ? "正在装载当前图表绑定的数据。" : "正在装载当前页面全部可视化数据。" }],
-    }]);
     waitAbortRef.current?.abort();
     const controller = new AbortController();
     waitAbortRef.current = controller;
+    let thread = activeThread;
+    let analysisPrompt = prompt;
     try {
+      if (newChat) {
+        if (!workspace) return;
+        const { thread: created } = await createAnalysisBranch(workspace.workspace_id, null, nextRootThreadTitle(threads), { command: "new" }, { tenantId, userId });
+        const loaded = await fetchAnalysisWorkspace(workspace.workspace_id, { tenantId, userId });
+        setThreads(loaded.threads);
+        setActiveThreadId(created.thread_id);
+        thread = created;
+        analysisPrompt = newChat.followUp;
+        setQuestion("");
+        setNotice("已保存当前分析记录，并打开新对话。");
+        if (!analysisPrompt) return;
+        if (missingTables) {
+          setNotice("已打开新对话。请先在智能分析主输入区选择当前机构的数据表，再发起追问。");
+          return;
+        }
+      }
+      if (!thread) return;
+      setPendingQuestion(analysisPrompt);
+      setProgressSteps([{
+        step_code: "request_queued",
+        sequence_no: 0,
+        status: "running",
+        output_refs: [{ label: "理解问题", detail: chartFollowUp ? "正在装载当前图表绑定的数据。" : "正在装载当前页面全部可视化数据。" }],
+      }]);
       const result = await waitForSelfAnalysis({
-        question: prompt,
+        question: analysisPrompt,
         tenantId,
         userId,
         requestId: createClientUuid(),
@@ -257,10 +366,13 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
         pageContext: {
           ...effectivePageContext,
           workspace_id: workspace?.workspace_id,
-          thread_id: activeThread.thread_id,
+          thread_id: thread.thread_id,
           page_key: definition.pageKey,
           selected_data_point: chartFollowUp ? selectedDataPoint : undefined,
           model_application_module: "intelligent_analysis_reasoning",
+          analysis_trigger: analysisTrigger,
+          voice_surface: analysisTrigger === "manual" ? undefined : "analysis_rail",
+          realtime_voice_auto_analysis: analysisTrigger === "manual" ? undefined : { silenceMs: 1_000 },
           analysis_skill: objectWithFallback(pageContext.analysis_skill, {
             id: `page-${definition.pageKey}`,
             name: `${definition.title}页面追问`,
@@ -277,12 +389,15 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
               }],
           analysis_policy: {
             engine: "IntelligentAnalysisEngine",
-            resultDelivery: "data_first",
             conflictStrategy: "executed_query_evidence_overrides_page_context",
             detailAnalysisOrder: "selected_table_full_dimensions_metrics_then_related_detail_table",
             missingDetailMessage: "没有更细粒度数据，请关联明细数据",
             ...objectValue(effectivePageContext.analysis_policy),
-            resultFormat: "brief_visual",
+            // The shared rail always uses the canonical plan -> Skill/Memory ->
+            // evidence -> synthesis chain. A page-level legacy policy must not
+            // silently downgrade the unique runtime to the old data-first path.
+            resultDelivery: "planned_analysis",
+            resultFormat: "concise_visual",
           },
         },
       });
@@ -294,7 +409,7 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
       await reload();
     } catch (error) {
       if ((error as { name?: string })?.name === "AbortError") return;
-      setNotice(apiErrorMessage(error, "追问执行失败，已保留现有线程。"));
+      setNotice(apiErrorMessage(error, newChat && !analysisPrompt ? "开启新对话失败。" : "追问执行失败，已保留现有线程。"));
     } finally {
       if (waitAbortRef.current === controller) {
         setBusy(false);
@@ -303,6 +418,7 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
       }
     }
   };
+  submitRef.current = (prompt, trigger) => { void submit(prompt, trigger); };
 
   const mergeSelected = async () => {
     if (!activeThread || !selectedMergeIds.length) return;
@@ -327,7 +443,17 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
             <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" data-analysis-thread-tabs="true">
               <Sparkles className="h-4 w-4 shrink-0 text-[#636366]" aria-hidden="true" />
               {visibleThreads.map((thread) => (
-                <button key={thread.thread_id} type="button" onClick={() => setActiveThreadId(thread.thread_id)} className={`shrink-0 rounded-md px-2 py-1.5 text-[10px] outline-none focus-visible:outline-none ${activeThread?.thread_id === thread.thread_id ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:bg-white"}`}>
+                <button
+                  key={thread.thread_id}
+                  type="button"
+                  onClick={() => setActiveThreadId(thread.thread_id)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    setTabMenu({ threadId: thread.thread_id, left: rect.left, top: rect.bottom + 4 });
+                  }}
+                  className={`shrink-0 rounded-md px-2 py-1.5 text-[10px] outline-none focus-visible:outline-none ${activeThread?.thread_id === thread.thread_id ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:bg-white"}`}
+                >
                   {thread.parent_thread_id ? "分支 · " : ""}{thread.title}{thread.status === "merged" ? " · 已合并" : ""}
                 </button>
               ))}
@@ -335,15 +461,15 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
             <button type="button" onClick={() => void createBranch()} disabled={!activeThread || busy} aria-label="新建分析分支" title="新建分支" className="ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#636366] outline-none hover:bg-white focus-visible:outline-none disabled:opacity-40" data-analysis-branch-create="true"><GitBranch className="h-3.5 w-3.5" /></button>
             <button type="button" onClick={() => onWideChange?.(!wide)} aria-label={wide ? "恢复右栏宽度" : "放大右栏"} title={wide ? "恢复右栏宽度" : "放大右栏"} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#636366] outline-none hover:bg-white focus-visible:outline-none" data-global-analysis-wide-toggle="true">{wide ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}</button>
           </div>
-          <div className="flex-1 overflow-y-auto bg-[#f8f8fa] p-2.5">
-            {!activeThread?.turns.length && !busy ? <div className="rounded-lg border border-dashed border-[#d9d9de] bg-white px-4 py-8 text-center text-[11px] leading-5 text-[#8a8a8e]">{chartFollowUp ? `基于“${analysisTitle}”继续追问、拆解或验证。` : pageSources.length ? `基于当前页面 ${pageSources.length} 个可视化继续分析。` : definition.prompt}</div> : null}
+          <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[#f8f8fa] p-2.5" data-workspace-transcript="true">
+            {!activeThread?.turns.length && !busy ? <div className="rounded-lg border border-dashed border-[#d9d9de] bg-white px-4 py-8 text-center text-[11px] leading-5 text-[#8a8a8e]">{chartFollowUp ? `基于“${analysisTitle}”继续追问、拆解或验证。` : pageSources.length ? `基于当前页面 ${pageSources.length} 个可视化继续分析。` : definition.prompt} 输入 /new 可保存当前记录并开启新对话。</div> : null}
             <div className="space-y-2">
-              {activeThread?.turns.map((turn) => <div key={turn.turn_id} className="rounded-lg border border-[#ececf0] bg-white p-3" data-workspace-follow-up-turn="true"><div className="text-[11px] text-[#1d1d1f]">{turn.question}</div><WorkspaceFollowUpChart visual={followUpVisualFromRefs(turn.artifact_refs)} /><div className="mt-2 whitespace-pre-wrap text-[11px] leading-5 text-[#636366]">{turn.answer || "本轮仅返回部分数据，结论尚未完成。"}</div><TrustedArtifactPanel taskId={String(turn.execution_plan.task_id || "")} compact /></div>)}
+              {activeThread?.turns.map((turn, index) => <div key={turn.turn_id} className="rounded-lg border border-[#ececf0] bg-white p-3" data-workspace-follow-up-turn="true" data-latest-workspace-turn={index === (activeThread.turns.length - 1) ? "true" : undefined}><div className="text-[11px] text-[#1d1d1f]">{turn.question}</div><WorkspaceFollowUpChart visual={followUpVisualFromRefs(turn.artifact_refs)} /><div className="mt-2 whitespace-pre-wrap text-[11px] leading-5 text-[#636366]">{turn.answer || "本轮仅返回部分数据，结论尚未完成。"}</div><TrustedArtifactPanel taskId={String(turn.execution_plan.task_id || "")} compact /></div>)}
               {busy ? <div className="rounded-lg border border-[#ececf0] bg-white p-3" data-workspace-follow-up-thinking="true"><div className="text-[11px] text-[#1d1d1f]">{pendingQuestion || question}</div><div className="mt-2"><AnalysisProgressPanel embedded compact steps={progressSteps} running={busy} hasResult={false} /></div></div> : null}
             </div>
             {notice ? <div className="mt-2 rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[10px] text-[#636366]">{notice}</div> : null}
           </div>
-          <div className="shrink-0 border-t border-[#ececf0] bg-white p-2" data-analysis-workspace-composer="true">
+          <div className="relative z-20 shrink-0 border-t border-[#ececf0] bg-white p-2" data-analysis-workspace-composer="true">
             {visibleThreads.some((thread) => thread.parent_thread_id && thread.status === "active" && thread.thread_id !== activeThread?.thread_id) ? (
               <div className="mb-2 flex items-center gap-1.5">
                 {visibleThreads.filter((thread) => thread.parent_thread_id && thread.status === "active" && thread.thread_id !== activeThread?.thread_id).map((thread) => <label key={thread.thread_id} className="flex h-7 items-center gap-1 rounded-md border border-[#e5e5ea] px-2 text-[9px] text-[#636366]"><input type="checkbox" checked={selectedMergeIds.includes(thread.thread_id)} onChange={(event) => setSelectedMergeIds((current) => event.target.checked ? [...current, thread.thread_id] : current.filter((id) => id !== thread.thread_id))} />{thread.title}</label>)}
@@ -351,12 +477,69 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
               </div>
             ) : null}
             <div className="flex items-end gap-2 rounded-lg border border-[#d9d9de] bg-white px-2.5 py-1.5 focus-within:border-[#8a8a8e]">
-              <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} rows={2} placeholder={chartFollowUp ? "基于当前图表继续追问…" : "基于当前页面全部可视化继续分析…"} className="min-h-[36px] flex-1 resize-none bg-transparent text-[11px] leading-5 text-[#1d1d1f] outline-none placeholder:text-[#aeaeb2]" />
-              <button type="button" onClick={() => void submit()} disabled={!question.trim() || busy || !activeThread} className="flex h-7 w-7 items-center justify-center rounded-full bg-[#1d1d1f] text-white disabled:bg-[#d1d1d6]" aria-label="提交追问">{busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}</button>
+              <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} rows={2} placeholder={chartFollowUp ? "基于当前图表继续追问，或输入 /new…" : "基于当前页面继续分析，或输入 /new…"} className="min-h-[36px] flex-1 resize-none bg-transparent text-[11px] leading-5 text-[#1d1d1f] outline-none placeholder:text-[#aeaeb2]" />
+              <button type="button" onClick={popupVoice.toggle} disabled={busy || realtimeVoice.listening} className={`flex h-7 w-7 items-center justify-center rounded-full disabled:opacity-40 ${popupVoice.listening ? "bg-[#e8f6ee] text-[#178a53]" : "text-[#636366] hover:bg-[#f2f2f7]"}`} aria-label={popupVoice.listening ? "停止语音录入" : "语音录入"} title="语音录入，停顿 1 秒自动提交" data-analysis-popup-voice="true"><Mic className={`h-3.5 w-3.5 ${popupVoice.listening ? "animate-pulse" : ""}`} /></button>
+              <button type="button" onClick={realtimeVoice.toggle} disabled={busy || popupVoice.listening} className={`flex h-7 w-7 items-center justify-center rounded-full disabled:opacity-40 ${realtimeVoice.listening ? "bg-[#e8f6ee] text-[#178a53]" : "text-[#636366] hover:bg-[#f2f2f7]"}`} aria-label={realtimeVoice.listening ? "停止实时语音输入" : "实时语音输入"} title="实时语音输入，停顿 1 秒自动提交" data-analysis-realtime-voice="true"><AudioLines className={`h-3.5 w-3.5 ${realtimeVoice.listening ? "animate-pulse" : ""}`} /></button>
+              <button type="button" onClick={() => void submit()} disabled={!question.trim() || busy || (!activeThread && !parseNewChatCommand(question.trim()))} className="flex h-7 w-7 items-center justify-center rounded-full bg-[#1d1d1f] text-white disabled:bg-[#d1d1d6]" aria-label="提交追问">{busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}</button>
             </div>
+            {popupVoice.error || realtimeVoice.error ? <div className="mt-1 px-1 text-[9px] text-[#d93025]" role="status">{popupVoice.error || realtimeVoice.error}</div> : null}
           </div>
+          {tabMenu ? (
+            <div
+              className="fixed z-[120] min-w-[84px] rounded-lg border border-[#e5e5ea] bg-white py-1 shadow-lg shadow-black/10"
+              style={{ left: tabMenu.left, top: tabMenu.top }}
+              data-analysis-thread-menu="true"
+            >
+              <button
+                type="button"
+                disabled={busy || openThreads.length <= 1}
+                onClick={() => void closeThread(tabMenu.threadId)}
+                className="flex w-full items-center px-3 py-1.5 text-left text-[11px] text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:text-[#aeaeb2]"
+              >关闭</button>
+            </div>
+          ) : null}
         </section>
   );
+}
+
+function parseNewChatCommand(prompt: string) {
+  const match = prompt.match(/^\/new(?:\s+([\s\S]*))?$/i);
+  return match ? { followUp: (match[1] || "").trim() } : null;
+}
+
+function nextRootThreadTitle(threads: AnalysisThread[]) {
+  const used = new Set(threads.map((thread) => thread.title.trim()));
+  if (!used.has("新分析")) return "新分析";
+  let index = 2;
+  while (used.has(`新分析 ${index}`)) index += 1;
+  return `新分析 ${index}`;
+}
+
+function threadStorageKey(tenantId: string, userId: string, workspaceKey: string) {
+  return `sda:analysis-workspace:active-thread:v1:${tenantId}:${userId}:${workspaceKey}`;
+}
+
+function readStoredThreadId(tenantId: string, userId: string, workspaceKey: string) {
+  try {
+    return window.sessionStorage.getItem(threadStorageKey(tenantId, userId, workspaceKey))?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+
+function writeStoredThreadId(tenantId: string, userId: string, workspaceKey: string, threadId: string) {
+  try {
+    window.sessionStorage.setItem(threadStorageKey(tenantId, userId, workspaceKey), threadId);
+  } catch {
+    // Storage quota must not block analysis.
+  }
+}
+
+function pickActiveThreadId(threads: AnalysisThread[], preferred: string) {
+  const open = threads.filter((thread) => thread.status !== "archived");
+  if (preferred && open.some((thread) => thread.thread_id === preferred)) return preferred;
+  const latestWithTurns = [...open].reverse().find((thread) => thread.status === "active" && thread.turns.length);
+  return latestWithTurns?.thread_id || open.find((thread) => thread.status === "active")?.thread_id || open[0]?.thread_id || "";
 }
 
 function isChartBoundDataPoint(selectedDataPoint: SelectedDataPoint | undefined) {

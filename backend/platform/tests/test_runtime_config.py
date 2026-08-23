@@ -10,32 +10,18 @@ from backend.platform.security import AuthenticationError, make_session_token, r
 
 
 class RuntimeConfigTest(unittest.TestCase):
-    def test_staging_development_login_requires_an_explicit_password(self) -> None:
+    def test_staging_development_login_does_not_require_a_shared_env_password(self) -> None:
         with patch.dict(
             "os.environ",
             {
                 "SMART_DATA_AGENT_ENV": "staging",
                 "SMART_DATA_AGENT_AUTH_MODE": "development",
-            },
-            clear=True,
-        ):
-            with self.assertRaisesRegex(
-                RuntimeConfigurationError,
-                "SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD is required",
-            ):
-                load_runtime_config()
-
-        with patch.dict(
-            "os.environ",
-            {
-                "SMART_DATA_AGENT_ENV": "staging",
-                "SMART_DATA_AGENT_AUTH_MODE": "development",
-                "SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD": "test-only-explicit-login-secret",
             },
             clear=True,
         ):
             config = load_runtime_config()
         self.assertEqual(config.environment, "staging")
+        self.assertEqual(config.auth_mode, "development")
 
     def test_insecure_production_profile_fails_closed(self) -> None:
         with patch.dict(

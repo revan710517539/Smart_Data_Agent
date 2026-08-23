@@ -13,6 +13,37 @@ from backend.platform.tests.governed_warehouse import attach_governed_test_wareh
 
 
 class IntelligentAnalysisPipelineTest(unittest.TestCase):
+    def test_user_visible_conclusions_use_nested_chinese_field_labels(self) -> None:
+        request = IntelligentAnalysisRequest(
+            question="分析审批阶段数量和渠道差异",
+            tenant_id="tenant_demo",
+            user_id="u_super_admin",
+            analysis_plan={
+                "metrics": ["approval_stage_count", "channel_gap_value"],
+                "dimensions": ["branch_name"],
+            },
+            query_result={
+                "data": [
+                    {"branch_name": "华东分行", "approval_stage_count": 12, "channel_gap_value": 3},
+                    {"branch_name": "华南分行", "approval_stage_count": 8, "channel_gap_value": 1},
+                ],
+                "semantic_info": {
+                    "schema_mapping": {
+                        "metrics": ["approval_stage_count", "channel_gap_value"],
+                        "dimensions": ["branch_name"],
+                        "field_labels": {"approval_stage_count": "审批阶段数量", "branch_name": "机构"},
+                    }
+                },
+            },
+        )
+        result = IntelligentAnalysisEngine().analyze(request, {"visualization_suggestions": []})
+        visible = "\n".join([result["analysis_summary"], *result["possible_conclusions"]])
+        self.assertIn("审批阶段数量", visible)
+        self.assertIn("渠道差异数值", visible)
+        self.assertNotIn("approval_stage_count", visible)
+        self.assertNotIn("channel_gap_value", visible)
+        self.assertNotIn("branch_name", visible)
+
     def test_invalid_planning_json_retries_with_compact_prompt(self) -> None:
         valid = json.dumps({
             "metrics": ["loan_amount"], "dimensions": ["branch_name"], "limit": 10,
@@ -406,6 +437,116 @@ class IntelligentAnalysisPipelineTest(unittest.TestCase):
         self.assertIn("snap_page_evidence", prompt)
         self.assertIn("业务漏斗页面追问", prompt)
         self.assertIn("实际执行证据", prompt)
+
+    def test_chart_rail_uses_unique_planned_runtime_even_with_full_page_skill(self) -> None:
+        planning_json = json.dumps(
+            {
+                "metrics": ["stage_count"],
+                "dimensions": ["branch_name", "product_line", "stage_name", "stage_order", "stat_date"],
+                "limit": 50,
+                "sort_direction": "desc",
+                "sql": (
+                    "SELECT branch_name, product_line, stage_name, stage_order, stat_date, stage_count "
+                    "FROM funnel_operation_fact WHERE tenant_id = :tenant_id"
+                ),
+                "data_processing_python": "def process_data(data, context):\n    return {\"rows\": data, \"quality\": {}}\n",
+                "visualization_python": "def build_chart(data, context):\n    return {\"type\": \"bar\", \"series\": data}\n",
+                "analysis_approach": ["先看漏斗总体规模", "再定位阶段断点", "最后说明证据边界"],
+                "metric_scenarios": [],
+                "visualization_suggestions": [
+                    {
+                        "type": "column",
+                        "title": "漏斗总体与阶段变化",
+                        "dimension": "stage_name",
+                        "metric": "stage_count",
+                        "purpose": "从总体到阶段定位断点",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+        repeated = "stage_count 显示完件到授信阶段下降，ev_raw_001 仅能说明当前漏斗相关关系。"
+        final_json = json.dumps(
+            {
+                "analysis_summary": (
+                    "stage_count 显示完件到授信阶段下降。stage_count 显示完件到授信阶段下降。"
+                    "SELECT * FROM funnel_operation_fact。建议复核产品和机构结构。"
+                ),
+                "conclusions": [repeated, repeated],
+                "metric_findings": [
+                    {
+                        "metric": "stage_count",
+                        "observed": "stage_count 下降",
+                        "interpretation": "需按机构和产品继续拆解",
+                        "evidence": "ev_raw_001",
+                    }
+                ],
+                "visualization_suggestions": [
+                    {
+                        "type": "column",
+                        "title": "stage_count 总体变化",
+                        "dimension": "stage_name",
+                        "metric": "stage_count",
+                        "purpose": "stage_count 从总到分分析",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+        page_context = {
+            "route": "funnel",
+            "page_key": "funnel",
+            "analysis_scene_hint": "chart_followup",
+            "visual_analysis_scope": "chart",
+            "chart_bound_source": True,
+            "filters": {"branch_name": "上海分行", "product_line": "经营贷"},
+            "analysis_plan_hint": {
+                "dataset_id": "funnel_operation_mart",
+                "metrics": ["stage_count"],
+                "dimensions": ["branch_name", "product_line", "stage_name", "stage_order", "stat_date"],
+                "chart_types": ["column", "table"],
+            },
+            "model_application_module": "intelligent_analysis_reasoning",
+            "analysis_skill": {"id": "scene-weekly-report"},
+            "analysis_context_skills": [{"id": "scene-weekly-report"}, {"id": "page-funnel"}],
+            "analysis_policy": {"resultDelivery": "planned_analysis", "resultFormat": "concise_visual"},
+        }
+        with patch(
+            "backend.platform.intelligent_analysis.engine.call_model_text_completion",
+            side_effect=[
+                {"status": "connected", "model_id": "model_two_stage", "response_text": planning_json},
+                {"status": "connected", "model_id": "model_two_stage", "response_text": final_json},
+            ],
+        ) as completion:
+            response = run_analysis(
+                self.services,
+                user_id="u_super_admin",
+                tenant_id="tenant_demo",
+                question="为什么当前漏斗从完件到授信下降",
+                page_context=page_context,
+            )
+
+        self.assertEqual(completion.call_count, 2)
+        intelligent = response["intelligent_analysis"]
+        self.assertEqual(intelligent["planning_invocation"]["status"], "connected")
+        self.assertEqual(intelligent["model_invocation"]["status"], "connected")
+        chain = intelligent["runtime_chain"]
+        self.assertEqual(chain["engine"], "IntelligentAnalysisEngine")
+        self.assertEqual(chain["dataset_scope"], "chart")
+        self.assertEqual(
+            [stage["code"] for stage in chain["stages"]],
+            ["scene_intent", "analysis_plan", "skill_dispatch", "memory_fusion", "evidence_query", "result_synthesis"],
+        )
+        dispatched = chain["stages"][2]["skill_ids"]
+        self.assertIn("scene-weekly-report", dispatched)
+        self.assertIn("scene-chart-followup", dispatched)
+        self.assertIn("topic-attribution", dispatched)
+        user_text = "\n".join([intelligent["analysis_summary"], *intelligent["possible_conclusions"]])
+        self.assertNotIn("stage_count", user_text)
+        self.assertNotIn("SELECT", user_text.upper())
+        self.assertNotIn("ev_raw_001", user_text)
+        self.assertLessEqual(len(intelligent["analysis_summary"]), 360)
+        self.assertEqual(len(intelligent["possible_conclusions"]), 1)
 
     def test_surface_context_and_reviewed_memories_are_bounded_into_model_prompt(self) -> None:
         request = IntelligentAnalysisRequest(

@@ -2,6 +2,7 @@ import type { PageDataAsset, PageDataInstitutionScope, PageDataPageCode } from "
 
 export function pageDataScope(asset: PageDataAsset): PageDataInstitutionScope {
   if (asset.institutionScope) return asset.institutionScope;
+  if (asset.targetPages.length === 1 && asset.targetPages[0] === "customer_segment_analysis") return "customer_segment";
   return asset.targetPages.length === 1 && asset.targetPages[0] === "dashboard" ? "multi_institution" : "single_institution";
 }
 
@@ -15,6 +16,9 @@ export function pageDataBelongsToPage(asset: PageDataAsset, pageCode: PageDataPa
   const scope = pageDataScope(asset);
   if (pageCode === "dashboard") {
     return scope === "multi_institution" && asset.targetPages.includes("dashboard");
+  }
+  if (pageCode === "customer_segment_analysis") {
+    return scope === "customer_segment" && asset.targetPages.includes("customer_segment_analysis");
   }
   if (pageCode !== "weekly_report" && pageCode !== "institution_supervision") {
     return false;

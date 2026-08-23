@@ -25,7 +25,7 @@ class ModelApplicationModuleTest(unittest.TestCase):
             "status": "available",
         }
 
-    def test_saved_model_is_selectable_without_connectivity_test(self) -> None:
+    def test_saved_model_is_not_selectable_without_connectivity_test(self) -> None:
         store = InMemorySystemConfigStore()
         store.upsert_model(
             "tenant_demo",
@@ -43,7 +43,24 @@ class ModelApplicationModuleTest(unittest.TestCase):
 
         models = list_models_for_application(store, "tenant_demo", "intelligent_analysis_reasoning")
 
-        self.assertEqual([model["id"] for model in models], ["model_untested"])
+        self.assertEqual(models, [])
+
+    def test_connected_model_is_not_selectable_until_one_actual_submodel_is_enabled(self) -> None:
+        store = InMemorySystemConfigStore()
+        model = self._model("model_disabled", "已连接但未启用", "global_text_model")
+        model["availableModels"] = ["analysis-model", "analysis-model-v2"]
+        model["enabledModels"] = []
+        store.upsert_model(account_system_config_scope("u_admin"), model, updated_by="u_admin")
+
+        self.assertEqual(
+            list_models_for_application(
+                store,
+                "tenant_demo",
+                "intelligent_analysis_reasoning",
+                user_id="u_admin",
+            ),
+            [],
+        )
 
     def test_authenticated_account_scope_does_not_fall_back_to_tenant_binding(self) -> None:
         store = InMemorySystemConfigStore()
@@ -126,7 +143,7 @@ class ModelApplicationModuleTest(unittest.TestCase):
             [],
         )
 
-    def test_system_default_relay_remains_routable_after_local_connectivity_failure(self) -> None:
+    def test_system_default_relay_is_not_routable_after_first_connectivity_failure(self) -> None:
         store = InMemorySystemConfigStore()
         failed_default = self._model(
             "model_default_intelligent_analysis_relay",
@@ -138,13 +155,13 @@ class ModelApplicationModuleTest(unittest.TestCase):
         store.upsert_model(account_system_config_scope("u_admin"), failed_default)
 
         self.assertEqual(
-            [item["id"] for item in list_models_for_application(
+            list_models_for_application(
                 store,
                 "tenant_demo",
                 "automatic_analysis",
                 user_id="u_admin",
-            )],
-            ["model_default_intelligent_analysis_relay"],
+            ),
+            [],
         )
 
     def test_account_global_text_model_routes_to_every_non_voice_module_only(self) -> None:

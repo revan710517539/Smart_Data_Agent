@@ -1,103 +1,130 @@
-# Smart Data Agent 服务器 MySQL 部署契约
+# Smart Data Agent 生产服务器部署契约
 
-## 边界
+## 不变边界
 
-本契约只调整 SDA 镜像、挂载、依赖和启动验收，不修改服务器 MySQL 的监听、
-端口、账号授权或数据，也不写入宿主机业务目录。
+- 目标主库是 MySQL 8.0.18；禁止修改 migration ledger checksum。
+- Data Crawler 宿主机目录固定为
+  `/opt/palywright/examples/data-crawler/runtime-data`，在 SDA 内只读挂载为
+  `/app/data`；容器内 `SMART_DATA_AGENT_DATA_CRAWLER_ROOT=/app/data`。SDA 不修改
+  Crawler 源码、容器和源数据。
+- 原始数据不进入镜像；`/app/runtime` 与 `/app/Topic_Data` 使用 SDA 独立持久卷。
+- 生产仅接受严格 OIDC、Redis TLS、KMS、S3/OSS、ClamAV 和显式 egress allowlist。
+- 任何 Skill/Memory 候选仍需人工审批；部署本身不等于激活。
 
-- MySQL 是宿主机原生 MySQL 8.x，SDA 容器通过现有 Docker 默认 bridge 访问。
-- 宿主机 `/opt/smart-data-agent/src/app/data` 原样只读挂载到容器 `/app/data`。
-- `/app/data/<机构名>` 是唯一原始机构目录；不存在机构文件夹时返回空目录，
-  不回退到 `Origin_Data`、测试数据、首个机构或其他租户。
-- `/app/Topic_Data` 是 SDA 自己生成的数据，使用独立持久卷。
-- `/app/runtime` 保存附件和非结构化运行状态，使用独立持久卷。
-- Compose 将 `SMART_DATA_AGENT_DATA_CRAWLER_ROOT` 固定为 `/app/data`，不允许
-  通过容器环境回退到本机开发目录。
-- 本机 `Origin_Data`、`Topic_Data`、`runtime`、`.git` 和测试样例不会进入
-  Docker 构建上下文，也不会随镜像上传。
+## 版本与配置
 
-## 受控业务数据
+1. 从干净工作树的完整 40 位 Git SHA 构建镜像：
 
-仓库中的 `src/app/data/business-data-manifest.json` 是本次可部署业务 CSV 的
-唯一清单。清单内文件均位于 `src/app/data/<机构名>/`，Git 克隆到默认宿主机
-路径后会通过只读挂载直接呈现在 `/app/data/<机构名>/`。这些机构目录被
-`.dockerignore` 排除，不进入应用镜像或远程构建缓存；未列入清单的账号、会话、
-运行记录、截图、SQL 历史、原始查询目录和生成分析数据不得随发布复制。
+   ```bash
+   ./scripts/build-image.sh <40位SHA>
+   ```
 
-部署前必须运行 `python3 scripts/check_server_deployment_contract.py`。检查会回读
-每个清单文件的 SHA-256、行列数、直接标识字段和跨机构关系组的公共字段，确保
-华兴银行与兰州银行用于表关系的汇总表能够被同一挂载目录发现。更新业务 CSV
-时应同步更新清单；不得只替换文件而跳过校验。
+2. 将 `.env.production.example` 复制为受保护的 `.env.production`，只在部署平台
+   Secret 区填真实值。不得把数据库、OIDC、模型、对象存储或 KMS 凭据写入 Git、
+   日志和聊天。
+3. `SMART_DATA_AGENT_IMAGE` 必须是精确 SHA tag；Dockerfile 的 OCI revision label
+   必须与 tag、待发布 Commit 一致。
 
-## 必需的受保护环境变量
+## 发布前门禁
 
-在 Dokploy 的 Secret/受保护环境变量中设置，不要写入 Git、镜像、Compose
-明文或聊天：
+CI 或生产等价候选必须提供 MySQL 8.0.18，并运行：
+
+```bash
+./scripts/release-gate.sh
+./scripts/check-mysql-closure.sh
+docker compose --env-file .env.production -f docker-compose.server.yml config --quiet
+```
+
+门禁核验源码、wheel/site-packages、镜像 SQL 闭包，前端预压缩资源、组件尺寸、
+完整后端测试和真实浏览器本地认证合同。已发布 migration 只能追加，
+`configs/deployment/mysql-migration-checksums.json` 必须与仓库 SQL 一致。
+
+## 候选拓扑与启动顺序
+
+生产 Compose 只使用同一精确 SHA 镜像，按以下顺序启动：
 
 ```text
-SMART_DATA_AGENT_AUTH_SECRET=<至少 32 字符的随机值>
-SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD=<内部登录密码>
-SMART_DATA_AGENT_CORS_ORIGINS=https://<SDA 对外域名>
-SMART_DATA_AGENT_DATABASE_URL=mysql+pymysql://sda_app:<URL编码密码>@172.17.0.1:3306/smart_data_agent?ssl_mode=verify_ca&ssl_ca=/run/secrets/mysql_ca.pem
+migration（一次性、成功后退出）
+  └─ capabilities（一次性；准备基础 Skill 与待审机构 Skill/Memory）
+       └─ worker（独立进程，写共享心跳）
+            └─ api（ASGI；读取 Worker 心跳进入 readiness）
 ```
 
-数据库密码若包含 `@`、`:`、`/`、`#` 等字符必须进行 URL 编码。Compose 默认
-只读挂载宿主机 `/var/lib/mysql80/ca.pem` 到
-`/run/secrets/mysql_ca.pem`；不得挂载或暴露 MySQL 服务端私钥。
-
-## 构建前检查
+API 和 Worker 均固定 `SMART_DATA_AGENT_AUTO_MIGRATE=false`。migration job 使用
+命名锁、checksum 和 append-only ledger；失败时 API/Worker 不启动。
 
 ```bash
-python3 scripts/check_server_deployment_contract.py
-docker compose -f docker-compose.server.yml config --quiet
+docker compose --env-file .env.production -f docker-compose.server.yml up migration
 ```
 
-第二条命令只解析配置；缺少任一必需 Secret 时应立即失败。它不连接或修改
-MySQL，也不读取业务文件内容。
-
-## 数据库分支
-
-只允许二选一：
-
-1. 已迁移正式 MySQL：完整保留 `platform_schema_migrations` 和所有获批正式
-   机构行，排除测试/demo 租户和样例行。导入后先核对迁移 checksum、租户、
-   超管、表数和各表行数，再启动 SDA；不要再次执行初始化。
-2. 目标库仍为空：先显式创建 schema、正式机构、系统身份和 RBAC。每个批准的
-   正式机构执行一次下面的幂等命令；它不创建演示业务数据、模型密钥或数据源密钥。
+首次空库在 migration 成功后、API 切流前，按已批准机构显式运行：
 
 ```bash
-docker compose -f docker-compose.server.yml run --rm smart-data-agent \
-  python scripts/provision_production.py \
-  --tenant-slug "<机构名>" \
-  --tenant-name "<机构名>" \
+docker compose --env-file .env.production -f docker-compose.server.yml run --rm migration \
+  python /app/scripts/provision_production.py --skip-schema \
+  --tenant-slug "<机构规范名称>" --tenant-name "<机构显示名>" \
   --super-admin-subject u_super_admin \
-  --super-admin-email "xujingbo-jk@qifu.com" \
-  --super-admin-name "胥京波"
+  --super-admin-email "<已批准邮箱>" --super-admin-name "<已批准姓名>"
 ```
 
-登录密码不保存在 MySQL 用户档案表中；内部单实例登录读取受保护环境变量
-`SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD`。此前通过聊天传递过的密码应在
-上线前轮换后再注入。
+本项目现有 11 家机构能力包以既有 canonical ID（例如 `tenant:华兴银行`）为
+外键，首次生产建租户必须与 `configs/analysis/institution_analysis_profiles.json`
+逐项一致；不得由前端或显示名称临时推导另一个 ID。登录、恢复、refresh 和切机构
+均使用后端 `tenant_directory`。
 
-## 启动与验收
+所有租户建好后再运行能力准备并启动长期进程：
 
 ```bash
-docker compose -f docker-compose.server.yml up -d --build
-curl -fsS http://127.0.0.1:8787/api/live
-curl -fsS http://127.0.0.1:8787/api/ready
+docker compose --env-file .env.production -f docker-compose.server.yml up capabilities
+docker compose --env-file .env.production -f docker-compose.server.yml up -d worker api
+./scripts/candidate-smoke.sh http://127.0.0.1:8787
 ```
 
-验收必须同时满足：
+`capabilities` 只激活 7 条平台基础场景/方法 Skill；33 条机构覆盖 Skill 保持
+`review`，110 条机构 Memory 保持 `candidate`，不会绕过四眼审批。API 与 Worker
+启动时只验证这组能力，不再并发写入。
 
-- 镜像构建成功，容器使用 MySQL 主库且 readiness 的 database 为 ready。
-- database 的角色数和用户数不为零，超级管理员可登录并保持全局身份。
-- `/app/data` 可读取且为只读挂载；空目录只显示空机构目录，不导致容器退出。
-- `/app/Topic_Data` 和 `/app/runtime` 可写并在重建容器后保留。
-- worker 为 ready；MySQL、挂载、权限或 Secret 缺失时返回明确失败，不能使用
-  Mock、SQLite、默认机构或跨租户数据掩盖错误。
+## Data Crawler 合同
 
-## 回滚
+挂载根目录必须包含 `manifest.json`，schema 为
+`smart-data-crawler-manifest/v1`。每个租户条目必须包含 canonical `tenant_id`、
+`institution_directory`、租户 schema 版本、文件相对路径和 SHA-256、生成时间。
 
-回滚只切回上一版镜像/Compose，并保留 MySQL、`/opt/smart-data-agent/src/app/data`
-以及两个持久卷。不要为代码回滚清空数据库或删除机构/Topic_Data 文件。若本次
-执行过数据库导入，数据库恢复必须使用上线前单独验证过的备份，不与容器回滚混做。
+```bash
+docker compose --env-file .env.production -f docker-compose.server.yml exec api \
+  ./scripts/data-crawler-contract-smoke.sh
+```
+
+生产不再按中文名称猜目录。`/api/data-assets` 的 `source.csv_source` 会返回
+`contract_status`、`contract_error`、tenant、目录、manifest/schema 版本和生成时间，
+并区分 manifest 缺失、映射缺失、schema 不兼容、文件缺失/checksum 不符和无文件。
+
+## 认证与模型链验收
+
+用已完成候选 OIDC 登录的专用 Chrome profile 运行：
+
+```bash
+SMART_DATA_AGENT_AUTH_E2E_URL=https://candidate.example \
+SMART_DATA_AGENT_AUTH_E2E_CHROME_PROFILE=/protected/sda-candidate-profile \
+./scripts/auth-e2e.sh
+```
+
+该门禁在真实浏览器中验证 `/api/auth/me` canonical tenant 目录、cookie-only 与
+canonical header 导航、代表性 `/api/data-assets`、切机构、单次 refresh、刷新后
+业务请求，并拒绝任何 401/429 风暴。
+
+模型在“模型接入”中保存后先为 draft/untested；真实连接测试成功并启用至少一个
+provider 返回的子模型后才进入分析运行时。测试失败或未测试的模型不会被智能分析、
+周报重生成、自动分析、Memory/Skill 运行时选择。API Key 只以加密密文保存，HTTP
+读取仅返回掩码。完整页面、场景、Skill 调度和表达契约见
+`docs/production_model_skill_runtime.md`。
+
+## 切换、证据与回滚
+
+切换前保存：脱敏 `docker inspect`、镜像 ID/Commit、migration ledger、数据库备份/
+恢复点、runtime/topic 卷备份、Crawler mount 盘点、公网 readiness、SHA256SUMS 和
+浏览器验收结果。旧容器停止但保留，作为代码回滚单元。
+
+回滚只切回上一精确 SHA 镜像和 Compose；不要清空数据库、删除 ledger、更新
+checksum 或改 Crawler 数据。若新 migration 已执行，数据库回退只使用上线前已验证
+恢复点，并与容器回滚分别留痕、审批和验收。

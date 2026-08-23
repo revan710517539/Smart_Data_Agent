@@ -11,8 +11,25 @@ import {
   type FunAsrProxyEvent,
 } from "../self-analysis/domain";
 
-export function useVisualizationVoiceCommand(onCommand: (command: string) => void) {
+type VoiceApplicationModule = "realtime_voice_input" | "popup_voice_input";
+
+type VisualizationVoiceOptions = {
+  applicationModule?: VoiceApplicationModule;
+  contextText?: string;
+  silenceMs?: number;
+  stopAfterCommand?: boolean;
+};
+
+export function useVisualizationVoiceCommand(
+  onCommand: (command: string) => void,
+  onTranscript?: (text: string) => void,
+  options: VisualizationVoiceOptions = {},
+) {
   const { tenantId, userId } = usePlatformContext();
+  const applicationModule = options.applicationModule || "realtime_voice_input";
+  const contextText = options.contextText || "可视化样式、指标与维度配置";
+  const silenceMs = Math.max(250, Number(options.silenceMs || 1_000));
+  const stopAfterCommand = Boolean(options.stopAfterCommand);
   const [listening, setListening] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [error, setError] = useState("");
@@ -26,6 +43,10 @@ export function useVisualizationVoiceCommand(onCommand: (command: string) => voi
   const draftRef = useRef("");
   const silenceTimerRef = useRef<number | null>(null);
   const lastDispatchedRef = useRef("");
+  const onCommandRef = useRef(onCommand);
+  const onTranscriptRef = useRef(onTranscript);
+  onCommandRef.current = onCommand;
+  onTranscriptRef.current = onTranscript;
 
   const clearSilenceTimer = () => {
     if (silenceTimerRef.current !== null) window.clearTimeout(silenceTimerRef.current);
@@ -38,12 +59,13 @@ export function useVisualizationVoiceCommand(onCommand: (command: string) => voi
       const command = normalizeVoiceSegment(`${finalRef.current} ${draftRef.current}`);
       if (command && command !== lastDispatchedRef.current) {
         lastDispatchedRef.current = command;
-        onCommand(command);
+        onCommandRef.current(command);
+        if (stopAfterCommand) stop();
       }
       finalRef.current = "";
       draftRef.current = "";
       setTranscript("");
-    }, 1_000);
+    }, silenceMs);
   };
 
   const cleanup = () => {
@@ -76,7 +98,7 @@ export function useVisualizationVoiceCommand(onCommand: (command: string) => voi
     draftRef.current = "";
     lastDispatchedRef.current = "";
     try {
-      const runtime = await fetchAnalysisRuntimeConfig({ tenantId, userId, speechApplicationModule: "realtime_voice_input" });
+      const runtime = await fetchAnalysisRuntimeConfig({ tenantId, userId, speechApplicationModule: applicationModule });
       if (!runtime.speechIntegration) throw new Error("当前机构未启用实时语音配置");
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持麦克风采集");
       const AudioContextConstructor = getAudioContextConstructor();
@@ -86,15 +108,15 @@ export function useVisualizationVoiceCommand(onCommand: (command: string) => voi
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       if (!activeRef.current) { stream.getTracks().forEach((track) => track.stop()); return; }
       streamRef.current = stream;
-      const socket = new WebSocket(buildFunAsrRealtimeUrl(tenantId, userId, "realtime_voice_input"));
+      const socket = new WebSocket(buildFunAsrRealtimeUrl(tenantId, userId, applicationModule));
       socketRef.current = socket;
       socket.onopen = () => socket.send(JSON.stringify({
         type: "start",
         provider: "aliyun_fun_asr",
         speechIntegrationId: runtime.speechIntegration!.id,
-        applicationModule: "realtime_voice_input",
+        applicationModule,
         sampleRate: funAsrSampleRate,
-        context: [{ role: "user", content: [{ type: "input_text", text: "可视化样式、指标与维度配置" }] }],
+        context: [{ role: "user", content: [{ type: "input_text", text: contextText }] }],
       }));
       socket.onmessage = (event) => {
         let payload: FunAsrProxyEvent;
@@ -122,6 +144,7 @@ export function useVisualizationVoiceCommand(onCommand: (command: string) => voi
           } else draftRef.current = text;
           const next = normalizeVoiceSegment(`${finalRef.current} ${draftRef.current}`);
           setTranscript(next);
+          onTranscriptRef.current?.(next);
           scheduleCommand();
         } else if (payload.type === "error") {
           setError(funAsrErrorMessage(payload.message || ""));

@@ -56,17 +56,26 @@ class PostgreSQLUserDirectoryStore(UserDirectoryStore):
                 cursor.execute(
                     """
                     INSERT INTO platform_user_profiles(
-                        external_subject, email, display_name, status, last_login_at
-                    ) VALUES (%s, lower(%s), %s, %s, CASE WHEN %s THEN now() ELSE NULL END)
+                        external_subject, email, display_name, phone, status, last_login_at
+                    ) VALUES (%s, lower(%s), %s, %s, %s, CASE WHEN %s THEN now() ELSE NULL END)
                     ON CONFLICT(external_subject) DO UPDATE SET
                         email = EXCLUDED.email,
                         display_name = EXCLUDED.display_name,
+                        phone = EXCLUDED.phone,
                         status = EXCLUDED.status,
                         last_login_at = CASE WHEN %s THEN now() ELSE platform_user_profiles.last_login_at END,
                         updated_at = now(),
                         lock_version = platform_user_profiles.lock_version + 1
                     """,
-                    (profile.user_id, profile.email, profile.name, status, logged_in, logged_in),
+                    (
+                        profile.user_id,
+                        profile.email,
+                        profile.name,
+                        _pending_org_phone(profile),
+                        status,
+                        logged_in,
+                        logged_in,
+                    ),
                 )
             user_key = PostgreSQLIdentityResolver.user_id(connection, profile.user_id, required=False)
             department = str(profile.department or "").strip()
@@ -92,7 +101,7 @@ class PostgreSQLUserDirectoryStore(UserDirectoryStore):
                         """,
                         (department, user_key, department),
                     )
-        return UserProfile(
+        saved = UserProfile(
             user_id=profile.user_id,
             name=profile.name,
             department=profile.department,
@@ -100,6 +109,11 @@ class PostgreSQLUserDirectoryStore(UserDirectoryStore):
             status=_ui_status(status),
             last_login=profile.last_login,
         )
+        if self.get_password_hash(saved.user_id) is None:
+            from .passwords import default_password_hash
+
+            self.set_password_hash(saved.user_id, default_password_hash())
+        return saved
 
     def delete_profile(self, user_id: str) -> bool:
         with self._transaction() as connection, connection.cursor() as cursor:
@@ -113,11 +127,61 @@ class PostgreSQLUserDirectoryStore(UserDirectoryStore):
             )
             return cursor.rowcount > 0
 
+    def get_password_hash(self, user_id: str) -> str | None:
+        with self.pool.connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT c.password_hash
+                FROM platform_user_credentials c
+                JOIN platform_user_profiles u ON u.user_id = c.user_id
+                WHERE u.external_subject = %s
+                """,
+                (str(user_id or "").strip(),),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        hashed = str(_value(row, "password_hash", 0) or "").strip()
+        return hashed or None
+
+    def set_password_hash(self, user_id: str, password_hash: str) -> None:
+        key = str(user_id or "").strip()
+        digest = str(password_hash or "").strip()
+        if not key or not digest:
+            raise ValueError("password_hash_required")
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT user_id FROM platform_user_profiles WHERE external_subject = %s",
+                (key,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise KeyError("user_not_provisioned")
+            internal_id = _value(row, "user_id", 0)
+            cursor.execute(
+                "SELECT 1 FROM platform_user_credentials WHERE user_id = %s",
+                (internal_id,),
+            )
+            if cursor.fetchone() is None:
+                cursor.execute(
+                    "INSERT INTO platform_user_credentials(user_id, password_hash) VALUES (%s, %s)",
+                    (internal_id, digest),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE platform_user_credentials
+                    SET password_hash = %s, password_updated_at = now(), updated_at = now()
+                    WHERE user_id = %s
+                    """,
+                    (digest, internal_id),
+                )
+
     @staticmethod
     def _profile_select() -> str:
         return """
             SELECT u.external_subject AS user_code, u.display_name, u.email, u.status,
-                   u.last_login_at,
+                   u.last_login_at, u.phone,
                    COALESCE((
                        SELECT o.org_name
                        FROM platform_user_tenant_memberships m
@@ -133,7 +197,7 @@ class PostgreSQLUserDirectoryStore(UserDirectoryStore):
     def _profile_select_for_tenant() -> str:
         return """
             SELECT u.external_subject AS user_code, u.display_name, u.email, u.status,
-                   u.last_login_at,
+                   u.last_login_at, u.phone,
                    COALESCE((
                        SELECT o.org_name
                        FROM platform_user_tenant_memberships m
@@ -154,13 +218,17 @@ class PostgreSQLUserDirectoryStore(UserDirectoryStore):
     def _profile_from_row(row: Any) -> UserProfile:
         last_login = _value(row, "last_login_at", 4)
         last_login_text = last_login.isoformat() if isinstance(last_login, datetime) else str(last_login or "未登录")
+        phone = str(_value(row, "phone", 5) or "")
+        department = str(_value(row, "department", 6) or "未分配部门")
+        if phone.startswith("org:") and (department in {"", "未分配部门"} or str(_value(row, "status", 3)) == "invited"):
+            department = phone[4:]
         return UserProfile(
             user_id=str(_value(row, "user_code", 0)),
             name=str(_value(row, "display_name", 1)),
             email=str(_value(row, "email", 2)),
             status=_ui_status(str(_value(row, "status", 3))),
             last_login=last_login_text,
-            department=str(_value(row, "department", 5) or "未分配部门"),
+            department=department,
         )
 
     @contextmanager
@@ -191,9 +259,17 @@ def _ui_status(value: str) -> str:
     return "inactive" if str(value or "").strip() in {"disabled", "inactive", "locked"} else str(value or "active")
 
 
+def _pending_org_phone(profile: UserProfile) -> str | None:
+    if str(profile.status or "") == "invited":
+        institution = str(profile.department or "").strip()
+        if institution and institution != "未分配部门":
+            return f"org:{institution}"[:64]
+    return None
+
+
 def _value(row: Any, key: str, index: int) -> Any:
     if isinstance(row, dict):
-        return row[key]
+        return row.get(key)
     try:
         return row[key]
     except (TypeError, KeyError, IndexError):

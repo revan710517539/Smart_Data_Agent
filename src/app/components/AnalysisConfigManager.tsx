@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Eye, EyeOff, Pencil, Plus, Trash2, X } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
 import { apiErrorMessage } from "../services/apiClient";
-import { availableAnalysisSkills } from "../services/analysisSkillCatalog";
+import { pageVisibleAnalysisSkills } from "../services/analysisSkillCatalog";
 import {
   deleteDataAssetItem,
   fetchDataAssets,
@@ -59,7 +59,7 @@ export function AnalysisConfigManager() {
         (ownedShortcuts.length ? ownedShortcuts : allShortcuts.filter((item) => !item.ownerUserId))
           .sort((a, b) => a.sortOrder - b.sortOrder),
       );
-      setSkills(availableAnalysisSkills(knowledgeBundle.analysis_skills || []));
+      setSkills(pageVisibleAnalysisSkills(knowledgeBundle.analysis_skills || []));
       setTopicTables(
         [...(bundle.topic_tables || [])].sort((a, b) =>
           a.name.localeCompare(b.name, "zh-CN") || a.code.localeCompare(b.code),

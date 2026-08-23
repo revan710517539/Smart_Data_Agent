@@ -8,11 +8,17 @@ const weekly = await readFile(path.join(root, "src/app/components/WeeklyReport.t
 const menu = await readFile(path.join(root, "src/app/components/weekly-report/AnalysisModules.tsx"), "utf8");
 const composer = await readFile(path.join(root, "src/app/components/page-data/PageDataComposer.tsx"), "utf8");
 const assignment = await readFile(path.join(root, "src/app/components/page-data/assignment.ts"), "utf8");
+const scrollSource = await readFile(path.join(root, "src/app/components/weekly-report/scrollToReportBody.ts"), "utf8");
 
 assert.doesNotMatch(weekly, /<PageDataComposer\b/, "周报页不应继续渲染独立页面数据入口");
 assert.match(composer, /data-weekly-page-data-mode-toggle="true"/, "周报页应复用单一编辑保存切换按钮");
 assert.match(composer, /controller\.mode === "browse" \? "编辑" : controller\.savingLayout \? "保存中" : "保存"/, "编辑态按钮必须显示保存并提供保存中状态");
 assert.match(weekly, /PageDataModeToggle controller=\{weeklyPageData\} onSave=\{saveReportVersion\}/, "周报保存按钮应同时保存页面布局与周报版本");
+assert.match(weekly, /data-weekly-report-toolbar="true"/, "周报工具栏必须吸顶");
+assert.match(weekly, /data-weekly-report-body-start="true"/, "周报正文必须保留业绩与业务波动分节锚点");
+assert.match(weekly, /scheduleWeeklyReportBodyScroll/, "点开经营周报必须把滚动定位到页面最上方");
+assert.match(weekly, /const \[editing, setEditing\] = useState\(false\)/, "周报正文空段落不得在打开时自动进入输入框并抢走页面滚动");
+assert.match(scrollSource, /main\.scrollTo\(\{ top: 0, behavior: "auto" \}\)/, "经营周报打开时主栏必须停在页顶，不能落到下方输入框");
 assert.match(weekly, /StickyNoteButton onClick=\{stickyNote.show\}/, "经营周报必须在编辑按钮左侧提供统一便签入口");
 assert.match(weekly, /StickyNotePanel className="mb-4"/, "经营周报便签必须显示在可视化图表上方");
 assert.doesNotMatch(weekly, />\s*保存版本\s*<\/button>/, "周报页不应保留独立保存版本按钮");
@@ -21,9 +27,9 @@ assert.match(weekly, /const defaults: WeeklyDataModule\[\] = \[[\s\S]*weeklyPage
 assert.doesNotMatch(weekly, /kind: "core" as const/, "经营周报不得再把核心指标表现作为周报数据条");
 assert.doesNotMatch(menu, /核心指标表现/, "统一周报数据列表不得展示核心指标表现");
 assert.match(weekly, /weeklyDataItems\.filter\(\(item\) => item\.visible\)\.map/, "周报正文应按统一数据条的顺序和显隐状态渲染");
-assert.match(weekly, /kind: "page-data" as const[\s\S]*deletable: false/, "页面数据条不得提供删除能力");
-assert.match(weekly, /kind: "visual-report" as const[\s\S]*deletable: true/, "同步的可视化报表条应提供删除能力");
-assert.match(weekly, /kind: "saved-analysis" as const[\s\S]*deletable: true/, "同步的智能分析条应提供删除能力");
+assert.match(weekly, /kind: "page-data" as const[\s\S]*deletable: isSuperAdmin/, "页面数据删除能力必须保留超级管理员范围");
+assert.match(weekly, /kind: "visual-report" as const[\s\S]*deletable: canDeleteSharedVisual/, "同步的可视化报表删除能力必须服从共享可视化权限");
+assert.match(weekly, /kind: "saved-analysis" as const[\s\S]*deletable: canDeleteSharedVisual/, "同步的智能分析删除能力必须服从共享可视化权限");
 assert.match(weekly, /className="rounded-lg px-2\.5 py-1\.5" data-report-meta-key/, "会议时间、汇报人和报告周期外层不得保留底色");
 assert.match(weekly, /data-weekly-visual-order-item=\{item\.id\}/, "周报正文中的可视化条目必须声明统一排序目标");
 assert.match(weekly, /data-weekly-visual-order-handle=\{item\.id\}/, "周报编辑态中的可视化条目必须提供拖动排序手柄");
@@ -34,9 +40,14 @@ assert.match(weekly, /VisualReportCards report=\{report\}[\s\S]*layoutEditable=\
 assert.match(menu, /data-weekly-unified-data-menu="true"/, "下拉框应使用统一周报数据列表");
 assert.doesNotMatch(menu, />分析模块</, "统一列表不应再显示分析模块分组");
 assert.doesNotMatch(menu, />页面数据</, "统一列表不应再显示页面数据分组");
-assert.match(menu, /draggable=\{editable\}/, "不同类型数据条应在编辑态支持统一拖动排序");
+assert.match(menu, /draggable\s+onDragStart=\{\(event\) => \{ setDraggedId\(item\.id\)/, "不同类型数据条应在浏览态和编辑态统一支持拖动排序");
 assert.match(menu, /aria-label=\{`\$\{item\.visible \? "隐藏" : "显示"\}\$\{item\.title\}`\}/, "每个数据条应提供独立显隐按钮");
-assert.match(menu, /item\.deletable \? <button/, "删除按钮只能由条目删除契约控制");
+assert.doesNotMatch(menu, /disabled=\{!editable\}/, "浏览态的显隐按钮不得禁用");
+assert.match(menu, /editable && item\.deletable \? <button/, "删除按钮必须同时受编辑态和条目删除权限控制");
+assert.doesNotMatch(weekly, /function toggleWeeklyDataItem[\s\S]{0,120}weeklyPageData\.mode !== "edit"/, "浏览态必须允许切换周报数据显隐");
+assert.doesNotMatch(weekly, /function moveWeeklyDataItem[\s\S]{0,120}weeklyPageData\.mode !== "edit"/, "浏览态必须允许调整周报数据顺序");
+assert.match(weekly, /function deleteWeeklyDataItem[\s\S]{0,120}weeklyPageData\.mode !== "edit" \|\| !item\.deletable/, "删除必须在编辑态并继续服从条目权限");
+assert.match(weekly, /kind: "page-data" as const[\s\S]*visible: preferenceById\.get\(`page-data:\$\{asset\.id\}`\)\?\.visible \?\? weeklyPageData\.layoutIds\.includes\(asset\.id\)/, "页面数据显隐必须作为周报展示偏好保存，不得在浏览态删除页面布局");
 
 assert.match(assignment, /singleInstitutionAssignedPage\(asset\) === pageCode/, "单机构页面数据必须按数据管理的唯一放置页进入经营周报或机构督导");
 assert.match(assignment, /includeNewlyAssigned/, "经营周报和机构督导必须把数据管理新指定的单机构数据追加进页面布局");

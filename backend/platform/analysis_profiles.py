@@ -52,11 +52,35 @@ def load_analysis_profiles(path: str | Path = PROFILE_PATH) -> dict[str, Any]:
     return payload
 
 
+def remap_analysis_profile_tenants(
+    payload: dict[str, Any],
+    tenant_codes_by_institution: dict[str, str],
+) -> dict[str, Any]:
+    """Return a copy whose profile tenant IDs use the relational catalog codes.
+
+    Source-controlled profiles identify institutions by stable display names,
+    while a production database can use opaque canonical tenant codes.  Never
+    manufacture relational tenants from display names; map only institutions
+    already present in the authoritative catalog and preserve all others.
+    """
+
+    institutions = []
+    for item in payload.get("institutions") or []:
+        profile = dict(item)
+        institution = str(profile.get("institution") or "").strip()
+        tenant_code = str(tenant_codes_by_institution.get(institution) or "").strip()
+        if tenant_code:
+            profile["tenantId"] = tenant_code
+        institutions.append(profile)
+    return {**payload, "institutions": institutions}
+
+
 def seed_loan_analysis_candidates(
     data_asset_store: Any,
     memory_store: Any,
     *,
     import_actor: str = IMPORT_ACTOR,
+    profiles: dict[str, Any] | None = None,
 ) -> dict[str, int]:
     """Merge institution methods into canonical topic Skills and scoped Memory.
 
@@ -65,7 +89,7 @@ def seed_loan_analysis_candidates(
     archived after their references have been attached to the canonical Skill.
     """
 
-    payload = load_analysis_profiles()
+    payload = profiles or load_analysis_profiles()
     evidence_hash = hashlib.sha256(PROFILE_PATH.read_bytes() + SOURCE_PATH.read_bytes()).hexdigest()
     skill_count = 0
     archived_count = 0
@@ -136,23 +160,34 @@ def prepare_loan_analysis_capabilities(
     memory_store: Any,
     *,
     import_actor: str,
+    profiles: dict[str, Any] | None = None,
 ) -> dict[str, int]:
     """Idempotently prepare canonical Skills plus governed institution Memory."""
 
-    payload = load_analysis_profiles()
+    payload = profiles or load_analysis_profiles()
     created = seed_loan_analysis_candidates(
         data_asset_store,
         memory_store,
         import_actor=import_actor,
+        profiles=payload,
     )
-    verified = verify_loan_analysis_capabilities(data_asset_store, memory_store)
+    verified = verify_loan_analysis_capabilities(
+        data_asset_store,
+        memory_store,
+        profiles=payload,
+    )
     return {**created, **verified}
 
 
-def verify_loan_analysis_capabilities(data_asset_store: Any, memory_store: Any) -> dict[str, int]:
+def verify_loan_analysis_capabilities(
+    data_asset_store: Any,
+    memory_store: Any,
+    *,
+    profiles: dict[str, Any] | None = None,
+) -> dict[str, int]:
     """Fail closed if canonical Skills, Memory, or de-duplication are incomplete."""
 
-    payload = load_analysis_profiles()
+    payload = profiles or load_analysis_profiles()
     base_skill_ids = {
         "scene-analysis-intent",
         "scene-chart-followup",

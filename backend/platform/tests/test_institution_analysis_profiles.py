@@ -11,6 +11,23 @@ from backend.platform.tests.governed_warehouse import attach_governed_test_wareh
 
 
 class InstitutionAnalysisProfilesTest(unittest.TestCase):
+    def test_profile_tenant_ids_can_be_remapped_to_relational_catalog_codes(self) -> None:
+        from backend.platform.analysis_profiles import remap_analysis_profile_tenants
+
+        profiles = load_analysis_profiles()
+        remapped = remap_analysis_profile_tenants(
+            profiles,
+            {
+                "华兴银行": "tenant:huaxing",
+                "广州银行": "tenant:guangzhou",
+            },
+        )
+        by_name = {item["institution"]: item["tenantId"] for item in remapped["institutions"]}
+        self.assertEqual(by_name["华兴银行"], "tenant:huaxing")
+        self.assertEqual(by_name["广州银行"], "tenant:guangzhou")
+        self.assertEqual(by_name["兰州银行"], "tenant:兰州银行")
+        self.assertEqual(profiles["institutions"][0]["tenantId"], "tenant:华兴银行")
+
     def test_import_merges_33_methods_into_canonical_skills_and_110_memories(self) -> None:
         assets = InMemoryDataAssetStore(seed_defaults=False)
         memories = InMemoryMemoryStore()

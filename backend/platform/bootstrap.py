@@ -774,7 +774,7 @@ def _build_mysql_production_platform(runtime_config: RuntimeConfig) -> PlatformS
             non_structured_store=non_structured_store,
             primary_database_pool=pool,
         )
-        _bind_runtime_kernel(services)
+        _bind_runtime_kernel(services, relational_pool=raw_pool)
         automation_runtime.platform_services = services
         if runtime_config.environment in {"development", "test"}:
             for tenant_id in [normalize_tenant_id(tenant) for tenant in OPERATING_TENANTS] + [LEGACY_TENANT_ID]:
@@ -1037,9 +1037,12 @@ def _register_automation_handlers(
     runtime.register_handler("memory.extract", memory_extraction_handler)
 
 
-def _bind_runtime_kernel(services: PlatformServices) -> None:
+def _bind_runtime_kernel(services: PlatformServices, *, relational_pool: Any | None = None) -> None:
     from backend.platform.analysis_profiles import (
+        load_analysis_profiles,
+        load_relational_tenant_codes_by_institution,
         prepare_loan_analysis_capabilities,
+        remap_analysis_profile_tenants,
         verify_loan_analysis_capabilities,
     )
     from backend.platform.kernel.jobs import register_runtime_jobs
@@ -1056,10 +1059,20 @@ def _bind_runtime_kernel(services: PlatformServices) -> None:
         "verify" if services.runtime_config.is_production else "seed",
     ).strip().lower()
     if capability_mode == "seed":
+        analysis_profiles = load_analysis_profiles()
+        if services.runtime_config.is_production:
+            if relational_pool is None:
+                raise RuntimeConfigurationError("Production capability seed requires relational tenant catalog")
+            with relational_pool.connection() as connection:
+                analysis_profiles = remap_analysis_profile_tenants(
+                    analysis_profiles,
+                    load_relational_tenant_codes_by_institution(connection),
+                )
         prepare_loan_analysis_capabilities(
             services.data_asset_store,
             services.memory_store,
             import_actor=capability_import_actor,
+            profiles=analysis_profiles,
         )
     elif capability_mode == "verify":
         verify_loan_analysis_capabilities(services.data_asset_store, services.memory_store)

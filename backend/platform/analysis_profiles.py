@@ -52,6 +52,32 @@ def load_analysis_profiles(path: str | Path = PROFILE_PATH) -> dict[str, Any]:
     return payload
 
 
+def load_relational_tenant_codes_by_institution(connection: Any) -> dict[str, str]:
+    """Read active production tenant codes keyed by their institution names."""
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT tenant_name, tenant_code FROM platform_tenants WHERE status = 'active'"
+        )
+        rows = list(cursor.fetchall())
+    return {
+        str(_row_value(row, "tenant_name", 0) or "").strip():
+        str(_row_value(row, "tenant_code", 1) or "").strip()
+        for row in rows
+        if str(_row_value(row, "tenant_name", 0) or "").strip()
+        and str(_row_value(row, "tenant_code", 1) or "").strip()
+    }
+
+
+def _row_value(row: Any, key: str, index: int) -> Any:
+    if isinstance(row, dict):
+        return row.get(key)
+    try:
+        return row[key]
+    except (TypeError, KeyError, IndexError):
+        return row[index]
+
+
 def remap_analysis_profile_tenants(
     payload: dict[str, Any],
     tenant_codes_by_institution: dict[str, str],

@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from backend.platform.analysis_profiles import load_analysis_profiles, seed_loan_analysis_candidates
+from backend.platform.analysis_profiles import (
+    load_analysis_profiles,
+    load_relational_tenant_codes_by_institution,
+    seed_loan_analysis_candidates,
+)
 from backend.platform.api.routes.analysis import run_analysis
 from backend.platform.assets.store import InMemoryDataAssetStore
 from backend.platform.bootstrap import build_local_platform
@@ -27,6 +31,32 @@ class InstitutionAnalysisProfilesTest(unittest.TestCase):
         self.assertEqual(by_name["广州银行"], "tenant:guangzhou")
         self.assertEqual(by_name["兰州银行"], "tenant:兰州银行")
         self.assertEqual(profiles["institutions"][0]["tenantId"], "tenant:华兴银行")
+
+    def test_relational_catalog_loader_maps_active_names_and_ignores_inactive_rows(self) -> None:
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, sql):
+                self.sql = sql
+
+            def fetchall(self):
+                return [
+                    {"tenant_name": "华兴银行", "tenant_code": "tenant:huaxing"},
+                    {"tenant_name": "广州银行", "tenant_code": "tenant:guangzhou"},
+                ]
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+
+        self.assertEqual(
+            load_relational_tenant_codes_by_institution(Connection()),
+            {"华兴银行": "tenant:huaxing", "广州银行": "tenant:guangzhou"},
+        )
 
     def test_import_merges_33_methods_into_canonical_skills_and_110_memories(self) -> None:
         assets = InMemoryDataAssetStore(seed_defaults=False)

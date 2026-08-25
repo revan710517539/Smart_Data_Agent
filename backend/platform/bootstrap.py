@@ -1061,16 +1061,16 @@ def _bind_runtime_kernel(services: PlatformServices, *, relational_pool: Any | N
         "SMART_DATA_AGENT_CAPABILITY_MODE",
         "verify" if services.runtime_config.is_production else "seed",
     ).strip().lower()
+    analysis_profiles = load_analysis_profiles()
+    if services.runtime_config.is_production:
+        if relational_pool is None:
+            raise RuntimeConfigurationError("Production capability lifecycle requires relational tenant catalog")
+        with relational_pool.connection() as connection:
+            analysis_profiles = remap_analysis_profile_tenants(
+                analysis_profiles,
+                load_relational_tenant_codes_by_institution(connection),
+            )
     if capability_mode == "seed":
-        analysis_profiles = load_analysis_profiles()
-        if services.runtime_config.is_production:
-            if relational_pool is None:
-                raise RuntimeConfigurationError("Production capability seed requires relational tenant catalog")
-            with relational_pool.connection() as connection:
-                analysis_profiles = remap_analysis_profile_tenants(
-                    analysis_profiles,
-                    load_relational_tenant_codes_by_institution(connection),
-                )
         prepare_loan_analysis_capabilities(
             services.data_asset_store,
             services.memory_store,
@@ -1078,7 +1078,11 @@ def _bind_runtime_kernel(services: PlatformServices, *, relational_pool: Any | N
             profiles=analysis_profiles,
         )
     elif capability_mode == "verify":
-        verify_loan_analysis_capabilities(services.data_asset_store, services.memory_store)
+        verify_loan_analysis_capabilities(
+            services.data_asset_store,
+            services.memory_store,
+            profiles=analysis_profiles,
+        )
     else:
         raise RuntimeConfigurationError("SMART_DATA_AGENT_CAPABILITY_MODE must be seed or verify")
     kernel = build_runtime_kernel(services)

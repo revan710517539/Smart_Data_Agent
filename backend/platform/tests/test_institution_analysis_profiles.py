@@ -91,6 +91,39 @@ class InstitutionAnalysisProfilesTest(unittest.TestCase):
         remap.assert_called_once_with(profiles, {"华兴银行": "tenant:huaxing"})
         self.assertEqual(prepare.call_args.kwargs["profiles"], mapped)
 
+    def test_runtime_kernel_verify_uses_relational_tenant_catalog_in_production(self) -> None:
+        from contextlib import contextmanager
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from backend.platform.bootstrap import _bind_runtime_kernel
+
+        class Pool:
+            @contextmanager
+            def connection(self):
+                yield object()
+
+        services = SimpleNamespace(
+            runtime_config=SimpleNamespace(is_production=True),
+            data_asset_store=object(),
+            memory_store=object(),
+            automation_runtime=object(),
+            workflow=SimpleNamespace(),
+        )
+        profiles = {"institutions": [{"tenantId": "tenant:华兴银行"}]}
+        mapped = {"institutions": [{"tenantId": "tenant:huaxing"}]}
+        with patch.dict("os.environ", {"SMART_DATA_AGENT_CAPABILITY_MODE": "verify"}), \
+             patch("backend.platform.analysis_profiles.load_analysis_profiles", return_value=profiles), \
+             patch("backend.platform.analysis_profiles.load_relational_tenant_codes_by_institution", return_value={"华兴银行": "tenant:huaxing"}), \
+             patch("backend.platform.analysis_profiles.remap_analysis_profile_tenants", return_value=mapped) as remap, \
+             patch("backend.platform.analysis_profiles.verify_loan_analysis_capabilities") as verify, \
+             patch("backend.platform.kernel.kernel.build_runtime_kernel", return_value=object()), \
+             patch("backend.platform.kernel.jobs.register_runtime_jobs"):
+            _bind_runtime_kernel(services, relational_pool=Pool())
+
+        remap.assert_called_once_with(profiles, {"华兴银行": "tenant:huaxing"})
+        self.assertEqual(verify.call_args.kwargs["profiles"], mapped)
+
     def test_import_merges_33_methods_into_canonical_skills_and_110_memories(self) -> None:
         assets = InMemoryDataAssetStore(seed_defaults=False)
         memories = InMemoryMemoryStore()

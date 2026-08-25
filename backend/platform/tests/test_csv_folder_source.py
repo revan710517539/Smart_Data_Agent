@@ -82,14 +82,18 @@ class CSVFolderSourceTest(unittest.TestCase):
             ("tenant:华兴银行", "华兴银行", "huaxing"),
             ("tenant:南京银行", "南京银行", "nanjing"),
             ("tenant:广州银行", "广州银行", "guangzhou"),
+            # Relational production tenants use canonical English codes, while
+            # Data Crawler publishes into Chinese institution directories.
+            ("tenant:huaxing", "华兴银行", "huaxing"),
+            ("tenant:lanzhou", "兰州银行", "lanzhou"),
         )
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             for tenant_id, directory, slug in bindings:
                 expected = root / directory / "业务数据.csv"
                 wrong = root / slug / "错误目录.csv"
-                expected.parent.mkdir(parents=True)
-                wrong.parent.mkdir(parents=True)
+                expected.parent.mkdir(parents=True, exist_ok=True)
+                wrong.parent.mkdir(parents=True, exist_ok=True)
                 expected.write_text(f"机构,金额\n{directory},1\n", encoding="utf-8")
                 wrong.write_text("机构,金额\n错误目录,999\n", encoding="utf-8")
 

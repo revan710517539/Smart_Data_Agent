@@ -539,27 +539,31 @@ class CSVFolderSource:
         return selected, superseded
 
 
+_CRAWLER_INSTITUTION_IDS = {
+    "华兴银行": "huaxing",
+    "郑州银行": "zhengzhou",
+    "广州银行": "guangzhou",
+    "南京银行": "nanjing",
+    "石嘴山银行": "shizuishan",
+    "兰州银行": "lanzhou",
+    "临商银行": "linshang",
+    "瑞丰银行": "ruifeng",
+    "兴业消金": "xingye-consumer-finance",
+    "汉口银行": "hankou",
+}
+_CRAWLER_DIRECTORIES_BY_ID = {institution_id: directory for directory, institution_id in _CRAWLER_INSTITUTION_IDS.items()}
+
+
 def tenant_directory_name(tenant_id: str) -> str:
-    """Map the authenticated tenant code to one safe crawler directory name."""
+    """Map an authenticated tenant code to its Chinese crawler directory."""
     name = str(tenant_id or "").strip().split(":", 1)[-1].strip()
     if not name or name in {".", ".."} or "/" in name or "\\" in name or "\x00" in name:
         raise ValueError("csv_source_tenant_directory_invalid")
-    return name
+    return _CRAWLER_DIRECTORIES_BY_ID.get(name, name)
 
 
 def _crawler_institution_id(directory: str) -> str:
-    return {
-        "华兴银行": "huaxing",
-        "郑州银行": "zhengzhou",
-        "广州银行": "guangzhou",
-        "南京银行": "nanjing",
-        "石嘴山银行": "shizuishan",
-        "兰州银行": "lanzhou",
-        "临商银行": "linshang",
-        "瑞丰银行": "ruifeng",
-        "兴业消金": "xingye-consumer-finance",
-        "汉口银行": "hankou",
-    }.get(directory, "")
+    return _CRAWLER_INSTITUTION_IDS.get(directory, "")
 
 
 def _decode_csv_text(content: bytes) -> str:

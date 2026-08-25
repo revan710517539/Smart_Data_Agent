@@ -6,9 +6,9 @@ test -n "$base_url" || { echo "candidate URL required" >&2; exit 2; }
 base_url=${base_url%/}
 expected_sha=${SMART_DATA_AGENT_EXPECTED_SHA:-}
 case "$expected_sha" in
-  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
-  *) echo "SMART_DATA_AGENT_EXPECTED_SHA must be the deployed 40-character SHA" >&2; exit 2 ;;
+  *[!0-9a-f]*|'') echo "SMART_DATA_AGENT_EXPECTED_SHA must be the deployed 40-character SHA" >&2; exit 2 ;;
 esac
+test "${#expected_sha}" -eq 40 || { echo "SMART_DATA_AGENT_EXPECTED_SHA must be the deployed 40-character SHA" >&2; exit 2; }
 live=$(curl --fail --silent --show-error --max-time 10 "$base_url/api/live")
 ready=$(curl --fail --silent --show-error --max-time 15 "$base_url/api/ready")
 python3 - "$live" "$ready" "$expected_sha" <<'PY'

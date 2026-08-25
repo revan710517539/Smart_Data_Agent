@@ -1062,14 +1062,25 @@ def _bind_runtime_kernel(services: PlatformServices, *, relational_pool: Any | N
         "verify" if services.runtime_config.is_production else "seed",
     ).strip().lower()
     analysis_profiles = load_analysis_profiles()
-    if services.runtime_config.is_production:
-        if relational_pool is None:
-            raise RuntimeConfigurationError("Production capability lifecycle requires relational tenant catalog")
+    if relational_pool is not None:
         with relational_pool.connection() as connection:
-            analysis_profiles = remap_analysis_profile_tenants(
-                analysis_profiles,
-                load_relational_tenant_codes_by_institution(connection),
+            tenant_codes_by_institution = load_relational_tenant_codes_by_institution(connection)
+        profile_institutions = {
+            str(profile.get("institution") or "").strip()
+            for profile in analysis_profiles["institutions"]
+            if str(profile.get("institution") or "").strip()
+        }
+        missing_institutions = sorted(profile_institutions - tenant_codes_by_institution.keys())
+        if missing_institutions:
+            raise RuntimeConfigurationError(
+                "Production capability tenant catalog is incomplete: " + ", ".join(missing_institutions)
             )
+        analysis_profiles = remap_analysis_profile_tenants(
+            analysis_profiles,
+            tenant_codes_by_institution,
+        )
+    elif services.runtime_config.is_production:
+        raise RuntimeConfigurationError("Production capability lifecycle requires relational tenant catalog")
     if capability_mode == "seed":
         prepare_loan_analysis_capabilities(
             services.data_asset_store,

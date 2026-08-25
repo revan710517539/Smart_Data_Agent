@@ -72,23 +72,29 @@ export function ResizableVisualizationGrid({ children, editable = true }: { chil
     const startWidth = position.width;
     const startHeight = position.height;
     const hints = entries.find((entry) => entry.id === id)?.hints;
-    const maxWidth = hints?.maxSpan ? visualGridWidthForSpan(effectiveWidth, visualGridGap, hints.maxSpan) : Number.POSITIVE_INFINITY;
+    const minWidth = visualGridWidthForSpan(effectiveWidth, visualGridGap, 1);
+    const hintMaxWidth = hints?.maxSpan ? visualGridWidthForSpan(effectiveWidth, visualGridGap, hints.maxSpan) : effectiveWidth;
+    const edgeMaxWidth = direction.includes("west") ? position.x + startWidth : effectiveWidth - position.x;
+    const maxWidth = Math.max(minWidth, Math.min(hintMaxWidth, edgeMaxWidth, effectiveWidth));
     const maxHeight = hints?.maxHeight ?? Number.POSITIVE_INFINITY;
     const minHeight = hints?.maxHeight ? minimumTextVisualGridHeight : minimumVisualGridHeight;
     let nextWidth = startWidth;
     let nextHeight = startHeight;
     const previousCursor = document.body.style.cursor;
     const previousUserSelect = document.body.style.userSelect;
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
     document.body.style.cursor = resizeCursor(direction);
     document.body.style.userSelect = "none";
     setActiveItemId(id);
 
     const move = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId !== event.pointerId) return;
       const horizontal = direction.includes("east") || direction.includes("west");
       const vertical = direction.includes("north") || direction.includes("south");
       const widthDelta = direction.includes("west") ? startX - pointerEvent.clientX : pointerEvent.clientX - startX;
       const heightDelta = direction.includes("north") ? startY - pointerEvent.clientY : pointerEvent.clientY - startY;
-      nextWidth = horizontal ? Math.min(maxWidth, Math.max(visualGridWidthForSpan(effectiveWidth, visualGridGap, 1), startWidth + widthDelta)) : startWidth;
+      nextWidth = horizontal ? Math.min(maxWidth, Math.max(minWidth, startWidth + widthDelta)) : startWidth;
       nextHeight = vertical ? Math.min(maxHeight, Math.max(minHeight, startHeight + heightDelta)) : startHeight;
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
       frameRef.current = requestAnimationFrame(() => {
@@ -102,10 +108,12 @@ export function ResizableVisualizationGrid({ children, editable = true }: { chil
         if (containerRef.current) containerRef.current.style.height = `${Math.max(layout.height, position.y + offsetY + nextHeight)}px`;
       });
     };
-    const end = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", end);
-      window.removeEventListener("pointercancel", end);
+    const end = (pointerEvent?: PointerEvent) => {
+      if (pointerEvent && pointerEvent.pointerId !== event.pointerId) return;
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
       document.body.style.cursor = previousCursor;
       document.body.style.userSelect = previousUserSelect;
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
@@ -113,15 +121,15 @@ export function ResizableVisualizationGrid({ children, editable = true }: { chil
       setOverrides((current) => ({ ...current, [id]: { ...current[id], span: visualGridSpanForWidth(effectiveWidth, visualGridGap, nextWidth), height: nextHeight } }));
       setActiveItemId("");
     };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", end, { once: true });
-    window.addEventListener("pointercancel", end, { once: true });
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
   };
 
   return (
     <div
       ref={containerRef}
-      className={`relative w-full ${activeItemId ? "" : "transition-[height] duration-150 motion-reduce:transition-none"}`}
+      className={`relative w-full overflow-x-hidden ${activeItemId ? "" : "transition-[height] duration-150 motion-reduce:transition-none"}`}
       style={{ height: layout.height }}
       data-resizable-visual-grid="true"
       data-visual-grid-count={entries.length}
@@ -150,7 +158,7 @@ export function ResizableVisualizationGrid({ children, editable = true }: { chil
               aria-label="横向调整可视化宽度"
               aria-orientation="vertical"
               onPointerDown={(event) => startResize(id, "east", event)}
-              className="absolute -right-1 top-3 bottom-3 z-40 w-2 cursor-ew-resize rounded-full opacity-0 transition-opacity group-hover:opacity-100 hover:bg-[#178a53]/20"
+              className="absolute bottom-3 right-0 top-3 z-40 w-2 cursor-ew-resize touch-none rounded-full opacity-0 transition-opacity group-hover:opacity-100 hover:bg-[#178a53]/20"
               data-visual-resize-handle="east"
             />
             <div role="separator" aria-label="从左边调整可视化宽度" aria-orientation="vertical" onPointerDown={(event) => startResize(id, "west", event)} className="absolute -left-1 bottom-3 top-3 z-40 w-2 cursor-ew-resize rounded-full opacity-0 transition-opacity group-hover:opacity-100 hover:bg-[#178a53]/20" data-visual-resize-handle="west" />
@@ -169,7 +177,7 @@ export function ResizableVisualizationGrid({ children, editable = true }: { chil
               role="separator"
               aria-label="同时调整可视化宽度和高度"
               onPointerDown={(event) => startResize(id, "southeast", event)}
-              className="absolute -bottom-1.5 -right-1.5 z-50 h-4 w-4 cursor-nwse-resize rounded-br-xl border-b-2 border-r-2 border-transparent opacity-0 transition-opacity group-hover:border-[#178a53]/35 group-hover:opacity-100"
+              className="absolute bottom-0 right-0 z-[60] h-6 w-6 cursor-nwse-resize touch-none rounded-br-xl border-b-2 border-r-2 border-transparent opacity-0 transition-opacity group-hover:border-[#178a53]/35 group-hover:opacity-100"
               data-visual-resize-handle="southeast"
             />
             </>}

@@ -176,6 +176,10 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             "customer_segment_list_metadata_invalid": "客群名单保存信息无效，请重新上传并确认。",
             "customer_segment_list_owner_required": "无法确认客群名单所属用户，请重新登录后再试。",
             "customer_segment_source_customer_key_duplicate": "明细表客户号主键存在重复值，请先修复源数据后再分析。",
+            "data_crawler_sql_binding_not_found": "未找到可运行的关联 SQL。请选择 SQL 后点击刷新。",
+            "data_crawler_sql_binding_ambiguous": "当前 CSV 对应多条 SQL，请先选择要运行的 SQL 再刷新。",
+            "data_crawler_run_id_required": "缺少 Data Crawler 运行记录标识。",
+            "non_temporal_sql_parameters_not_supported": "该 SQL 含有非时间参数，暂不能从 SDA 刷新或定时。",
         }
         metric_workbook_messages = {
             "请上传 .xlsx 格式的指标文件。": ("metric_workbook_file_type", "仅支持 .xlsx 格式的指标文件，请重新选择。"),
@@ -216,6 +220,10 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
                 "customer_segment_list_metadata_invalid",
                 "customer_segment_list_owner_required",
                 "customer_segment_source_customer_key_duplicate",
+                "data_crawler_sql_binding_not_found",
+                "data_crawler_sql_binding_ambiguous",
+                "data_crawler_run_id_required",
+                "non_temporal_sql_parameters_not_supported",
             }
             else "invalid_request"
         )

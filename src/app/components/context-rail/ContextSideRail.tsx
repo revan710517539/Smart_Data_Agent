@@ -44,6 +44,7 @@ export function ContextSideRail({
   const [edgeVisible, setEdgeVisible] = useState(false);
   const railRef = useRef<HTMLElement>(null);
   const railWidthClass = wide ? "w-[640px]" : "w-[320px]";
+  const viewport = useVisualViewportBox();
 
   useEffect(() => {
     setCollapsed(true);
@@ -72,8 +73,9 @@ export function ContextSideRail({
     if (!rail) return;
     const apply = () => {
       const top = rail.getBoundingClientRect().top;
-      const nextHeight = Math.max(280, Math.round(window.innerHeight - top));
+      const nextHeight = Math.max(280, Math.round(viewport.bottom - top));
       rail.style.height = `${nextHeight}px`;
+      rail.style.maxHeight = `${Math.max(280, viewport.height)}px`;
     };
     apply();
     const main = document.querySelector("[data-agent-main-shell]");
@@ -85,43 +87,45 @@ export function ContextSideRail({
       window.removeEventListener("scroll", apply, true);
       main?.removeEventListener("scroll", apply);
       rail.style.height = "";
+      rail.style.maxHeight = "";
     };
-  }, [collapsed, flushToViewport, pageKey, wide]);
+  }, [collapsed, flushToViewport, pageKey, viewport.bottom, viewport.height, wide]);
 
   return (
     <>
       {flushToViewport && !collapsed ? <div className={`weekly-report-print-hidden shrink-0 ${railWidthClass}`} data-context-rail-spacer="true" /> : null}
       <aside
         ref={railRef}
-        className={`weekly-report-print-hidden min-h-0 overflow-hidden rounded-tl-xl border border-b-0 border-r-0 border-[#e5e5ea] bg-white ${railWidthClass} ${collapsed ? "hidden" : ""} ${flushToViewport ? "fixed top-4 right-0 bottom-0 z-[65]" : "sticky top-4 h-[calc(100vh-1rem)] shrink-0"}`}
+        className={`weekly-report-print-hidden flex min-h-0 flex-col overflow-hidden rounded-tl-xl border border-b-0 border-r-0 border-[#e5e5ea] bg-white ${railWidthClass} ${collapsed ? "hidden" : ""} ${flushToViewport ? "fixed top-4 right-0 bottom-0 z-[65]" : "sticky top-0 z-30 h-[min(100dvh,100vh)] max-h-[100dvh] shrink-0 self-start"}`}
+        style={flushToViewport ? { top: Math.max(16, viewport.offsetTop), bottom: viewport.bottomInset, paddingBottom: "env(safe-area-inset-bottom, 0px)" } : { maxHeight: `${Math.max(280, viewport.height)}px` }}
         data-context-rail={collapsed ? "collapsed" : "expanded"}
         data-context-page={pageKey}
         data-context-rail-wide={wide ? "true" : "false"}
         data-context-rail-flush="true"
       >
-        <div className="absolute inset-x-0 top-0 z-[75] border-b border-[#ececf0] bg-white p-2" data-context-rail-tabs="true">
+        <div className="z-20 shrink-0 border-b border-[#ececf0] bg-white p-2" data-context-rail-tabs="true">
           <div className="grid grid-cols-[32px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-1">
             <button type="button" onClick={() => { onWideChange?.(false); setCollapsed(true); }} className="flex h-10 items-center justify-center rounded-lg text-[#8a8a8e] transition-colors hover:bg-[#f2f2f7] hover:text-[#1d1d1f]" aria-label="收起右侧评论与智能分析栏" title="收起右侧栏" data-context-rail-collapse="true">
               <PanelRightClose className="h-4 w-4" />
             </button>
-            <button type="button" onClick={() => onTabChange("comments")} className={`flex h-10 items-center justify-center gap-1.5 rounded-lg text-[12px] transition-colors ${activeTab === "comments" ? "bg-[#edf4fb] text-[#0a66c2]" : "text-[#636366] hover:bg-[#f2f2f7]"}`}>
-              <MessageSquareText className="h-3.5 w-3.5" />
-              评论{commentCount ? ` ${commentCount}` : ""}
+            <button type="button" onClick={() => onTabChange("comments")} className={`flex h-10 min-w-0 items-center justify-center gap-1 whitespace-nowrap rounded-lg px-1 text-[11px] transition-colors sm:text-[12px] ${activeTab === "comments" ? "bg-[#edf4fb] text-[#0a66c2]" : "text-[#636366] hover:bg-[#f2f2f7]"}`}>
+              <MessageSquareText className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">评论{commentCount ? ` ${commentCount}` : ""}</span>
             </button>
-            <button type="button" data-context-rail-analysis-tab="true" onClick={() => { revealAnalysisWorkspace(undefined); onTabChange("analysis"); }} className={`flex h-10 items-center justify-center gap-1.5 rounded-lg text-[12px] transition-colors ${activeTab === "analysis" ? "bg-[#edf4fb] text-[#0a66c2]" : "text-[#636366] hover:bg-[#f2f2f7]"}`}>
-              <Sparkles className="h-3.5 w-3.5" />
-              AI 分析
+            <button type="button" data-context-rail-analysis-tab="true" onClick={() => { revealAnalysisWorkspace(undefined); onTabChange("analysis"); }} className={`flex h-10 min-w-0 items-center justify-center gap-1 whitespace-nowrap rounded-lg px-1 text-[11px] transition-colors sm:text-[12px] ${activeTab === "analysis" ? "bg-[#edf4fb] text-[#0a66c2]" : "text-[#636366] hover:bg-[#f2f2f7]"}`}>
+              <Sparkles className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">AI 分析</span>
             </button>
-            <button type="button" onClick={() => onTabChange("message-board")} className={`flex h-10 items-center justify-center gap-1 rounded-lg text-[12px] transition-colors ${activeTab === "message-board" ? "bg-[#edf4fb] text-[#0a66c2]" : "text-[#636366] hover:bg-[#f2f2f7]"}`} data-context-rail-message-board="true">
-              <MessageSquarePlus className="h-3.5 w-3.5" />
-              留言板
+            <button type="button" onClick={() => onTabChange("message-board")} className={`flex h-10 min-w-0 items-center justify-center gap-1 whitespace-nowrap rounded-lg px-1 text-[11px] transition-colors sm:text-[12px] ${activeTab === "message-board" ? "bg-[#edf4fb] text-[#0a66c2]" : "text-[#636366] hover:bg-[#f2f2f7]"}`} data-context-rail-message-board="true">
+              <MessageSquarePlus className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">留言板</span>
             </button>
           </div>
         </div>
-        <div className={`absolute inset-x-0 bottom-0 top-[57px] flex min-h-0 flex-col overscroll-contain bg-[#f7f8fa] px-2 pb-2 ${activeTab === "analysis" ? "overflow-hidden" : "overflow-y-auto"}`} data-context-rail-scroll="true">
-          <div className={activeTab === "comments" ? "min-h-0" : "hidden"}>{comments}</div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden overscroll-contain bg-[#f7f8fa] px-2 pb-2" data-context-rail-scroll="true">
+          <div className={activeTab === "comments" ? "flex h-full min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}>{comments}</div>
           <div className={activeTab === "analysis" ? "flex h-full min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}>{analysis}</div>
-          <div className={activeTab === "message-board" ? "min-h-0" : "hidden"}>{messageBoard}</div>
+          <div className={activeTab === "message-board" ? "flex h-full min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}>{messageBoard}</div>
         </div>
       </aside>
 
@@ -151,4 +155,30 @@ export function ContextSideRail({
       )}
     </>
   );
+}
+
+function useVisualViewportBox() {
+  const [box, setBox] = useState({ offsetTop: 0, bottomInset: 0, height: 0, bottom: 0 });
+
+  useLayoutEffect(() => {
+    const apply = () => {
+      const viewport = window.visualViewport;
+      const height = Math.round(viewport?.height || window.innerHeight);
+      const offsetTop = Math.max(0, Math.round(viewport?.offsetTop || 0));
+      const bottomInset = Math.max(0, Math.round(window.innerHeight - offsetTop - height));
+      setBox({ offsetTop, bottomInset, height, bottom: offsetTop + height });
+    };
+    apply();
+    const viewport = window.visualViewport;
+    viewport?.addEventListener("resize", apply);
+    viewport?.addEventListener("scroll", apply);
+    window.addEventListener("resize", apply);
+    return () => {
+      viewport?.removeEventListener("resize", apply);
+      viewport?.removeEventListener("scroll", apply);
+      window.removeEventListener("resize", apply);
+    };
+  }, []);
+
+  return box;
 }

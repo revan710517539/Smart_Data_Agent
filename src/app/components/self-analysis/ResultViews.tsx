@@ -319,14 +319,19 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     const dismissTransientControls = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
-      if (target.closest('[data-visual-more-menu="true"]')) return;
-      const interactiveRoot = target.closest('[data-visual-interactive="true"]');
-      if (interactiveRoot && cardRef.current?.contains(interactiveRoot)) return;
-      setActivePanel(null);
-      setCommentPoint(null);
-      setTableHeaderMenu(null);
-      setMoreOpen(false);
+      const inMoreMenu = Boolean(target.closest('[data-visual-more-menu="true"]'));
+      const inMoreButton = Boolean(moreButtonRef.current?.contains(target));
+      if (!inMoreMenu && !inMoreButton) setMoreOpen(false);
       if (!target.closest('[data-visual-filter-panel="true"], [data-visual-filter-value-menu], [data-visual-filter-value-trigger]')) setFilterOpen(false);
+      if (
+        !target.closest('[data-visual-style-menu="true"]')
+        && !target.closest("[data-visual-field-panel]")
+        && !target.closest("[data-visual-panel-trigger]")
+      ) setActivePanel(null);
+      if (!target.closest('[data-visual-comment-action="true"], [data-visual-table-header-menu]')) {
+        setCommentPoint(null);
+        setTableHeaderMenu(null);
+      }
     };
     document.addEventListener("pointerdown", dismissTransientControls, true);
     return () => document.removeEventListener("pointerdown", dismissTransientControls, true);
@@ -417,9 +422,9 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
           {showFollowUp && <button type="button" onClick={() => { trackVisual("visual_follow_up_click"); onFollowUp({ dataTables: analysisSource }); }} className="h-7 whitespace-nowrap rounded-full px-2 text-[11px] text-[#178a53] hover:bg-white/80" aria-label={`追问${title}`} data-visual-follow-up="true">追问</button>}
         </div>
         <div aria-hidden={!operationsOpen} {...(!operationsOpen ? ({ inert: "" } as Record<string, string>) : {})} className={`flex items-center gap-0.5 overflow-hidden transition-[max-width,opacity] duration-200 motion-reduce:transition-none ${operationsOpen ? "max-w-[260px] opacity-100" : "pointer-events-none max-w-0 opacity-0"}`} data-visual-operation-tray={operationsOpen ? "expanded" : "collapsed"}>
-          <button tabIndex={operationsOpen ? 0 : -1} type="button" onClick={() => { trackVisual("visual_style_click"); togglePanel("style"); }} className={`h-7 whitespace-nowrap rounded-full px-2 text-[11px] outline-none focus-visible:outline-none ${activePanel === "style" ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`}>样式</button>
-          <button tabIndex={operationsOpen ? 0 : -1} type="button" onClick={() => { trackVisual("visual_metric_click"); togglePanel("metric"); }} className={`h-7 whitespace-nowrap rounded-full px-2 text-[11px] outline-none focus-visible:outline-none ${activePanel === "metric" ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`}>指标</button>
-          <button tabIndex={operationsOpen ? 0 : -1} type="button" onClick={() => { trackVisual("visual_dimension_click"); togglePanel("dimension"); }} className={`h-7 whitespace-nowrap rounded-full px-2 text-[11px] outline-none focus-visible:outline-none ${activePanel === "dimension" ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`}>维度</button>
+          <button tabIndex={operationsOpen ? 0 : -1} type="button" data-visual-panel-trigger="style" onClick={() => { trackVisual("visual_style_click"); setMoreOpen(false); togglePanel("style"); }} className={`h-7 whitespace-nowrap rounded-full px-2 text-[11px] outline-none focus-visible:outline-none ${activePanel === "style" ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`}>样式</button>
+          <button tabIndex={operationsOpen ? 0 : -1} type="button" data-visual-panel-trigger="metric" onClick={() => { trackVisual("visual_metric_click"); setMoreOpen(false); togglePanel("metric"); }} className={`h-7 whitespace-nowrap rounded-full px-2 text-[11px] outline-none focus-visible:outline-none ${activePanel === "metric" ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`}>指标</button>
+          <button tabIndex={operationsOpen ? 0 : -1} type="button" data-visual-panel-trigger="dimension" onClick={() => { trackVisual("visual_dimension_click"); setMoreOpen(false); togglePanel("dimension"); }} className={`h-7 whitespace-nowrap rounded-full px-2 text-[11px] outline-none focus-visible:outline-none ${activePanel === "dimension" ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`}>维度</button>
           <button tabIndex={operationsOpen ? 0 : -1} type="button" onClick={() => { trackVisual("visual_voice_click"); if (isTextCard) focusTextVoiceTarget(); voice.toggle(); }} className={`flex h-7 w-8 shrink-0 items-center justify-center rounded-full outline-none focus-visible:outline-none ${voice.listening ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`} aria-label={voice.listening ? "停止可视化语音配置" : "语音配置可视化"} title="实时语音配置"><AudioLines className={`h-3.5 w-3.5 ${voice.listening ? "animate-pulse" : ""}`} /></button>
         </div>
         {!isTextCard && <button type="button" onClick={toggleOperations} className={`inline-flex h-7 w-8 shrink-0 items-center justify-center rounded-full outline-none focus-visible:outline-none ${operationsOpen ? "bg-white text-[#178a53] shadow-sm" : "text-[#4f685b] hover:bg-white/80"}`} aria-expanded={operationsOpen} aria-label={operationsOpen ? "收起可视化操作" : "展开可视化操作"} title="操作" data-visual-operation-toggle="true"><SlidersHorizontal className="h-3.5 w-3.5" /></button>}
@@ -616,11 +621,29 @@ function applyVisualTableWheel(node: HTMLElement, event: WheelEvent) {
   const canY = node.scrollHeight > node.clientHeight + 1;
   const canX = node.scrollWidth > node.clientWidth + 1;
   if (!canY && !canX) return false;
-  if (!event.deltaY && !event.deltaX) return false;
+  const deltaY = event.shiftKey ? 0 : event.deltaY;
+  const deltaX = event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX;
+  if (!deltaY && !deltaX) return false;
+  let used = false;
+  if (canY && deltaY) {
+    const atTop = node.scrollTop <= 0;
+    const atBottom = node.scrollTop + node.clientHeight >= node.scrollHeight - 1;
+    if ((deltaY < 0 && !atTop) || (deltaY > 0 && !atBottom)) {
+      node.scrollTop += deltaY;
+      used = true;
+    }
+  }
+  if (canX && deltaX) {
+    const atLeft = node.scrollLeft <= 0;
+    const atRight = node.scrollLeft + node.clientWidth >= node.scrollWidth - 1;
+    if ((deltaX < 0 && !atLeft) || (deltaX > 0 && !atRight)) {
+      node.scrollLeft += deltaX;
+      used = true;
+    }
+  }
+  if (!used) return false;
   event.preventDefault();
   event.stopPropagation();
-  if (canY && event.deltaY) node.scrollTop += event.deltaY;
-  if (canX && event.deltaX) node.scrollLeft += event.deltaX;
   return true;
 }
 
@@ -642,7 +665,7 @@ function useVisualTableRegionWheelLock(regionRef: { current: HTMLElement | null 
     if (!region || !enabled) return;
     const onWheel = (event: WheelEvent) => {
       const scroller = region.querySelector<HTMLElement>("[data-visual-table-scroll]");
-      if (!scroller) return;
+      if (!scroller || !(event.target instanceof Node) || !scroller.contains(event.target)) return;
       applyVisualTableWheel(scroller, event);
     };
     region.addEventListener("wheel", onWheel, { passive: false, capture: true });

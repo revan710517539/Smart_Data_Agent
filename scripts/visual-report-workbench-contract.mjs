@@ -142,9 +142,14 @@ assert.match(dataTablePicker, /type="radio"/, "智能分析数据表必须使用
 assert.match(dataTablePicker, /onChange\(\[table\]\)/, "选择新表必须替换而不是追加已有数据源");
 assert.doesNotMatch(dataTablePicker, /多机构页面|pageDataTables|pageDataToSelection/, "智能分析数据表弹窗不得显示多机构页面");
 assert.match(domain, /singleAnalysisDataTableSelection[\s\S]*tables\.at\(-1\)/, "历史或外部多选状态必须收敛到最新一张数据表");
+assert.match(domain, /export function rematchAnalysisDataTableSelection/, "已选数据表必须能按 sourceKey 对齐当前交付");
 assert.match(selfAnalysis, /singleAnalysisDataTableSelection\(forcedDataTables \?\? selectedDataTables\)/, "每次分析提交前必须再次收敛单表契约");
+assert.match(selfAnalysis, /runtimeAssetResponse\.topic_tables/, "智能分析主题表必须使用已发布 runtime 目录");
+assert.match(selfAnalysis, /rematchAnalysisDataTableSelection\(current/, "恢复或刷新目录后必须把已选表对齐到当前交付");
 assert.match(analysisRoute, /consumer="self_analysis"/, "智能分析必须通过受治理的多机构页面读取接口取数");
-assert.match(builder, />多机构页面 \{pageDataTables\.length\}<\/button>/, "可视化报表弹窗必须提供多机构页面");
+assert.match(builder, />原始表 \{rawTables.length\}<\/button>/, "可视化报表弹窗必须提供原始表");
+assert.match(builder, />主题表 \{topicTables.length\}<\/button>/, "可视化报表弹窗必须提供主题表");
+assert.doesNotMatch(builder, /多机构页面 \{pageDataTables\.length\}|单机构页面|switchTab\("page_data"\)/, "可视化报表新增图表弹窗不得显示多机构页面或单机构页面");
 assert.match(builder, /pageCode: "visual_report"/, "可视化报表编辑器必须按自身消费者身份读取多机构页面");
 assert.match(cards, /railPageKey === "my-reports" \? "my_reports" : "visual_report"/, "我的报表回读可视化报表时必须重新校验多机构页面授权");
 assert.match(reportsRoute, /topic_data_store\.read_reference/, "我的报表智能分析 Tab 必须从分析执行的受治理快照回读数据");

@@ -71,6 +71,7 @@ import {
   detectAttachmentInstitutions,
   type AnalysisDataTableSelection,
   singleAnalysisDataTableSelection,
+  rematchAnalysisDataTableSelection,
   type AnalysisRow,
   type AudioContextConstructorLike,
   type FunAsrContextMessage,
@@ -692,11 +693,21 @@ export function SelfAnalysis() {
           setAvailableMetrics(metricResponse.metrics);
           // raw_tables is the same CSV catalog rendered in 数据管理 → 原始表.
           // It is intentionally not a separately stored configuration list.
-          setAvailableRawTables(assetResponse.raw_tables.filter((table) => table.lifecycleStatus === "active"));
-          setAvailableTopicTables(assetResponse.topic_tables);
-          setAvailablePageDataTables((assetResponse.page_data || []).filter(
+          const nextRawTables = assetResponse.raw_tables.filter((table) => table.lifecycleStatus === "active");
+          const nextTopicTables = (runtimeAssetResponse.topic_tables || []).filter(
+            (item) => item.lifecycleStatus === "active",
+          );
+          const nextPageDataTables = (assetResponse.page_data || []).filter(
             (item) => item.lifecycleStatus === "active" && item.institutionScope === "multi_institution",
-          ));
+          );
+          setAvailableRawTables(nextRawTables);
+          setAvailableTopicTables(nextTopicTables);
+          setAvailablePageDataTables(nextPageDataTables);
+          setSelectedDataTables((current) => rematchAnalysisDataTableSelection(current, [
+            ...nextRawTables.map(rawTableToSelection),
+            ...nextTopicTables.map(topicTableToSelection),
+            ...nextPageDataTables.map(pageDataToSelection),
+          ]));
           const configuredSkills = selectAvailableAnalysisSkills(runtimeAssetResponse.analysis_skills || [])
             .map((skill) => ({
               id: skill.id,

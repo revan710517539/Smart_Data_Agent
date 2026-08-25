@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from calendar import monthrange
 from datetime import datetime, timedelta
@@ -109,6 +110,59 @@ def _configuration_binding_for_table(client: Any, table: dict[str, Any], sql_id:
         if _delivery_relative_path(delivery.get("path"), institution_directory) == table_path:
             matches.append(item)
     return dict(matches[0]) if len(matches) == 1 else {}
+
+
+_DELIVERY_DATE_SUFFIX_RE = re.compile(
+    r"[_\-.]?(?:19|20)\d{2}[-_.]?\d{2}[-_.]?\d{2}$"
+)
+_DELIVERY_TIMESTAMP_PREFIX_RE = re.compile(r"^(?:19|20)\d{6}[_\-]\d{6}[_\-]")
+
+
+def _sql_title_key(value: str) -> str:
+    text = _DELIVERY_TIMESTAMP_PREFIX_RE.sub("", str(value or "").strip())
+    text = _DELIVERY_DATE_SUFFIX_RE.sub("", text)
+    return re.sub(r"[\s_\-]+", "", text).casefold()
+
+
+def _select_refresh_binding(client: Any, table: dict[str, Any], sql_id: str = "") -> dict[str, Any]:
+    """Choose the SQL that 刷新 should run, including before a CSV receipt exists."""
+
+    if sql_id:
+        return dict(client.binding(sql_id))
+    configured = _configuration_binding_for_table(client, table)
+    if configured:
+        return configured
+    items = [item for item in (client.list_bindings().get("items") or []) if isinstance(item, dict)]
+    table_key = _sql_title_key(str(table.get("tableNameCn") or table.get("fileName") or ""))
+    name_matches = [
+        item
+        for item in items
+        if _sql_title_key(str(item.get("sqlName") or "")) == table_key and table_key
+    ]
+    if len(name_matches) == 1:
+        return dict(name_matches[0])
+    if len(items) == 1:
+        return dict(items[0])
+    if len(name_matches) > 1 or len(items) > 1:
+        raise ValueError("data_crawler_sql_binding_ambiguous")
+    return {}
+
+
+def _refresh_execution_parameters(binding: dict[str, Any]) -> dict[str, str]:
+    specs = {
+        str(item.get("name") or ""): str(item.get("type") or "")
+        for item in binding.get("parameters") or []
+        if isinstance(item, dict) and str(item.get("name") or "")
+    }
+    if any(kind not in {"date", "month", "datetime"} for kind in specs.values()):
+        raise ValueError("non_temporal_sql_parameters_not_supported")
+    parameter_bindings = {name: "reference" for name in specs}
+    return _resolve_temporal_parameters(
+        binding,
+        {},
+        parameter_bindings,
+        datetime.now(ZoneInfo("Asia/Shanghai")),
+    )
 
 
 def _binding_for_table(client: Any, table: dict[str, Any], sql_id: str = "") -> dict[str, Any]:
@@ -467,6 +521,66 @@ def handle_data_crawler_schedule_test(handler: Any) -> None:
             "parameter_count": len(resolved),
             "receipt_sha256": str(table.get("contentHash") or ""),
         })
+    except Exception as exc:
+        send_route_exception(handler, exc)
+
+
+def handle_data_crawler_schedule_refresh(handler: Any) -> None:
+    try:
+        payload = handler._read_json()
+        context = handler._request_context(payload=payload)
+        handler._require_asset_permission(context, "create")
+        handler._require_automation_permission(context, "create")
+        source_key = str(payload.get("source_key") or "").strip()
+        _catalog, table = _raw_table(handler, context.tenant_id, source_key)
+        client = client_for_tenant(context.tenant_id)
+        binding = _select_refresh_binding(client, table, str(payload.get("sqlId") or ""))
+        if not binding:
+            raise ValueError("data_crawler_sql_binding_not_found")
+        resolved = _refresh_execution_parameters(binding)
+        execution = client.execute(
+            str(binding["sqlId"]),
+            {
+                "executionId": f"sda-refresh-{uuid4().hex}",
+                "parameters": resolved,
+                "parameterBindings": {},
+                "timezone": "Asia/Shanghai",
+            },
+        )
+        handler._write_audit(
+            context,
+            "data_crawler.schedule.refresh",
+            "raw_table",
+            source_key,
+            {"sql_id": str(binding.get("sqlId") or ""), "run_id": str(execution.get("runId") or "")},
+        )
+        handler._send_json(
+            {
+                "tenant_id": context.tenant_id,
+                "source_key": source_key,
+                "binding": binding,
+                "resolved_parameters": resolved,
+                "run": {
+                    "run_id": str(execution.get("runId") or ""),
+                    "status": str(execution.get("status") or ""),
+                    "sql_id": str(execution.get("sqlId") or binding.get("sqlId") or ""),
+                },
+            }
+        )
+    except Exception as exc:
+        send_route_exception(handler, exc)
+
+
+def handle_data_crawler_schedule_execution_get(handler: Any, query: str) -> None:
+    try:
+        params = parse_qs(query)
+        context = handler._request_context(params=params)
+        handler._require_asset_permission(context, "read")
+        run_id = str(first_query_value(params, "run_id") or "").strip()
+        if not run_id:
+            raise ValueError("data_crawler_run_id_required")
+        result = client_for_tenant(context.tenant_id).execution(run_id)
+        handler._send_json({"tenant_id": context.tenant_id, "run": result})
     except Exception as exc:
         send_route_exception(handler, exc)
 

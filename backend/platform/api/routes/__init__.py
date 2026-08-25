@@ -56,7 +56,9 @@ from .data_acquisition import (
 from .data_crawler_schedule import (
     handle_data_crawler_schedule_delete,
     handle_data_crawler_schedule_execute,
+    handle_data_crawler_schedule_execution_get,
     handle_data_crawler_schedule_get,
+    handle_data_crawler_schedule_refresh,
     handle_data_crawler_schedule_save,
     handle_data_crawler_schedule_statuses_get,
     handle_data_crawler_schedule_test,
@@ -232,6 +234,7 @@ from .traces import handle_trace_spans_get
 GET_ROUTE_HANDLERS = {
     "/api/data-crawler-schedule": handle_data_crawler_schedule_get,
     "/api/data-crawler-schedule/statuses": handle_data_crawler_schedule_statuses_get,
+    "/api/data-crawler-schedule/execution": handle_data_crawler_schedule_execution_get,
     "/mcp": handle_mcp_stream_get,
     "/api/auth/me": handle_auth_me,
     "/api/auth/oidc/start": handle_auth_oidc_start,
@@ -304,6 +307,7 @@ GET_ROUTE_HANDLERS = {
 
 POST_ROUTE_HANDLERS = {
     "/api/data-crawler-schedule/execute": handle_data_crawler_schedule_execute,
+    "/api/data-crawler-schedule/refresh": handle_data_crawler_schedule_refresh,
     "/api/data-crawler-schedule/test": handle_data_crawler_schedule_test,
     "/mcp": handle_mcp_stream_post,
     "/api/auth/login": handle_auth_login,

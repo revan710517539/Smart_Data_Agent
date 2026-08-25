@@ -469,7 +469,7 @@ export function AnalysisWorkspacePanel({ revealedDataPoint, wide = false, onWide
             </div>
             {notice ? <div className="mt-2 rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[10px] text-[#636366]">{notice}</div> : null}
           </div>
-          <div className="relative z-20 shrink-0 border-t border-[#ececf0] bg-white p-2" data-analysis-workspace-composer="true">
+          <div className="relative z-20 shrink-0 border-t border-[#ececf0] bg-white p-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))]" data-analysis-workspace-composer="true">
             {visibleThreads.some((thread) => thread.parent_thread_id && thread.status === "active" && thread.thread_id !== activeThread?.thread_id) ? (
               <div className="mb-2 flex items-center gap-1.5">
                 {visibleThreads.filter((thread) => thread.parent_thread_id && thread.status === "active" && thread.thread_id !== activeThread?.thread_id).map((thread) => <label key={thread.thread_id} className="flex h-7 items-center gap-1 rounded-md border border-[#e5e5ea] px-2 text-[9px] text-[#636366]"><input type="checkbox" checked={selectedMergeIds.includes(thread.thread_id)} onChange={(event) => setSelectedMergeIds((current) => event.target.checked ? [...current, thread.thread_id] : current.filter((id) => id !== thread.thread_id))} />{thread.title}</label>)}

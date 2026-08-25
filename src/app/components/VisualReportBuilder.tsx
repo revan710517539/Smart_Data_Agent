@@ -291,7 +291,7 @@ export function VisualReportBuilder() {
           {mode === "browse" && !report.cards.length && <div className="flex min-h-[560px] items-center justify-center text-center"><div><Table2 className="mx-auto h-8 w-8 text-[#d0d5d2]" /><div className="mt-3 text-[12px] text-[#8f9692]">当前报表还是空白页</div><div className="mt-1 text-[10px] text-[#b1b6b3]">点击右上角“编辑”后新增图表</div></div></div>}
       </div>
       {saving && <div className="mt-2 text-right text-[10px] text-[#9aa19d]">正在保存…</div>}
-      {modalOpen && <VisualChartModal rawTables={rawTables} topicTables={topicTables} pageDataTables={pageDataTables} tenantId={tenantId} userId={userId} reportId={report.id} drafts={visualChartDrafts} draftRevision={visualChartDraftRevision} onDraftChange={updateVisualChartDraft} onRestore={resetVisualChartDrafts} onCancel={() => setModalOpen(false)} onSave={addCard} />}
+      {modalOpen && <VisualChartModal rawTables={rawTables} topicTables={topicTables} tenantId={tenantId} userId={userId} reportId={report.id} drafts={visualChartDrafts} draftRevision={visualChartDraftRevision} onDraftChange={updateVisualChartDraft} onRestore={resetVisualChartDrafts} onCancel={() => setModalOpen(false)} onSave={addCard} />}
     </div>
   );
 }
@@ -363,10 +363,9 @@ function ReportCollection({ title, subtitle, icon: Icon, reports, onOpen, emptyT
   </section>;
 }
 
-function VisualChartModal({ rawTables, topicTables, pageDataTables, tenantId, userId, reportId, drafts, draftRevision, onDraftChange, onRestore, onCancel, onSave }: {
+function VisualChartModal({ rawTables, topicTables, tenantId, userId, reportId, drafts, draftRevision, onDraftChange, onRestore, onCancel, onSave }: {
   rawTables: RawTableAsset[];
   topicTables: TopicTableAsset[];
-  pageDataTables: PageDataAsset[];
   tenantId: string;
   userId: string;
   reportId: string;
@@ -378,7 +377,7 @@ function VisualChartModal({ rawTables, topicTables, pageDataTables, tenantId, us
   onSave: (card: VisualReportCard) => void;
 }) {
   const loadSequenceRef = useRef(0);
-  const [tab, setTab] = useState<"raw" | "topic" | "page_data">("raw");
+  const [tab, setTab] = useState<"raw" | "topic">("raw");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<VisualReportDataset | null>(null);
   const [rows, setRows] = useState<AnalysisRow[]>([]);
@@ -386,7 +385,7 @@ function VisualChartModal({ rawTables, topicTables, pageDataTables, tenantId, us
   const [config, setConfig] = useState<VisualizationCardConfig>(emptyConfig);
   const [loadingRows, setLoadingRows] = useState(false);
   const [rowError, setRowError] = useState("");
-  const datasets = (tab === "raw" ? rawTables : tab === "topic" ? topicTables : pageDataTables)
+  const datasets = (tab === "raw" ? rawTables : topicTables)
     .filter((item) => datasetName(item).toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
 
   const chooseDataset = async (dataset: VisualReportDataset) => {
@@ -436,7 +435,7 @@ function VisualChartModal({ rawTables, topicTables, pageDataTables, tenantId, us
     }
   };
 
-  const switchTab = (nextTab: "raw" | "topic" | "page_data") => {
+  const switchTab = (nextTab: "raw" | "topic") => {
     loadSequenceRef.current += 1;
     setTab(nextTab);
     setSelected(null);
@@ -466,10 +465,9 @@ function VisualChartModal({ rawTables, topicTables, pageDataTables, tenantId, us
       </div>
       <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)] overflow-hidden lg:grid-cols-[300px_minmax(0,1fr)] lg:grid-rows-1">
         <div className="flex min-h-0 flex-col border-b border-[#eef1ef] p-4 lg:border-b-0 lg:border-r">
-          <div className="mb-3 flex rounded-lg bg-[#f2f5f3] p-0.5">
+          <div className="mb-3 flex rounded-lg bg-[#f2f5f3] p-0.5" data-visual-report-dataset-tabs="true">
             <button type="button" onClick={() => switchTab("raw")} className={`h-8 flex-1 rounded-md text-[11px] ${tab === "raw" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#7b827e]"}`}>原始表 {rawTables.length}</button>
             <button type="button" onClick={() => switchTab("topic")} className={`h-8 flex-1 rounded-md text-[11px] ${tab === "topic" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#7b827e]"}`}>主题表 {topicTables.length}</button>
-            <button type="button" onClick={() => switchTab("page_data")} className={`h-8 flex-1 rounded-md text-[11px] ${tab === "page_data" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#7b827e]"}`}>多机构页面 {pageDataTables.length}</button>
           </div>
           <div className="relative mb-3"><Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-[#a1a7a3]" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索数据集" className="h-9 w-full rounded-lg border border-[#e1e6e3] pl-8 pr-3 text-[11px] outline-none focus:border-[#a9cdb5]" /></div>
           <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">

@@ -94,18 +94,35 @@ def _query_selected_csv(csv_source: Any | None, request: SkillRequest) -> SkillR
         if csv_source is None:
             raise RuntimeError("selected_csv_source_unavailable")
         tenant_source = csv_source.for_tenant(request.context.tenant_id)
+        catalog = tenant_source.table_assets(preview_limit=1)
         authorized = next(
             (
                 table
-                for table in tenant_source.table_assets(preview_limit=1)
+                for table in catalog
                 if str(table.get("id") or "").strip() == requested_id
                 and str(table.get("relativePath") or "").strip() == requested_path
             ),
             None,
         )
         if authorized is None:
+            requested_source_key = str(selected.get("sourceKey") or "").strip()
+            if requested_source_key:
+                authorized = next(
+                    (
+                        table
+                        for table in catalog
+                        if str(table.get("sourceKey") or "").strip() == requested_source_key
+                    ),
+                    None,
+                )
+        if authorized is None:
             raise PermissionError("selected_csv_not_published_or_not_authorized")
-        headers, source_rows = tenant_source.read_rows(requested_path, max_rows=50_000)
+        # Daily deliveries keep superseded files on disk. Always read the
+        # current catalog path, never the stale picker snapshot.
+        headers, source_rows = tenant_source.read_rows(
+            str(authorized.get("relativePath") or requested_path),
+            max_rows=50_000,
+        )
     fields = [field for field in authorized.get("fields") or [] if isinstance(field, dict)]
     page_data_selected = str(authorized.get("kind") or "") == "page_data"
     uploaded_selected = _is_uploaded_analysis_table(authorized)
@@ -182,7 +199,7 @@ def _query_selected_csv(csv_source: Any | None, request: SkillRequest) -> SkillR
         metric: _aggregate_metric(normalized_rows, metric, definitions.get(metric) or {})
         for metric in metrics
     }
-    dataset_id = str(request.inputs.get("dataset_id") or authorized.get("tableNameEn") or requested_id)
+    dataset_id = str(request.inputs.get("dataset_id") or authorized.get("tableNameEn") or authorized.get("id") or requested_id)
     metric_semantics = {
         metric: {
             "aggregation": str((definitions.get(metric) or {}).get("aggregation") or "sum"),
@@ -209,8 +226,8 @@ def _query_selected_csv(csv_source: Any | None, request: SkillRequest) -> SkillR
         }
     sql = _csv_query_statement(dataset_id, metrics, dimensions, definitions)
     source_snapshot = {
-        "table_id": requested_id,
-        "relative_path": requested_path,
+        "table_id": str(authorized.get("id") or requested_id),
+        "relative_path": str(authorized.get("relativePath") or requested_path),
         "content_hash": str(authorized.get("contentHash") or ""),
         "schema_fingerprint": str(authorized.get("schemaFingerprint") or ""),
         "source_key": str(authorized.get("sourceKey") or ""),

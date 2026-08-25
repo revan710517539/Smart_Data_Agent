@@ -299,6 +299,55 @@ class MemoryExtractionTest(unittest.TestCase):
         self.assertEqual([table["id"] for table in context["selected_data_tables"]], ["csv_current_delivery"])
         self.assertEqual(context["raw_table_count"], 1)
 
+    def test_analysis_selected_csv_resolves_stale_delivery_by_source_key(self) -> None:
+        current = {
+            "id": "csv_current_delivery",
+            "tableNameEn": "csv_current",
+            "sourceKey": "990f5d708c26d1d0078d1b590803539e",
+            "relativePath": "csv/yushu/2026-08-25/current.csv",
+            "fields": [],
+        }
+        csv_source = SimpleNamespace(
+            for_tenant=lambda tenant_id: SimpleNamespace(table_assets=lambda: [current]),
+        )
+        services = SimpleNamespace(
+            data_asset_store=self.store,
+            metric_dictionary_store=None,
+            data_acquisition_service=SimpleNamespace(csv_source=csv_source),
+        )
+
+        context = _build_asset_context(
+            services,
+            "tenant_demo",
+            "分析当前交付",
+            {
+                "selected_data_tables": [{
+                    "id": "csv_old_delivery",
+                    "code": "csv_old",
+                    "kind": "raw",
+                    "sourceKey": "990f5d708c26d1d0078d1b590803539e",
+                    "relativePath": "csv/yushu/2026-08-14/old.csv",
+                }],
+            },
+        )
+
+        self.assertEqual(context["selected_data_tables"][0]["id"], "csv_current_delivery")
+        self.assertEqual(context["selected_data_tables"][0]["relativePath"], current["relativePath"])
+        with self.assertRaisesRegex(PermissionError, "selected_data_asset_not_published_or_not_authorized"):
+            _build_asset_context(
+                services,
+                "tenant_demo",
+                "分析已下线数据",
+                {
+                    "selected_data_tables": [{
+                        "id": "csv_gone",
+                        "code": "csv_gone",
+                        "sourceKey": "missing_source_key",
+                        "relativePath": "csv/yushu/2026-08-14/gone.csv",
+                    }],
+                },
+            )
+
     def test_visual_follow_up_resolves_only_explicit_published_detail_table(self) -> None:
         lineage = InMemoryLineageStore()
         lineage.record_edge("tenant_demo", {

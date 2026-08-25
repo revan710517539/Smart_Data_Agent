@@ -1556,6 +1556,68 @@ def _selected_tables_have_query_semantics(tables: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _match_selected_analysis_table(
+    requested: dict[str, Any],
+    published_tables: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Resolve a picker selection against the current tenant catalog.
+
+    Data Crawler deliveries change ``id`` (hash of the dated relative path).
+    ``sourceKey`` is the logical source identity and must keep a previously
+    selected table authorized against the latest catalog entry.
+    """
+
+    requested_id = str(requested.get("id") or "").strip()
+    if requested_id:
+        matched = next(
+            (item for item in published_tables if str(item.get("id") or "").strip() == requested_id),
+            None,
+        )
+        if matched is not None:
+            return matched
+    requested_code = str(requested.get("code") or "").strip()
+    if requested_code:
+        matched = next(
+            (
+                item
+                for item in published_tables
+                if requested_code
+                in {
+                    str(item.get("code") or "").strip(),
+                    str(item.get("tableNameEn") or "").strip(),
+                }
+            ),
+            None,
+        )
+        if matched is not None:
+            return matched
+    requested_source_key = str(requested.get("sourceKey") or "").strip()
+    if requested_source_key:
+        matched = next(
+            (
+                item
+                for item in published_tables
+                if str(item.get("sourceKey") or "").strip() == requested_source_key
+            ),
+            None,
+        )
+        if matched is not None:
+            return matched
+    requested_path = str(requested.get("relativePath") or "").strip()
+    if requested_path:
+        matched = next(
+            (
+                item
+                for item in published_tables
+                if str(item.get("relativePath") or "").strip() == requested_path
+            ),
+            None,
+        )
+        if matched is not None:
+            return matched
+    return None
+
+
 def _build_asset_context(
     services: PlatformServices,
     tenant_id: str,
@@ -1620,22 +1682,7 @@ def _build_asset_context(
     )
     selected_data_tables = []
     for requested in requested_data_tables[:8]:
-        requested_ids = {
-            str(requested.get("id") or "").strip(),
-            str(requested.get("code") or "").strip(),
-        } - {""}
-        matched = next(
-            (
-                item
-                for item in published_tables
-                if requested_ids
-                & {
-                    str(item.get("id") or "").strip(),
-                    str(item.get("code") or item.get("tableNameEn") or "").strip(),
-                }
-            ),
-            None,
-        )
+        matched = _match_selected_analysis_table(requested, published_tables)
         if matched is None:
             raise PermissionError("selected_data_asset_not_published_or_not_authorized")
         if str(matched.get("kind") or "") == "page_data":

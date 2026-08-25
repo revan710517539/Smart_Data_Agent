@@ -177,7 +177,16 @@ export function MessageBoardPanel({
   };
 
   return (
-    <div className="space-y-2.5 py-2" data-message-board-panel="true">
+    <div className="flex h-full min-h-0 flex-col" data-message-board-panel="true">
+      <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto overscroll-contain py-2">
+      {notice && <div className="rounded-lg bg-white px-3 py-2 text-[11px] text-[#636366]" role="status">{notice}</div>}
+      {loading ? (
+        <div className="flex items-center justify-center py-10 text-[#8a8a8e]"><LoaderCircle className="h-4 w-4 animate-spin" /></div>
+      ) : messages.map((message) => (
+        <MessageCard key={message.message_id} message={message} expanded={expandedId === message.message_id} onToggle={() => setExpandedId((current) => current === message.message_id ? null : message.message_id)} onEdit={() => openEdit(message)} onArchive={() => void removeMessage(message)} archiving={archivingId === message.message_id} tenantId={tenantId} userId={userId} />
+      ))}
+      </div>
+      <div className="shrink-0 border-t border-[#ececf0] bg-[#f7f8fa] pt-2" data-message-board-composer="true">
       <button
         type="button"
         onClick={openNew}
@@ -189,7 +198,7 @@ export function MessageBoardPanel({
       </button>
 
       {draftOpen && (
-        <article className="rounded-xl border border-[#e5e5ea] bg-white" data-message-board-editor="true">
+        <article className="mt-2 rounded-xl border border-[#e5e5ea] bg-white" data-message-board-editor="true">
           <header className="flex items-center justify-between border-b border-[#f0f0f2] px-3 py-2.5">
             <div className="flex min-w-0 items-center gap-2 text-[12px] text-[#1d1d1f]">
               <MessageSquarePlus className="h-4 w-4 shrink-0 text-[#0a66c2]" />
@@ -244,13 +253,7 @@ export function MessageBoardPanel({
           </div>
         </article>
       )}
-
-      {notice && <div className="rounded-lg bg-white px-3 py-2 text-[11px] text-[#636366]" role="status">{notice}</div>}
-      {loading ? (
-        <div className="flex items-center justify-center py-10 text-[#8a8a8e]"><LoaderCircle className="h-4 w-4 animate-spin" /></div>
-      ) : messages.map((message) => (
-        <MessageCard key={message.message_id} message={message} expanded={expandedId === message.message_id} onToggle={() => setExpandedId((current) => current === message.message_id ? null : message.message_id)} onEdit={() => openEdit(message)} onArchive={() => void removeMessage(message)} archiving={archivingId === message.message_id} tenantId={tenantId} userId={userId} />
-      ))}
+      </div>
     </div>
   );
 }

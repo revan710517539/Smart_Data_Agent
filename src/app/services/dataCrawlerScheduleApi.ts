@@ -107,6 +107,26 @@ export function executeDataCrawlerSchedule({ tenantId, userId = getDefaultUserId
   });
 }
 
+export function refreshDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey, sqlId }: Context & { sourceKey: string; sqlId?: string }) {
+  return apiRequest<{
+    binding: DataCrawlerBinding | null;
+    resolved_parameters: Record<string, string>;
+    run: { run_id: string; status: string; sql_id: string };
+  }>("/api/data-crawler-schedule/refresh", {
+    method: "POST",
+    context: { tenantId, userId },
+    body: { source_key: sourceKey, sqlId: sqlId || "" },
+  });
+}
+
+export function fetchDataCrawlerScheduleExecution({ tenantId, userId = getDefaultUserId(), runId }: Context & { runId: string }) {
+  const query = new URLSearchParams({ run_id: runId });
+  return apiRequest<{ run: { runId?: string; status: string; message?: string; sqlId?: string } }>(`/api/data-crawler-schedule/execution?${query.toString()}`, {
+    method: "GET",
+    context: { tenantId, userId },
+  });
+}
+
 export function clearDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey }: Context & { sourceKey: string }) {
   return apiRequest<{ cleared: boolean }>("/api/data-crawler-schedule", {
     method: "DELETE",

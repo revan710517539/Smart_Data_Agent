@@ -1460,7 +1460,9 @@ export function WeeklyReport() {
 
   return (
     <div className="p-4 md:p-7">
-      <div className="weekly-report-print-hidden sticky top-0 z-20 -mx-4 mb-6 flex flex-col gap-4 bg-[#f8f8fa] px-4 py-3 md:-mx-7 md:px-7 xl:flex-row xl:items-start xl:justify-between" data-weekly-report-toolbar="true">
+      <div ref={reportBodyRef} className="relative grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_auto]" data-context-page-body="weekly-report">
+        <div className="min-w-0">
+      <div className="weekly-report-print-hidden sticky top-0 z-20 mb-6 flex flex-col gap-4 bg-[#f8f8fa] py-3 xl:flex-row xl:items-start xl:justify-between" data-weekly-report-toolbar="true">
         <div>
           <div className="flex items-center gap-2">
             <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">银行经营分析周报工作台</h2>
@@ -1534,8 +1536,6 @@ export function WeeklyReport() {
           </button>
         </div>
       </div>
-
-      <div ref={reportBodyRef} className="relative grid gap-5 xl:grid-cols-[minmax(0,1fr)_auto]" data-context-page-body="weekly-report">
         <AnalysisUnderlineProvider
           targets={analysisSelectionTargets.filter((target) => !target.itemId)}
           activeTargetId={rightRailTab === "analysis" ? selectedCommentTarget?.id : undefined}
@@ -1734,6 +1734,8 @@ export function WeeklyReport() {
             </div>
           </div>
         </section>
+        </AnalysisUnderlineProvider>
+        </div>
 
         <WeeklyReportSideRail
           activeTab={rightRailTab}
@@ -1785,7 +1787,6 @@ export function WeeklyReport() {
             railHeight: commentRailHeight,
           }}
         />
-        </AnalysisUnderlineProvider>
       </div>
       {pendingVisualReportDelete && (
         <VisualReportDeleteConfirm

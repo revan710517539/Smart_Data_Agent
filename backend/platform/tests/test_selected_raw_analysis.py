@@ -147,6 +147,60 @@ class SelectedRawAnalysisTest(unittest.TestCase):
                     },
                 ))
 
+    def test_selected_csv_query_uses_latest_delivery_for_stale_source_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tenant_dir = Path(temp_dir) / "华兴银行" / "csv" / "yushu"
+            older = tenant_dir / "2026-08-14"
+            newest = tenant_dir / "2026-08-25"
+            older.mkdir(parents=True)
+            newest.mkdir(parents=True)
+            (older / "20260814_104950_经营数据.csv").write_text(
+                "日期,总完件\n2026-08-14,10\n",
+                encoding="utf-8",
+            )
+            (newest / "20260825_094222_经营数据.csv").write_text(
+                "日期,总完件\n2026-08-25,99\n",
+                encoding="utf-8",
+            )
+            csv_source = CSVFolderSource(temp_dir)
+            latest = csv_source.for_tenant("tenant:华兴银行").table_assets()[0]
+            self.assertEqual(latest["relativePath"], "csv/yushu/2026-08-25/20260825_094222_经营数据.csv")
+            stale = {
+                **latest,
+                "id": "csv_stale_delivery",
+                "tableNameEn": "csv_stale",
+                "relativePath": "csv/yushu/2026-08-14/20260814_104950_经营数据.csv",
+            }
+            plan = _build_temporary_raw_table_plan({}, latest, "分析一下这个数据")
+
+            class UnexpectedSemanticService:
+                def query(self, _request):  # pragma: no cover - must not be called.
+                    raise AssertionError("selected CSV must not fall back to semantic service")
+
+            _, handler = build_supersonic_query_skill(UnexpectedSemanticService(), csv_source)
+            result = handler(SkillRequest(
+                skill_id="supersonic.query",
+                context=ExecutionContext(user_id="u_super_admin", tenant_id="tenant:华兴银行"),
+                inputs={
+                    "question": "分析一下这个数据",
+                    "dataset_id": plan["dataset_id"],
+                    "metrics": plan["metrics"],
+                    "dimensions": plan["dimensions"],
+                    "limit": 50,
+                    "context": {
+                        "analysis_plan": plan,
+                        "selected_raw_table": stale,
+                    },
+                },
+            ))
+
+            self.assertEqual(result.output["data"][0]["field_2"], 99)
+            self.assertEqual(result.output["semantic_info"]["source_snapshot"]["table_id"], latest["id"])
+            self.assertEqual(
+                result.output["semantic_info"]["source_snapshot"]["relative_path"],
+                latest["relativePath"],
+            )
+
     def test_run_analysis_uses_selected_csv_instead_of_default_dataset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             tenant_dir = Path(temp_dir) / "华兴银行"
@@ -188,6 +242,57 @@ class SelectedRawAnalysisTest(unittest.TestCase):
             self.assertEqual(semantic_info["schema_mapping"]["field_labels"]["field_2"], "总完件")
             self.assertEqual(semantic_info["source_snapshot"]["table_id"], table["id"])
             self.assertFalse(response["skill_results"][0]["evidence"]["publishable"])
+
+    def test_run_analysis_resolves_stale_csv_selection_by_source_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tenant_dir = Path(temp_dir) / "华兴银行" / "csv" / "yushu"
+            older = tenant_dir / "2026-08-14"
+            newest = tenant_dir / "2026-08-25"
+            older.mkdir(parents=True)
+            newest.mkdir(parents=True)
+            (older / "20260814_104950_经营数据.csv").write_text(
+                "日期,总完件\n2026-08-14,10\n",
+                encoding="utf-8",
+            )
+            (newest / "20260825_094222_经营数据.csv").write_text(
+                "日期,总完件\n2026-08-25,99\n",
+                encoding="utf-8",
+            )
+            with patch.dict(environ, {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": temp_dir}):
+                services = build_local_platform()
+            try:
+                latest = services.data_acquisition_service.csv_source.for_tenant("tenant:华兴银行").table_assets()[0]
+                with patch(
+                    "backend.platform.intelligent_analysis.engine.call_model_text_completion",
+                    return_value={"status": "failed", "error_code": "test_model_disabled"},
+                ):
+                    response = run_analysis(
+                        services,
+                        user_id="u_super_admin",
+                        tenant_id="tenant:华兴银行",
+                        question="分析一下这个数据",
+                        page_context={
+                            "route": "self-analysis/query",
+                            "selected_data_tables": [{
+                                "id": "csv_stale_delivery",
+                                "code": "csv_stale",
+                                "kind": "raw",
+                                "sourceKey": latest["sourceKey"],
+                                "relativePath": "csv/yushu/2026-08-14/20260814_104950_经营数据.csv",
+                            }],
+                            "analysis_policy": {"resultDelivery": "data_first"},
+                        },
+                    )
+            finally:
+                services.close()
+
+            self.assertEqual(response["status"], "review_required")
+            self.assertEqual(response["asset_context"]["selected_data_tables"][0]["id"], latest["id"])
+            self.assertEqual(
+                response["skill_results"][0]["semantic_info"]["source_snapshot"]["table_id"],
+                latest["id"],
+            )
+            self.assertEqual(response["skill_results"][0]["data"][0]["field_2"], 99)
 
 
 if __name__ == "__main__":

@@ -13,8 +13,11 @@ from backend.platform.api.routes.data_crawler_schedule import (
     _binding_for_table,
     _configuration_binding_for_table,
     _optional_status_endpoint,
+    _refresh_execution_parameters,
     _resolve_temporal_parameters,
     _schedule_statuses,
+    _select_refresh_binding,
+    _sql_title_key,
     _task_definition,
     handle_data_crawler_schedule_test,
 )
@@ -376,6 +379,60 @@ class DataCrawlerScheduleContractTest(unittest.TestCase):
                 }
             },
         )
+
+
+    def test_refresh_binding_matches_table_title_when_receipt_is_missing(self) -> None:
+        items = [
+            {"sqlId": "sql_flow", "sqlName": "双周报流量与审批转化"},
+            {"sqlId": "sql_other", "sqlName": "经营日报"},
+        ]
+
+        class Client:
+            endpoint = SimpleNamespace(institution_directory="郑州银行")
+
+            @staticmethod
+            def list_bindings() -> dict[str, object]:
+                return {"items": items}
+
+            @staticmethod
+            def binding(sql_id: str) -> dict[str, object]:
+                return next(item for item in items if item["sqlId"] == sql_id)
+
+        binding = _select_refresh_binding(
+            Client(),
+            {"tableNameCn": "双周报流量与审批转化_2026-08-14", "fileName": "20260814_130518_双周报流量与审批转化.csv"},
+        )
+        self.assertEqual(binding["sqlId"], "sql_flow")
+        self.assertEqual(_sql_title_key("事件发生口径转化-经营贷_2026-08-14"), _sql_title_key("事件发生口径转化-经营贷"))
+
+    def test_refresh_binding_requires_explicit_sql_when_several_candidates_exist(self) -> None:
+        items = [
+            {"sqlId": "sql_a", "sqlName": "报表甲"},
+            {"sqlId": "sql_b", "sqlName": "报表乙"},
+        ]
+
+        class Client:
+            endpoint = SimpleNamespace(institution_directory="华兴银行")
+
+            @staticmethod
+            def list_bindings() -> dict[str, object]:
+                return {"items": items}
+
+            @staticmethod
+            def binding(sql_id: str) -> dict[str, object]:
+                return next(item for item in items if item["sqlId"] == sql_id)
+
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            _select_refresh_binding(Client(), {"tableNameCn": "无关名称", "relativePath": "无关.csv"})
+        chosen = _select_refresh_binding(Client(), {"tableNameCn": "无关名称"}, "sql_b")
+        self.assertEqual(chosen["sqlId"], "sql_b")
+
+    def test_refresh_execution_uses_reference_day_for_today(self) -> None:
+        binding = {
+            "parameters": [{"name": "today", "type": "date"}],
+        }
+        resolved = _refresh_execution_parameters(binding)
+        self.assertRegex(resolved["today"], r"^\d{4}-\d{2}-\d{2}$")
 
 
 if __name__ == "__main__":

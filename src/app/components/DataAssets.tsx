@@ -71,7 +71,9 @@ import {
   executeDataCrawlerSchedule,
   fetchAutomationRun,
   fetchDataCrawlerSchedule,
+  fetchDataCrawlerScheduleExecution,
   fetchDataCrawlerScheduleStatuses,
+  refreshDataCrawlerSchedule,
   saveDataCrawlerSchedule,
   testDataCrawlerSchedule,
   type DataCrawlerScheduleDraft,
@@ -2843,20 +2845,26 @@ function DataCrawlerSchedulePanel({
   const [draft, setDraft] = useState<DataCrawlerScheduleDraft | null>(null);
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState("");
   const [configurationUnavailable, setConfigurationUnavailable] = useState(false);
+  const [selectedSqlId, setSelectedSqlId] = useState("");
 
   const reload = async () => {
-    if (!table.sourceKey) return;
+    if (!table.sourceKey) return null;
     setLoading(true);
     try {
       const response = await fetchDataCrawlerSchedule({ tenantId, userId, sourceKey: table.sourceKey });
+      const nextDraft = defaultDataCrawlerDraft(response);
       setState(response);
-      setDraft(defaultDataCrawlerDraft(response));
+      setDraft(nextDraft);
+      setSelectedSqlId(nextDraft.sqlId);
       setConfigurationUnavailable(false);
-      setNotice("");
+      if (!refreshing) setNotice("");
+      return response;
     } catch {
       setConfigurationUnavailable(true);
+      return null;
     } finally {
       setLoading(false);
     }
@@ -2864,9 +2872,72 @@ function DataCrawlerSchedulePanel({
 
   useEffect(() => { void reload(); }, [table.sourceKey, table.contentHash, tenantId, userId]);
 
+  const runRefresh = async (sqlId = selectedSqlId) => {
+    if (!table.sourceKey) return;
+    setRefreshing(true);
+    setNotice("正在触发 Data Crawler SQL 运行并拆解时间参数…");
+    try {
+      const result = await refreshDataCrawlerSchedule({ tenantId, userId, sourceKey: table.sourceKey, sqlId });
+      const deadline = Date.now() + 30 * 60 * 1000;
+      let status = result.run.status;
+      while (Date.now() < deadline && !["succeeded", "failed"].includes(status)) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1_500));
+        const current = await fetchDataCrawlerScheduleExecution({ tenantId, userId, runId: result.run.run_id });
+        status = String(current.run.status || "");
+        if (["failed", "cancelled"].includes(status)) throw new Error(current.run.message || "SQL 运行失败");
+        if (status === "succeeded") break;
+      }
+      if (status !== "succeeded") throw new Error("SQL 运行等待超时");
+      const refreshed = await reload();
+      const nextState = {
+        ...(refreshed || state || {}),
+        tenant_id: refreshed?.tenant_id || state?.tenant_id || tenantId,
+        source_key: table.sourceKey,
+        institution_id: refreshed?.institution_id || state?.institution_id || "",
+        institution_directory: refreshed?.institution_directory || state?.institution_directory || "",
+        validation_required: true,
+        available_bindings: refreshed?.available_bindings || state?.available_bindings || [],
+        task: refreshed?.task || state?.task || null,
+        binding: result.binding || refreshed?.binding || null,
+      };
+      const nextDraft = defaultDataCrawlerDraft(nextState);
+      setState(nextState);
+      setDraft(nextDraft);
+      setSelectedSqlId(result.binding?.sqlId || nextDraft.sqlId);
+      setNotice("数据已开始刷新；SQL 时间参数已拆解到本页，可继续完成定时配置。");
+    } catch (error) {
+      setNotice(apiErrorMessage(error, "刷新失败，请确认 Data Crawler 可连通后重试。"));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const refreshButton = (
+    <button
+      type="button"
+      disabled={refreshing || loading || !table.sourceKey}
+      onClick={() => void runRefresh()}
+      className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-[#d9dedb] bg-white px-3.5 text-[12px] font-medium text-[#3f4843] transition-colors hover:bg-[#f4f6f5] focus:outline-none focus:ring-2 focus:ring-[#dceee4] disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {refreshing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+      {refreshing ? "刷新中…" : "刷新"}
+    </button>
+  );
+
   if (!table.sourceKey) return <div className="p-4"><div className="flex items-start gap-3 rounded-lg border border-[#f3d5d0] bg-[#fff8f7] px-4 py-3 text-[11px] leading-5 text-[#a83c32]"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><div className="font-medium">暂时无法设置定时任务</div><div className="mt-0.5 text-[#8d5b55]">当前 CSV 缺少稳定来源标识，请先重新同步数据资产。</div></div></div></div>;
-  if (loading && !state) return <div className="flex min-h-[140px] items-center justify-center gap-2 p-4 text-[11px] text-[#8a8a8e]"><RefreshCw className="h-3.5 w-3.5 animate-spin" />正在读取定时任务配置…</div>;
-  if (!state || !draft) return <div className="px-4 py-5 text-[11px] leading-5 text-[#7a837e]"><div className="font-medium text-[#4e5752]">暂未读取到定时任务配置</div><div className="mt-1">打开 Tab 不会执行 SQL 或自动测试连接。{configurationUnavailable ? "请稍后重新打开；连通性错误仅在确定或执行时提示。" : ""}</div></div>;
+  if (loading && !state && !refreshing) return <div className="flex min-h-[140px] items-center justify-center gap-2 p-4 text-[11px] text-[#8a8a8e]"><RefreshCw className="h-3.5 w-3.5 animate-spin" />正在读取定时任务配置…</div>;
+  if (!state || !draft) {
+    return (
+      <div className="flex items-start justify-between gap-4 px-5 py-5">
+        <div className="min-w-0 text-[11px] leading-5 text-[#7a837e]">
+          <div className="font-medium text-[#4e5752]">暂未读取到定时任务配置</div>
+          <div className="mt-1">打开 Tab 不会自动执行 SQL。点击刷新将触发 Data Crawler 中该 SQL 的「运行」，并拆解时间参数到本页。{configurationUnavailable ? "若连接失败，请确认 Data Crawler 可用后重试。" : ""}</div>
+          {notice ? <div className={`mt-2 ${notice.includes("失败") ? "text-[#a83c32]" : "text-[#087647]"}`}>{notice}</div> : null}
+        </div>
+        {refreshButton}
+      </div>
+    );
+  }
 
   const binding = state.binding;
   const unsupported = (binding?.parameters || []).filter((item) => !["date", "month", "datetime"].includes(item.type));
@@ -2954,19 +3025,34 @@ function DataCrawlerSchedulePanel({
     }
   };
 
-  const successfulNotice = notice.includes("完成") || notice.includes("已保存") || notice.includes("已清空") || notice.includes("通过");
+  const successfulNotice = notice.includes("完成") || notice.includes("已保存") || notice.includes("已清空") || notice.includes("通过") || notice.includes("拆解");
   const pendingNotice = notice.includes("正在");
 
   return (
     <div className="px-5 py-4 text-[12px] text-[#3a3a3c]">
       {!binding ? (
-        <div className="py-8 text-center leading-5 text-[#7a837e]">
-          <div className="font-medium text-[#4e5752]">暂未识别到唯一的关联 SQL</div>
-          <p className="mt-1 text-[10px]">当前页面不会自动执行或报错；机构、SQL 与 CSV 回执将在提交操作时统一校验。</p>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 leading-5 text-[#7a837e]">
+            <div className="font-medium text-[#4e5752]">暂未识别到唯一的关联 SQL</div>
+            <p className="mt-1 text-[10px]">点击刷新将按 Data Crawler「运行」执行一次 SQL，并把时间参数拆解到本页。打开 Tab 不会自动执行。</p>
+            {state.available_bindings.length > 1 ? (
+              <label className="mt-3 block max-w-md">
+                <span className="mb-1.5 block text-[11px] font-medium text-[#626b66]">选择要运行的 SQL</span>
+                <select aria-label="选择要运行的 SQL" className={scheduleControlClass} value={selectedSqlId} onChange={(event) => setSelectedSqlId(event.target.value)}>
+                  <option value="">请选择 SQL</option>
+                  {state.available_bindings.map((item) => (
+                    <option key={item.sqlId} value={item.sqlId}>{item.sqlName}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {notice ? <div className={`mt-2 text-[11px] ${notice.includes("失败") ? "text-[#a83c32]" : "text-[#087647]"}`}>{notice}</div> : null}
+          </div>
+          {refreshButton}
         </div>
       ) : (
         <>
-          <div className="grid items-start gap-3 md:grid-cols-[minmax(0,1.15fr)_minmax(0,0.8fr)_minmax(0,1fr)]">
+          <div className="grid items-start gap-3 md:grid-cols-[minmax(0,1.15fr)_minmax(0,0.8fr)_minmax(0,1fr)_auto]">
               <div>
                 <div className="mb-1.5 text-[11px] font-medium text-[#626b66]">关联 SQL</div>
                 <div className="flex h-9 min-w-0 items-center gap-2 rounded-lg border border-[#e4e8e5] bg-[#f8faf9] px-3 text-[12px] text-[#303633]">
@@ -2981,6 +3067,7 @@ function DataCrawlerSchedulePanel({
                 {!binding.parameters.length && <span className="mt-1.5 block text-[10px] text-[#8a928d]">无参数 SQL 仅支持手动执行一次。</span>}
               </div>
               {draft.recurrence !== "none" && <div><span className="mb-1.5 block text-[11px] font-medium text-[#626b66]">执行日期与时间</span><ScheduleDateControl label="执行日期与时间" value={draft.executionAt} includeTime onChange={(value) => setDraft({ ...draft, executionAt: value })} /></div>}
+              <div className="flex h-9 items-end self-start pt-6">{refreshButton}</div>
           </div>
           <div className="mt-5 border-t border-[#e8ece9] pt-3.5">
               <div className="flex items-center justify-between gap-3">

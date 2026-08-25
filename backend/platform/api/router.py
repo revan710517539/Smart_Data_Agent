@@ -256,6 +256,8 @@ API_ROUTE_REGISTRY = APIRouteRegistry(
         RouteSpec("GET", "/api/data-crawler-schedule/statuses", "data_crawler_schedule_statuses_get", "ingestion", "List active tenant-scoped Data Crawler schedules for raw-table list status labels."),
         RouteSpec("PUT", "/api/data-crawler-schedule", "data_crawler_schedule_save", "ingestion", "Save a tenant-scoped SDA schedule and claim Data Crawler control without mutating source SQL."),
         RouteSpec("POST", "/api/data-crawler-schedule/test", "data_crawler_schedule_test", "ingestion", "Test tenant-scoped Data Crawler connectivity, SQL binding, CSV receipt and temporal parameters without saving or executing."),
+        RouteSpec("POST", "/api/data-crawler-schedule/refresh", "data_crawler_schedule_refresh", "ingestion", "Run the bound Data Crawler SQL once, matching the SQL editor Run action, and return template parameters for SDA schedule configuration."),
+        RouteSpec("GET", "/api/data-crawler-schedule/execution", "data_crawler_schedule_execution_get", "ingestion", "Read one Data Crawler SQL execution started from the SDA schedule tab."),
         RouteSpec("POST", "/api/data-crawler-schedule/execute", "data_crawler_schedule_execute", "ingestion", "Immediately dispatch one tenant-scoped Data Crawler SQL execution."),
         RouteSpec("DELETE", "/api/data-crawler-schedule", "data_crawler_schedule_delete", "ingestion", "Disable the SDA schedule and release its Data Crawler control claim."),
         RouteSpec("GET", "/api/knowledge/documents", "knowledge_documents_get", "knowledge", "List tenant knowledge document identities, current immutable versions and review state."),

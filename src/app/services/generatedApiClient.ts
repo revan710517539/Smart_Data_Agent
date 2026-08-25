@@ -78,6 +78,8 @@ export const generatedApiRoutes = {
   "get_data_crawler_schedule_get": { method: "GET", path: "/api/data-crawler-schedule", authRequired: true },
   "put_data_crawler_schedule_save": { method: "PUT", path: "/api/data-crawler-schedule", authRequired: true },
   "post_data_crawler_schedule_execute": { method: "POST", path: "/api/data-crawler-schedule/execute", authRequired: true },
+  "get_data_crawler_schedule_execution_get": { method: "GET", path: "/api/data-crawler-schedule/execution", authRequired: true },
+  "post_data_crawler_schedule_refresh": { method: "POST", path: "/api/data-crawler-schedule/refresh", authRequired: true },
   "get_data_crawler_schedule_statuses_get": { method: "GET", path: "/api/data-crawler-schedule/statuses", authRequired: true },
   "post_data_crawler_schedule_test": { method: "POST", path: "/api/data-crawler-schedule/test", authRequired: true },
   "get_email_daily_get": { method: "GET", path: "/api/email-daily", authRequired: true },

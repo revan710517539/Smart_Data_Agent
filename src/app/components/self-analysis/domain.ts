@@ -161,6 +161,32 @@ export function singleAnalysisDataTableSelection(tables: AnalysisDataTableSelect
   const latest = Array.isArray(tables) ? tables.at(-1) : undefined;
   return latest ? [latest] : [];
 }
+
+export function rematchAnalysisDataTableSelection(
+  selected: AnalysisDataTableSelection[] | null | undefined,
+  catalog: AnalysisDataTableSelection[],
+): AnalysisDataTableSelection[] {
+  const latest = singleAnalysisDataTableSelection(selected);
+  const table = latest[0];
+  if (!table) return [];
+  const byId = catalog.find((item) => Boolean(item.id) && item.id === table.id);
+  if (byId) return [byId];
+  if (table.code) {
+    const byCode = catalog.find((item) => item.code === table.code);
+    if (byCode) return [byCode];
+  }
+  if (table.sourceKey) {
+    const sameKind = catalog.find((item) => item.kind === table.kind && item.sourceKey === table.sourceKey);
+    if (sameKind) return [sameKind];
+    const bySourceKey = catalog.find((item) => item.sourceKey === table.sourceKey);
+    if (bySourceKey) return [bySourceKey];
+  }
+  if (table.relativePath) {
+    const byPath = catalog.find((item) => item.relativePath === table.relativePath);
+    if (byPath) return [byPath];
+  }
+  return latest;
+}
 export type AnalysisRow = {
   branch: string;
   productLine: string;

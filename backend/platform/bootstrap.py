@@ -822,6 +822,8 @@ def _register_automation_handlers(
     application_store: InMemoryApplicationStore | SQLiteApplicationStore,
     market_service: MarketMonitoringService,
 ) -> None:
+    from backend.platform.api.routes.data_crawler_schedule import data_crawler_dispatch_handler
+
     def acquisition_handler(
         tenant_id: str,
         config: dict,
@@ -1035,6 +1037,7 @@ def _register_automation_handlers(
     runtime.register_handler("report.weekly_learning", report_learning_handler)
     runtime.register_handler("market.evaluate", market_evaluate_handler)
     runtime.register_handler("memory.extract", memory_extraction_handler)
+    runtime.register_handler("data_crawler.dispatch", data_crawler_dispatch_handler)
 
 
 def _bind_runtime_kernel(services: PlatformServices, *, relational_pool: Any | None = None) -> None:

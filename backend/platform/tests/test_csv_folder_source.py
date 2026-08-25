@@ -77,6 +77,30 @@ class CSVFolderSourceTest(unittest.TestCase):
             self.assertEqual(source.root, app_data.resolve())
             self.assertEqual([item["file_name"] for item in tenant_source.snapshot()["files"]], ["loan.csv"])
 
+    def test_tenant_catalog_uses_chinese_crawler_output_directory_not_english_institution_id(self) -> None:
+        bindings = (
+            ("tenant:华兴银行", "华兴银行", "huaxing"),
+            ("tenant:南京银行", "南京银行", "nanjing"),
+            ("tenant:广州银行", "广州银行", "guangzhou"),
+        )
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for tenant_id, directory, slug in bindings:
+                expected = root / directory / "业务数据.csv"
+                wrong = root / slug / "错误目录.csv"
+                expected.parent.mkdir(parents=True)
+                wrong.parent.mkdir(parents=True)
+                expected.write_text(f"机构,金额\n{directory},1\n", encoding="utf-8")
+                wrong.write_text("机构,金额\n错误目录,999\n", encoding="utf-8")
+
+                source = CSVFolderSource(root).for_tenant(tenant_id)
+                source.prime_catalog()
+
+                with self.subTest(tenant_id=tenant_id):
+                    self.assertEqual(source.root, (root / directory).resolve())
+                    self.assertEqual([item["file_name"] for item in source.snapshot()["files"]], ["业务数据.csv"])
+                    self.assertEqual(source.table_assets()[0]["previewRows"][0]["机构"], directory)
+
     def test_environment_uses_local_checkout_when_app_data_mount_is_empty(self) -> None:
         local_root = CSVFolderSource.local_data_crawler_root
         self.assertTrue(local_root.is_dir(), "local Data Crawler checkout must exist for this development test")
@@ -281,6 +305,27 @@ class CSVFolderSourceTest(unittest.TestCase):
             self.assertEqual(wrong["contract_status"], "invalid")
             self.assertEqual(wrong["contract_error"], "crawler_tenant_directory_mapping_missing")
             self.assertEqual(wrong["files"], [])
+
+    def test_slug_directory_manifest_fails_closed_instead_of_overriding_chinese_crawler_directory(self) -> None:
+        with TemporaryDirectory() as tmpdir, patch.dict(
+            os.environ, {"SMART_DATA_AGENT_ENV": "production"}, clear=False
+        ):
+            root = Path(tmpdir)
+            chinese = root / "华兴银行" / "经营日报.csv"
+            legacy = root / "huaxing" / "经营日报.csv"
+            chinese.parent.mkdir()
+            legacy.parent.mkdir()
+            chinese.write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            legacy.write_text("机构,金额\n错误目录,999\n", encoding="utf-8")
+            self._write_manifest(root, "tenant:华兴银行", "huaxing", legacy)
+
+            source = CSVFolderSource(root).for_tenant("tenant:华兴银行")
+            snapshot = source.snapshot(force=True)
+
+            self.assertEqual(snapshot["contract_status"], "invalid")
+            self.assertEqual(snapshot["contract_error"], "crawler_tenant_directory_mismatch")
+            self.assertEqual(snapshot["files"], [])
+            self.assertNotEqual(source.root, legacy.parent.resolve())
 
     def test_production_manifest_checksum_mismatch_fails_closed(self) -> None:
         with TemporaryDirectory() as tmpdir:

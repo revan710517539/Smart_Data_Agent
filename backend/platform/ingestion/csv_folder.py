@@ -114,7 +114,12 @@ class CSVFolderSource:
             contract = resolve_crawler_tenant(self.root, str(tenant_id).strip(), required=required_manifest)
         except CrawlerManifestError as exc:
             contract_error = str(exc)
-        directory = str(contract.get("institution_directory") or "") if contract else _tenant_directory_name(tenant_id)
+        # Data Crawler publishes business CSVs below the Chinese institution
+        # name.  Its opaque English institution ID is only an API/catalog
+        # identifier and must never become an SDA filesystem path.
+        directory = tenant_directory_name(tenant_id)
+        if contract and str(contract.get("institution_directory") or "").strip() != directory:
+            contract_error = "crawler_tenant_directory_mismatch"
         if contract_error:
             directory = f".unmapped-{hashlib.sha256(str(tenant_id).encode('utf-8')).hexdigest()[:16]}"
         with self._catalog_lock:
@@ -534,7 +539,7 @@ class CSVFolderSource:
         return selected, superseded
 
 
-def _tenant_directory_name(tenant_id: str) -> str:
+def tenant_directory_name(tenant_id: str) -> str:
     """Map the authenticated tenant code to one safe crawler directory name."""
     name = str(tenant_id or "").strip().split(":", 1)[-1].strip()
     if not name or name in {".", ".."} or "/" in name or "\\" in name or "\x00" in name:

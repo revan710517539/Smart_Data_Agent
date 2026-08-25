@@ -53,6 +53,14 @@ from .data_acquisition import (
     handle_data_acquisition_get,
     handle_latest_acquisition_csv_get,
 )
+from .data_crawler_schedule import (
+    handle_data_crawler_schedule_delete,
+    handle_data_crawler_schedule_execute,
+    handle_data_crawler_schedule_get,
+    handle_data_crawler_schedule_save,
+    handle_data_crawler_schedule_statuses_get,
+    handle_data_crawler_schedule_test,
+)
 from .external_reports import handle_external_report_import
 from .workbuddy_bridge import (
     handle_codex_context_get,
@@ -222,6 +230,8 @@ from .tenants import handle_tenants_get
 from .traces import handle_trace_spans_get
 
 GET_ROUTE_HANDLERS = {
+    "/api/data-crawler-schedule": handle_data_crawler_schedule_get,
+    "/api/data-crawler-schedule/statuses": handle_data_crawler_schedule_statuses_get,
     "/mcp": handle_mcp_stream_get,
     "/api/auth/me": handle_auth_me,
     "/api/auth/oidc/start": handle_auth_oidc_start,
@@ -293,6 +303,8 @@ GET_ROUTE_HANDLERS = {
 }
 
 POST_ROUTE_HANDLERS = {
+    "/api/data-crawler-schedule/execute": handle_data_crawler_schedule_execute,
+    "/api/data-crawler-schedule/test": handle_data_crawler_schedule_test,
     "/mcp": handle_mcp_stream_post,
     "/api/auth/login": handle_auth_login,
     "/api/auth/login-survey": handle_auth_login_survey,
@@ -396,6 +408,7 @@ POST_ROUTE_HANDLERS = {
 }
 
 PUT_ROUTE_HANDLERS = {
+    "/api/data-crawler-schedule": handle_data_crawler_schedule_save,
     "/api/automation/task": handle_automation_task_update,
     "/api/subscription": handle_subscription_update,
     "/api/reports/comment": handle_report_comment_mutate,
@@ -407,6 +420,7 @@ PUT_ROUTE_HANDLERS = {
 }
 
 DELETE_ROUTE_HANDLERS = {
+    "/api/data-crawler-schedule": handle_data_crawler_schedule_delete,
     "/api/message-board": handle_message_board_delete,
     "/api/analysis/history": handle_analysis_history_delete,
     "/api/system-config/model": handle_system_model_delete,

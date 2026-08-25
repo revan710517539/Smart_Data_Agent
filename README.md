@@ -95,10 +95,17 @@
   SMART_DATA_AGENT_DATA_WAREHOUSE=csv
   SMART_DATA_AGENT_OBJECT_STORE=s3
   SMART_DATA_AGENT_DATA_CRAWLER_ROOT=/app/data
+  SMART_DATA_AGENT_DATA_CRAWLER_ENDPOINTS={"tenant:华兴银行":{"baseUrl":"http://playwright-data-crawler:8795","institutionId":"huaxing","institutionDirectory":"华兴银行","token":"<protected-per-institution-token>"}}
   SMART_DATA_AGENT_CSV_MAX_FILE_BYTES=134217728
   SMART_DATA_AGENT_EMBEDDED_WORKER=false
   SMART_DATA_AGENT_STATIC_ROOT=/app/dist
   ```
+
+  `SMART_DATA_AGENT_DATA_CRAWLER_ENDPOINTS` 是机构硬隔离的权威绑定：SDA 租户、
+  Data Crawler 机构 ID 和 CSV 挂载目录必须同时匹配，否则定时任务接口失败关闭。
+  同机宿主进程可使用 `http://127.0.0.1:8795`；两个独立容器必须加入同一个私有网络，
+  并使用 Data Crawler 服务名，不能使用容器自身的 `127.0.0.1`。每个机构必须使用
+  不同令牌，不允许共享跨机构凭据。
 
   A genuinely empty database must be explicitly initialized before login; the
   application never invents a default production tenant or silently inserts

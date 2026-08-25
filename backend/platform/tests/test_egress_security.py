@@ -3,12 +3,14 @@ import ssl
 import unittest
 from io import BytesIO
 from urllib.error import HTTPError
+from urllib.request import ProxyHandler, Request
 from unittest.mock import patch
 
 from backend.platform.security import (
     EgressPolicyError,
     classify_egress_policy_error,
     create_governed_websocket_connection,
+    safe_urlopen,
     validate_outbound_url,
 )
 from backend.platform.settings import call_model_completion, test_data_connection, test_model_integration, test_speech_integration
@@ -199,6 +201,28 @@ class EgressSecurityTest(unittest.TestCase):
                 validate_outbound_url("https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net/v1"),
                 "https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net/v1",
             )
+
+    def test_explicit_direct_http_host_bypasses_governed_proxy(self) -> None:
+        response = _FakeHTTPResponse(b'{}')
+        opener = type("Opener", (), {"open": lambda _self, _request, timeout: response})()
+        with patch.dict(
+            "os.environ",
+            {
+                "SMART_DATA_AGENT_EGRESS_PROXY": "http://127.0.0.1:7897",
+                "SMART_DATA_AGENT_EGRESS_DIRECT_HOSTS": "*.qihoo.net",
+                "SMART_DATA_AGENT_EGRESS_PRIVATE_HOSTS": "*.qihoo.net",
+            },
+            clear=False,
+        ), patch("backend.platform.security.egress.build_opener", return_value=opener) as build:
+            with safe_urlopen(
+                Request("https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net/v1/models"),
+                timeout=5,
+                context=ssl.create_default_context(),
+            ) as actual:
+                self.assertIs(actual, response)
+
+        proxy_handlers = [handler for handler in build.call_args.args if isinstance(handler, ProxyHandler)]
+        self.assertEqual([handler.proxies for handler in proxy_handlers], [{}])
 
     def test_model_integration_classifies_timeout_as_transient(self) -> None:
         with patch(

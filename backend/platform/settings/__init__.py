@@ -11,22 +11,12 @@ from .postgresql_store import PostgreSQLSystemConfigStore
 from .model_modules import (
     MODEL_APPLICATION_MODULES,
     application_module_label,
+    is_retired_default_model,
     list_models_for_application,
     normalize_application_module,
     require_model_for_application,
     resolve_model_for_application,
     select_model_for_application,
-)
-from .default_models import (
-    DEFAULT_RELAY_MODEL_API_BASE,
-    DEFAULT_RELAY_MODEL_API_KEY_ENV,
-    DEFAULT_RELAY_MODEL_ID,
-    DEFAULT_RELAY_SHARED_MODELS,
-    DEFAULT_MODEL_TEMPLATE_SCOPE,
-    configure_default_relay_model,
-    default_relay_model_preset,
-    ensure_default_models_for_account,
-    ensure_default_models_for_accounts,
 )
 
 __all__ = [
@@ -42,18 +32,10 @@ __all__ = [
     "test_speech_integration",
     "MODEL_APPLICATION_MODULES",
     "application_module_label",
+    "is_retired_default_model",
     "list_models_for_application",
     "normalize_application_module",
     "require_model_for_application",
     "resolve_model_for_application",
     "select_model_for_application",
-    "DEFAULT_RELAY_MODEL_ID",
-    "DEFAULT_MODEL_TEMPLATE_SCOPE",
-    "DEFAULT_RELAY_MODEL_API_BASE",
-    "DEFAULT_RELAY_MODEL_API_KEY_ENV",
-    "DEFAULT_RELAY_SHARED_MODELS",
-    "default_relay_model_preset",
-    "ensure_default_models_for_account",
-    "ensure_default_models_for_accounts",
-    "configure_default_relay_model",
 ]

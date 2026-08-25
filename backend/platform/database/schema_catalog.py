@@ -341,7 +341,7 @@ TABLES: tuple[TableSpec, ...] = (
             c("agent_name", "VARCHAR(200)", "NOT NULL", "名称。"),
             c("agent_type", "VARCHAR(64)", "NOT NULL", "planner/query/reviewer 等类型。"),
             c("status", "VARCHAR(24)", "NOT NULL DEFAULT 'configured' CHECK (status IN ('configured','implemented','healthy','disabled'))", "运行可用状态。"),
-            c("model_integration_id", "UUID", "", "默认模型，外键在模型表建成后由迁移补充。"),
+            c("model_integration_id", "UUID", "", "绑定模型，外键在模型表建成后由迁移补充。"),
             c("input_schema", "JSONB", "NOT NULL DEFAULT '{}'::jsonb", "输入 JSON Schema。"),
             c("output_schema", "JSONB", "NOT NULL DEFAULT '{}'::jsonb", "输出 JSON Schema。"),
             c("runtime_config", "JSONB", "NOT NULL DEFAULT '{}'::jsonb", "超时、配额等运行设置。"),

@@ -1,73 +1,52 @@
-# 登录页调查模块紧凑布局 Design QA
+# 定时任务 Tab 系统风格收敛 QA
 
-**Findings**
+- source visual truth: `/var/folders/5j/1tdj8bb17jbc5z_08kq65_bc0000gn/T/codex-clipboard-9cb9e7d1-7757-4519-abbb-87df1a813f90.png`
+- implementation screenshot: `/Users/revan/Documents/Smart_Data_Agent/schedule-tab-system-refined.png`
+- calendar screenshot: `/Users/revan/Documents/Smart_Data_Agent/schedule-tab-calendar-refined.png`
+- combined comparison: `/Users/revan/Documents/Smart_Data_Agent/schedule-tab-reference-comparison.png`
+- browser: Codex in-app Browser，SDA 本地服务 `127.0.0.1:5174`
+- viewport evidence: 浏览器截图为 1280×720；用户截图为 2302×934，组合图将用户截图按宽度归一到 1280px 后与实现截图纵向拼接
+- state: 华兴银行 / 站内数据 / 自营双周报放款与资产表现_2026-08-25 / 定时任务 / 每日 / today 为取值日前第 7 日
 
-- 当前无未解决的 P0/P1/P2 问题。
-- 已修复 [P2] 调查模块下方存在额外说明块和过长留白：删除说明块，将双栏卡片收敛到 `900px`，问题间距改为紧凑节奏，两个文本框保持完整可见并允许用户纵向扩展。
+## Full-view comparison
 
-**Comparison target**
+组合图上半部为用户标注截图，下半部为本次实现。实现继续使用 SDA 现有的白底、细灰边框、8px 圆角、低饱和绿色和紧凑桌面字体；信息层级从冗余说明改为“SQL 配置 → SQL 时间参数 → 操作”。
 
-- Source visual truth: `/var/folders/5j/1tdj8bb17jbc5z_08kq65_bc0000gn/T/codex-clipboard-14561b74-d90d-4688-a8b0-cd92e1796a28.png`
-- Browser-rendered implementation: `http://127.0.0.1:5174/login`
-- Desktop implementation screenshot: `/Users/revan/.codex/visualizations/2026/08/22/01a02742-893f-7570-80e4-3bc27203c487/login-survey-implementation-desktop.png`
-- Mobile implementation screenshot: `/Users/revan/.codex/visualizations/2026/08/22/01a02742-893f-7570-80e4-3bc27203c487/login-survey-implementation-mobile.png`
-- Full-view comparison: `/Users/revan/.codex/visualizations/2026/08/22/01a02742-893f-7570-80e4-3bc27203c487/login-survey-source-vs-implementation.png`
-- Focused card comparison: `/Users/revan/.codex/visualizations/2026/08/22/01a02742-893f-7570-80e4-3bc27203c487/login-survey-focused-comparison.png`
+- 已删除机构/别名/CSV 文件说明行，定时任务内容直接从关联 SQL 开始。
+- 已删除 SQL 参数辅助说明、N 日预览提示和底部操作说明。
+- 只保留 SQL 时间参数上方一条横向分隔线；浏览器按全宽 `.border-t` 实测仅 1 条。
+- 关联 SQL、循环方式、执行日期与时间保持同一行；循环方式控件实测字体 12px、高度 36px。
+- 取值方式与 N 日输入框实测 y 坐标均为 469px、高度均为 36px，标签基线和控件顶边一致。
 
-**Viewport and normalization**
+## Focused interaction comparison
 
-- Source pixels: `2026 × 1294`; source top red-box region is the requested visual/content target and the lower red-box explanation is explicitly excluded.
-- Desktop CSS viewport: `1440 × 900`; rendered card measured `900 × 455.5` CSS px, centered at `x=270`, `y=222.25`; page has `scrollWidth=1440` and no horizontal overflow.
-- In-app Browser screenshot surface is half-scale relative to measured CSS coordinates; the focused implementation crop uses the corresponding `450 × 228` raster region and only scales for visual comparison.
-- Mobile CSS viewport: `390 × 844`; full-page content height `946`, main card width `358`, `scrollWidth=390`, no horizontal overflow.
-- State: login mode; survey fields blank; institution `华兴银行`. Browser autofill supplied local QA-only account/password values in screenshots; they were not submitted.
+- 取值方式使用项目现有 Radix Select，菜单为白底、细灰边框、8px 圆角、绿色选中态，选项仅固定值、取值日、取值日前第 N 日。
+- N 日输入改为无浏览器数字微调器的文本数字输入，填写 7 后不再出现预览提示。
+- 执行日期与时间使用项目 Calendar、Popover、Select 组合；日历显示中文月份和中文星期，日期、小时、分钟均可选。
+- 日历压缩为 28px 日期单元，720px 高桌面视口中日期和时间选择器完整可见，无裁切。
+- 浏览器控制台无 warning/error。
 
-**Full-view comparison evidence**
+## Deterministic measurements
 
-- The unified split card keeps the source's pale-green survey pane, white login pane, restrained border/radius/shadow and green primary color.
-- The deleted lower explanation is absent from visible text and DOM. Survey pane height now follows the compact login card instead of extending the whole shell.
-- Desktop columns are equal width, so the survey module follows the login module's scale. Mobile retains a single stacked card and natural vertical scrolling.
+- 关联 SQL、循环方式、执行日期与时间控件高度均为 36px。
+- 循环方式、执行日期与时间、取值方式、N 输入字体均为 12px。
+- 取值方式：x=554、y=469、w=299、h=36。
+- N 输入：x=865、y=469、w=328、h=36。
+- 已确认页面中不存在：`打开仅加载配置`、`按 SQL 参数类型选择`、`测试只校验连接与参数`、`预览：`。
 
-**Focused region comparison evidence**
+## Comparison history
 
-- Both questions, labels, placeholders and counters are fully visible. Desktop textareas measure `392 × 92`; mobile measures `308 × 92`; `scrollHeight=90`, so the empty state is not clipped.
-- Survey labels, input borders, radii, type scale and focus tokens remain aligned with the existing login form.
-- No focused image/asset comparison is required: the screen contains only existing Lucide icons and form controls, with no raster illustration, logo artwork or generated image.
+- iteration 1：已完成日期时间、N 日模式和测试按钮，但用户指出字体偏大、说明文字冗余、横线过多、N 日错位及原生日历风格不统一。
+- iteration 2：删除四处冗余信息，统一 36px/12px 控件规范，改用系统 Select/Popover/Calendar，完成中文日历与 N 日对齐。
+- iteration 2 focused fix：发现 720px 视口中时间选择器位于截图下沿，进一步压缩日历行距和日期单元后，日期与时间完整可见。
 
-**Required fidelity surfaces**
+## Verification
 
-- Fonts and typography: existing system font stack and hierarchy retained; no title, placeholder, label or counter truncation observed.
-- Spacing and layout rhythm: outer width reduced from `980px` to `900px`; pane padding is `24–28px`; question gap is `14px`; login-form gap is `14px`; no excess lower whitespace remains inside the card.
-- Colors and visual tokens: existing `#0f8554` primary green, pale-green survey surface, white form surface, neutral borders and soft elevation retained.
-- Image quality and asset fidelity: existing Lucide icons are reused; no placeholder, emoji, CSS drawing or handcrafted SVG was introduced.
-- Copy and content: the two required questions and original login copy remain. The bottom auto-save explanation is removed exactly as requested; saving behavior remains invisible and unchanged.
-
-**Primary interactions and runtime checks**
-
-- Survey fields are blank on load and the survey subtree contains `0` buttons。
-- The removed explanation text is absent.
-- Login, registration and cancel controls remain present; credential gating is unchanged.
-- Desktop and mobile have no horizontal overflow; mobile supports vertical scrolling to the complete login section.
-- Browser console after desktop and mobile reload: `0` warnings/errors.
-- Login/cancel/page-close persistence remains covered by the focused auth/message-board tests; no persistence handler was changed in this visual adjustment.
-
-**Comparison history**
-
-1. Earlier implementation added the survey and automatic persistence but left a bottom explanation block, causing the survey column to make the shared card taller than the login content.
-2. The explanation block was removed, both columns were normalized to equal width, textarea height and inter-field spacing were reduced, and resize-y was retained for longer answers.
-3. Post-fix desktop evidence shows a `900 × 455.5` card with both textareas complete and no lower internal blank region. Post-fix `390 × 844` evidence shows no horizontal overflow or clipping. No actionable P0/P1/P2 findings remain.
-
-**Implementation Checklist**
-
-- [x] Remove the lower survey explanation.
-- [x] Keep both survey questions, placeholders and counters complete.
-- [x] Match survey and login module scale.
-- [x] Reduce excessive label/input and question spacing.
-- [x] Preserve login, cancel and page-close survey persistence.
-- [x] Verify desktop, mobile, visible DOM and console.
-
-**Follow-up Polish**
-
-- No P3 polish is required for handoff.
+- [x] `npm run typecheck`
+- [x] `npm run build`
+- [x] `npm run test:frontend-size`
+- [x] Codex in-app Browser 真实交互：定时任务 Tab、取值方式下拉、N 日输入、日期时间弹窗
+- [x] 组合截图对比与局部弹窗复核
+- [x] 浏览器控制台无 warning/error
 
 final result: passed

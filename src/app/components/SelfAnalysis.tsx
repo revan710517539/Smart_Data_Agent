@@ -179,6 +179,7 @@ export function SelfAnalysis() {
   const realtimeVoiceSilenceTimerRef = useRef<number | null>(null);
   const realtimeVoiceReconnectTimerRef = useRef<number | null>(null);
   const realtimeVoiceReconnectAttemptsRef = useRef(0);
+  const realtimeVoiceExpectedCloseRef = useRef<"session_end" | "">("");
   const realtimeVoiceLastAutoAnalysisTextRef = useRef("");
   const realtimeVoiceAutoAnalyzeRef = useRef<(text: string, trigger: RealtimeVoiceTrigger) => void>(() => undefined);
   const realtimeVoiceDrainQueueRef = useRef<() => void>(() => undefined);
@@ -2133,6 +2134,9 @@ export function SelfAnalysis() {
         }
         if (payload.type === "finished") {
           if (target === "query" && realtimeVoiceActiveRef.current) {
+            // Aliyun ends a recognition task; keep listening by opening a new
+            // task instead of treating this as a transport failure.
+            realtimeVoiceExpectedCloseRef.current = "session_end";
             socket.close();
           } else {
             stopRealtimeVoiceInput();
@@ -2146,6 +2150,8 @@ export function SelfAnalysis() {
       };
       socket.onclose = () => {
         if (!realtimeVoiceActiveRef.current) return;
+        const expectedClose = realtimeVoiceExpectedCloseRef.current;
+        realtimeVoiceExpectedCloseRef.current = "";
         // renderedRef is the current unsubmitted speech segment. It may be
         // intentionally empty after a 5-second auto-submit, so do not fall back
         // to the already executing query and accidentally enqueue it again.
@@ -2157,10 +2163,12 @@ export function SelfAnalysis() {
           return;
         }
         setRealtimeVoiceListening(true);
-        setRealtimeVoiceError("实时语音连接中断，正在自动重连…");
+        if (expectedClose !== "session_end") {
+          setRealtimeVoiceError("实时语音连接中断，正在自动重连…");
+        }
         const attempt = realtimeVoiceReconnectAttemptsRef.current + 1;
         realtimeVoiceReconnectAttemptsRef.current = attempt;
-        const delay = Math.min(10_000, 800 * 2 ** Math.min(attempt - 1, 4));
+        const delay = expectedClose === "session_end" ? 0 : Math.min(10_000, 800 * 2 ** Math.min(attempt - 1, 4));
         realtimeVoiceReconnectTimerRef.current = window.setTimeout(() => {
           realtimeVoiceReconnectTimerRef.current = null;
           void startFunAsrInput("query", continuationText, { preserveSpeakerProfile: true });
@@ -2215,6 +2223,7 @@ export function SelfAnalysis() {
     setVoiceListening(false);
     setVoiceprintStatus("idle");
     realtimeVoiceReconnectAttemptsRef.current = 0;
+    realtimeVoiceExpectedCloseRef.current = "";
     realtimeVoiceSpeakerGateRef.current = createRealtimeSpeakerGateState();
     realtimeVoiceIgnoredSpeakerSegmentsRef.current = 0;
     setRealtimeVoiceIgnoredSpeakerSegments(0);

@@ -141,8 +141,16 @@ def safe_urlopen(
         private_host_exceptions=private_host_exceptions,
     )
     handlers: list[object] = []
-    proxy = _egress_proxy_url()
-    if proxy:
+    target_host = (urlparse(request.full_url).hostname or "").rstrip(".").lower()
+    direct_allowlist = _host_patterns("SMART_DATA_AGENT_EGRESS_DIRECT_HOSTS")
+    is_direct = _host_matches(target_host, direct_allowlist)
+    proxy = "" if is_direct else _egress_proxy_url()
+    if is_direct:
+        # build_opener otherwise installs a default ProxyHandler from the
+        # process environment.  A governed direct-host rule must override
+        # both the explicit egress proxy and inherited HTTP(S)_PROXY values.
+        handlers.append(ProxyHandler({}))
+    elif proxy:
         handlers.append(ProxyHandler({"http": proxy, "https": proxy}))
     handlers.extend(
         [

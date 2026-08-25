@@ -143,11 +143,11 @@ class ModelApplicationModuleTest(unittest.TestCase):
             [],
         )
 
-    def test_system_default_relay_is_not_routable_after_first_connectivity_failure(self) -> None:
+    def test_failed_global_relay_is_not_routable_after_first_connectivity_failure(self) -> None:
         store = InMemorySystemConfigStore()
         failed_default = self._model(
-            "model_default_intelligent_analysis_relay",
-            "默认模型",
+            "model_failed_global_relay",
+            "失败的全局模型",
             "global_text_model",
         )
         failed_default["status"] = "draft"

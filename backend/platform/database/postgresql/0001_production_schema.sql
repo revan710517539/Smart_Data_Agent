@@ -410,7 +410,7 @@ COMMENT ON COLUMN platform_agents.agent_code IS '稳定 Agent 编码。';
 COMMENT ON COLUMN platform_agents.agent_name IS '名称。';
 COMMENT ON COLUMN platform_agents.agent_type IS 'planner/query/reviewer 等类型。';
 COMMENT ON COLUMN platform_agents.status IS '运行可用状态。';
-COMMENT ON COLUMN platform_agents.model_integration_id IS '默认模型，外键在模型表建成后由迁移补充。';
+COMMENT ON COLUMN platform_agents.model_integration_id IS '绑定模型，外键在模型表建成后由迁移补充。';
 COMMENT ON COLUMN platform_agents.input_schema IS '输入 JSON Schema。';
 COMMENT ON COLUMN platform_agents.output_schema IS '输出 JSON Schema。';
 COMMENT ON COLUMN platform_agents.runtime_config IS '超时、配额等运行设置。';

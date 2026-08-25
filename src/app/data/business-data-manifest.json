@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "mount_contract": "/opt/smart-data-agent/src/app/data:/app/data:ro",
+  "mount_contract": "/opt/palywright/examples/data-crawler/data:/app/data:ro",
   "datasets": [
     {
       "institution": "兰州银行",

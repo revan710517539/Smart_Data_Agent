@@ -311,7 +311,7 @@ def _public_handler_failure(exc: Exception) -> tuple[str, str, bool]:
         if "selected_submodel_not_enabled_for_application_module" in message or "selected_model_not_registered_for_application_module" in message:
             return (
                 "analysis_selected_model_unavailable",
-                "所选模型或子模型已更新，请从默认模型重新选择后重试。",
+                "所选模型或子模型已更新，请从模型接入列表重新选择后重试。",
                 False,
             )
         if "skill:supersonic.query:execute" in message:

@@ -96,7 +96,6 @@ function normalizedModelName(value: string) {
   return value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
 }
 
-const defaultRelayModelId = "model_default_intelligent_analysis_relay";
 const settingsReadRetryDelays = [1_500, 3_000, 5_000];
 const auditPageSize = 20;
 
@@ -2162,9 +2161,7 @@ function ModelAccessModal({
   }, [models]);
 
   const saveModelEdit = async (model: ModelIntegration) => {
-    const nextDraft = model.id === defaultRelayModelId
-      ? { ...modelEditDraft, name: "默认模型", modelName: "中转站" }
-      : modelEditDraft;
+    const nextDraft = modelEditDraft;
     if (!nextDraft.name.trim() || !nextDraft.key.trim() || (model.requiresCredential && !modelEditDraft.value.trim())) return;
     try {
       await onUpdate(model, nextDraft);
@@ -2215,8 +2212,8 @@ function ModelAccessModal({
   const startModelEdit = (model: ModelIntegration) => {
     setEditingModelId(model.id);
     setModelEditDraft({
-      name: model.id === defaultRelayModelId ? "默认模型" : model.name,
-      modelName: model.id === defaultRelayModelId ? "中转站" : modelSourceLabel(model.modelName),
+      name: model.name,
+      modelName: modelSourceLabel(model.modelName),
       applicationModule: "global_text_model",
       key: model.key,
       value: "",
@@ -2312,15 +2309,13 @@ function ModelAccessModal({
                             value={modelEditDraft.name}
                             autoComplete="off"
                             data-1p-ignore="true"
-                            readOnly={model.id === defaultRelayModelId}
                             onChange={(event) => setModelEditDraft((current) => ({ ...current, name: event.target.value }))}
-                            className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc] read-only:bg-[#fafbfc] read-only:text-[#8a8a8e]"
+                            className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
                           />
                           <select
                             value={modelEditDraft.modelName}
-                            disabled={model.id === defaultRelayModelId}
                             onChange={(event) => setModelEditDraft((current) => ({ ...current, modelName: event.target.value }))}
-                            className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc] disabled:bg-[#fafbfc] disabled:text-[#8a8a8e]"
+                            className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
                           >
                             {modelSourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}
                           </select>
@@ -2370,11 +2365,10 @@ function ModelAccessModal({
                           type="button"
                           onClick={(event) => {
                             event.stopPropagation();
-                            if (model.id !== defaultRelayModelId) onDelete(model.id);
+                            onDelete(model.id);
                           }}
-                          disabled={model.id === defaultRelayModelId}
-                          className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#fff0f0] hover:text-[#d93025] disabled:cursor-not-allowed disabled:opacity-30"
-                          aria-label={model.id === defaultRelayModelId ? "系统默认模型不可删除" : `删除${model.name}`}
+                          className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#fff0f0] hover:text-[#d93025]"
+                          aria-label={`删除${model.name}`}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>

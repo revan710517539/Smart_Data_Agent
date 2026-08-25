@@ -76,7 +76,7 @@ assert.match(systemSettings, /setUserEditorError\(message\)[\s\S]*?setAccessNoti
 assert.match(systemSettings, /role="alert" aria-live="polite"[\s\S]*?\{saveError\}/, "新增用户校验错误必须在弹窗内可访问地呈现");
 assert.match(systemSettings, /visibleInCurrentInstitution[\s\S]*?当前列表仅显示\$\{selectedInstitution\}用户/, "跨机构新增用户不得短暂插入当前机构列表，且必须解释保存目标");
 assert.match(systemSettings, /切换到\{accessNoticeTargetInstitution\}查看/, "跨机构新增用户必须提供显式切换查看入口");
-assert.match(systemSettings, /title=\{model\.key \|\| "未配置 API 地址"\}/, "默认模型的非敏感 API 地址必须直接可见");
+assert.match(systemSettings, /title=\{model\.key \|\| "未配置 API 地址"\}/, "用户接入模型的非敏感 API 地址必须直接可见");
 assert.match(systemSettings, /model\.key \|\| "未配置 API 地址"/, "模型地址不得被系统预置地址占位文案替代");
 assert.ok(!systemSettings.includes("系统预置地址"), "模型配置不得隐藏系统预置 API 地址");
 assert.match(platformContext, /normalized === "sda-internal" \|\| normalized === "SDA 内部环境"/, "机构选择器不得暴露内部技术租户");

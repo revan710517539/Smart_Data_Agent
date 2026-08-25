@@ -27,13 +27,17 @@ _DELIVERY_DATE_TOKEN_RE = re.compile(
 class CSVFolderSource:
     """Read-only view of one institution's Data Crawler delivery folder."""
 
-    # The local Data Crawler checkout is the development delivery root.  It is
-    # deliberately treated exactly like a deployed mount: callers must still
-    # resolve an institution subdirectory through ``for_tenant``.  Production
-    # must provide SMART_DATA_AGENT_DATA_CRAWLER_ROOT instead of relying on
-    # this workstation-specific path.
+    # Data Crawler's default DATA_CRAWLER_OUTPUT_DIR is <checkout>/data.
+    # SDA must read that same host tree.  A previous compose contract used the
+    # sibling runtime-data directory, which the crawler never wrote.
     local_data_crawler_root = Path("/Users/revan/Documents/playwright/examples/data-crawler/data")
+    legacy_runtime_data_crawler_root = Path(
+        "/Users/revan/Documents/playwright/examples/data-crawler/runtime-data"
+    )
     container_data_crawler_root = Path("/app/data")
+    _crawler_operational_directory_names = frozenset(
+        {"csv", "metadata", "runs", "secrets", "sessions", "snapshots"}
+    )
 
     default_max_file_bytes = 128 * 1024 * 1024
     default_max_files = 500
@@ -78,8 +82,9 @@ class CSVFolderSource:
     @classmethod
     def from_environment(cls) -> "CSVFolderSource":
         # A deployed Smart Data Agent reads the container mount directly from
-        # /app/data/<机构名>. The workstation root is only the local analogue.
-        # Neither path may fall back to legacy Origin_Data or another tenant.
+        # /app/data/<机构名>. The workstation root is only the local analogue
+        # of Data Crawler's DATA_CRAWLER_OUTPUT_DIR.  Neither path may fall
+        # back to legacy Origin_Data or another tenant.
         configured = str(os.getenv("SMART_DATA_AGENT_DATA_CRAWLER_ROOT") or "").strip()
         if configured:
             # An explicit server setting wins even while the path is not
@@ -87,18 +92,63 @@ class CSVFolderSource:
             # rather than silently reading a local or legacy directory.
             root = Path(configured).expanduser()
         elif cls.container_data_crawler_root.is_dir() and (
-            not cls.local_data_crawler_root.is_dir()
+            cls._existing_host_crawler_root() is None
             or any(cls.container_data_crawler_root.iterdir())
         ):
             root = cls.container_data_crawler_root
-        elif cls.local_data_crawler_root.is_dir():
-            root = cls.local_data_crawler_root
         else:
+            host_root = cls._existing_host_crawler_root()
             # Preserve the deployment contract even when neither mount has
             # arrived yet: the tenant catalog remains empty until /app/data is
             # mounted, never silently reverts to a legacy shared directory.
-            root = cls.container_data_crawler_root
+            root = host_root if host_root is not None else cls.container_data_crawler_root
         return cls(root)
+
+    @classmethod
+    def _host_crawler_root_candidates(cls) -> tuple[Path, ...]:
+        """Host directories that Data Crawler may actually write."""
+
+        configured_output = str(os.getenv("DATA_CRAWLER_OUTPUT_DIR") or "").strip()
+        candidates: list[Path] = []
+        if configured_output:
+            candidates.append(Path(configured_output).expanduser())
+        candidates.append(cls.local_data_crawler_root)
+        candidates.append(cls.legacy_runtime_data_crawler_root)
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for path in candidates:
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(path)
+        return tuple(unique)
+
+    @classmethod
+    def _existing_host_crawler_root(cls) -> Path | None:
+        existing = [path for path in cls._host_crawler_root_candidates() if path.is_dir()]
+        if not existing:
+            return None
+        for path in existing:
+            if cls._contains_crawler_deliveries(path):
+                return path
+        return existing[0]
+
+    @classmethod
+    def _contains_crawler_deliveries(cls, root: Path) -> bool:
+        if (root / "metadata" / "sources.json").is_file():
+            return True
+        skip = cls._crawler_operational_directory_names
+        try:
+            return any(
+                item.is_dir()
+                and item.name not in skip
+                and not item.name.startswith(".")
+                and not item.name.startswith(".unmapped-")
+                for item in root.iterdir()
+            )
+        except OSError:
+            return False
 
     def for_tenant(self, tenant_id: str) -> "CSVFolderSource":
         """Return the sole approved raw-data directory for one tenant.

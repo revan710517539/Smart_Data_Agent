@@ -42,13 +42,11 @@ x-sda-runtime: &sda-runtime
     SMART_DATA_AGENT_WORKER_HEALTH_FILE: /app/runtime/worker-health.json
     SMART_DATA_AGENT_CAPABILITY_IMPORT_ACTOR: "${SMART_DATA_AGENT_CAPABILITY_IMPORT_ACTOR:-system}"
     SMART_DATA_AGENT_CAPABILITY_MODE: verify
-    SMART_DATA_AGENT_DEFAULT_MODEL_API_BASE: "${SMART_DATA_AGENT_DEFAULT_MODEL_API_BASE:-}"
-    SMART_DATA_AGENT_DEFAULT_MODEL_API_KEY: "${SMART_DATA_AGENT_DEFAULT_MODEL_API_KEY:-}"
     AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
     AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
     AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN:-}"
   volumes:
-    - "${SMART_DATA_AGENT_DATA_CRAWLER_HOST_ROOT:-/opt/palywright/examples/data-crawler/runtime-data}:/app/data:ro"
+    - "${SMART_DATA_AGENT_DATA_CRAWLER_HOST_ROOT:-/opt/palywright/examples/data-crawler/data}:/app/data:ro"
     - "${SMART_DATA_AGENT_MYSQL_CA_HOST_PATH:-/var/lib/mysql80/ca.pem}:/run/secrets/mysql_ca.pem:ro"
     - "${SMART_DATA_AGENT_KMS_PROVIDER_HOST_PATH:?set audited KMS provider host path}:/run/secrets/sda-kms-provider:ro"
     - smart-data-agent-runtime:/app/runtime

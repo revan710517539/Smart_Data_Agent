@@ -1,18 +1,21 @@
 import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { zhCN } from "date-fns/locale";
 import { useLocation } from "react-router";
 import {
   AlertTriangle,
   Activity,
   BookOpen,
+  CalendarDays,
   CalendarClock,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronUp,
   CheckCircle2,
+  Clock3,
   Database,
   Eye,
-  FileText,
   FilePlus2,
   GitBranch,
   History,
@@ -104,6 +107,9 @@ import { customerDetailTableKey, PageDataAssetList, PageDataCreateButton, PageDa
 import { pageDataScope } from "./page-data/assignment";
 import { TableRelationshipWorkspace } from "./data-assets/TableRelationshipBuilder";
 import { DataPageSelector } from "./ui/DataPageSelector";
+import { Calendar } from "./ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
 type DataAssetSection = "metrics" | "knowledge" | "data-management" | "quality";
 type DataManagementTab = "raw" | "single_page" | "multi_page" | "customer_segment_page" | "topic";
@@ -304,7 +310,7 @@ export function DataAssets() {
   const section = getSection(location.pathname);
   const copy = sectionCopy[section];
   const sectionSubtitle = section === "data-management"
-    ? `原始表仅读取当前机构 /app/data/${selectedInstitution}/ 中的 CSV；主题表和分析结果统一复用 Topic_Data 中的最新数据资产`
+    ? `原始表仅读取当前机构 Data Crawler 已下载的 CSV；主题表和分析结果统一复用 Topic_Data 中的最新数据资产`
     : copy.subtitle;
   const [searchTerm, setSearchTerm] = useState("");
   const [metrics, setMetrics] = useState<MetricDictionaryItem[]>([]);
@@ -2658,6 +2664,157 @@ function temporalReferencePreview(executionAt: string, parameterType: string, of
   return parameterType === "datetime" ? `${date} ${part(value.getHours())}:${part(value.getMinutes())}` : date;
 }
 
+const scheduleControlClass = "h-9 w-full rounded-lg border border-[#dfe4e1] bg-white px-3 text-[12px] font-normal text-[#303633] shadow-none outline-none transition-colors hover:border-[#cbd4cf] focus-visible:border-[#8fb9a2] focus-visible:ring-2 focus-visible:ring-[#dceee4] disabled:cursor-not-allowed disabled:bg-[#f7f8f7] disabled:text-[#9aa19d]";
+const scheduleMenuClass = "z-[80] rounded-lg border-[#e1e6e3] bg-white p-1 text-[12px] text-[#303633] shadow-[0_12px_32px_rgba(45,63,54,0.12)]";
+
+function ScheduleSelect({
+  label,
+  value,
+  onValueChange,
+  options,
+  disabled = false,
+}: {
+  label: string;
+  value: string;
+  onValueChange: (value: string) => void;
+  options: Array<{ value: string; label: string; disabled?: boolean }>;
+  disabled?: boolean;
+}) {
+  return (
+    <Select value={value} onValueChange={onValueChange} disabled={disabled}>
+      <SelectTrigger aria-label={label} className={`${scheduleControlClass} [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:text-[#7d8781]`}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent align="start" className={scheduleMenuClass}>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value} disabled={option.disabled} className="h-8 rounded-md px-2 pr-8 text-[12px] focus:bg-[#f0f6f2] focus:text-[#1f5f43]">
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function parseLocalScheduleValue(value: string): Date | null {
+  const [datePart, timePart = "00:00"] = String(value || "").split("T");
+  const [year, month, day] = datePart.split("-").map(Number);
+  const [hour, minute] = timePart.split(":").map(Number);
+  if (![year, month, day, hour, minute].every(Number.isFinite)) return null;
+  const result = new Date(year, month - 1, day, hour, minute, 0, 0);
+  return Number.isNaN(result.getTime()) ? null : result;
+}
+
+function formatLocalDate(value: Date): string {
+  const part = (number: number) => String(number).padStart(2, "0");
+  return `${value.getFullYear()}-${part(value.getMonth() + 1)}-${part(value.getDate())}`;
+}
+
+function ScheduleDateControl({
+  label,
+  value,
+  onChange,
+  includeTime = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  includeTime?: boolean;
+}) {
+  const selected = parseLocalScheduleValue(includeTime ? value : `${value}T00:00`);
+  const display = selected
+    ? includeTime
+      ? `${formatLocalDate(selected).replaceAll("-", "/")} ${String(selected.getHours()).padStart(2, "0")}:${String(selected.getMinutes()).padStart(2, "0")}`
+      : formatLocalDate(selected).replaceAll("-", "/")
+    : "请选择日期";
+  const setDate = (date: Date | undefined) => {
+    if (!date) return;
+    const next = selected || new Date();
+    next.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+    next.setSeconds(0, 0);
+    onChange(includeTime ? formatLocalDateTime(next) : formatLocalDate(next));
+  };
+  const setTime = (part: "hour" | "minute", nextValue: string) => {
+    const next = selected || new Date();
+    if (part === "hour") next.setHours(Number(nextValue));
+    else next.setMinutes(Number(nextValue));
+    next.setSeconds(0, 0);
+    onChange(formatLocalDateTime(next));
+  };
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" aria-label={label} className={`${scheduleControlClass} flex items-center justify-between gap-3 text-left`}>
+          <span className={selected ? "truncate" : "truncate text-[#9aa19d]"}>{display}</span>
+          <CalendarDays className="h-3.5 w-3.5 shrink-0 text-[#7d8781]" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" sideOffset={6} className="z-[80] w-auto overflow-hidden rounded-xl border-[#e1e6e3] bg-white p-0 shadow-[0_14px_38px_rgba(45,63,54,0.14)]">
+        <Calendar
+          mode="single"
+          locale={zhCN}
+          selected={selected || undefined}
+          onSelect={setDate}
+          className="p-2.5 text-[12px]"
+          classNames={{
+            month: "flex flex-col gap-2",
+            caption: "relative flex w-full items-center justify-center pt-0",
+            caption_label: "text-[12px] font-medium text-[#303633]",
+            head_cell: "w-7 rounded-md text-[10px] font-normal text-[#929a96]",
+            row: "mt-1 flex w-full",
+            day: "size-7 rounded-md p-0 text-[11px] font-normal text-[#3f4743] hover:bg-[#f0f6f2]",
+            day_selected: "bg-[#0f8f58] text-white hover:bg-[#0f8f58] hover:text-white focus:bg-[#0f8f58] focus:text-white",
+            day_today: "bg-[#eef5f1] text-[#176944]",
+            day_outside: "text-[#c0c5c2]",
+          }}
+        />
+        {includeTime && (
+          <div className="flex items-center gap-2 border-t border-[#edf0ee] px-3 py-2.5">
+            <Clock3 className="h-3.5 w-3.5 text-[#7d8781]" />
+            <span className="mr-auto text-[11px] text-[#69726d]">执行时间</span>
+            <Select value={String(selected?.getHours() ?? 9).padStart(2, "0")} onValueChange={(next) => setTime("hour", next)}>
+              <SelectTrigger aria-label={`${label}小时`} className="h-8 w-[72px] rounded-md border-[#dfe4e1] bg-white px-2 text-[11px] shadow-none focus:ring-2 focus:ring-[#dceee4]"><SelectValue /></SelectTrigger>
+              <SelectContent className={`${scheduleMenuClass} max-h-56 min-w-[72px]`}>{Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0")).map((hour) => <SelectItem key={hour} value={hour} className="h-7 text-[11px] focus:bg-[#f0f6f2]">{hour}</SelectItem>)}</SelectContent>
+            </Select>
+            <span className="text-[11px] text-[#8b938f]">:</span>
+            <Select value={String(selected?.getMinutes() ?? 0).padStart(2, "0")} onValueChange={(next) => setTime("minute", next)}>
+              <SelectTrigger aria-label={`${label}分钟`} className="h-8 w-[72px] rounded-md border-[#dfe4e1] bg-white px-2 text-[11px] shadow-none focus:ring-2 focus:ring-[#dceee4]"><SelectValue /></SelectTrigger>
+              <SelectContent className={`${scheduleMenuClass} max-h-56 min-w-[72px]`}>{Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0")).map((minute) => <SelectItem key={minute} value={minute} className="h-7 text-[11px] focus:bg-[#f0f6f2]">{minute}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function ScheduleMonthControl({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  const [year, setYear] = useState(() => Number(String(value || "").split("-")[0]) || new Date().getFullYear());
+  const selectedMonth = Number(String(value || "").split("-")[1]) || 0;
+  const months = ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"];
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" aria-label={label} className={`${scheduleControlClass} flex items-center justify-between gap-3 text-left`}>
+          <span className={value ? "truncate" : "truncate text-[#9aa19d]"}>{value ? value.replace("-", " / ") : "请选择月份"}</span>
+          <CalendarDays className="h-3.5 w-3.5 shrink-0 text-[#7d8781]" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" sideOffset={6} className="z-[80] w-[280px] rounded-xl border-[#e1e6e3] bg-white p-3 shadow-[0_14px_38px_rgba(45,63,54,0.14)]">
+        <div className="mb-3 flex items-center justify-between">
+          <button type="button" aria-label="上一年" onClick={() => setYear((current) => current - 1)} className="grid h-7 w-7 place-items-center rounded-md text-[#7d8781] hover:bg-[#f0f4f2]"><ChevronLeft className="h-3.5 w-3.5" /></button>
+          <span className="text-[12px] font-medium text-[#303633]">{year} 年</span>
+          <button type="button" aria-label="下一年" onClick={() => setYear((current) => current + 1)} className="grid h-7 w-7 place-items-center rounded-md text-[#7d8781] hover:bg-[#f0f4f2]"><ChevronRight className="h-3.5 w-3.5" /></button>
+        </div>
+        <div className="grid grid-cols-3 gap-1.5">{months.map((month, index) => {
+          const active = year === Number(String(value || "").split("-")[0]) && selectedMonth === index + 1;
+          return <button key={month} type="button" onClick={() => onChange(`${year}-${String(index + 1).padStart(2, "0")}`)} className={`h-8 rounded-md text-[11px] transition-colors ${active ? "bg-[#0f8f58] text-white" : "text-[#4b544f] hover:bg-[#f0f6f2] hover:text-[#176944]"}`}>{month}</button>;
+        })}</div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function dataCrawlerScheduleListStatus(
   task: DataCrawlerScheduleState["task"],
   draft: DataCrawlerScheduleDraft,
@@ -2797,23 +2954,11 @@ function DataCrawlerSchedulePanel({
     }
   };
 
-  const controlClass = "h-10 w-full rounded-lg border border-[#d1d1d6] bg-white px-3 text-[13px] text-[#1d1d1f] outline-none transition-colors placeholder:text-[#aeaeb2] focus:border-[#8eb9a2] focus:ring-2 focus:ring-[#dceee4] disabled:cursor-not-allowed disabled:bg-[#fafbfc] disabled:text-[#8a8a8e]";
   const successfulNotice = notice.includes("完成") || notice.includes("已保存") || notice.includes("已清空") || notice.includes("通过");
   const pendingNotice = notice.includes("正在");
 
   return (
     <div className="px-5 py-4 text-[12px] text-[#3a3a3c]">
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-[#ecefed] pb-3">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[#69726d]">
-          <Shield className="h-3.5 w-3.5 shrink-0 text-[#0f8f58]" />
-          <span className="text-[12px] font-medium text-[#303633]">{state.institution_directory}</span>
-          <span className="text-[#b0b6b2]">·</span>
-          <span className="font-mono text-[11px]">{state.institution_id}</span>
-          <span className="text-[#b0b6b2]">·</span>
-          <span className="flex min-w-0 items-center gap-1.5"><FileText className="h-3.5 w-3.5 shrink-0" /><span className="max-w-[420px] truncate" title={table.fileName}>{table.fileName}</span></span>
-        </div>
-        <span className="shrink-0 text-[11px] text-[#8a928d]">打开仅加载配置，测试、确定或执行时校验连接</span>
-      </div>
       {!binding ? (
         <div className="py-8 text-center leading-5 text-[#7a837e]">
           <div className="font-medium text-[#4e5752]">暂未识别到唯一的关联 SQL</div>
@@ -2821,43 +2966,72 @@ function DataCrawlerSchedulePanel({
         </div>
       ) : (
         <>
-          <div className="grid items-start gap-4 pt-4 md:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)_minmax(0,1fr)]">
+          <div className="grid items-start gap-3 md:grid-cols-[minmax(0,1.15fr)_minmax(0,0.8fr)_minmax(0,1fr)]">
               <div>
-                <div className="mb-1.5 text-[11px] font-medium text-[#636b67]">关联 SQL</div>
-                <div className="flex h-10 min-w-0 items-center gap-2 rounded-lg border border-[#e5e5ea] bg-[#fafbfc] px-3 text-[13px] text-[#1d1d1f]">
-                  <Link2 className="h-3.5 w-3.5 shrink-0 text-[#7c8680]" />
+                <div className="mb-1.5 text-[11px] font-medium text-[#626b66]">关联 SQL</div>
+                <div className="flex h-9 min-w-0 items-center gap-2 rounded-lg border border-[#e4e8e5] bg-[#f8faf9] px-3 text-[12px] text-[#303633]">
+                  <Link2 className="h-3.5 w-3.5 shrink-0 text-[#818a85]" />
                   <span className="min-w-0 flex-1 truncate" title={binding.sqlName}>{binding.sqlName}</span>
-                  <span className="shrink-0 text-[10px] text-[#087647]">待校验</span>
+                  <span className="shrink-0 text-[10px] text-[#25825a]">待校验</span>
                 </div>
               </div>
-              <label>
-                <span className="mb-1.5 block text-[11px] font-medium text-[#636b67]">循环方式</span>
-                <select aria-label="循环方式" className={controlClass} value={draft.recurrence} onChange={(event) => setDraft({ ...draft, recurrence: event.target.value as DataCrawlerScheduleDraft["recurrence"] })}><option value="none">不循环（仅手动执行）</option><option value="daily" disabled={!binding.parameters.length}>每日</option><option value="weekly" disabled={!binding.parameters.length}>每周</option><option value="biweekly" disabled={!binding.parameters.length}>每双周</option><option value="monthly" disabled={!binding.parameters.length}>每月</option></select>
+              <div>
+                <span className="mb-1.5 block text-[11px] font-medium text-[#626b66]">循环方式</span>
+                <ScheduleSelect label="循环方式" value={draft.recurrence} onValueChange={(value) => setDraft({ ...draft, recurrence: value as DataCrawlerScheduleDraft["recurrence"] })} options={[{ value: "none", label: "不循环（仅手动执行）" }, { value: "daily", label: "每日", disabled: !binding.parameters.length }, { value: "weekly", label: "每周", disabled: !binding.parameters.length }, { value: "biweekly", label: "每双周", disabled: !binding.parameters.length }, { value: "monthly", label: "每月", disabled: !binding.parameters.length }]} />
                 {!binding.parameters.length && <span className="mt-1.5 block text-[10px] text-[#8a928d]">无参数 SQL 仅支持手动执行一次。</span>}
-              </label>
-              {draft.recurrence !== "none" && <label><span className="mb-1.5 block text-[11px] font-medium text-[#636b67]">执行日期与时间</span><input aria-label="执行日期与时间" type="datetime-local" className={`${controlClass} [color-scheme:light]`} value={draft.executionAt} onChange={(event) => setDraft({ ...draft, executionAt: event.target.value })} /></label>}
+              </div>
+              {draft.recurrence !== "none" && <div><span className="mb-1.5 block text-[11px] font-medium text-[#626b66]">执行日期与时间</span><ScheduleDateControl label="执行日期与时间" value={draft.executionAt} includeTime onChange={(value) => setDraft({ ...draft, executionAt: value })} /></div>}
           </div>
-          <div className="mt-5 border-t border-[#ecefed] pt-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-start gap-2"><GitBranch className="mt-0.5 h-4 w-4 text-[#7c8680]" /><div><div className="text-[12px] font-medium text-[#4e5752]">SQL 时间参数</div><p className="mt-0.5 text-[11px] text-[#8a928d]">按 SQL 参数类型选择日期、时间或月份；不会修改 Data Crawler 中的原始 SQL。</p></div></div>
-                <span className="shrink-0 text-[11px] text-[#8a928d]">{binding.parameters.length} 个</span>
+          <div className="mt-5 border-t border-[#e8ece9] pt-3.5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2"><GitBranch className="h-3.5 w-3.5 text-[#7d8781]" /><div className="text-[12px] font-medium text-[#424b46]">SQL 时间参数</div></div>
+                <span className="shrink-0 text-[10px] text-[#929a96]">{binding.parameters.length} 个</span>
               </div>
               {!binding.parameters.length && <div className="mt-3 flex items-center gap-2 text-[10px] text-[#7a837e]"><CheckCircle2 className="h-3.5 w-3.5 text-[#0f8f58]" />该 SQL 无参数，保持“不循环”后可直接执行一次。</div>}
-              {Boolean(binding.parameters.length) && <div className="mt-3 divide-y divide-[#ecefed] border-y border-[#ecefed]">{binding.parameters.map((parameter) => {
+              {Boolean(binding.parameters.length) && <div className="mt-1">{binding.parameters.map((parameter) => {
                 const rule = draft.parameterBindings[parameter.name] || "fixed";
                 const mode = scheduleParameterMode(rule);
                 const offset = scheduleParameterOffset(rule);
-                const inputType = parameter.type === "month" ? "month" : parameter.type === "datetime" ? "datetime-local" : "date";
                 const unit = parameter.type === "month" ? "月" : "日";
                 const referenceLabel = parameter.type === "month" ? "取值月" : "取值日";
-                return <div key={parameter.name} className="grid items-end gap-4 py-3.5 md:grid-cols-[minmax(170px,0.8fr)_minmax(220px,1fr)_minmax(250px,1.1fr)]"><div className="min-w-0 self-center"><div className="truncate text-[12px] font-medium text-[#303633]" title={parameter.name}>{temporalParameterLabel(parameter.name, parameter.type)}</div><div className="mt-1 truncate font-mono text-[10px] text-[#8a928d]" title={parameter.name}>{parameter.name} · SQL 中使用 {parameter.occurrenceCount} 次 · {parameter.type}</div></div>{["date", "month", "datetime"].includes(parameter.type) ? <><label><span className="mb-1.5 block text-[11px] font-medium text-[#636b67]">取值方式</span><select aria-label={`${parameter.name} 取值方式`} className={controlClass} value={mode} onChange={(event) => mutateParameter(parameter.name, event.target.value)}><option value="fixed">固定值</option><option value="reference">{referenceLabel}</option><option value="before">{referenceLabel}前第 N {unit}</option></select></label><label><span className="mb-1.5 block text-[11px] font-medium text-[#636b67]">{mode === "fixed" ? "固定值" : mode === "reference" ? "取值结果" : `N（${unit}）`}</span>{mode === "fixed" ? <input aria-label={`${parameter.name} 固定值`} type={inputType} className={`${controlClass} [color-scheme:light]`} value={draft.parameters[parameter.name] || ""} onChange={(event) => setDraft({ ...draft, parameters: { ...draft.parameters, [parameter.name]: event.target.value } })} /> : mode === "reference" ? <div className="flex h-10 items-center rounded-lg border border-[#e5e5ea] bg-[#fafbfc] px-3 text-[12px] text-[#636366]">{temporalReferencePreview(draft.executionAt, parameter.type)}</div> : <div className="relative"><input aria-label={`${parameter.name} 提前${unit}数`} type="number" min={1} inputMode="numeric" placeholder="请输入 N" className={`${controlClass} pr-10`} value={offset} onChange={(event) => updateParameterOffset(parameter.name, event.target.value)} /><span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[11px] text-[#8a8a8e]">{unit}</span><div className="mt-1 text-[10px] text-[#8a928d]">预览：{offset ? temporalReferencePreview(draft.executionAt, parameter.type, Number(offset)) : "填写 N 后显示"}</div></div>}</label></> : <div className="md:col-span-2 flex min-h-10 items-center text-[11px] text-[#a83c32]">非时间参数当前仅展示，暂不允许在 SDA 中改写。</div>}</div>;
+                const fixedValue = draft.parameters[parameter.name] || "";
+                return (
+                  <div key={parameter.name} className="grid items-start gap-3 py-3 md:grid-cols-[minmax(170px,0.8fr)_minmax(220px,1fr)_minmax(250px,1.1fr)]">
+                    <div className="min-w-0 self-center">
+                      <div className="truncate text-[12px] font-medium text-[#303633]" title={parameter.name}>{temporalParameterLabel(parameter.name, parameter.type)}</div>
+                      <div className="mt-1 truncate font-mono text-[10px] text-[#929a96]" title={parameter.name}>{parameter.name} · SQL 中使用 {parameter.occurrenceCount} 次 · {parameter.type}</div>
+                    </div>
+                    {["date", "month", "datetime"].includes(parameter.type) ? (
+                      <>
+                        <div>
+                          <span className="mb-1.5 block text-[11px] font-medium text-[#626b66]">取值方式</span>
+                          <ScheduleSelect label={`${parameter.name} 取值方式`} value={mode} onValueChange={(value) => mutateParameter(parameter.name, value)} options={[{ value: "fixed", label: "固定值" }, { value: "reference", label: referenceLabel }, { value: "before", label: `${referenceLabel}前第 N ${unit}` }]} />
+                        </div>
+                        <div>
+                          <span className="mb-1.5 block text-[11px] font-medium text-[#626b66]">{mode === "fixed" ? "固定值" : mode === "reference" ? "取值结果" : `N（${unit}）`}</span>
+                          {mode === "fixed" ? (
+                            parameter.type === "month"
+                              ? <ScheduleMonthControl label={`${parameter.name} 固定值`} value={fixedValue} onChange={(value) => setDraft({ ...draft, parameters: { ...draft.parameters, [parameter.name]: value } })} />
+                              : <ScheduleDateControl label={`${parameter.name} 固定值`} value={fixedValue} includeTime={parameter.type === "datetime"} onChange={(value) => setDraft({ ...draft, parameters: { ...draft.parameters, [parameter.name]: value } })} />
+                          ) : mode === "reference" ? (
+                            <div className="flex h-9 items-center rounded-lg border border-[#e5e9e6] bg-[#f8faf9] px-3 text-[12px] text-[#5f6863]">{temporalReferencePreview(draft.executionAt, parameter.type)}</div>
+                          ) : (
+                            <div className="relative">
+                              <input aria-label={`${parameter.name} 提前${unit}数`} type="text" inputMode="numeric" placeholder="请输入 N" className={`${scheduleControlClass} pr-9`} value={offset} onChange={(event) => updateParameterOffset(parameter.name, event.target.value)} />
+                              <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[11px] text-[#8b938f]">{unit}</span>
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    ) : <div className="flex min-h-9 items-center text-[11px] text-[#a83c32] md:col-span-2">非时间参数当前仅展示，暂不允许在 SDA 中改写。</div>}
+                  </div>
+                );
               })}</div>}
           </div>
         </>
       )}
-      {notice && <div role="status" aria-live="polite" className={`mt-4 flex items-start gap-2 border-t pt-3 leading-5 ${successfulNotice ? "border-[#cfe8da] text-[#087647]" : pendingNotice ? "border-[#dfe3e1] text-[#69726d]" : "border-[#f3d5d0] text-[#a83c32]"}`}>{successfulNotice ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : pendingNotice ? <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" /> : <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}<span>{notice}</span></div>}
-      <div className="mt-4 flex flex-col gap-3 border-t border-[#e8e8ec] pt-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="min-w-0 text-[11px] leading-4 text-[#8a928d]">测试只校验连接与参数；取消清空设置；确定保存配置；执行在校验通过后立即拉取。</p>
+      {notice && <div role="status" aria-live="polite" className={`mt-3 flex items-start gap-2 rounded-lg px-3 py-2 text-[11px] leading-5 ${successfulNotice ? "bg-[#f1f8f4] text-[#087647]" : pendingNotice ? "bg-[#f5f7f6] text-[#69726d]" : "bg-[#fff6f4] text-[#a83c32]"}`}>{successfulNotice ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : pendingNotice ? <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" /> : <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}<span>{notice}</span></div>}
+      <div className="mt-4 flex items-center justify-end">
         <div className="flex shrink-0 items-center justify-end gap-2">
           <button type="button" title="清空 SDA 中的全部设置并释放控制权" disabled={loading || testing} onClick={() => void clear()} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-transparent px-3 text-[12px] text-[#707873] transition-colors hover:border-[#dfe3e1] hover:bg-[#fafbfa] disabled:cursor-not-allowed disabled:opacity-50"><RotateCcw className="h-3.5 w-3.5" />取消</button>
           <button type="button" disabled={loading || testing || !binding || Boolean(unsupported.length)} onClick={() => void testConnection()} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#d9dedb] bg-white px-3.5 text-[12px] font-medium text-[#3f4843] transition-colors hover:bg-[#f4f6f5] focus:outline-none focus:ring-2 focus:ring-[#dceee4] disabled:cursor-not-allowed disabled:opacity-50">{testing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}{testing ? "测试中…" : "测试"}</button>

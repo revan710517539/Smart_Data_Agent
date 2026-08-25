@@ -184,7 +184,7 @@ async function main() {
   await configureApplicationModel(cdp, appUrl, "intelligent_analysis_reasoning", "经营分析中转站A", "中转站", ["gpt-5.5", "deepseek-v4-flash"], "model_analysis_relay_a");
   await configureApplicationModel(cdp, appUrl, "intelligent_analysis_reasoning", "经营分析中转站B", "中转站", ["qwen-plus"], "model_analysis_relay_b");
   await configureApplicationModel(cdp, appUrl, "intelligent_analysis_reasoning", "Claude 官方模型", "官方网站", ["claude-sonnet-4"], "model_analysis_official");
-  await configureApplicationModel(cdp, appUrl, "global_text_model", "默认模型", "中转站", ["360/deepseek-v4-flash", "360/deepseek-v4-pro", "deepbank/glm-5.2", "glm-5.2-codex", "gpt-5.5"], "model_default_intelligent_analysis_relay");
+  await configureApplicationModel(cdp, appUrl, "global_text_model", "通用分析中转站", "中转站", ["360/deepseek-v4-flash", "360/deepseek-v4-pro", "deepbank/glm-5.2", "glm-5.2-codex", "gpt-5.5"], "model_global_analysis_relay");
   await configureSpeechIntegration(cdp, appUrl, "realtime_voice_input", "speech_frontend_realtime");
   await configureSpeechIntegration(cdp, appUrl, "popup_voice_input", "speech_frontend_popup");
   await cdp.evaluate(`
@@ -626,7 +626,7 @@ async function main() {
   await cdp.evaluate(`(() => { const input = document.querySelector('[data-plain-query-input="true"]'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(input, ""); input.dispatchEvent(new Event("input", { bubbles: true })); })()`);
   await cdp.evaluate(`document.querySelector('button[aria-label="选择分析模型"]')?.click()`);
   await waitForEval(cdp, `document.querySelectorAll("[data-model-group]").length === 4`);
-  await assertEval(cdp, `[...document.querySelectorAll("[data-model-group]")].map((node) => node.dataset.modelGroup).join("|") === "默认模型|经营分析中转站A|经营分析中转站B|其他"`, "default and relay integrations must each form a category and non-relay models must be grouped last under 其他");
+  await assertEval(cdp, `[...document.querySelectorAll("[data-model-group]")].map((node) => node.dataset.modelGroup).join("|") === "经营分析中转站A|经营分析中转站B|通用分析中转站|其他"`, "user-configured relay integrations must each form a category and non-relay models must be grouped last under 其他");
   await assertEval(cdp, `["360/deepseek-v4-flash","360/deepseek-v4-pro","deepbank/glm-5.2","glm-5.2-codex","gpt-5.5","deepseek-v4-flash","qwen-plus","claude-sonnet-4"].every((id) => Boolean(document.querySelector('button[data-model-option="' + id + '"]')))`, "all configured child models must be listed under their integration groups");
   await cdp.evaluate(`document.querySelector('button[data-model-option="qwen-plus"]')?.click()`);
   await waitForEval(cdp, `document.querySelector('button[aria-label="选择分析模型"]')?.innerText.toLowerCase().includes("qwen-plus")`);

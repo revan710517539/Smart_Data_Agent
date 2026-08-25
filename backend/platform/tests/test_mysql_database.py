@@ -96,6 +96,9 @@ class MySQLDatabaseContractTest(unittest.TestCase):
         self.assertTrue(mysql_version_supported("8.0.18-commercial"))
         self.assertFalse(mysql_version_supported("8.0.19"))
         self.assertFalse(mysql_version_supported("8.4.0"))
+        self.assertTrue(mysql_version_supported("9.5.0", compatible_versions=("9.5.0",)))
+        self.assertTrue(mysql_version_supported("9.5.0-commercial", compatible_versions=("9.5.0",)))
+        self.assertFalse(mysql_version_supported("9.5.1", compatible_versions=("9.5.0",)))
 
     def test_generated_schema_is_mysql_only_and_complete(self) -> None:
         ddl = Path(MYSQL_SCHEMA_PATH).read_text(encoding="utf-8")

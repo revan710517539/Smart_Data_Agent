@@ -6,8 +6,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+from websocket import WebSocketConnectionClosedException
 
-from backend.platform.api.asgi import SmartDataAgentASGI
+from backend.platform.api.asgi import ASGIFunASRSession, SmartDataAgentASGI
 from backend.platform.bootstrap import build_local_platform
 from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
 
@@ -110,6 +113,46 @@ class ASGIRuntimeTest(unittest.TestCase):
         self.assertEqual(payloads[0], {"type": "connected"})
         self.assertIn({"type": "pong"}, payloads)
         self.assertEqual(sent[-1]["type"], "websocket.close")
+
+    def test_fun_asr_asgi_start_uses_governed_websocket_instead_of_ambient_proxy(self) -> None:
+        remote = MagicMock()
+        remote.recv.side_effect = WebSocketConnectionClosedException()
+        config = SimpleNamespace(
+            endpoint="wss://ws-example.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+            api_key="redacted",
+            model="fun-asr-realtime",
+            sample_rate=16000,
+            integration_id="speech_fun_asr",
+            integration_name="阿里云 Fun-ASR",
+        )
+
+        async def receive() -> dict:
+            return {"type": "websocket.disconnect", "code": 1000}
+
+        async def send(_message: dict) -> None:
+            return None
+
+        session = ASGIFunASRSession(
+            SimpleNamespace(),
+            {},
+            "tenant:华兴银行",
+            "u_super_admin",
+            receive,
+            send,
+        )
+        def ignore_reader(coro: object) -> MagicMock:
+            getattr(coro, "close", lambda: None)()
+            return MagicMock()
+
+        with patch("backend.platform.api.asgi.FunAsrProxy._resolve_config", return_value=config), patch(
+            "backend.platform.api.asgi.create_governed_websocket_connection",
+            return_value=remote,
+        ) as connect, patch("backend.platform.api.asgi.asyncio.create_task", side_effect=ignore_reader):
+            asyncio.run(session._start_remote({"type": "start", "sampleRate": 16000}))
+        connect.assert_called_once()
+        self.assertEqual(connect.call_args.args[0], config.endpoint)
+        self.assertNotIn("http_proxy_host", connect.call_args.kwargs)
+        self.assertIs(session.remote, remote)
 
     async def _websocket_ping(self) -> list[dict]:
         messages = iter(

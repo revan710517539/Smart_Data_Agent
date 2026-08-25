@@ -16,12 +16,12 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qs
 
 import certifi
-from websocket import ABNF, WebSocketConnectionClosedException, WebSocketTimeoutException, create_connection
+from websocket import ABNF, WebSocketConnectionClosedException, WebSocketTimeoutException
 
 from backend.platform.automation import AutomationWorker
 from backend.platform.bootstrap import PlatformServices, build_local_platform, build_production_platform
 from backend.platform.runtime_config import load_runtime_config
-from backend.platform.security import validate_outbound_url
+from backend.platform.security import create_governed_websocket_connection
 
 from .routes.asr import (
     FUN_ASR_REALTIME_PATH,
@@ -429,17 +429,19 @@ class ASGIFunASRSession:
             return
         resolver = FunAsrProxy(self.handler, None, self.params, self.tenant_id, self.user_id)
         config = resolver._resolve_config(event, sample_rate=_coerce_sample_rate(event.get("sampleRate")))
-        validate_outbound_url(config.endpoint, allowed_schemes=("wss",))
         headers = [
             f"Authorization: Bearer {config.api_key}",
             "user-agent: SmartDataAgent/1.0 Fun-ASR realtime ASGI proxy",
         ]
+        # Production ASGI must use the same governed transport as the local
+        # HTTP proxy. websocket-client create_connection inherits HTTP(S)_PROXY
+        # and that TLS path is what surfaces as a browser reconnect banner.
         self.remote = await asyncio.to_thread(
-            create_connection,
+            create_governed_websocket_connection,
             config.endpoint,
-            header=headers,
             timeout=10,
-            sslopt={"cert_reqs": ssl.CERT_REQUIRED, "ca_certs": certifi.where()},
+            header=headers,
+            ca_certs=certifi.where(),
         )
         self.remote.settimeout(1)
         await self._remote_send_json(

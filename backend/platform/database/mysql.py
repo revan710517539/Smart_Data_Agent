@@ -90,6 +90,7 @@ class MySQLConnectionPool:
         min_size: int = 1,
         max_size: int = 12,
         timeout_seconds: float = 10,
+        compatible_versions: tuple[str, ...] = (),
         connector: Any | None = None,
     ) -> None:
         if min_size < 1 or max_size < min_size or max_size > 100:
@@ -99,6 +100,7 @@ class MySQLConnectionPool:
         self.min_size = min_size
         self.max_size = max_size
         self.timeout_seconds = timeout_seconds
+        self.compatible_versions = compatible_versions
         self._connector = connector or _pymysql_connect
         self._connections: queue.LifoQueue[Any] = queue.LifoQueue(maxsize=max_size)
         self._created = 0
@@ -171,7 +173,7 @@ class MySQLConnectionPool:
                 cursor.execute("SELECT VERSION() AS version, @@session.time_zone AS time_zone")
                 row = cursor.fetchone() or {}
             version = str(_value(row, "version", 0) or "")
-            supported = mysql_version_supported(version)
+            supported = mysql_version_supported(version, compatible_versions=self.compatible_versions)
             return {
                 "ready": supported,
                 "adapter": "mysql_primary",
@@ -211,6 +213,7 @@ def apply_mysql_schema(
     *,
     connection: Any | None = None,
     schema_path: str | Path = MYSQL_SCHEMA_PATH,
+    compatible_versions: tuple[str, ...] = (),
 ) -> MySQLMigrationResult:
     path = Path(schema_path)
     ddl = path.read_text(encoding="utf-8")
@@ -228,7 +231,7 @@ def apply_mysql_schema(
                 raise MySQLMigrationError("mysql_schema_migration_lock_timeout")
             cursor.execute("SELECT VERSION() AS version")
             version = str(_value(cursor.fetchone(), "version", 0) or "")
-            if not mysql_version_supported(version):
+            if not mysql_version_supported(version, compatible_versions=compatible_versions):
                 raise MySQLMigrationError(f"mysql_version_unsupported:{version}")
             cursor.execute(
                 """
@@ -419,8 +422,9 @@ def mysql_tls_configured(database_url: str) -> bool:
     return value in {"verify_ca", "verify_identity"} and bool(ca)
 
 
-def mysql_version_supported(version: str) -> bool:
-    return str(version or "").split("-", 1)[0].strip() == MYSQL_TARGET_VERSION
+def mysql_version_supported(version: str, *, compatible_versions: tuple[str, ...] = ()) -> bool:
+    actual = str(version or "").split("-", 1)[0].strip()
+    return actual == MYSQL_TARGET_VERSION or actual in compatible_versions
 
 
 def _migration_attempts_table_exists(cursor: Any) -> bool:

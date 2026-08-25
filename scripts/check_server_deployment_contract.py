@@ -90,7 +90,8 @@ for content, label in ((dev_compose, "dev_compose"), (server_compose, "server_co
         "/app/Origin_Data" not in content and "SMART_DATA_AGENT_CSV_SOURCE_ROOT" not in content,
         f"{label}_no_retired_source",
     )
-require("/opt/palywright/examples/data-crawler/runtime-data" in server_compose, "server_compose_host_data_contract")
+require("/opt/palywright/examples/data-crawler/data" in server_compose, "server_compose_host_data_contract")
+require("runtime-data" not in server_compose, "server_compose_no_legacy_runtime_data")
 require("/run/secrets/mysql_ca.pem:ro" in server_compose, "server_compose_mysql_ca_read_only")
 require(
     "/app/Topic_Data" in server_compose and "/app/runtime" in server_compose,
@@ -142,7 +143,7 @@ for content, label in ((readme, "readme"), (deployment_doc, "deployment_doc")):
         f"{label}_current_source_contract",
     )
     require("scripts/provision_production.py" in content, f"{label}_explicit_empty_database_provision")
-    require("/opt/palywright/examples/data-crawler/runtime-data" in content, f"{label}_server_host_path")
+    require("/opt/palywright/examples/data-crawler/data" in content, f"{label}_server_host_path")
 
 for script in (
     "scripts/release-gate.sh",

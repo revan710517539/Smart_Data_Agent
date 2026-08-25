@@ -18,15 +18,16 @@ Simulator。SDA 只消费 Data Crawler 已落盘的数据，不修改 Crawler �
 数据。
 
 ```text
-Data Crawler 宿主机目录：/opt/palywright/examples/data-crawler/runtime-data
+Data Crawler 宿主机目录：/opt/palywright/examples/data-crawler/data
 SDA 容器目录：/app/data
 访问模式：只读
 ```
 
 必须比较 Docker mount 的宿主机 `Source`，不能因为两个容器内路径相同就判定为同一
-数据源。业务 CSV 不进入镜像；`/app/runtime` 和 `/app/Topic_Data` 是 SDA 自己的持久
-卷。生产适配不得改变分析场景、模型选择、Skill/Memory 语义、报表口径或其他业务
-模块。
+数据源。该宿主机目录必须等于 Data Crawler 的 `DATA_CRAWLER_OUTPUT_DIR`（本机与
+服务器默认都是采集仓库下的 `data/`，不是单独的 `runtime-data/`）。业务 CSV 不进入
+镜像；`/app/runtime` 和 `/app/Topic_Data` 是 SDA 自己的持久卷。生产适配不得改变
+分析场景、模型选择、Skill/Memory 语义、报表口径或其他业务模块。
 
 ## 2. 每次开发必须遵守的流程
 

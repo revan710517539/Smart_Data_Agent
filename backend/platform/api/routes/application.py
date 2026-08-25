@@ -12,7 +12,6 @@ from backend.platform.api.routes.assets import (
     _visualization_topic_tables,
 )
 from backend.platform.application.store import ApplicationActionUnavailable, UnsupportedApplicationAction
-from backend.platform.settings import ensure_default_models_for_account
 
 
 def handle_application_module_get(handler: Any, query: str) -> None:
@@ -207,16 +206,6 @@ def _review_registration(handler: Any, context: Any, action: str, payload: dict[
         request_id,
         approved=action == "approve_registration",
     )
-    if action == "approve_registration":
-        session = reviewed.get("user") if isinstance(reviewed.get("user"), dict) else {}
-        user = session.get("user") if isinstance(session.get("user"), dict) else {}
-        user_id = str(user.get("id") or "")
-        if user_id:
-            ensure_default_models_for_account(
-                handler.services.system_config_store,
-                user_id,
-                updated_by=context.user_id,
-            )
     return reviewed
 
 

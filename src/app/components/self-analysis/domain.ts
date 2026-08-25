@@ -879,8 +879,6 @@ export type AnalysisModelGroup = {
   options: AnalysisModelOption[];
 };
 
-const DEFAULT_RELAY_MODEL_ID = "model_default_intelligent_analysis_relay";
-
 export function displayAnalysisModelName(value: string) {
   const normalized = value.trim().replace(/_/g, "-").replace(/\s+/g, "-");
   if (!normalized) return "未命名";
@@ -922,11 +920,7 @@ export function groupAnalysisModelOptions(models: ModelIntegration[]): AnalysisM
     }
     otherOptions.push(...options);
   });
-  relayGroups.sort((left, right) => {
-    const leftDefault = left.id === DEFAULT_RELAY_MODEL_ID ? 0 : 1;
-    const rightDefault = right.id === DEFAULT_RELAY_MODEL_ID ? 0 : 1;
-    return leftDefault - rightDefault || left.category.localeCompare(right.category, "zh-CN");
-  });
+  relayGroups.sort((left, right) => left.category.localeCompare(right.category, "zh-CN"));
   if (otherOptions.length) {
     relayGroups.push({ id: "other", category: "其他", options: otherOptions });
   }

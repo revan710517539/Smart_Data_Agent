@@ -28,6 +28,7 @@ class RuntimeConfig:
     oidc_token_endpoint: str
     oidc_jwks_uri: str
     oidc_redirect_uri: str
+    development_mysql_compatible_versions: tuple[str, ...] = ()
 
     @property
     def is_production(self) -> bool:
@@ -59,6 +60,11 @@ def load_runtime_config() -> RuntimeConfig:
         oidc_token_endpoint=os.getenv("SMART_DATA_AGENT_OIDC_TOKEN_ENDPOINT", "").strip(),
         oidc_jwks_uri=os.getenv("SMART_DATA_AGENT_OIDC_JWKS_URI", "").strip(),
         oidc_redirect_uri=os.getenv("SMART_DATA_AGENT_OIDC_REDIRECT_URI", "").strip(),
+        development_mysql_compatible_versions=tuple(
+            version.strip()
+            for version in os.getenv("SMART_DATA_AGENT_DEVELOPMENT_MYSQL_COMPATIBLE_VERSIONS", "").split(",")
+            if version.strip()
+        ),
     )
     validate_runtime_config(config)
     return config
@@ -73,6 +79,19 @@ def validate_runtime_config(config: RuntimeConfig) -> None:
             raise RuntimeConfigurationError(f"Invalid CORS origin: {origin}")
     if config.database_url and not config.database_url.lower().startswith(("mysql://", "mysql+pymysql://")):
         raise RuntimeConfigurationError("SMART_DATA_AGENT_DATABASE_URL must point to MySQL")
+    invalid_mysql_versions = [
+        version
+        for version in config.development_mysql_compatible_versions
+        if not all(part.isdigit() for part in version.split(".")) or len(version.split(".")) != 3
+    ]
+    if invalid_mysql_versions:
+        raise RuntimeConfigurationError(
+            "SMART_DATA_AGENT_DEVELOPMENT_MYSQL_COMPATIBLE_VERSIONS must contain exact numeric versions"
+        )
+    if config.development_mysql_compatible_versions and config.environment not in {"development", "test"}:
+        raise RuntimeConfigurationError(
+            "SMART_DATA_AGENT_DEVELOPMENT_MYSQL_COMPATIBLE_VERSIONS is forbidden outside development/test"
+        )
     if not config.is_production:
         return
     errors: list[str] = []

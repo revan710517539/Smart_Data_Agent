@@ -7,10 +7,8 @@ from backend.authz import normalize_tenant_id
 from backend.authz.seed import OPERATING_TENANTS
 from backend.platform.api.support import first_query_value, send_route_exception
 from backend.platform.settings import (
-    DEFAULT_RELAY_MODEL_ID,
     account_system_config_scope,
-    default_relay_model_preset,
-    ensure_default_models_for_account,
+    is_retired_default_model,
     test_model_integration,
     test_speech_integration,
 )
@@ -23,10 +21,7 @@ def handle_system_config_get(handler: Any, query: str) -> None:
         params = parse_qs(query)
         context = handler._request_context(params=params)
         config_scope = _account_config_scope(context)
-        ensure_default_models_for_account(handler.services.system_config_store, context.user_id)
         models = _list_account_models(handler, context, config_scope)
-        if not any(str(model.get("id") or "") == DEFAULT_RELAY_MODEL_ID for model in models):
-            models = [default_relay_model_preset(), *models]
         speech_integrations = _list_account_speech_integrations(handler, context, config_scope)
         can_read_system_params = _can_read_system_params(handler, context)
         parameter_scopes = _available_system_parameter_scopes(handler, context) if can_read_system_params else ()
@@ -69,6 +64,8 @@ def handle_system_model_upsert(handler: Any) -> None:
         model = payload.get("model")
         if not isinstance(model, dict):
             raise ValueError("model must be an object.")
+        if is_retired_default_model(str(model.get("id") or "")):
+            raise ValueError("retired_default_model_forbidden")
         model = {**model, "applicationModule": "global_text_model"}
         if str(model.get("value") or "") == MASKED_SECRET:
             existing = _get_account_model(handler, context, str(model.get("id") or ""), reveal_secret=True)
@@ -93,8 +90,6 @@ def handle_system_model_delete(handler: Any, query: str) -> None:
         model_id = first_query_value(params, "model_id")
         if not model_id:
             raise ValueError("model_id is required.")
-        if model_id == DEFAULT_RELAY_MODEL_ID:
-            raise ValueError("default_model_cannot_be_deleted")
         config_scope = _model_account_scope(context)
         deleted = False
         for scope in _model_scope_candidates(context):
@@ -350,6 +345,8 @@ def _available_system_parameter_scopes(
 
 def _list_account_models(handler: Any, context: Any, config_scope: str) -> list[dict[str, Any]]:
     for model in handler.services.system_config_store.list_models(config_scope, reveal_secret=True):
+        if is_retired_default_model(model):
+            continue
         if str(model.get("status") or "") == "disabled":
             continue
         if str(model.get("applicationModule") or "") == "global_text_model":
@@ -363,9 +360,13 @@ def _list_account_models(handler: Any, context: Any, config_scope: str) -> list[
         [
             model
             for model in handler.services.system_config_store.list_models(config_scope)
-            if str(model.get("status") or "") != "disabled"
+            if str(model.get("status") or "") != "disabled" and not is_retired_default_model(model)
         ],
-        handler.services.system_config_store.list_models(context.tenant_id),
+        [
+            model
+            for model in handler.services.system_config_store.list_models(context.tenant_id)
+            if not is_retired_default_model(model)
+        ],
     )
 
 

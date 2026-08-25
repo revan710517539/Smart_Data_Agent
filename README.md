@@ -20,7 +20,11 @@
   npm run dev:api
   ```
 
-  MySQL 8.x is required for every persistent runtime, including development.
+  Staging and production are pinned to MySQL 8.0.18. Development and test also
+  use that target by default; an existing local instance may be admitted only
+  by listing its exact version in
+  `SMART_DATA_AGENT_DEVELOPMENT_MYSQL_COMPATIBLE_VERSIONS`. That setting is
+  rejected in staging and production.
   The API fails closed when `SMART_DATA_AGENT_DATABASE_URL` is absent or is not
   a MySQL URL. Delivered institution CSV files stay in the external Data Crawler
   directory and generated results stay in `Topic_Data/`; MySQL stores structured
@@ -73,8 +77,9 @@
   the full operator runbook is `docs/server_mysql_deployment.md`. It keeps the
   existing host-native MySQL and Data Crawler directory unchanged:
 
-  - `/opt/palywright/examples/data-crawler/runtime-data` is mounted read-only at
-    `/app/data`; production requires the versioned Crawler `manifest.json`.
+  - `/opt/palywright/examples/data-crawler/data` is mounted read-only at
+    `/app/data` (the same tree Data Crawler writes via `DATA_CRAWLER_OUTPUT_DIR`);
+    production requires the versioned Crawler `manifest.json`.
   - `/app/Topic_Data` and `/app/runtime` use persistent writable volumes.
   - `/var/lib/mysql80/ca.pem` is mounted read-only; the MySQL server key is never
     mounted into the application container.

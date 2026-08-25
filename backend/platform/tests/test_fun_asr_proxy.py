@@ -71,6 +71,7 @@ class FunAsrProxyContractTest(unittest.TestCase):
         self.assertEqual(event["payload"]["model"], "fun-asr-realtime")
         self.assertEqual(event["payload"]["parameters"]["format"], "pcm")
         self.assertEqual(event["payload"]["parameters"]["sample_rate"], 16000)
+        self.assertTrue(event["payload"]["parameters"]["heartbeat"])
         self.assertEqual(event["payload"]["input"]["context"], context)
 
     def test_continue_task_event_preserves_context(self) -> None:

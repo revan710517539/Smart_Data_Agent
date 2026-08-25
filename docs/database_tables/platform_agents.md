@@ -14,7 +14,7 @@
 | `agent_name` | `VARCHAR(200)` | NOT NULL | 名称。 |
 | `agent_type` | `VARCHAR(64)` | NOT NULL | planner/query/reviewer 等类型。 |
 | `status` | `VARCHAR(24)` | NOT NULL DEFAULT 'configured' CHECK (status IN ('configured','implemented','healthy','disabled')) | 运行可用状态。 |
-| `model_integration_id` | `UUID` | 无 | 默认模型，外键在模型表建成后由迁移补充。 |
+| `model_integration_id` | `UUID` | 无 | 绑定模型，外键在模型表建成后由迁移补充。 |
 | `input_schema` | `JSONB` | NOT NULL DEFAULT '{}'::jsonb | 输入 JSON Schema。 |
 | `output_schema` | `JSONB` | NOT NULL DEFAULT '{}'::jsonb | 输出 JSON Schema。 |
 | `runtime_config` | `JSONB` | NOT NULL DEFAULT '{}'::jsonb | 超时、配额等运行设置。 |

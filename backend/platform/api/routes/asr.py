@@ -27,9 +27,6 @@ from backend.platform.settings.speech_test import (
     dashscope_api_base_to_fun_asr_endpoint as _speech_dashscope_endpoint,
 )
 from backend.platform.settings import (
-    DEFAULT_RELAY_MODEL_ID,
-    default_relay_model_preset,
-    ensure_default_models_for_account,
     list_models_for_application,
     normalize_application_module,
 )
@@ -113,8 +110,6 @@ def handle_fun_asr_runtime_config_get(handler: Any, query: str) -> None:
 
 def _resolve_runtime_analysis_models(handler: Any, tenant_id: str, user_id: str) -> list[dict[str, Any]]:
     store = handler.services.system_config_store
-    if user_id:
-        ensure_default_models_for_account(store, user_id)
     models = list_models_for_application(
         store,
         tenant_id,
@@ -122,8 +117,6 @@ def _resolve_runtime_analysis_models(handler: Any, tenant_id: str, user_id: str)
         user_id=user_id,
         reveal_secret=False,
     )
-    if not any(str(model.get("id") or "") == DEFAULT_RELAY_MODEL_ID for model in models):
-        models = [default_relay_model_preset(), *models]
     deduplicated: dict[str, dict[str, Any]] = {}
     for model in models:
         model_id = str(model.get("id") or "").strip()
@@ -189,6 +182,9 @@ def build_run_task_event(
                 "format": "pcm",
                 "sample_rate": sample_rate or DEFAULT_FUN_ASR_SAMPLE_RATE,
                 "language_hints": ["zh"],
+                # Aliyun disconnects after 60s of silent PCM unless heartbeat
+                # is on. Realtime listening sends silence between utterances.
+                "heartbeat": True,
             },
             "input": input_payload,
         },

@@ -4,7 +4,8 @@
 
 - 目标主库是 MySQL 8.0.18；禁止修改 migration ledger checksum。
 - Data Crawler 宿主机目录固定为
-  `/opt/palywright/examples/data-crawler/runtime-data`，在 SDA 内只读挂载为
+  `/opt/palywright/examples/data-crawler/data`（与 Crawler 默认
+  `DATA_CRAWLER_OUTPUT_DIR` 相同，不是 `runtime-data`），在 SDA 内只读挂载为
   `/app/data`；容器内 `SMART_DATA_AGENT_DATA_CRAWLER_ROOT=/app/data`。SDA 不修改
   Crawler 源码、容器和源数据。
 - 原始数据不进入镜像；`/app/runtime` 与 `/app/Topic_Data` 使用 SDA 独立持久卷。

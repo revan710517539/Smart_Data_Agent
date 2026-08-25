@@ -405,7 +405,7 @@ class AutomationRuntimeTest(unittest.TestCase):
         assert failed is not None
         self.assertEqual(failed["status"], "failed")
         self.assertEqual(failed["error_code"], "analysis_selected_model_unavailable")
-        self.assertIn("默认模型", failed["error_summary"])
+        self.assertIn("模型接入列表", failed["error_summary"])
         self.assertNotIn("权限", failed["error_summary"])
 
     def test_transient_handler_failure_is_retried_and_then_succeeds(self) -> None:

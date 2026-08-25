@@ -103,7 +103,6 @@ from backend.platform.settings import (
     InMemorySystemConfigStore,
     PostgreSQLSystemConfigStore,
     SQLiteSystemConfigStore,
-    ensure_default_models_for_accounts,
 )
 from backend.platform.skills import SkillConfigCatalog, SkillExecutor, SkillRegistry
 from backend.platform.skills.builtin import build_data_product_skills, build_supersonic_query_skill
@@ -251,10 +250,19 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
     if runtime_config.database_url:
         min_size = max(1, min(int(os.getenv("SMART_DATA_AGENT_DB_POOL_MIN", "2")), 20))
         max_size = max(min_size, min(int(os.getenv("SMART_DATA_AGENT_DB_POOL_MAX", "20")), 100))
-        mysql_pool = MySQLConnectionPool(runtime_config.database_url, min_size=min_size, max_size=max_size)
+        mysql_pool = MySQLConnectionPool(
+            runtime_config.database_url,
+            min_size=min_size,
+            max_size=max_size,
+            compatible_versions=runtime_config.development_mysql_compatible_versions,
+        )
         if os.getenv("SMART_DATA_AGENT_AUTO_MIGRATE", "true").strip().lower() not in {"0", "false", "no"}:
             with mysql_pool.connection() as connection:
-                apply_mysql_schema(runtime_config.database_url, connection=connection)
+                apply_mysql_schema(
+                    runtime_config.database_url,
+                    connection=connection,
+                    compatible_versions=runtime_config.development_mysql_compatible_versions,
+                )
     roles, assignments, policies, manageable_roles = build_local_authz_seed()
     knowledge_documents = [
         KnowledgeDocument(
@@ -392,7 +400,6 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         _seed_system_integrations_if_empty(system_config_store)
     if runtime_config.environment in {"development", "test"}:
         _seed_system_integrations_if_empty(system_config_store)
-    _seed_account_default_models(system_config_store, user_directory_store)
     if runtime_config.environment in {"development", "test"} and db_path is not None:
         for tenant_id in [normalize_tenant_id(tenant) for tenant in OPERATING_TENANTS] + [LEGACY_TENANT_ID]:
             bundle = data_asset_store.list_bundle(tenant_id)
@@ -549,6 +556,13 @@ def build_production_platform(runtime_config: RuntimeConfig | None = None) -> Pl
     """Build a persistent runtime on the sole supported MySQL primary."""
 
     runtime_config = runtime_config or load_runtime_config()
+    if (
+        runtime_config.development_mysql_compatible_versions
+        and runtime_config.environment not in {"development", "test"}
+    ):
+        raise RuntimeConfigurationError(
+            "Development MySQL compatibility versions are forbidden outside development/test"
+        )
     if runtime_config.environment == "test":
         raise RuntimeConfigurationError("Test runtimes must opt into an isolated adapter explicitly")
     if not runtime_config.database_url:
@@ -563,12 +577,21 @@ def _build_mysql_production_platform(runtime_config: RuntimeConfig) -> PlatformS
 
     min_size = max(1, min(int(os.getenv("SMART_DATA_AGENT_DB_POOL_MIN", "2")), 20))
     max_size = max(min_size, min(int(os.getenv("SMART_DATA_AGENT_DB_POOL_MAX", "20")), 100))
-    raw_pool = MySQLConnectionPool(runtime_config.database_url, min_size=min_size, max_size=max_size)
+    raw_pool = MySQLConnectionPool(
+        runtime_config.database_url,
+        min_size=min_size,
+        max_size=max_size,
+        compatible_versions=runtime_config.development_mysql_compatible_versions,
+    )
     pool = MySQLStoreConnectionPool(raw_pool)
     try:
         if os.getenv("SMART_DATA_AGENT_AUTO_MIGRATE", "true").strip().lower() not in {"0", "false", "no"}:
             with raw_pool.connection() as connection:
-                apply_mysql_schema(runtime_config.database_url, connection=connection)
+                apply_mysql_schema(
+                    runtime_config.database_url,
+                    connection=connection,
+                    compatible_versions=runtime_config.development_mysql_compatible_versions,
+                )
 
         policy_repository = PostgreSQLPolicyRepository(pool)
         reconcile_role_defaults(policy_repository)
@@ -591,7 +614,6 @@ def _build_mysql_production_platform(runtime_config: RuntimeConfig) -> PlatformS
         approval_store = PostgreSQLCapabilityApprovalStore(pool)
         bridge_auth_store = PostgreSQLBridgeAuthStore(pool)
         message_board_store = MySQLMessageBoardStore(raw_pool)
-        _seed_account_default_models(system_config_store, user_directory_store)
 
         rate_limiter = build_rate_limiter(runtime_config.environment)
         enforcer = AuthEnforcer(policy_repository)
@@ -1277,24 +1299,6 @@ def _seed_system_integrations_if_empty(system_config_store: InMemorySystemConfig
                     )
         except Exception:
             continue
-
-
-def _seed_account_default_models(system_config_store: object, user_directory_store: object) -> None:
-    """Backfill environment-backed defaults for all known accounts on startup."""
-
-    list_profiles = getattr(user_directory_store, "list_profiles", None)
-    if not callable(list_profiles):
-        return
-    try:
-        ensure_default_models_for_accounts(
-            system_config_store,
-            (str(profile.user_id) for profile in list_profiles()),
-            updated_by=SUPER_ADMIN_USER_ID,
-        )
-    except Exception:
-        # Default provisioning must never prevent the API from starting.  Model
-        # updates and new-account provisioning will safely retry later.
-        return
 
 
 def build_local_authz_seed() -> tuple[list[Role], list[RoleAssignment], list[PermissionPolicy], dict[str, set[str]]]:

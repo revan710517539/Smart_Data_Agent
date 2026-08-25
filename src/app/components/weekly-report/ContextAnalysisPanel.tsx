@@ -97,6 +97,7 @@ export function WeeklyContextAnalysisPanel({
   const silenceTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef(0);
+  const expectedCloseRef = useRef<"session_end" | "">("");
   const voiceActiveRef = useRef(false);
   const voiceBaseRef = useRef("");
   const voiceFinalRef = useRef("");
@@ -249,6 +250,7 @@ export function WeeklyContextAnalysisPanel({
   function stopRealtimeVoice(sendFinish = true) {
     clearSilenceTimer();
     clearReconnectTimer();
+    expectedCloseRef.current = "";
     voiceActiveRef.current = false;
     const socket = socketRef.current;
     if (socket?.readyState === WebSocket.OPEN && sendFinish) {
@@ -436,7 +438,10 @@ export function WeeklyContextAnalysisPanel({
           stopRealtimeVoice(false);
           return;
         }
-        if (payload.type === "finished") socket.close();
+        if (payload.type === "finished") {
+          expectedCloseRef.current = "session_end";
+          socket.close();
+        }
       };
       socket.onerror = () => {
         if (!voiceActiveRef.current) return;
@@ -445,13 +450,17 @@ export function WeeklyContextAnalysisPanel({
       };
       socket.onclose = () => {
         if (!voiceActiveRef.current) return;
+        const expectedClose = expectedCloseRef.current;
+        expectedCloseRef.current = "";
         socketRef.current = null;
         cleanupAudio();
         setVoiceListening(true);
-        setVoiceError("实时语音连接中断，正在自动重连…");
+        if (expectedClose !== "session_end") {
+          setVoiceError("实时语音连接中断，正在自动重连…");
+        }
         const attempt = reconnectAttemptsRef.current + 1;
         reconnectAttemptsRef.current = attempt;
-        const delay = Math.min(10_000, 800 * 2 ** Math.min(attempt - 1, 4));
+        const delay = expectedClose === "session_end" ? 0 : Math.min(10_000, 800 * 2 ** Math.min(attempt - 1, 4));
         reconnectTimerRef.current = window.setTimeout(() => {
           reconnectTimerRef.current = null;
           if (voiceActiveRef.current) void startRealtimeVoice(true);

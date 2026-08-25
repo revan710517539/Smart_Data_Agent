@@ -13,7 +13,7 @@ from backend.platform.access.service import (
 from backend.platform.access.store import InMemoryUserDirectoryStore, UserProfile
 from backend.platform.api.support import send_route_exception
 from backend.platform.bootstrap import build_local_platform
-from backend.platform.settings import DEFAULT_RELAY_MODEL_ID, list_models_for_application
+from backend.platform.settings import list_models_for_application
 from backend.platform.tenancy import ExecutionContext
 
 

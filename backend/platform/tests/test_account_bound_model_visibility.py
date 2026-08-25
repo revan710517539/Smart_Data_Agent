@@ -14,15 +14,10 @@ from backend.platform.api.routes.analysis import _resolve_selected_model
 from backend.platform.api.routes.settings import _available_system_parameter_scopes, handle_system_config_get
 from backend.platform.api.server import create_server
 from backend.platform.bootstrap import build_local_platform
-from backend.platform.settings import (
-    DEFAULT_MODEL_TEMPLATE_SCOPE,
-    DEFAULT_RELAY_MODEL_ID,
-    DEFAULT_RELAY_SHARED_MODELS,
-    configure_default_relay_model,
-    default_relay_model_preset,
-    ensure_default_models_for_account,
+from backend.platform.settings.model_modules import (
+    RETIRED_DEFAULT_RELAY_MODEL_ID,
+    list_models_for_application,
 )
-from backend.platform.settings.model_modules import list_models_for_application
 from backend.platform.settings.store import (
     GLOBAL_SYSTEM_CONFIG_TENANT,
     account_system_config_scope,
@@ -86,11 +81,8 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
         self.assertIn("account_bound_model", {item["id"] for item in other_institution["models"]})
         self.assertNotIn("account_bound_model", {item["id"] for item in other_account_models})
 
-    def test_unconfigured_system_config_returns_safe_shared_model_preset(self) -> None:
-        with TemporaryDirectory() as tmpdir, patch.dict(
-            "os.environ",
-            {"SMART_DATA_AGENT_DEFAULT_MODEL_API_KEY": ""},
-        ):
+    def test_unconfigured_system_config_does_not_inject_retired_default(self) -> None:
+        with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -107,19 +99,18 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
-        preset = next(item for item in payload["models"] if item["id"] == DEFAULT_RELAY_MODEL_ID)
         self.assertEqual(response.status, 200)
-        self.assertTrue(preset["requiresCredential"])
-        self.assertEqual(preset["value"], "")
-        self.assertEqual(preset["availableModels"], list(DEFAULT_RELAY_SHARED_MODELS))
-        self.assertEqual(preset["enabledModels"], list(DEFAULT_RELAY_SHARED_MODELS))
+        self.assertNotIn(RETIRED_DEFAULT_RELAY_MODEL_ID, {item["id"] for item in payload["models"]})
+        self.assertFalse(any(item.get("requiresCredential") for item in payload["models"]))
 
     def test_analysis_runtime_config_exposes_account_models_for_any_institution(self) -> None:
-        with TemporaryDirectory() as tmpdir, patch.dict(
-            "os.environ",
-            {"SMART_DATA_AGENT_DEFAULT_MODEL_API_KEY": ""},
-        ):
+        with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            server.services.system_config_store.upsert_model(
+                account_system_config_scope("u_super_admin"),
+                {**self._model("account_runtime_model"), "applicationModule": "global_text_model"},
+                updated_by="u_super_admin",
+            )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
@@ -146,11 +137,11 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
         self.assertEqual(huaxing["status"], 200)
         hankou_ids = {item["id"] for item in hankou["analysisModels"]}
         huaxing_ids = {item["id"] for item in huaxing["analysisModels"]}
-        self.assertIn(DEFAULT_RELAY_MODEL_ID, hankou_ids)
+        self.assertEqual(hankou_ids, {"account_runtime_model"})
         self.assertEqual(hankou_ids, huaxing_ids)
-        relay = next(item for item in hankou["analysisModels"] if item["id"] == DEFAULT_RELAY_MODEL_ID)
+        relay = next(item for item in hankou["analysisModels"] if item["id"] == "account_runtime_model")
         self.assertEqual(relay["applicationModule"], "global_text_model")
-        self.assertEqual(relay["enabledModels"], list(DEFAULT_RELAY_SHARED_MODELS))
+        self.assertEqual(relay["enabledModels"], ["account-model"])
         self.assertEqual(relay.get("value"), "")
 
     def test_system_config_skips_authorized_but_unprovisioned_parameter_scopes(self) -> None:
@@ -184,8 +175,7 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
         response: dict[str, object] = {}
         handler._send_json = lambda payload: response.update(payload)
 
-        with patch.dict("os.environ", {"SMART_DATA_AGENT_DEFAULT_MODEL_API_KEY": ""}):
-            handle_system_config_get(handler, "")
+        handle_system_config_get(handler, "")
 
         self.assertEqual(response["parameter_tenant_ids"], ["tenant:sda-internal"])
         self.assertTrue(response["can_read_system_params"])
@@ -220,11 +210,24 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
                 SimpleNamespace(user_id="u_super_admin", tenant_id="tenant:sda-internal"),
             )
 
-    def test_default_preset_contains_no_credential(self) -> None:
-        preset = default_relay_model_preset()
-        self.assertEqual(preset["value"], "")
-        self.assertEqual(preset["status"], "draft")
-        self.assertEqual(preset["testStatus"], "untested")
+    def test_retired_default_is_never_routable(self) -> None:
+        services = build_local_platform()
+        try:
+            services.system_config_store.upsert_model(
+                account_system_config_scope("u_super_admin"),
+                {**self._model(RETIRED_DEFAULT_RELAY_MODEL_ID), "applicationModule": "global_text_model"},
+                updated_by="u_super_admin",
+            )
+            candidates = list_models_for_application(
+                services.system_config_store,
+                normalize_tenant_id("华兴银行"),
+                "intelligent_analysis_reasoning",
+                user_id="u_super_admin",
+            )
+        finally:
+            services.close()
+
+        self.assertNotIn(RETIRED_DEFAULT_RELAY_MODEL_ID, {item["id"] for item in candidates})
 
     def test_relational_virtual_scope_codes_are_global_isolated_and_reversible(self) -> None:
         first_scope = account_system_config_scope("u_super_admin")
@@ -391,89 +394,38 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
         self.assertEqual(legacy["applicationModule"], "intelligent_analysis_reasoning")
         self.assertTrue(legacy["legacyAccountBinding"])
 
-    def test_default_relay_is_backfilled_for_existing_accounts_without_overwrite(self) -> None:
-        services = build_local_platform()
-        try:
-            configure_default_relay_model(services.system_config_store, "test-default-secret")
-            self.assertEqual(ensure_default_models_for_account(services.system_config_store, "u_super_admin"), [DEFAULT_RELAY_MODEL_ID])
-            default_model = services.system_config_store.get_model(
-                account_system_config_scope("u_super_admin"),
-                DEFAULT_RELAY_MODEL_ID,
-                reveal_secret=True,
-            )
-            template = services.system_config_store.get_model(
-                DEFAULT_MODEL_TEMPLATE_SCOPE,
-                DEFAULT_RELAY_MODEL_ID,
-                reveal_secret=True,
-            )
-            self.assertIsNotNone(default_model)
-            self.assertEqual(default_model["key"], "https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net")
-            self.assertEqual(default_model["value"], "test-default-secret")
-            self.assertEqual(template["value"], "test-default-secret")
-            self.assertEqual(default_model["status"], "draft")
-
-            services.system_config_store.upsert_model(
-                account_system_config_scope("u_lina"),
-                {
-                    **self._model(DEFAULT_RELAY_MODEL_ID),
-                    "name": "账号保留模型",
-                    "key": "https://custom.example/v1",
-                },
-                updated_by="u_lina",
-            )
-            self.assertEqual(ensure_default_models_for_account(services.system_config_store, "u_lina"), [])
-            preserved = services.system_config_store.get_model(
-                account_system_config_scope("u_lina"), DEFAULT_RELAY_MODEL_ID, reveal_secret=True
-            )
-            self.assertEqual(preserved["name"], "默认模型")
-            self.assertEqual(preserved["key"], "https://custom.example/v1")
-            self.assertEqual(preserved["applicationModule"], "global_text_model")
-        finally:
-            services.close()
-
-    def test_connected_super_admin_default_repairs_blank_template_and_account_shell(self) -> None:
-        services = build_local_platform()
-        try:
-            connected_default = {
-                **self._model(DEFAULT_RELAY_MODEL_ID),
-                "name": "旧默认中转模型",
-                "key": "https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net",
-                "availableModels": ["360/deepseek-v4-flash"],
-                "enabledModels": ["360/deepseek-v4-flash"],
-            }
-            services.system_config_store.upsert_model(
-                account_system_config_scope("u_super_admin"),
-                connected_default,
+    def test_system_config_hides_legacy_default_but_keeps_user_model(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            scope = account_system_config_scope("u_super_admin")
+            server.services.system_config_store.upsert_model(
+                scope,
+                {**self._model(RETIRED_DEFAULT_RELAY_MODEL_ID), "name": "默认模型"},
                 updated_by="u_super_admin",
             )
-            services.system_config_store.upsert_model(
-                account_system_config_scope("u_lina"),
-                {
-                    **connected_default,
-                    "value": "stale-secret",
-                    "availableModels": [],
-                    "enabledModels": [],
-                    "testStatus": "untested",
-                    "status": "draft",
-                },
-                updated_by="u_lina",
+            server.services.system_config_store.upsert_model(
+                scope,
+                self._model("user_owned_model"),
+                updated_by="u_super_admin",
             )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+                conn.request(
+                    "GET",
+                    f"/api/system-config?tenant_id={quote(normalize_tenant_id('华兴银行'))}&user_id=u_super_admin",
+                )
+                response = conn.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
 
-            ensure_default_models_for_account(services.system_config_store, "u_lina")
-            template = services.system_config_store.get_model(
-                DEFAULT_MODEL_TEMPLATE_SCOPE, DEFAULT_RELAY_MODEL_ID, reveal_secret=True
-            )
-            restored = services.system_config_store.get_model(
-                account_system_config_scope("u_lina"), DEFAULT_RELAY_MODEL_ID, reveal_secret=True
-            )
-        finally:
-            services.close()
-
-        self.assertEqual(template["status"], "available")
-        self.assertEqual(template["name"], "默认模型")
-        self.assertEqual(template["enabledModels"], ["360/deepseek-v4-flash"])
-        self.assertEqual(restored["value"], "stale-secret")
-        self.assertEqual(restored["enabledModels"], ["360/deepseek-v4-flash"])
+        self.assertEqual(response.status, 200)
+        self.assertIn("user_owned_model", {item["id"] for item in payload["models"]})
+        self.assertNotIn(RETIRED_DEFAULT_RELAY_MODEL_ID, {item["id"] for item in payload["models"]})
 
     def test_fresh_local_platform_has_no_synthetic_admin_account(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -488,38 +440,6 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
         self.assertIsNone(profile)
         self.assertEqual(assignments, [])
         self.assertIsNotNone(super_profile)
-
-    def test_startup_canonicalizes_existing_account_defaults(self) -> None:
-        with TemporaryDirectory() as tmpdir, patch.dict(
-            "os.environ", {"SMART_DATA_AGENT_DEFAULT_MODEL_API_KEY": "startup-default-secret"}
-        ):
-            db_path = f"{tmpdir}/api.sqlite"
-            services = build_local_platform(db_path)
-            try:
-                services.system_config_store.upsert_model(
-                    account_system_config_scope("u_lina"),
-                    {
-                        **self._model(DEFAULT_RELAY_MODEL_ID),
-                        "name": "历史默认模型名称",
-                        "key": "https://stale.example/v1",
-                        "applicationModule": "intelligent_analysis_reasoning",
-                    },
-                    updated_by="u_lina",
-                )
-            finally:
-                services.close()
-
-            rebuilt = build_local_platform(db_path)
-            try:
-                saved = rebuilt.system_config_store.get_model(
-                    account_system_config_scope("u_lina"), DEFAULT_RELAY_MODEL_ID, reveal_secret=True
-                )
-            finally:
-                rebuilt.close()
-
-        self.assertEqual(saved["name"], "默认模型")
-        self.assertEqual(saved["key"], "https://stale.example/v1")
-        self.assertEqual(saved["applicationModule"], "global_text_model")
 
     def test_new_model_saved_in_one_institution_is_visible_to_the_same_account_elsewhere(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -595,54 +515,41 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
         self.assertTrue(delete_payload["deleted"])
         self.assertNotIn("deleted_model", {item["id"] for item in read_payload["models"]})
 
-    def test_default_relay_is_canonical_for_every_account_and_cannot_be_deleted(self) -> None:
+    def test_retired_default_id_cannot_be_created_through_api(self) -> None:
         with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
-            configure_default_relay_model(server.services.system_config_store, "test-default-secret")
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                port = server.server_address[1]
-                for user_id, tenant_id in (("u_super_admin", normalize_tenant_id("华兴银行")),):
-                    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                    conn.request(
-                        "GET",
-                        f"/api/system-config?tenant_id={quote(tenant_id)}&user_id={user_id}",
-                    )
-                    response = conn.getresponse()
-                    payload = json.loads(response.read().decode("utf-8"))
-                    default = next(item for item in payload["models"] if item["id"] == DEFAULT_RELAY_MODEL_ID)
-                    self.assertEqual(default["key"], "https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net")
-                    self.assertEqual(default["applicationModule"], "global_text_model")
-
-                ensure_default_models_for_account(server.services.system_config_store, "u_lina")
-                account_default = server.services.system_config_store.get_model(
-                    account_system_config_scope("u_lina"), DEFAULT_RELAY_MODEL_ID, reveal_secret=True
+                conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+                conn.request(
+                    "POST",
+                    "/api/system-config/model",
+                    body=json.dumps(
+                        {
+                            "user_id": "u_super_admin",
+                            "tenant_id": normalize_tenant_id("华兴银行"),
+                            "model": self._model(RETIRED_DEFAULT_RELAY_MODEL_ID),
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
                 )
-                self.assertEqual(account_default["key"], "https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net")
-                self.assertEqual(account_default["applicationModule"], "global_text_model")
-
-                delete_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                delete_conn.request(
-                    "DELETE",
-                    f"/api/system-config/model?tenant_id={quote(normalize_tenant_id('华兴银行'))}&user_id=u_super_admin&model_id={DEFAULT_RELAY_MODEL_ID}",
-                )
-                delete_response = delete_conn.getresponse()
-                delete_body = delete_response.read().decode("utf-8")
+                response = conn.getresponse()
+                body = response.read().decode("utf-8")
             finally:
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
 
-        self.assertEqual(delete_response.status, 400)
-        self.assertNotIn("test-default-secret", delete_body)
+        self.assertEqual(response.status, 400)
+        self.assertNotIn("account-secret", body)
 
-    def test_newly_registered_account_receives_the_protected_default_relay(self) -> None:
+    def test_newly_registered_account_starts_without_implicit_model(self) -> None:
         password = "test-only-explicit-login-secret"
         with patch.dict("os.environ", {"SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD": password}):
             with TemporaryDirectory() as tmpdir:
                 server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
-                configure_default_relay_model(server.services.system_config_store, "test-default-secret")
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
                 try:
@@ -653,7 +560,7 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
                         "/api/auth/register",
                         body=json.dumps(
                             {
-                                "name": "默认模型用户",
+                                "name": "无预置模型用户",
                                 "email": "default-model-user@example.com",
                                 "password": password,
                                 "institution": "华兴银行",
@@ -691,8 +598,8 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
                     user_id = approve_payload["result"]["user"]["user"]["id"]
                     if not user_id:
                         user_id = str(payload.get("request_id") or "")
-                    saved = server.services.system_config_store.get_model(
-                        account_system_config_scope(user_id), DEFAULT_RELAY_MODEL_ID, reveal_secret=True
+                    saved = server.services.system_config_store.list_models(
+                        account_system_config_scope(user_id), reveal_secret=True
                     )
                 finally:
                     server.shutdown()
@@ -701,64 +608,7 @@ class AccountBoundModelVisibilityTest(unittest.TestCase):
 
         self.assertEqual(response.status, 202)
         self.assertEqual(approve_response.status, 200)
-        self.assertIsNotNone(saved)
-        self.assertEqual(saved["applicationModule"], "global_text_model")
-        self.assertEqual(saved["key"], "https://litellm-dev.sandbox.deepbank.daikuan.qihoo.net")
-
-    def test_account_can_change_default_relay_url_and_key_without_get_reverting(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
-            configure_default_relay_model(server.services.system_config_store, "test-default-secret")
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            try:
-                port = server.server_address[1]
-                tenant_id = normalize_tenant_id("华兴银行")
-                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                conn.request(
-                    "POST",
-                    "/api/system-config/model",
-                    body=json.dumps(
-                        {
-                            "user_id": "u_super_admin",
-                            "tenant_id": tenant_id,
-                            "model": {
-                                "id": DEFAULT_RELAY_MODEL_ID,
-                                "name": "默认模型",
-                                "modelName": "中转站",
-                                "key": "https://custom-relay.example/v1",
-                                "value": "account-edited-secret",
-                                "applicationModule": "global_text_model",
-                                "status": "draft",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                )
-                save_response = conn.getresponse()
-                save_payload = json.loads(save_response.read().decode("utf-8"))
-                read_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                read_conn.request(
-                    "GET",
-                    f"/api/system-config?tenant_id={quote(tenant_id)}&user_id=u_super_admin",
-                )
-                read_response = read_conn.getresponse()
-                read_payload = json.loads(read_response.read().decode("utf-8"))
-                stored = server.services.system_config_store.get_model(
-                    account_system_config_scope("u_super_admin"), DEFAULT_RELAY_MODEL_ID, reveal_secret=True
-                )
-            finally:
-                server.shutdown()
-                server.server_close()
-                thread.join(timeout=5)
-
-        self.assertEqual(save_response.status, 200)
-        self.assertEqual(save_payload["model"]["key"], "https://custom-relay.example/v1")
-        default = next(item for item in read_payload["models"] if item["id"] == DEFAULT_RELAY_MODEL_ID)
-        self.assertEqual(default["name"], "默认模型")
-        self.assertEqual(default["key"], "https://custom-relay.example/v1")
-        self.assertEqual(stored["value"], "account-edited-secret")
+        self.assertEqual(saved, [])
 
     def test_tenant_admin_and_operator_can_bind_own_model_without_system_config_permission(self) -> None:
         with TemporaryDirectory() as tmpdir:

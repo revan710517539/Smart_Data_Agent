@@ -254,6 +254,7 @@ def build_run_task_event(
                 "format": "pcm",
                 "sample_rate": sample_rate or DEFAULT_FUN_ASR_SAMPLE_RATE,
                 "language_hints": ["zh"],
+                "heartbeat": True,
             },
             "input": {},
         },

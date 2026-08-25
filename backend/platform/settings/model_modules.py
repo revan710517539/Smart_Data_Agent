@@ -17,7 +17,12 @@ MODEL_APPLICATION_MODULES: dict[str, str] = {
 }
 
 VOICE_APPLICATION_MODULES = {"global_voice_model", "realtime_voice_input", "popup_voice_input"}
-DEFAULT_RELAY_MODEL_ID = "model_default_intelligent_analysis_relay"
+RETIRED_DEFAULT_RELAY_MODEL_ID = "model_default_intelligent_analysis_relay"
+
+
+def is_retired_default_model(model: dict[str, Any] | str) -> bool:
+    model_id = model if isinstance(model, str) else model.get("id")
+    return str(model_id or "").strip() == RETIRED_DEFAULT_RELAY_MODEL_ID
 
 # Existing saved integrations are never deleted merely because a retired
 # feature is removed.  The former collector-repair binding is presented as the
@@ -76,6 +81,8 @@ def list_models_for_application(
     resolved: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for model in models:
+        if is_retired_default_model(model):
+            continue
         model_module = normalize_application_module(model.get("applicationModule"))
         enabled_models = [str(item).strip() for item in model.get("enabledModels") or [] if str(item).strip()]
         if (
@@ -101,6 +108,8 @@ def list_models_for_application(
         # Keep them on the governed application-module route while requiring a
         # previously connected account model; do not use untested demo rows.
         for model in account_models:
+            if is_retired_default_model(model):
+                continue
             if (
                 str(model.get("applicationModule") or "").strip()
                 or str(model.get("status") or "available") != "available"

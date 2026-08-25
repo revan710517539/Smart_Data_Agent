@@ -27,7 +27,7 @@ def main() -> None:
     required_standard_markers = (
         "sda-production-development/v1",
         "MySQL 8.0.18",
-        "/opt/palywright/examples/data-crawler/runtime-data",
+        "/opt/palywright/examples/data-crawler/data",
         "smart-data-crawler-manifest/v1",
         "migration append-only",
         "canonical tenant ID",

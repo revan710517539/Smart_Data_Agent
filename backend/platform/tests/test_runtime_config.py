@@ -23,6 +23,40 @@ class RuntimeConfigTest(unittest.TestCase):
         self.assertEqual(config.environment, "staging")
         self.assertEqual(config.auth_mode, "development")
 
+    def test_development_mysql_compatibility_is_explicit_and_environment_scoped(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "SMART_DATA_AGENT_ENV": "development",
+                "SMART_DATA_AGENT_DEVELOPMENT_MYSQL_COMPATIBLE_VERSIONS": "9.5.0",
+            },
+            clear=True,
+        ):
+            config = load_runtime_config()
+        self.assertEqual(config.development_mysql_compatible_versions, ("9.5.0",))
+
+        with patch.dict(
+            "os.environ",
+            {
+                "SMART_DATA_AGENT_ENV": "staging",
+                "SMART_DATA_AGENT_DEVELOPMENT_MYSQL_COMPATIBLE_VERSIONS": "9.5.0",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "forbidden outside development/test"):
+                load_runtime_config()
+
+        with patch.dict(
+            "os.environ",
+            {
+                "SMART_DATA_AGENT_ENV": "development",
+                "SMART_DATA_AGENT_DEVELOPMENT_MYSQL_COMPATIBLE_VERSIONS": "9.5",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "exact numeric versions"):
+                load_runtime_config()
+
     def test_insecure_production_profile_fails_closed(self) -> None:
         with patch.dict(
             "os.environ",

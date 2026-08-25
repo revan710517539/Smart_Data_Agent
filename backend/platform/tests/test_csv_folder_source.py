@@ -46,7 +46,15 @@ class CSVFolderSourceTest(unittest.TestCase):
     def test_environment_prefers_explicit_deployed_data_crawler_root(self) -> None:
         with TemporaryDirectory() as tmpdir:
             deployed_root = Path(tmpdir) / "crawler-csv"
-            with patch.dict(os.environ, {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": str(deployed_root)}):
+            crawler_output = Path(tmpdir) / "crawler-output"
+            crawler_output.mkdir()
+            with patch.dict(
+                os.environ,
+                {
+                    "SMART_DATA_AGENT_DATA_CRAWLER_ROOT": str(deployed_root),
+                    "DATA_CRAWLER_OUTPUT_DIR": str(crawler_output),
+                },
+            ):
                 source = CSVFolderSource.from_environment()
             self.assertEqual(source.root, deployed_root.resolve())
             # A missing configured mount cannot fall back to either the local
@@ -57,18 +65,70 @@ class CSVFolderSourceTest(unittest.TestCase):
     def test_environment_uses_local_data_crawler_root_when_present(self) -> None:
         local_root = CSVFolderSource.local_data_crawler_root
         self.assertTrue(local_root.is_dir(), "local Data Crawler checkout must exist for this development test")
-        with TemporaryDirectory() as tmpdir, patch.dict(os.environ, {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": ""}, clear=False), patch.object(
+        with TemporaryDirectory() as tmpdir, patch.dict(
+            os.environ,
+            {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": "", "DATA_CRAWLER_OUTPUT_DIR": ""},
+            clear=False,
+        ), patch.object(
             CSVFolderSource, "container_data_crawler_root", Path(tmpdir) / "missing-app-data"
         ):
             source = CSVFolderSource.from_environment()
         self.assertEqual(source.root, local_root.resolve())
+
+    def test_environment_follows_data_crawler_output_dir_on_the_host(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir) / "crawler-output"
+            (output_root / "华兴银行").mkdir(parents=True)
+            (output_root / "华兴银行" / "loan.csv").write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {
+                    "SMART_DATA_AGENT_DATA_CRAWLER_ROOT": "",
+                    "DATA_CRAWLER_OUTPUT_DIR": str(output_root),
+                },
+                clear=False,
+            ), patch.object(
+                CSVFolderSource, "container_data_crawler_root", Path(tmpdir) / "missing-app-data"
+            ):
+                source = CSVFolderSource.from_environment()
+            tenant_source = source.for_tenant("tenant:华兴银行")
+            tenant_source.prime_catalog()
+            self.assertEqual(source.root, output_root.resolve())
+            self.assertEqual([item["file_name"] for item in tenant_source.snapshot()["files"]], ["loan.csv"])
+
+    def test_environment_uses_legacy_runtime_data_when_crawler_data_dir_is_absent(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            runtime_root = Path(tmpdir) / "runtime-data"
+            (runtime_root / "华兴银行").mkdir(parents=True)
+            (runtime_root / "华兴银行" / "loan.csv").write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            missing_data = Path(tmpdir) / "missing-data"
+            with patch.dict(
+                os.environ,
+                {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": "", "DATA_CRAWLER_OUTPUT_DIR": ""},
+                clear=False,
+            ), patch.object(
+                CSVFolderSource, "container_data_crawler_root", Path(tmpdir) / "missing-app-data"
+            ), patch.object(
+                CSVFolderSource, "local_data_crawler_root", missing_data
+            ), patch.object(
+                CSVFolderSource, "legacy_runtime_data_crawler_root", runtime_root
+            ):
+                source = CSVFolderSource.from_environment()
+            tenant_source = source.for_tenant("tenant:华兴银行")
+            tenant_source.prime_catalog()
+            self.assertEqual(source.root, runtime_root.resolve())
+            self.assertEqual([item["file_name"] for item in tenant_source.snapshot()["files"]], ["loan.csv"])
 
     def test_environment_uses_app_data_mount_before_local_checkout(self) -> None:
         with TemporaryDirectory() as tmpdir:
             app_data = Path(tmpdir) / "app-data"
             (app_data / "华兴银行").mkdir(parents=True)
             (app_data / "华兴银行" / "loan.csv").write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
-            with patch.dict(os.environ, {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": ""}, clear=False), patch.object(
+            with patch.dict(
+                os.environ,
+                {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": "", "DATA_CRAWLER_OUTPUT_DIR": ""},
+                clear=False,
+            ), patch.object(
                 CSVFolderSource, "container_data_crawler_root", app_data
             ):
                 source = CSVFolderSource.from_environment()
@@ -108,7 +168,11 @@ class CSVFolderSourceTest(unittest.TestCase):
     def test_environment_uses_local_checkout_when_app_data_mount_is_empty(self) -> None:
         local_root = CSVFolderSource.local_data_crawler_root
         self.assertTrue(local_root.is_dir(), "local Data Crawler checkout must exist for this development test")
-        with TemporaryDirectory() as tmpdir, patch.dict(os.environ, {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": ""}, clear=False), patch.object(
+        with TemporaryDirectory() as tmpdir, patch.dict(
+            os.environ,
+            {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": "", "DATA_CRAWLER_OUTPUT_DIR": ""},
+            clear=False,
+        ), patch.object(
             CSVFolderSource, "container_data_crawler_root", Path(tmpdir) / "empty-app-data"
         ):
             CSVFolderSource.container_data_crawler_root.mkdir()

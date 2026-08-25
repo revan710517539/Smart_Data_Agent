@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useReducer, useRef, useState, type PointerEvent } from "react";
+import { lazy, Suspense, useEffect, useReducer, useRef, useState, type PointerEvent } from "react";
 import { AudioLines, Bot, BrainCircuit, Database, ExternalLink, Eye, History, ListChecks, Mic, Send, ShieldCheck, Sparkles, X, type LucideIcon } from "lucide-react";
 import { useLocation, useNavigate } from "react-router";
 import { fetchPlatformCapabilities } from "../../services/capabilitiesApi";
@@ -172,7 +172,6 @@ export function AgentSupervisor() {
   }, [running]);
 
   const actions = agentActionRegistry.list();
-  const pageLabel = useMemo(() => `${selectedInstitution} · ${location.pathname}`, [location.pathname, selectedInstitution]);
 
   const appendMessage = (message: Omit<Message, "id">) => {
     if (message.role !== "user") trackInteraction({ eventName: "assistant_reply", resourceType: "agent_supervisor", extension: { reply: boundedInteractionText(message.content), role: message.role } });
@@ -527,7 +526,7 @@ export function AgentSupervisor() {
       }}
     >
       {open && (
-        <div className={`pointer-events-auto absolute flex h-[min(640px,calc(100vh-112px))] max-w-[calc(100vw-32px)] overflow-hidden rounded-2xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/15 ${historyOpen ? "w-[min(600px,calc(100vw-32px))]" : "w-[min(440px,calc(100vw-32px))]"}`} role="dialog" aria-label="Agent 总管" style={{ right: orbOffset.right, bottom: orbOffset.bottom + orbSizePx + 16 }}>
+        <div className={`pointer-events-auto absolute flex h-[min(640px,calc(100vh-112px))] max-w-[calc(100vw-32px)] overflow-hidden rounded-2xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/15 ${historyOpen ? "w-[min(600px,calc(100vw-32px))]" : "w-[min(440px,calc(100vw-32px))]"}`} role="dialog" aria-label="Agent 总管" data-supervisor-model={modelLabel || "unset"} style={{ right: orbOffset.right, bottom: orbOffset.bottom + orbSizePx + 16 }}>
           {historyOpen && (
             <aside className="flex w-40 shrink-0 flex-col border-r border-[#e5e5ea] bg-[#fafbfc] p-2">
               <div className="mb-2 flex items-center justify-between text-[11px] text-[#636366]"><span>历史对话</span><button type="button" onClick={() => setHistoryOpen(false)} aria-label="关闭历史" className="rounded p-0.5 hover:bg-white"><X className="h-3 w-3" /></button></div>
@@ -538,8 +537,8 @@ export function AgentSupervisor() {
             </aside>
           )}
           <section className="flex h-full min-w-0 flex-1 flex-col bg-white">
-            <header className="flex items-start justify-between border-b border-[#ebebf0] px-4 py-3">
-              <div><div className="flex items-center gap-1.5 text-[10px] tracking-[0.12em] text-[#8a8a8e]"><Bot className="h-3.5 w-3.5" />AGENT WORKSPACE</div><div className="mt-1 flex items-center gap-2 text-[14px] text-[#1d1d1f]"><strong>系统 Agent 总管</strong><button type="button" onClick={() => setHistoryOpen((value) => !value)} title="历史对话" aria-label="历史对话"><History className="h-3.5 w-3.5 text-[#8a8a8e]" /></button></div><p className="mt-0.5 max-w-[270px] truncate text-[10px] text-[#aeaeb2]" data-supervisor-model={modelLabel || "unset"}>{pageLabel}{modelLabel ? ` · ${modelLabel}` : " · 未选择文本模型"}</p></div>
+            <header className="flex items-center justify-between border-b border-[#ebebf0] px-4 py-3">
+              <div className="flex items-center gap-2 text-[14px] tracking-tight text-[#1d1d1f]"><strong>系统 Agent 总管</strong><button type="button" onClick={() => setHistoryOpen((value) => !value)} title="历史对话" aria-label="历史对话" className="rounded-md p-0.5 text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f]"><History className="h-3.5 w-3.5" /></button></div>
               <button type="button" onClick={() => { stopVoiceInput(); setOpen(false); }} aria-label="关闭 Agent 总管" className="rounded-md p-1 text-[#8a8a8e] hover:bg-[#f2f2f7]"><X className="h-4 w-4" /></button>
             </header>
             <div className="contents">
@@ -557,7 +556,7 @@ export function AgentSupervisor() {
             {pendingAction && <div className="flex items-center gap-2 border-t border-[#f1d6b8] bg-[#fff7ed] px-3 py-2 text-[11px] text-[#9a5a09]"><ShieldCheck className="h-4 w-4 shrink-0" /><span className="min-w-0 flex-1">确认执行：{pendingAction.label}</span><button type="button" onClick={() => setPendingAction(null)} className="rounded px-2 py-1 hover:bg-white">取消</button><button type="button" onClick={() => void executeAction(pendingAction, true)} className="rounded bg-[#1d1d1f] px-2 py-1 text-white">确认</button></div>}
             <form className="border-t border-[#ebebf0] p-3" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
               <div className="flex gap-1.5"><input ref={inputRef} value={input} onChange={(event) => { const value = event.target.value; setInput(value); if (voiceActiveRef.current) resetVoiceTranscript(value); }} placeholder="问指标、记忆、Skill，或说“打开/点击/填写…”" className="min-w-0 flex-1 rounded-lg bg-[#f2f2f7] px-3 py-2 text-[12px] outline-none ring-0 focus:bg-white focus:ring-1 focus:ring-[#c7c7cc]" /><button type="button" onClick={() => { trackInteraction({ eventName: "assistant_voice_click", resourceType: "agent_supervisor" }); void startVoiceInput("manual"); }} className={`rounded-lg px-2.5 transition ${voiceMode === "manual" ? "bg-[#1d1d1f] text-white" : "bg-[#f2f2f7] text-[#636366] hover:bg-[#e5e5ea]"}`} aria-label={voiceMode === "manual" ? "停止语音录入" : "语音录入"} title="语音录入：转写后点击发送执行"><Mic className={`h-4 w-4 ${voiceMode === "manual" ? "animate-pulse" : ""}`} /></button><button type="button" onClick={() => { trackInteraction({ eventName: "assistant_realtime_voice_click", resourceType: "agent_supervisor" }); void startVoiceInput("realtime"); }} className={`rounded-lg px-2.5 transition ${voiceMode === "realtime" ? "bg-[#1d1d1f] text-white" : "bg-[#f2f2f7] text-[#636366] hover:bg-[#e5e5ea]"}`} aria-label={voiceMode === "realtime" ? "停止实时语音交互" : "实时语音交互"} title="实时语音：停顿 3 秒自动执行"><AudioLines className={`h-4 w-4 ${voiceMode === "realtime" ? "animate-pulse" : ""}`} /></button><button disabled={!input.trim() || running} className="rounded-lg bg-[#1d1d1f] px-3 text-white disabled:opacity-40" aria-label="发送指令">{running ? <ListChecks className="h-4 w-4 animate-pulse" /> : <Send className="h-4 w-4" />}</button></div>
-              <p className="mt-1.5 text-[10px] text-[#aeaeb2]" aria-live="polite">{voiceNotice || (modelLabel ? `当前模型：${modelLabel}。左下角切换后，这里会跟着用。` : "请先在左下角选择文本模型，总管才能回复。")}</p>
+              {voiceNotice ? <p className="mt-1.5 text-[10px] text-[#aeaeb2]" aria-live="polite">{voiceNotice}</p> : null}
             </form>
             </div>
           </section>

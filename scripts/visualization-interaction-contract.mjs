@@ -5,6 +5,7 @@ import ts from "typescript";
 const sourcePath = new URL("../src/app/components/visualization/visualizationCommand.ts", import.meta.url);
 const source = await readFile(sourcePath, "utf8");
 const visualCardSource = await readFile(new URL("../src/app/components/self-analysis/ResultViews.tsx", import.meta.url), "utf8");
+const visualDataModelSource = await readFile(new URL("../src/app/components/visualization/visualizationDataModel.ts", import.meta.url), "utf8");
 const visualGridSource = await readFile(new URL("../src/app/components/self-analysis/ResizableVisualizationGrid.tsx", import.meta.url), "utf8");
 const visualGridLayoutSource = await readFile(new URL("../src/app/components/self-analysis/visualGridLayout.ts", import.meta.url), "utf8");
 const analysisWorkspaceSource = await readFile(new URL("../src/app/components/analysis-workspace/AnalysisWorkspaceRail.tsx", import.meta.url), "utf8");
@@ -18,6 +19,11 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`;
 const { classifyVisualVoiceIntent, moveVisualizationField, resolveVisualizationVoiceCommand } = await import(moduleUrl);
+const visualDataModelCompiled = ts.transpileModule(visualDataModelSource, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
+}).outputText;
+const visualDataModelModuleUrl = `data:text/javascript;base64,${Buffer.from(visualDataModelCompiled).toString("base64")}`;
+const { visualizationRoleFields } = await import(visualDataModelModuleUrl);
 const visualGridLayoutCompiled = ts.transpileModule(visualGridLayoutSource, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
 }).outputText;
@@ -68,6 +74,20 @@ assert.ok(visualCardSource.includes('window.setTimeout(() => setVoiceNoticeVisib
 assert.ok(voiceSource.includes('scheduleCommand()') && voiceSource.includes("const silenceMs = Math.max(250, Number(options.silenceMs || 1_000))") && voiceSource.includes("}, silenceMs)") && voiceSource.includes("if (stopAfterCommand) stop()"), "共享语音入口必须默认静默一秒触发，并允许 AI 右栏单次提交后停止");
 assert.ok(voiceSource.includes("speechApplicationModule: applicationModule") && voiceSource.includes("buildFunAsrRealtimeUrl(tenantId, userId, applicationModule)"), "语音入口必须从模型应用模块读取同一套接入配置");
 assert.ok(analysisWorkspaceSource.includes('data-analysis-popup-voice="true"') && analysisWorkspaceSource.includes('data-analysis-realtime-voice="true"') && analysisWorkspaceSource.includes('applicationModule: "popup_voice_input"') && analysisWorkspaceSource.includes('applicationModule: "realtime_voice_input"') && analysisWorkspaceSource.includes("silenceMs: 1_000") && analysisWorkspaceSource.includes('resultDelivery: "planned_analysis"'), "AI 右栏两种语音必须转写后在一秒静默时进入唯一文本分析运行时");
+assert.deepEqual(
+  visualizationRoleFields(
+    ["loan_amount", "branch", "report_date"],
+    {
+      loan_amount: { type: "decimal", semanticRole: "metric", isMetric: true },
+      branch: { type: "string", semanticRole: "dimension" },
+      report_date: { type: "date", semanticRole: "date", isTime: true },
+    },
+    ["loan_amount", "branch"],
+  ),
+  { metrics: ["loan_amount"], dimensions: ["branch", "report_date"] },
+  "已定义指标不得进入维度下拉，已定义维度不得进入指标下拉",
+);
+assert.ok(visualCardSource.includes("visualizationRoleFields") && visualCardSource.includes("roleFields.metrics") && visualCardSource.includes("roleFields.dimensions"), "可视化指标和维度候选必须按数据表字段角色拆分");
 assert.ok(visualCardSource.includes('document.addEventListener("pointerdown", dismissTransientControls, true)'), "操作浮层必须支持点击页面其他区域收起");
 assert.ok(visualCardSource.includes("moreButtonRef.current?.contains(target)") && visualCardSource.includes('[data-visual-more-menu="true"]') && visualCardSource.includes("if (!inMoreMenu && !inMoreButton) setMoreOpen(false)"), "更多菜单必须在点击按钮和菜单之外时关闭，不得被卡片内其他交互区挡住");
 assert.ok(visualCardSource.includes('applyType(option.type); setActivePanel(null);') && !visualCardSource.includes('applyType(option.type); setActivePanel(null); setOperationsOpen(false);'), "选择样式后操作托盘不得自动折叠");
@@ -77,6 +97,9 @@ assert.match(visualCardSource, /thead className="sticky top-0 z-20/, "表格滚�
 assert.match(visualCardSource, /data-visual-table-frozen-header="true"/, "超高表格表头必须标记为冻结");
 assert.match(visualCardSource, /data-visual-table-sort=\{field\}/, "每列表头必须提供统一排序入口");
 assert.match(visualCardSource, /data-visual-table-sort-direction=\{direction \|\| "original"\}/, "表头必须暴露原始、正排和倒排三态");
+assert.ok(visualCardSource.includes("rowByKey") && visualCardSource.includes("originalIndexByRow") && !visualCardSource.includes("rows.indexOf(row)"), "表格重排必须使用预建索引，不能对每一行重复线性扫描");
+assert.ok(visualCardSource.includes("useClientPagination(rowLabels, 20)") && visualCardSource.includes("useClientPagination(columnLabels, pivotColumnPageSize)"), "交叉表必须同时限制行与列的单页渲染规模");
+assert.ok(visualCardSource.includes("data-pivot-row-pagination") && visualCardSource.includes("data-pivot-column-pagination"), "交叉表必须暴露行列分页状态供浏览器验收");
 assert.match(visualCardSource, /addEventListener\("wheel", onWheel, \{ passive: false, capture: true \}\)/, "表格滚轮必须用捕获阶段非被动监听");
 assert.match(visualCardSource, /node.scrollTop \+= deltaY/, "表格内滚轮必须先滚动表格内容");
 assert.match(visualCardSource, /if \(!used\) return false/, "表格滚到尽头后必须把滚轮交给页面");

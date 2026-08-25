@@ -61,6 +61,11 @@ class AccessUserIdentityTest(unittest.TestCase):
         self.assertEqual(captured["payload"]["error"], "access_user_identity_conflict")
         self.assertIn("用户标识已存在", captured["payload"]["message"])
 
+        send_route_exception(handler, PermissionError("customer_segment_detail_table_required"))
+        self.assertEqual(captured["status"], HTTPStatus.FORBIDDEN)
+        self.assertEqual(captured["payload"]["error"], "customer_segment_detail_table_required")
+        self.assertIn("客户号", captured["payload"]["message"])
+
     def test_upsert_user_keeps_roles_from_other_institutions(self) -> None:
         services = build_local_platform()
         try:

@@ -6,7 +6,6 @@ import {
   deleteMessageBoardEntry,
   createMessageBoardEntry,
   fetchMessageBoard,
-  fetchMessageBoardAttachment,
   updateMessageBoardEntry,
   uploadMessageBoardImage,
   type MessageBoardEntry,
@@ -23,6 +22,7 @@ import {
   type FunAsrProxyEvent,
 } from "../self-analysis/domain";
 import type { CommentTarget } from "../weekly-report/domain";
+import { MessageBoardAttachmentGallery } from "./MessageBoardAttachmentGallery";
 
 type DraftImage = { file: File; previewUrl: string };
 
@@ -283,7 +283,7 @@ function MessageCard({ message, expanded, onToggle, onEdit, onArchive, archiving
       {expanded && (
         <div className="border-t border-[#f0f0f2] px-3 pb-3 pt-2.5">
           {quote?.selected_text && <div className="rounded-lg border-l-2 border-[#8bb7e6] bg-[#f7f9fc] px-3 py-2 text-[11px] leading-5 text-[#636366]">引用 · {quote.label || message.page_title}</div>}
-          {message.attachment_ids.length > 0 && <AttachmentGrid attachmentIds={message.attachment_ids} tenantId={tenantId} userId={userId} />}
+          {message.attachment_ids.length > 0 && <MessageBoardAttachmentGallery attachmentIds={message.attachment_ids} tenantId={tenantId} userId={userId} />}
           <div className="mt-3 flex items-end justify-between gap-2">
             <div className="text-[10px] leading-4 text-[#8a8a8e]">
               <div>{message.author_name}</div>
@@ -302,20 +302,7 @@ function StatusBadge({ status }: { status: MessageBoardEntry["status"] }) {
   return <span className={`rounded px-1.5 py-0.5 text-[9px] ${status === "adopted" ? "bg-[#e8f3ff] text-[#1677ff]" : status === "completed" ? "bg-[#eef6ee] text-[#2f7d32]" : "bg-[#f2f3f5] text-[#646a73]"}`}>{label}</span>;
 }
 
-function AttachmentGrid({ attachmentIds, tenantId, userId }: { attachmentIds: string[]; tenantId: string; userId: string }) {
-  const [urls, setUrls] = useState<string[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    const loaded: string[] = [];
-    Promise.all(attachmentIds.map((id) => fetchMessageBoardAttachment(id, { tenantId, userId })))
-      .then((next) => { loaded.push(...next); if (!cancelled) setUrls(next); })
-      .catch(() => undefined);
-    return () => { cancelled = true; loaded.forEach(URL.revokeObjectURL); };
-  }, [attachmentIds, tenantId, userId]);
-  return <div className="mt-2 grid grid-cols-3 gap-2">{urls.map((url, index) => <a key={url} href={url} target="_blank" rel="noreferrer" className="aspect-square overflow-hidden rounded-lg border border-[#ececf0]"><img src={url} alt={`留言截图 ${index + 1}`} className="h-full w-full object-cover" /></a>)}</div>;
-}
-
-function useMessageBoardVoice({ tenantId, userId, pageTitle, content, setContent, textareaRef }: { tenantId: string; userId: string; pageTitle: string; content: string; setContent: (value: string) => void; textareaRef: React.RefObject<HTMLTextAreaElement | null> }) {
+export function useMessageBoardVoice({ tenantId, userId, pageTitle, content, setContent, textareaRef }: { tenantId: string; userId: string; pageTitle: string; content: string; setContent: (value: string) => void; textareaRef: React.RefObject<HTMLTextAreaElement | null> }) {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState("");
   const activeRef = useRef(false);

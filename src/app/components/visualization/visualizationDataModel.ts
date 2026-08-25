@@ -71,6 +71,36 @@ export function visualizationFieldPolicy(type: VisualizationType): Visualization
   return { minimumMetrics: 1, maximumMetrics: unlimited, maximumDimensions: unlimited, defaultMetricCount: 4, defaultDimensionCount: 1, preferTimeDimension: false };
 }
 
+export function visualizationRoleFields(
+  fields: string[],
+  fieldMetadata: Record<string, FieldDisplayMetadata> = {},
+  inferredMetrics: string[] = [],
+) {
+  const inferred = new Set(inferredMetrics);
+  const hasDeclaredRoles = fields.some((field) => {
+    const role = fieldMetadata[field]?.semanticRole;
+    return role === "metric" || role === "dimension" || role === "date" || Boolean(fieldMetadata[field]?.isMetric);
+  });
+  const metrics: string[] = [];
+  const dimensions: string[] = [];
+  for (const field of fields) {
+    const meta = fieldMetadata[field];
+    const role = meta?.semanticRole;
+    if (role === "metric" || (Boolean(meta?.isMetric) && role !== "dimension" && role !== "date")) {
+      metrics.push(field);
+      continue;
+    }
+    if (role === "dimension" || role === "date") {
+      dimensions.push(field);
+      continue;
+    }
+    if (hasDeclaredRoles) continue;
+    if (inferred.has(field)) metrics.push(field);
+    else dimensions.push(field);
+  }
+  return { metrics, dimensions };
+}
+
 export function defaultVisualizationSelections(
   type: VisualizationType,
   metricCandidates: string[],

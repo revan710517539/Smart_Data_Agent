@@ -104,14 +104,27 @@ function TableRelationshipModal({ tenantId, userId, initial, onClose, onSaved }:
 
   useEffect(() => {
     let cancelled = false;
+    let retryId = 0;
     setLoading(true);
     setLoadError("");
     fetchTableRelationshipCatalog({ tenantId, userId }).then((response) => {
-      if (!cancelled) setCatalog(response);
+      if (cancelled) return;
+      if (response.status === "loading" && catalogAttempt < 15) {
+        retryId = window.setTimeout(() => { if (!cancelled) setCatalogAttempt((current) => current + 1); }, 800);
+        return;
+      }
+      setCatalog(response);
+      setLoading(false);
     }).catch((requestError) => {
-      if (!cancelled) setLoadError(apiErrorMessage(requestError, "关系目录读取失败。"));
-    }).finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      if (!cancelled) {
+        setLoadError(apiErrorMessage(requestError, "关系目录读取失败。"));
+        setLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+      if (retryId) window.clearTimeout(retryId);
+    };
   }, [tenantId, userId, catalogAttempt]);
 
   useEffect(() => {

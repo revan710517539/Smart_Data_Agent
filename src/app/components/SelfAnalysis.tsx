@@ -252,6 +252,7 @@ export function SelfAnalysis() {
   const [availableRawTables, setAvailableRawTables] = useState<RawTableAsset[]>([]);
   const [availableTopicTables, setAvailableTopicTables] = useState<TopicTableAsset[]>([]);
   const [availablePageDataTables, setAvailablePageDataTables] = useState<PageDataAsset[]>([]);
+  const analysisCatalogRef = useRef<AnalysisDataTableSelection[]>([]);
   const [selectedDataTables, setSelectedDataTablesState] = useState<AnalysisDataTableSelection[]>([]);
   const setSelectedDataTables = (
     next: AnalysisDataTableSelection[] | ((current: AnalysisDataTableSelection[]) => AnalysisDataTableSelection[]),
@@ -292,7 +293,7 @@ export function SelfAnalysis() {
   const [executionHistoryTasks, setExecutionHistoryTasks] = useState<BackendAnalysisResponse[]>([]);
   const [expandedExecutionTaskId, setExpandedExecutionTaskId] = useState("");
   const [executionTraceSpans, setExecutionTraceSpans] = useState<AnalysisTraceSpan[]>([]);
-  useSelfAnalysisWorkbenchPersistence({ tenantId, userId, enabled: activeView === "query", state: { selectedDataTables, selectedTopic, showResult, analysisPlan, analysisRows, analysisSummary, analysisScenarios, analysisTaskId, resultMode, visualTypes, scriptPlanName, sqlScript, pythonScript, analysisInputCollapsed }, restore: (snapshot) => { setSelectedDataTables(snapshot.selectedDataTables); setSelectedTopic(snapshot.selectedTopic); setShowResult(snapshot.showResult); setAnalysisPlan(snapshot.analysisPlan); setAnalysisRows(snapshot.analysisRows); setAnalysisSummary(snapshot.analysisSummary); setAnalysisScenarios(snapshot.analysisScenarios); setAnalysisTaskId(snapshot.analysisTaskId); setResultMode(snapshot.resultMode); setVisualTypes(snapshot.visualTypes); setScriptPlanName(snapshot.scriptPlanName); setSqlScript(snapshot.sqlScript); setPythonScript(snapshot.pythonScript); setAnalysisInputCollapsed(snapshot.analysisInputCollapsed); } });
+  useSelfAnalysisWorkbenchPersistence({ tenantId, userId, enabled: activeView === "query", state: { selectedDataTables, selectedTopic, showResult, analysisPlan, analysisRows, analysisSummary, analysisScenarios, analysisTaskId, resultMode, visualTypes, scriptPlanName, sqlScript, pythonScript, analysisInputCollapsed }, restore: (snapshot) => { setSelectedDataTables(rematchAnalysisDataTableSelection(snapshot.selectedDataTables, analysisCatalogRef.current)); setSelectedTopic(snapshot.selectedTopic); setShowResult(snapshot.showResult); setAnalysisPlan(snapshot.analysisPlan); setAnalysisRows(snapshot.analysisRows); setAnalysisSummary(snapshot.analysisSummary); setAnalysisScenarios(snapshot.analysisScenarios); setAnalysisTaskId(snapshot.analysisTaskId); setResultMode(snapshot.resultMode); setVisualTypes(snapshot.visualTypes); setScriptPlanName(snapshot.scriptPlanName); setSqlScript(snapshot.sqlScript); setPythonScript(snapshot.pythonScript); setAnalysisInputCollapsed(snapshot.analysisInputCollapsed); } });
   useEffect(() => {
     if (!analysisTaskId || visualCardsTaskRef.current === analysisTaskId) return;
     visualCardsTaskRef.current = analysisTaskId;
@@ -703,11 +704,13 @@ export function SelfAnalysis() {
           setAvailableRawTables(nextRawTables);
           setAvailableTopicTables(nextTopicTables);
           setAvailablePageDataTables(nextPageDataTables);
-          setSelectedDataTables((current) => rematchAnalysisDataTableSelection(current, [
+          const nextCatalog = [
             ...nextRawTables.map(rawTableToSelection),
             ...nextTopicTables.map(topicTableToSelection),
             ...nextPageDataTables.map(pageDataToSelection),
-          ]));
+          ];
+          analysisCatalogRef.current = nextCatalog;
+          setSelectedDataTables((current) => rematchAnalysisDataTableSelection(current, nextCatalog));
           const configuredSkills = selectAvailableAnalysisSkills(runtimeAssetResponse.analysis_skills || [])
             .map((skill) => ({
               id: skill.id,
@@ -1096,6 +1099,16 @@ export function SelfAnalysis() {
       ...nextQuerySkillReferences.map((reference) => reference.skill),
     ]);
     let effectiveDataTables = singleAnalysisDataTableSelection(forcedDataTables ?? selectedDataTables);
+    if (effectiveDataTables.length && availableAnalysisTables.length) {
+      const rematched = rematchAnalysisDataTableSelection(effectiveDataTables, availableAnalysisTables);
+      if (!rematched.length) {
+        setSelectedDataTables([]);
+        setAnalysisError("所选数据表已更新、下线或不属于当前机构，请重新选择数据表后重试。");
+        return;
+      }
+      if (rematched[0]?.id !== effectiveDataTables[0]?.id) setSelectedDataTables(rematched);
+      effectiveDataTables = rematched;
+    }
     let resolvedViaMetricPreset = false;
     const uploadGate = uploadedAnalysisGate(knowledgeFiles);
     if (uploadGate.mediaOnly) {
@@ -2332,7 +2345,7 @@ export function SelfAnalysis() {
           <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">{activeView === "reports" ? "我的报表" : "智能分析"}</h2>
           <p className="text-[13px] text-[#aeaeb2] mt-1">{activeView === "reports" ? "精选报表 · 智能分析报表 · 可视化报表" : "自然语言查询 · AI自动生成图表 · 智能归因分析"}</p>
         </div>
-        {activeView === "query" ? <div className="flex items-center gap-2"><button type="button" onClick={restoreInitialAnalysisWorkspace} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#636366] transition hover:bg-[#f2f2f7]" data-self-analysis-restore="true"><RotateCcw className="h-3.5 w-3.5" />恢复</button><button type="button" onClick={() => void toggleExecutionHistory()} className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[12px] transition ${executionHistoryOpen ? "border-[#d1d1d6] bg-[#f2f2f7] text-[#1d1d1f]" : "border-[#e5e5ea] bg-white text-[#636366] hover:bg-[#f2f2f7]"}`}><History className="h-3.5 w-3.5" />执行记录</button></div> : null}
+        <div className="flex w-fit min-h-9 shrink-0 items-center gap-[0.2cm]" data-page-header-actions="true">{activeView === "query" ? <><button type="button" onClick={restoreInitialAnalysisWorkspace} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] transition hover:bg-[#f2f2f7]" data-self-analysis-restore="true"><RotateCcw className="h-3.5 w-3.5" />恢复</button><button type="button" onClick={() => void toggleExecutionHistory()} className={`inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-[12px] transition ${executionHistoryOpen ? "border-[#d1d1d6] bg-[#f2f2f7] text-[#1d1d1f]" : "border-[#e5e5ea] bg-white text-[#3a3a3c] hover:bg-[#f2f2f7]"}`}><History className="h-3.5 w-3.5" />执行记录</button></> : null}</div>
       </div>
       {activeView === "query" && (
         <>

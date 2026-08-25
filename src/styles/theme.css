@@ -31,6 +31,7 @@
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
   --radius: 0.625rem;
+  --sda-shell-edge-gap: 0.4cm;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: #030213;
@@ -176,15 +177,31 @@
   }
 
   html {
-    /* Prevent a vertical scrollbar appearing/disappearing from shifting the
-       workspace horizontally when a full-screen modal locks page scrolling. */
-    scrollbar-gutter: stable;
+    /* The app scrolls inside the main shell, so reserving a document scrollbar
+       gutter only creates an unused strip at the viewport's right edge. */
+    scrollbar-gutter: auto;
   }
 
   body {
     @apply bg-background text-foreground;
     overflow-x: hidden;
     text-rendering: optimizeLegibility;
+  }
+
+  /* Put top/right page inset on the page root, not the scroll owner, so the
+     main scrollbar stays flush against the workbench's right edge. */
+  [data-agent-main-shell="true"] {
+    padding-top: 0;
+    padding-right: 0;
+  }
+
+  [data-agent-main-shell="true"] > * {
+    padding-top: var(--sda-shell-edge-gap) !important;
+    padding-right: var(--sda-shell-edge-gap) !important;
+  }
+
+  [data-agent-sidebar-header="true"] {
+    padding-top: var(--sda-shell-edge-gap) !important;
   }
 
   /*

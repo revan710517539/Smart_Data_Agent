@@ -8,8 +8,13 @@ const source = await readFile(
 
 assert.match(
   source,
-  /setTenantIdByInstitution\(buildTenantIdCatalog\(response\.tenants\)\)/,
+  /setTenantIdByInstitution\(buildTenantIdCatalog\((?:response\.tenants|tenants)\)\)/,
   "租户目录必须同时保留后端权威 ID 与显示名",
+);
+assert.match(
+  source,
+  /refreshTenantCatalog/,
+  "租户目录变更后必须能主动刷新权威机构列表",
 );
 assert.match(
   source,

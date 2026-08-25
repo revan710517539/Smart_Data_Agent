@@ -139,6 +139,7 @@ def seed_loan_analysis_candidates(
             if not _memory_exists(memory_store, tenant_id, record.memory_id):
                 memory_store.write(record)
                 memory_count += 1
+            _ensure_catalog_experience(data_asset_store, tenant_id, record, import_actor)
         for record in _common_memories(
             tenant_id,
             payload["commonMemories"],
@@ -148,6 +149,7 @@ def seed_loan_analysis_candidates(
             if not _memory_exists(memory_store, tenant_id, record.memory_id):
                 memory_store.write(record)
                 memory_count += 1
+            _ensure_catalog_experience(data_asset_store, tenant_id, record, import_actor)
         expected_memory_ids = [*institution_memory_ids, *common_memory_ids]
         for kind, method in _METHODS.items():
             base_skill_id = str(method["base"])
@@ -214,16 +216,9 @@ def verify_loan_analysis_capabilities(
     """Fail closed if canonical Skills, Memory, or de-duplication are incomplete."""
 
     payload = profiles or load_analysis_profiles()
-    base_skill_ids = {
-        "scene-analysis-intent",
-        "scene-chart-followup",
-        "scene-page-rail",
-        "scene-textbox-voice",
-        "scene-self-analysis",
-        "topic-descriptive",
-        "topic-attribution",
-        "topic-predictive",
-    }
+    from backend.platform.assets.store import PLATFORM_ANALYSIS_SKILL_IDS
+
+    base_skill_ids = set(PLATFORM_ANALYSIS_SKILL_IDS)
     skill_count = 0
     memory_count = 0
     for profile in payload["institutions"]:
@@ -263,6 +258,9 @@ def verify_loan_analysis_capabilities(
                 raise RuntimeError(f"production_memory_candidate_missing:{tenant_id}:{memory_id}") from exc
             if str(item.get("status") or item.get("verified_status") or "") not in {"candidate", "review", "active"}:
                 raise RuntimeError(f"production_memory_candidate_invalid:{tenant_id}:{memory_id}")
+            catalog_experience = data_asset_store.get_item(tenant_id, "analysis_experience", memory_id)
+            if not catalog_experience or str(catalog_experience.get("lifecycleStatus") or "") != "active":
+                raise RuntimeError(f"production_memory_catalog_missing:{tenant_id}:{memory_id}")
             memory_count += 1
     return {
         "base_skills_verified": len(base_skill_ids) * len(payload["institutions"]),
@@ -274,6 +272,37 @@ def verify_loan_analysis_capabilities(
 
 def _unique_strings(values: Any) -> list[str]:
     return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+
+
+def _ensure_catalog_experience(
+    data_asset_store: Any,
+    tenant_id: str,
+    record: MemoryRecord,
+    import_actor: str,
+) -> None:
+    """Mirror governed method Memory into the 知识记忆 catalog the UI actually lists."""
+
+    existing = data_asset_store.get_item(tenant_id, "analysis_experience", record.memory_id)
+    if existing is not None:
+        return
+    method = str((record.content or {}).get("method") or record.title or "").strip()
+    data_asset_store.upsert_item(
+        tenant_id,
+        "analysis_experience",
+        {
+            "id": record.memory_id,
+            "name": record.title,
+            "title": record.title,
+            "description": method,
+            "steps": method,
+            "scenario": "双周报经营分析",
+            "metrics": "",
+            "status": "当前有效",
+            "enabled": True,
+        },
+        updated_by=import_actor,
+        lifecycle_status="active",
+    )
 
 
 def _memory_exists(memory_store: Any, tenant_id: str, memory_id: str) -> bool:

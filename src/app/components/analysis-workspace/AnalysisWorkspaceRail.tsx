@@ -42,7 +42,6 @@ const pageDefinitions: Record<string, PageDefinition> = {
   "/self-analysis/visual-reports": { pageKey: "visual-reports", title: "可视化报表", prompt: "基于当前可视化和授权数据集继续追问、拆解或验证。" },
   "/self-analysis/reports": { pageKey: "my-reports", title: "我的报表", prompt: "基于当前报表继续追问并固化新的分析结论。" },
   "/weekly-report": { pageKey: "weekly-report", title: "经营周报", prompt: "基于当前周报及关联证据继续追问、分支分析或合并结论。" },
-  "/data-assets/metrics": { pageKey: "metric-management", title: "指标管理", prompt: "检查当前指标语义、版本和影响范围。" },
   "/data-assets/data-management": { pageKey: "data-management", title: "站内数据", prompt: "检查当前数据 Schema、语义关系和版本影响。" },
 };
 

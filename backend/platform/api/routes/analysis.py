@@ -896,9 +896,17 @@ def _planner_skill_ids() -> frozenset[str]:
     except Exception:
         pass
     try:
-        from backend.platform.assets.store import PLATFORM_VISIBLE_ANALYSIS_SKILL_IDS
+        from backend.platform.assets.store import (
+            DISPATCH_SCENE_SKILL_IDS,
+            DISPATCH_TOPIC_SKILL_IDS,
+            PLATFORM_VISIBLE_ANALYSIS_SKILL_IDS,
+        )
 
-        ids.update(PLATFORM_VISIBLE_ANALYSIS_SKILL_IDS)
+        ids.update(
+            set(PLATFORM_VISIBLE_ANALYSIS_SKILL_IDS)
+            - set(DISPATCH_SCENE_SKILL_IDS)
+            - set(DISPATCH_TOPIC_SKILL_IDS)
+        )
     except Exception:
         pass
     return frozenset(ids)
@@ -1615,7 +1623,48 @@ def _match_selected_analysis_table(
         )
         if matched is not None:
             return matched
+    requested_titles = _analysis_table_title_keys(requested)
+    titled = [
+        item for item in published_tables
+        if requested_titles and requested_titles & _analysis_table_title_keys(item)
+    ]
+    if len(titled) == 1:
+        return titled[0]
+    requested_logical = _analysis_table_logical_keys(requested)
+    logical = [
+        item for item in published_tables
+        if requested_logical and requested_logical & _analysis_table_logical_keys(item)
+    ]
+    if len(logical) == 1:
+        return logical[0]
     return None
+
+
+def _analysis_table_title_keys(item: dict[str, Any]) -> set[str]:
+    names = [
+        str(item.get("tableNameCn") or "").strip(),
+        str(item.get("name") or "").strip(),
+        str(item.get("fileName") or "").strip().removesuffix(".csv").removesuffix(".CSV"),
+        str(item.get("relativePath") or "").rsplit("/", 1)[-1].removesuffix(".csv").removesuffix(".CSV"),
+    ]
+    return {name.casefold() for name in names if name}
+
+
+def _analysis_table_logical_keys(item: dict[str, Any]) -> set[str]:
+    from backend.platform.ingestion.csv_folder import _delivery_name_parts
+
+    titles: set[str] = set()
+    for value in (
+        str(item.get("tableNameCn") or ""),
+        str(item.get("name") or ""),
+        str(item.get("fileName") or ""),
+        str(item.get("relativePath") or ""),
+    ):
+        title, _date = _delivery_name_parts(value)
+        cleaned = re.sub(r"[\s_\-./]+", "", (title or value).strip()).casefold()
+        if cleaned:
+            titles.add(cleaned)
+    return titles
 
 
 def _build_asset_context(
@@ -1658,7 +1707,16 @@ def _build_asset_context(
     # and must never make a currently visible CSV look unauthorized.
     csv_source = getattr(getattr(services, "data_acquisition_service", None), "csv_source", None)
     if csv_source is not None:
-        raw_tables = csv_source.for_tenant(tenant_id).table_assets()
+        catalog = csv_source.for_tenant(tenant_id)
+        if not getattr(catalog, "catalog_ready", True):
+            prime = getattr(catalog, "prime_catalog", None)
+            if callable(prime):
+                prime()
+            else:
+                waiter = getattr(catalog, "wait_until_ready", None)
+                if callable(waiter):
+                    waiter(30.0)
+        raw_tables = [item for item in catalog.table_assets() if isinstance(item, dict)]
     else:
         # Isolated callers without the acquisition service retain the store
         # contract; all running application services have a CSV source.

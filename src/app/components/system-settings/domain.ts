@@ -318,6 +318,15 @@ export function availableModelOptions(model: ModelIntegration) {
   return Array.from(new Set([...(model.enabledModels || []), ...(model.availableModels || [])])).filter(Boolean);
 }
 
+export function stableOpenModelOptions(currentOrder: string[] | undefined, model: ModelIntegration) {
+  const available = availableModelOptions(model);
+  if (!currentOrder?.length) return available;
+  const availableSet = new Set(available);
+  const retained = currentOrder.filter((modelName) => availableSet.has(modelName));
+  const retainedSet = new Set(retained);
+  return [...retained, ...available.filter((modelName) => !retainedSet.has(modelName))];
+}
+
 export const speechCapabilityDescriptions: Record<string, { title: string; model: string; description: string }[]> = {
   aliyun_fun_asr: [
     {

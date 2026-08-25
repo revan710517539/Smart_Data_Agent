@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type ProxyOptions } from 'vite'
 import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
@@ -35,20 +35,31 @@ export default defineConfig({
   assetsInclude: ['**/*.svg', '**/*.csv'],
   server: {
     proxy: {
-      '/api': {
-        target: apiProxyTarget,
-        changeOrigin: true,
-        ws: true,
-      },
+      '/api': apiProxy(),
     },
   },
   preview: {
     proxy: {
-      '/api': {
-        target: apiProxyTarget,
-        changeOrigin: true,
-        ws: true,
-      },
+      '/api': apiProxy(),
     },
   },
 })
+
+function apiProxy(): ProxyOptions {
+  return {
+    target: apiProxyTarget,
+    changeOrigin: true,
+    ws: true,
+    configure(proxy) {
+      proxy.on('error', (err, _req, res) => {
+        if (!res.writeHead || res.headersSent) return
+        res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8', 'Retry-After': '2' })
+        res.end(JSON.stringify({
+          error: 'api_unavailable',
+          message: 'Data Agent API 暂时无法连接，服务正在启动或重启，请稍后重试。',
+          detail: String((err as Error & { code?: string }).code || err),
+        }))
+      })
+    },
+  }
+}

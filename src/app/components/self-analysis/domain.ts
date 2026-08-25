@@ -169,6 +169,7 @@ export function rematchAnalysisDataTableSelection(
   const latest = singleAnalysisDataTableSelection(selected);
   const table = latest[0];
   if (!table) return [];
+  if (!catalog.length) return latest;
   const byId = catalog.find((item) => Boolean(item.id) && item.id === table.id);
   if (byId) return [byId];
   if (table.code) {
@@ -185,7 +186,41 @@ export function rematchAnalysisDataTableSelection(
     const byPath = catalog.find((item) => item.relativePath === table.relativePath);
     if (byPath) return [byPath];
   }
-  return latest;
+  const requestedTitles = analysisTableTitleKeys(table);
+  const byTitle = catalog.filter((item) =>
+    Array.from(analysisTableTitleKeys(item)).some((title) => requestedTitles.has(title)),
+  );
+  if (byTitle.length === 1) return [byTitle[0]];
+  const requestedLogical = analysisTableLogicalKeys(table);
+  const byLogical = catalog.filter((item) =>
+    Array.from(analysisTableLogicalKeys(item)).some((title) => requestedLogical.has(title)),
+  );
+  if (byLogical.length === 1) return [byLogical[0]];
+  return [];
+}
+
+function analysisTableTitleKeys(table: AnalysisDataTableSelection) {
+  return new Set(
+    [table.name, table.code, table.relativePath?.split("/").pop()?.replace(/\.csv$/i, "")]
+      .map((value) => String(value || "").trim().toLocaleLowerCase())
+      .filter(Boolean),
+  );
+}
+
+function analysisTableLogicalKeys(table: AnalysisDataTableSelection) {
+  return new Set(
+    [table.name, table.code, table.relativePath]
+      .map((value) => analysisTableLogicalTitle(String(value || "")))
+      .filter(Boolean),
+  );
+}
+
+export function analysisTableLogicalTitle(value: string) {
+  const stem = String(value || "").trim().replace(/\.csv$/i, "");
+  const withoutPrefix = stem.replace(/^\d{8}(?:_\d{6})?_/, "");
+  const withoutSuffix = withoutPrefix.replace(/_\d{4}-\d{2}-\d{2}$/, "");
+  const title = withoutSuffix.split("/").pop() || withoutSuffix;
+  return title.replace(/[\s_\-./]+/g, "").toLocaleLowerCase();
 }
 export type AnalysisRow = {
   branch: string;
@@ -499,7 +534,9 @@ export function backendTableToSelection(value: unknown): AnalysisDataTableSelect
     fieldNameEn: String(field.fieldNameEn || field.code || field.name || "").trim(),
     fieldNameCn: String(field.fieldNameCn || field.label || field.explanation || field.fieldNameEn || "").trim(),
     type: String(field.type || "string"),
-    semanticRole: field.semanticRole === "metric" || field.semanticRole === "date" ? field.semanticRole : "dimension" as const,
+    semanticRole: field.semanticRole === "metric" || field.semanticRole === "date" || field.semanticRole === "dimension"
+      ? field.semanticRole
+      : Boolean(field.isMetric) ? "metric" as const : Boolean(field.isTime) ? "date" as const : "dimension" as const,
     dateFormat: field.dateFormat === "yyyy-MM-dd" ? "yyyy-MM-dd" as const : undefined,
     isPrimaryKey: Boolean(field.isPrimaryKey),
     isMetric: Boolean(field.isMetric),

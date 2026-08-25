@@ -3,10 +3,9 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import parse_qs
 
-from backend.authz import normalize_tenant_id
-from backend.authz.seed import OPERATING_TENANTS
 from backend.platform.api.support import send_route_exception
 from backend.platform.tenancy import ExecutionContext
+from backend.platform.tenancy.catalog import catalog_tenant_ids
 
 
 def handle_operating_snapshot_get(handler: Any, query: str) -> None:
@@ -42,7 +41,7 @@ def _authorized_dashboard_tenant_ids(handler: Any, context: Any) -> tuple[str, .
     for assignment in repository.list_user_assignments(context.user_id):
         tenant_id = str(assignment.tenant_id or "").strip()
         if tenant_id == "*":
-            candidates.update(normalize_tenant_id(name) for name in OPERATING_TENANTS)
+            candidates.update(catalog_tenant_ids(handler.services))
         elif tenant_id:
             candidates.add(tenant_id)
     approved: list[str] = []

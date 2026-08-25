@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from backend.platform.api.routes.assets import (
     MULTI_INSTITUTION_DIMENSION,
+    _authorized_raw_table_catalog,
     _bind_page_data_asset,
     _bind_table_relationship_asset,
     _join_institution_rows,
@@ -592,6 +593,29 @@ class PageDataAssetTest(unittest.TestCase):
         self.assertEqual(csv_source.requested_tenants, ["tenant:a", "tenant:b"])
         self.assertNotIn("tenant:c", csv_source.requested_tenants)
         self.assertEqual(set(enforcer.requested_tenants), {"tenant:a", "tenant:b"})
+
+    def test_relationship_catalog_skips_unready_tenants_without_blocking(self) -> None:
+        table_b = {**self.table, "id": "csv_table_b", "sourceKey": "source_b", "relativePath": "reports/b.csv"}
+        unready = _UnreadyCatalog([table_b])
+        handler = SimpleNamespace(services=SimpleNamespace(
+            data_acquisition_service=SimpleNamespace(csv_source=_UnreadyMultiCsvSource({
+                "tenant:a": _UnreadyCatalog([self.table]),
+                "tenant:b": unready,
+            })),
+            data_asset_store=InMemoryDataAssetStore(seed_defaults=False),
+            access_service=SimpleNamespace(session_for_user=lambda *_args, **_kwargs: {"institutions": ["a", "b"], "institution": "a"}),
+            permission_broker=SimpleNamespace(enforcer=_Enforcer()),
+        ))
+        handler.services.data_acquisition_service.csv_source._catalogs["tenant:a"].catalog_ready = True
+        labels, tables = _authorized_raw_table_catalog(
+            handler,
+            SimpleNamespace(tenant_id="tenant:a", user_id="u_super_admin"),
+            wait_for_catalog=False,
+        )
+        self.assertEqual(set(labels), {"tenant:a", "tenant:b"})
+        self.assertIn(("tenant:a", "source_1"), tables)
+        self.assertNotIn(("tenant:b", "source_b"), tables)
+        self.assertEqual(unready.prime_calls, 0)
 
     def test_table_relationship_rejects_non_primary_key_and_disconnected_local_tables(self) -> None:
         handler = self._multi_handler()

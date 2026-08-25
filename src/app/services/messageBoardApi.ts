@@ -20,6 +20,7 @@ export type MessageBoardEntry = {
   quote_context: MessageBoardQuote | Record<string, never>;
   attachment_ids: string[];
   status: "new" | "adopted" | "completed";
+  append_content: string;
   archived_at: string | null;
   created_at: string;
   updated_at: string;
@@ -95,14 +96,60 @@ export async function uploadMessageBoardImage(file: File, messageId: string, con
   });
 }
 
+export async function updateMessageBoardAppendContent(
+  messageId: string,
+  appendContent: string,
+  expectedLockVersion: number,
+  context: Context,
+  options: { keepalive?: boolean } = {},
+) {
+  const body = { message_id: messageId, append_content: appendContent, expected_lock_version: expectedLockVersion };
+  if (options.keepalive) {
+    const response = await fetch(`${getApiBaseUrl()}/api/message-board/admin/append-content`, {
+      method: "PUT",
+      credentials: "include",
+      keepalive: true,
+      headers: { ...apiContextHeaders(context), Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(String((payload as { message?: string }).message || "追加内容保存失败"));
+    return payload as { message: MessageBoardEntry };
+  }
+  return apiRequest<{ message: MessageBoardEntry }>("/api/message-board/admin/append-content", {
+    method: "PUT",
+    context,
+    body,
+  });
+}
+
+export async function downloadAdoptedMessageBoardExport(format: "excel" | "feishu", context: Context) {
+  const params = new URLSearchParams({ status: "adopted", format });
+  const response = await fetch(`${getApiBaseUrl()}/api/message-board/admin/export?${params}`, {
+    credentials: "include",
+    headers: apiContextHeaders(context),
+  });
+  if (!response.ok) throw new Error("已采纳留言导出失败");
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = format === "feishu" ? "已采纳留言-飞书表格.xlsx" : "已采纳留言.xlsx";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  return Number(response.headers.get("X-Export-Count") || "0");
+}
+
 export async function fetchMessageBoardAdmin(
-  { query = "", page = 1, pageSize = 50 }: { query?: string; page?: number; pageSize?: number },
+  { query = "", page = 1, pageSize = 50, status = "", sort = "" }: { query?: string; page?: number; pageSize?: number; status?: string; sort?: string },
   context: Context,
 ) {
-  const params = new URLSearchParams({ query, page: String(page), page_size: String(pageSize) });
+  const params = new URLSearchParams({ query, page: String(page), page_size: String(pageSize), status, sort });
   return apiRequest<{ messages: MessageBoardEntry[]; total: number; page: number; page_size: number }>(
     `/api/message-board/admin?${params}`,
-    { context, readCache: { ttlMs: 8_000, tags: ["message-board"] } },
+    { context, readCache: { ttlMs: 8_000, tags: ["message-board"], forceRefresh: true } },
   );
 }
 

@@ -341,9 +341,11 @@ export type TableRelationshipCatalogTable = {
 
 export type TableRelationshipCatalog = {
   tenant_id: string;
+  status?: "loading" | "ready";
   institutions: Array<{ tenantId: string; institutionName: string; tables: TableRelationshipCatalogTable[] }>;
   count: { institutions: number; tables: number };
   source_read_only: true;
+  message?: string;
 };
 
 export type PageDataAsset = DataAssetGovernanceFields & {
@@ -596,6 +598,7 @@ export async function fetchTableRelationshipCatalog({
   return apiRequest<TableRelationshipCatalog>("/api/data-assets/table-relationships/catalog", {
     method: "GET",
     context: { tenantId, userId },
+    timeoutMs: 30_000,
     readCache: { ttlMs: 15_000, tags: ["data-assets", "table-relationships"] },
   });
 }

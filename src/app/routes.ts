@@ -1,47 +1,67 @@
-import { createElement, lazy, Suspense, type ComponentType } from "react";
+import { createElement, Suspense, type ComponentType } from "react";
 import { createBrowserRouter, Navigate } from "react-router";
 import { PlaceholderPage } from "./components/PlaceholderPage";
 import { RouteErrorPage } from "./components/RouteErrorPage";
-import { routePreloaders } from "./routePreload";
+import { consumePreparedNavigationFailure, prepareRouteLoader, readPreparedRouteModule, routeLoaders, routePreloaders, type RouteLoader } from "./routePreload";
 
-const Dashboard = lazyNamed(() => import("./components/Dashboard"), "Dashboard");
-const BusinessFunnel = lazyNamed(() => import("./components/BusinessFunnel"), "BusinessFunnel");
-const BusinessSandbox = lazyNamed(() => import("./components/BusinessSandbox"), "BusinessSandbox");
-const InstitutionSupervision = lazyNamed(() => import("./components/InstitutionSupervision"), "InstitutionSupervision");
-const CustomerSegmentAnalysis = lazyNamed(() => import("./components/CustomerSegmentAnalysis"), "CustomerSegmentAnalysis");
-const WeeklyReport = lazyNamed(() => import("./components/WeeklyReport"), "WeeklyReport");
-const EmailDailyReport = lazyNamed(() => import("./components/EmailDailyReport"), "EmailDailyReport");
-const CustomerInsight = lazyNamed(() => import("./components/CustomerInsight"), "CustomerInsight");
-const CompetitionAnalysis = lazyNamed(() => import("./components/CompetitionAnalysis"), "CompetitionAnalysis");
-const SelfAnalysis = lazyNamed(() => import("./components/SelfAnalysis"), "SelfAnalysis");
-const VisualReportBuilder = lazyNamed(() => import("./components/VisualReportBuilder"), "VisualReportBuilder");
-const DataAgentWorkspace = lazyNamed(() => import("./components/DataAgentWorkspace"), "DataAgentWorkspace");
-const DataAssets = lazyNamed(() => import("./components/DataAssets"), "DataAssets");
-const Notifications = lazyNamed(() => import("./components/Notifications"), "Notifications");
-const SystemSettings = lazyNamed(() => import("./components/SystemSettings"), "SystemSettings");
-const LoginPage = lazyNamed(() => import("./components/LoginPage"), "LoginPage");
-const Layout = lazyNamed(() => import("./components/Layout"), "Layout");
-const SkillPluginManager = lazyNamed(() => import("./components/SkillPluginManager"), "SkillPluginManager");
-const ExternalToolManager = lazyNamed(() => import("./components/ExternalToolManager"), "ExternalToolManager");
-const AnalysisConfigManager = lazyNamed(() => import("./components/AnalysisConfigManager"), "AnalysisConfigManager");
-const BridgeAuthorization = lazyNamed(() => import("./components/BridgeAuthorization"), "BridgeAuthorization");
-const MessageBoardManagement = lazyNamed(() => import("./components/MessageBoardManagement"), "MessageBoardManagement");
+const Dashboard = preparedNamed(routeLoaders.dashboard, "Dashboard");
+const BusinessFunnel = preparedNamed(routeLoaders.funnel, "BusinessFunnel");
+const BusinessSandbox = preparedNamed(routeLoaders.sandbox, "BusinessSandbox");
+const InstitutionSupervision = preparedNamed(routeLoaders.supervision, "InstitutionSupervision");
+const CustomerSegmentAnalysis = preparedNamed(routeLoaders.customerSegment, "CustomerSegmentAnalysis");
+const WeeklyReport = preparedNamed(routeLoaders.weekly, "WeeklyReport");
+const EmailDailyReport = preparedNamed(routeLoaders.email, "EmailDailyReport");
+const CustomerInsight = preparedNamed(routeLoaders.customers, "CustomerInsight");
+const CompetitionAnalysis = preparedNamed(routeLoaders.competition, "CompetitionAnalysis");
+const SelfAnalysis = preparedNamed(routeLoaders.analysis, "SelfAnalysis");
+const VisualReportBuilder = preparedNamed(routeLoaders.visualReports, "VisualReportBuilder");
+const DataAgentWorkspace = preparedNamed(routeLoaders.workspace, "DataAgentWorkspace");
+const DataAssets = preparedNamed(routeLoaders.assets, "DataAssets");
+const Notifications = preparedNamed(routeLoaders.notifications, "Notifications");
+const SystemSettings = preparedNamed(routeLoaders.settings, "SystemSettings");
+const LoginPage = preparedNamed(routeLoaders.login, "LoginPage");
+const Layout = preparedNamed(routeLoaders.layout, "Layout", false);
+const SkillPluginManager = preparedNamed(routeLoaders.skills, "SkillPluginManager");
+const ExternalToolManager = preparedNamed(routeLoaders.tools, "ExternalToolManager");
+const AnalysisConfigManager = preparedNamed(routeLoaders.analysisConfig, "AnalysisConfigManager");
+const BridgeAuthorization = preparedNamed(routeLoaders.bridge, "BridgeAuthorization");
+const MessageBoardManagement = preparedNamed(routeLoaders.messageBoard, "MessageBoardManagement");
 
-function lazyNamed(loader: () => Promise<Record<string, unknown>>, exportName: string) {
-  return lazy(async () => {
-    try {
-      const module = await loader();
-      clearRouteImportRetry();
-      return { default: module[exportName] as ComponentType };
-    } catch (error) {
-      if (isDynamicImportError(error) && await canSafelyReloadRouteImport()) {
+/* Menu navigation fills this shared module cache before changing location.
+ * Direct URLs still suspend here and retain the established recovery path. */
+function preparedNamed(loader: RouteLoader, exportName: string, clearRetryOnSuccess = true) {
+  let guardedPromise: Promise<RouteModuleResult> | null = null;
+  let terminalError: unknown = null;
+  const prepare = () => {
+    const ready = readPreparedRouteModule(loader);
+    if (ready) return Promise.resolve(ready);
+    if (guardedPromise) return guardedPromise;
+    guardedPromise = prepareRouteLoader(loader).then((module) => {
+      terminalError = null;
+      if (clearRetryOnSuccess) clearRouteImportRetry();
+      return module;
+    }).catch(async (error) => {
+      guardedPromise = null;
+      const failedPreparedNavigation = consumePreparedNavigationFailure(loader);
+      if (!failedPreparedNavigation && isDynamicImportError(error) && await canSafelyReloadRouteImport()) {
         window.location.reload();
-        return await new Promise<{ default: ComponentType }>(() => undefined);
+        return await new Promise<RouteModuleResult>(() => undefined);
       }
+      terminalError = error;
       throw error;
-    }
-  });
+    });
+    return guardedPromise;
+  };
+  return function PreparedRoute() {
+    if (terminalError) throw terminalError;
+    const module = readPreparedRouteModule(loader);
+    if (!module) throw prepare();
+    if (clearRetryOnSuccess) clearRouteImportRetry();
+    return createElement(module[exportName] as ComponentType);
+  };
 }
+
+type RouteModuleResult = Record<string, unknown>;
 
 const routeImportRetryKey = "smart-data-agent:route-import-retry";
 
@@ -80,13 +100,15 @@ function withPageSuspense(Component: ComponentType) {
 function RouteFallback() {
   return createElement(
     "div",
-    { className: "animate-pulse p-7", "aria-label": "页面内容加载中" },
-    createElement("div", { className: "h-5 w-36 rounded bg-[#e9e9ed]" }),
-    createElement("div", { className: "mt-2 h-3 w-72 max-w-full rounded bg-[#f0f0f2]" }),
-    createElement("div", { className: "mt-7 grid gap-4 md:grid-cols-3" },
+    { className: "p-7", "aria-label": "页面内容加载中" },
+    createElement("div", { className: "inline-flex h-7 items-center gap-2 text-[12px] text-[#8a8a8e]", "data-route-fallback-indicator": "compact" },
+      createElement("span", { className: "h-3.5 w-3.5 animate-spin rounded-full border border-[#d1d1d6] border-t-[#636366]", "aria-hidden": "true" }),
+      createElement("span", null, "正在准备页面"),
+    ),
+    createElement("div", { className: "mt-5 grid animate-pulse gap-4 md:grid-cols-3" },
       ...Array.from({ length: 3 }, (_, index) => createElement("div", { key: index, className: "h-28 rounded-xl border border-[#f0f0f2] bg-[#fafbfc]" })),
     ),
-    createElement("div", { className: "mt-5 h-72 rounded-xl border border-[#f0f0f2] bg-[#fafbfc]" }),
+    createElement("div", { className: "mt-5 h-72 animate-pulse rounded-xl border border-[#f0f0f2] bg-[#fafbfc]" }),
   );
 }
 

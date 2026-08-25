@@ -38,6 +38,8 @@ _PAGE_DATA_PROJECTION_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 _PAGE_DATA_PROJECTION_CACHE_MAX = 48
 _PAGE_DATA_WORKSPACE_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 _PAGE_DATA_WORKSPACE_CACHE_TTL_SECONDS = 20.0
+_RELATIONSHIP_CATALOG_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+_RELATIONSHIP_CATALOG_CACHE_TTL_SECONDS = 20.0
 
 
 def _csv_table_assets(catalog: Any, *, wait_for_catalog: bool) -> list[dict[str, Any]]:
@@ -64,26 +66,52 @@ def _csv_table_assets(catalog: Any, *, wait_for_catalog: bool) -> list[dict[str,
     return [dict(item) for item in tables if isinstance(item, dict)]
 
 
-def _authorized_raw_table_catalog(handler: Any, context: Any) -> tuple[dict[str, str], dict[tuple[str, str], dict[str, Any]]]:
-    """Return authoritative, permission-filtered tables with server-owned institution labels."""
+def _raw_tables_for_tenant(handler: Any, tenant_id: str, *, wait_for_catalog: bool) -> list[dict[str, Any]]:
+    """Return one tenant's CSV tables with the same metadata overlay as the picker."""
+
+    catalog = handler.services.data_acquisition_service.csv_source.for_tenant(tenant_id)
+    tables = _csv_table_assets(catalog, wait_for_catalog=wait_for_catalog)
+    data_asset_store = getattr(handler.services, "data_asset_store", None)
+    stored = data_asset_store.list_bundle(tenant_id) if data_asset_store is not None else {"raw_tables": []}
+    overlays = {
+        str(item.get("sourceKey") or ""): item
+        for item in stored.get("raw_tables", [])
+        if isinstance(item, dict) and item.get("metadataOverlayVersion") == 1 and str(item.get("sourceKey") or "")
+    }
+    result: list[dict[str, Any]] = []
+    for raw_table in tables:
+        source_key = str(raw_table.get("sourceKey") or "").strip()
+        if not source_key:
+            continue
+        overlay = overlays.get(source_key)
+        table = dict(raw_table)
+        if overlay:
+            table = _raw_table_with_metadata_overlay(table, overlay)
+        result.append(table)
+    return result
+
+
+def _authorized_raw_table_catalog(
+    handler: Any,
+    context: Any,
+    *,
+    wait_for_catalog: bool = True,
+) -> tuple[dict[str, str], dict[tuple[str, str], dict[str, Any]]]:
+    """Return authoritative, permission-filtered tables with server-owned institution labels.
+
+    Relationship catalog listing passes ``wait_for_catalog=False`` so a cold CSV
+    scan in another institution cannot stall the dataset picker past the client
+    timeout. Page-data reads keep the wait so the first dashboard open does not
+    fail closed as a schema change.
+    """
 
     tenant_labels = _authorized_tenant_labels(handler, context)
     table_by_ref: dict[tuple[str, str], dict[str, Any]] = {}
     for tenant_id in tenant_labels:
-        catalog = handler.services.data_acquisition_service.csv_source.for_tenant(tenant_id)
-        data_asset_store = getattr(handler.services, "data_asset_store", None)
-        stored = data_asset_store.list_bundle(tenant_id) if data_asset_store is not None else {"raw_tables": []}
-        overlays = {
-            str(item.get("sourceKey") or ""): item
-            for item in stored.get("raw_tables", [])
-            if isinstance(item, dict) and item.get("metadataOverlayVersion") == 1 and str(item.get("sourceKey") or "")
-        }
-        for raw_table in _csv_table_assets(catalog, wait_for_catalog=True):
-            source_key = str(raw_table.get("sourceKey") or "").strip()
-            if not source_key:
-                continue
-            table = _raw_table_with_metadata_overlay(dict(raw_table), overlays.get(source_key))
-            table_by_ref[(tenant_id, source_key)] = table
+        for table in _raw_tables_for_tenant(handler, tenant_id, wait_for_catalog=wait_for_catalog):
+            source_key = str(table.get("sourceKey") or "").strip()
+            if source_key:
+                table_by_ref[(tenant_id, source_key)] = table
     return tenant_labels, table_by_ref
 
 
@@ -774,7 +802,27 @@ def handle_table_relationship_catalog_get(handler: Any, query: str = "") -> None
     try:
         context = handler._request_context()
         handler._require_asset_permission(context, "read")
-        tenant_labels, table_by_ref = _authorized_raw_table_catalog(handler, context)
+        cache_key = (str(context.user_id), str(context.tenant_id))
+        now = monotonic()
+        cached = _RELATIONSHIP_CATALOG_CACHE.get(cache_key)
+        if cached and now - cached[0] < _RELATIONSHIP_CATALOG_CACHE_TTL_SECONDS:
+            handler._send_json(cached[1])
+            return
+        current_catalog = handler.services.data_acquisition_service.csv_source.for_tenant(context.tenant_id)
+        if not getattr(current_catalog, "catalog_ready", True):
+            handler._send_json(
+                {
+                    "tenant_id": context.tenant_id,
+                    "status": "loading",
+                    "institutions": [],
+                    "count": {"institutions": 0, "tables": 0},
+                    "source_read_only": True,
+                    "message": "当前机构的 Data Crawler 原始数据目录正在准备中，请稍候重试。",
+                },
+                headers={"Retry-After": "1"},
+            )
+            return
+        tenant_labels, table_by_ref = _authorized_raw_table_catalog(handler, context, wait_for_catalog=False)
         institutions = []
         for tenant_id, institution_name in sorted(tenant_labels.items(), key=lambda item: item[1]):
             tables = [
@@ -793,12 +841,22 @@ def handle_table_relationship_catalog_get(handler: Any, query: str = "") -> None
                 if candidate_tenant == tenant_id
             ]
             institutions.append({"tenantId": tenant_id, "institutionName": institution_name, "tables": tables})
-        handler._send_json({
+        payload = {
             "tenant_id": context.tenant_id,
+            "status": "ready",
             "institutions": institutions,
             "count": {"institutions": len(institutions), "tables": sum(len(item["tables"]) for item in institutions)},
             "source_read_only": True,
-        })
+        }
+        _RELATIONSHIP_CATALOG_CACHE[cache_key] = (now, payload)
+        if len(_RELATIONSHIP_CATALOG_CACHE) > 48:
+            expired = [
+                key for key, entry in _RELATIONSHIP_CATALOG_CACHE.items()
+                if now - entry[0] >= _RELATIONSHIP_CATALOG_CACHE_TTL_SECONDS
+            ]
+            for key in expired:
+                _RELATIONSHIP_CATALOG_CACHE.pop(key, None)
+        handler._send_json(payload)
     except Exception as exc:  # pragma: no cover - HTTP boundary.
         send_route_exception(handler, exc)
 
@@ -1464,7 +1522,7 @@ def _bind_page_data_asset(handler: Any, context: Any, item: dict[str, Any]) -> d
     table = next(
         (
             candidate
-            for candidate in handler.services.data_acquisition_service.csv_source.for_tenant(context.tenant_id).table_assets()
+            for candidate in _raw_tables_for_tenant(handler, context.tenant_id, wait_for_catalog=True)
             if str(candidate.get("sourceKey") or "") == source_key
         ),
         None,

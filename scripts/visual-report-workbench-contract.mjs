@@ -143,7 +143,10 @@ assert.match(dataTablePicker, /onChange\(\[table\]\)/, "选择新表必须替换
 assert.doesNotMatch(dataTablePicker, /多机构页面|pageDataTables|pageDataToSelection/, "智能分析数据表弹窗不得显示多机构页面");
 assert.match(domain, /singleAnalysisDataTableSelection[\s\S]*tables\.at\(-1\)/, "历史或外部多选状态必须收敛到最新一张数据表");
 assert.match(domain, /export function rematchAnalysisDataTableSelection/, "已选数据表必须能按 sourceKey 对齐当前交付");
+assert.match(domain, /analysisTableLogicalTitle/, "已选数据表必须能按交付题目对齐当前文件，找不到时不得继续使用下线表");
 assert.match(selfAnalysis, /singleAnalysisDataTableSelection\(forcedDataTables \?\? selectedDataTables\)/, "每次分析提交前必须再次收敛单表契约");
+assert.match(selfAnalysis, /rematchAnalysisDataTableSelection\(effectiveDataTables, availableAnalysisTables\)/, "提交分析前必须把已选表重新对齐到当前目录");
+assert.match(selfAnalysis, /rematchAnalysisDataTableSelection\(snapshot.selectedDataTables, analysisCatalogRef.current\)/, "恢复工作台时必须把缓存数据表对齐到当前目录");
 assert.match(selfAnalysis, /runtimeAssetResponse\.topic_tables/, "智能分析主题表必须使用已发布 runtime 目录");
 assert.match(selfAnalysis, /rematchAnalysisDataTableSelection\(current/, "恢复或刷新目录后必须把已选表对齐到当前交付");
 assert.match(analysisRoute, /consumer="self_analysis"/, "智能分析必须通过受治理的多机构页面读取接口取数");

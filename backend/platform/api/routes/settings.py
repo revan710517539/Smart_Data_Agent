@@ -3,9 +3,8 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import parse_qs
 
-from backend.authz import normalize_tenant_id
-from backend.authz.seed import OPERATING_TENANTS
 from backend.platform.api.support import first_query_value, send_route_exception
+from backend.platform.tenancy.catalog import catalog_tenant_ids
 from backend.platform.settings import (
     account_system_config_scope,
     is_retired_default_model,
@@ -303,7 +302,7 @@ def _authorized_system_config_tenant_ids(handler: Any, context: Any) -> tuple[st
     for assignment in repository.list_user_assignments(context.user_id):
         tenant_id = str(assignment.tenant_id or "").strip()
         if tenant_id == "*":
-            candidates.update(normalize_tenant_id(name) for name in OPERATING_TENANTS)
+            candidates.update(catalog_tenant_ids(handler.services))
         elif tenant_id:
             candidates.add(tenant_id)
     allowed: list[str] = []

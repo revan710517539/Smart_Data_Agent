@@ -67,6 +67,24 @@ export function ContextSideRail({
     window.dispatchEvent(new CustomEvent(contextRailWideEvent, { detail: { pageKey, wide } }));
   }, [pageKey, wide]);
 
+  useEffect(() => {
+    if (!collapsed) {
+      setEdgeVisible(false);
+      return;
+    }
+    const onMove = (event: PointerEvent) => {
+      const fromRight = window.innerWidth - event.clientX;
+      setEdgeVisible(fromRight >= 0 && fromRight <= 40);
+    };
+    const onLeave = () => setEdgeVisible(false);
+    window.addEventListener("pointermove", onMove, { passive: true });
+    document.documentElement.addEventListener("pointerleave", onLeave);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      document.documentElement.removeEventListener("pointerleave", onLeave);
+    };
+  }, [collapsed]);
+
   useLayoutEffect(() => {
     if (collapsed || flushToViewport) return;
     const rail = railRef.current;
@@ -94,11 +112,12 @@ export function ContextSideRail({
   return (
     <>
       {flushToViewport && !collapsed ? <div className={`weekly-report-print-hidden shrink-0 ${railWidthClass}`} data-context-rail-spacer="true" /> : null}
+      {!collapsed ? (
       <aside
         ref={railRef}
-        className={`weekly-report-print-hidden flex min-h-0 flex-col overflow-hidden rounded-tl-xl border border-b-0 border-r-0 border-[#e5e5ea] bg-white ${railWidthClass} ${collapsed ? "hidden" : ""} ${flushToViewport ? "fixed top-4 right-0 bottom-0 z-[65]" : "sticky top-0 z-30 h-[min(100dvh,100vh)] max-h-[100dvh] shrink-0 self-start"}`}
+        className={`weekly-report-print-hidden flex min-h-0 flex-col overflow-hidden rounded-tl-xl border border-b-0 border-r-0 border-[#e5e5ea] bg-white ${railWidthClass} ${flushToViewport ? "fixed top-4 right-0 bottom-0 z-[65]" : "sticky top-0 z-30 h-[min(100dvh,100vh)] max-h-[100dvh] shrink-0 self-start"}`}
         style={flushToViewport ? { top: Math.max(16, viewport.offsetTop), bottom: viewport.bottomInset, paddingBottom: "env(safe-area-inset-bottom, 0px)" } : { maxHeight: `${Math.max(280, viewport.height)}px` }}
-        data-context-rail={collapsed ? "collapsed" : "expanded"}
+        data-context-rail="expanded"
         data-context-page={pageKey}
         data-context-rail-wide={wide ? "true" : "false"}
         data-context-rail-flush="true"
@@ -128,23 +147,20 @@ export function ContextSideRail({
           <div className={activeTab === "message-board" ? "flex h-full min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}>{messageBoard}</div>
         </div>
       </aside>
+      ) : null}
 
       {collapsed && (
-        <aside className="weekly-report-print-hidden w-0 shrink-0" data-context-rail-edge="true" data-context-page={pageKey}>
+        <aside className="weekly-report-print-hidden w-[0.2cm] shrink-0" data-context-rail="collapsed" data-context-rail-edge="true" data-context-page={pageKey}>
           <div
-            className="fixed bottom-0 right-0 top-0 z-[110] w-10"
+            className="pointer-events-none fixed bottom-0 right-0 top-0 z-[110] w-10"
             data-context-rail-edge-zone="true"
-            onMouseEnter={() => {
-              setEdgeVisible(true);
-            }}
-            onMouseLeave={() => setEdgeVisible(false)}
           >
             <button
               type="button"
               aria-label="展开右侧评论与智能分析栏"
               title="展开右侧栏"
               onClick={() => setCollapsed(false)}
-              className={`fixed right-2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#d9d9de] bg-white text-[#636366] shadow-lg shadow-black/10 transition-opacity hover:bg-[#f2f2f7] hover:text-[#1d1d1f] ${edgeVisible ? "opacity-100" : "pointer-events-none opacity-0"}`}
+              className={`fixed right-2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#d9d9de] bg-white text-[#636366] shadow-lg shadow-black/10 transition-opacity hover:bg-[#f2f2f7] hover:text-[#1d1d1f] ${edgeVisible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"}`}
               style={{ top: "50%" }}
               data-context-rail-expand="true"
             >

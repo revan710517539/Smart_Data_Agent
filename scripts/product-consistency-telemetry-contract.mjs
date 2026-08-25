@@ -70,6 +70,15 @@ assert.ok(!authRoute.includes("SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD"), "�
 assert.ok(!authRoute.includes('"123456"'), "认证路由不得保留历史密码兜底");
 assert.match(layout, /data-account-password-toggle="true"/, "登录后必须提供修改本人密码入口");
 assert.match(systemSettings, /institutionOptions=\{visibleInstitutions\}/, "新增用户只能选择权威目录中已登记的机构");
+assert.match(systemSettings, /data-tenant-management="true"/, "系统配置必须提供租户管理子模块");
+assert.match(
+  systemSettings,
+  /系统运行概览[\s\S]*TenantManagementCard[\s\S]*模型接入/,
+  "租户管理必须放在系统运行概览和模型接入之间",
+);
+assert.match(systemSettings, /createTenant\(name\)/, "新增租户必须调用租户目录写入接口");
+assert.match(systemSettings, /deleteTenant\(tenantIdForInstitution\(name\)\)/, "删除租户必须按权威 ID 调用目录接口");
+assert.match(systemSettings, /refreshTenantCatalog/, "租户变更后必须刷新权威目录");
 assert.match(systemSettings, /tenantId: tenantIdForInstitution\(nextTenant\)/, "新增用户必须把稳定 tenant ID 与显示名分开提交");
 assert.ok(!systemSettings.includes("institutionOptions={isSuperAdmin ? operatingTenantNames"), "超级管理员也不得向未登记静态机构授权");
 assert.match(systemSettings, /setUserEditorError\(message\)[\s\S]*?setAccessNotice\(message\)/, "新增用户失败必须保留弹窗和表单并显示具体原因");

@@ -379,34 +379,29 @@ export function DataAgentWorkspace() {
 
   return (
     <div className="p-7">
-      <div className="flex items-center justify-between mb-7">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-[#f2f2f7] flex items-center justify-center">
-            <BrainCircuit className="w-[18px] h-[18px] text-[#636366]" />
-          </div>
-          <div>
-            <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">{header.title}</h2>
-            <p className="text-[13px] text-[#aeaeb2] mt-0.5">{header.subtitle}</p>
-            <p className="mt-1 text-[11px] text-[#8a8a8e]">{workspaceNotice}</p>
-          </div>
+      <div className="mb-7 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">{header.title}</h2>
+          <p className="mt-1 text-[13px] text-[#aeaeb2]">{header.subtitle}</p>
+          <p className="mt-1 text-[11px] text-[#8a8a8e]">{workspaceNotice}</p>
         </div>
-        {showHeaderAction && (
-          <div className="flex flex-wrap items-center justify-end gap-3">
+        <div className="flex w-fit min-h-9 shrink-0 flex-wrap items-center justify-end gap-[0.2cm]" data-page-header-actions="true">
             {activeTab === "todos" && (
               <div ref={setTodoToolbarLeftHost} className="flex items-center" data-todo-toolbar-host="left" />
             )}
+            {showHeaderAction && (
             <button
               onClick={handlePrimaryAction}
-              className="flex h-10 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-4 text-[13px] text-white transition-colors hover:bg-[#2c2c2e]"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white transition-colors hover:bg-[#2c2c2e]"
             >
-              <Plus className="w-4 h-4" />
+              <Plus className="w-3.5 h-3.5" />
               {header.action}
             </button>
+            )}
             {activeTab === "todos" && (
               <div ref={setTodoToolbarRightHost} className="flex items-center" data-todo-toolbar-host="right" />
             )}
           </div>
-        )}
       </div>
 
       {activeTab !== "todos" && (

@@ -110,7 +110,12 @@ class ASGIRequestAdapter(AnalysisAPIHandler):
         self.path = raw_path + (f"?{query}" if query else "")
         self.request_version = "HTTP/1.1"
         self.client_address = client or ("unknown", 0)
-        self.server = SimpleNamespace(automation_worker=automation_worker)
+        self.server = SimpleNamespace(
+            automation_worker=automation_worker,
+            services=services,
+            startup_status="ready",
+            startup_error="",
+        )
         self.rfile = BytesIO(body)
         self.wfile = BytesIO()
         self.headers = Message()

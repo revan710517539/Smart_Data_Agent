@@ -46,6 +46,19 @@ CORE_TOPIC_SKILL_LABELS = {
     "topic-attribution": "归因分析",
     "topic-predictive": "预测分析",
 }
+DISPATCH_SCENE_SKILL_IDS = (
+    "scene-weekly-report",
+    "scene-daily-operation",
+    "scene-risk-strategy",
+)
+DISPATCH_TOPIC_SKILL_IDS = (
+    "topic-exploratory",
+    "topic-financial-budget",
+    "topic-credit-risk",
+    "topic-suspicious-transaction",
+    "topic-liquidity-risk",
+    "topic-overdue-risk",
+)
 PLATFORM_ANALYSIS_SKILL_IDS = (
     SCENE_INTENT_SKILL_ID,
     SCENE_CHART_FOLLOWUP_SKILL_ID,
@@ -53,8 +66,27 @@ PLATFORM_ANALYSIS_SKILL_IDS = (
     SCENE_TEXTBOX_VOICE_SKILL_ID,
     SCENE_SELF_ANALYSIS_SKILL_ID,
     *CORE_TOPIC_SKILL_IDS,
+    *DISPATCH_SCENE_SKILL_IDS,
+    *DISPATCH_TOPIC_SKILL_IDS,
 )
+PLATFORM_TOOL_IDS = (
+    "tool-confluence-search",
+    "tool-outlook",
+    "tool-teams-cloud-doc",
+    "tool-teams-t5t",
+    "tool-financial-analyst",
+)
+PLATFORM_INTENT_IDS = ("intent_branch_rank", "intent_risk_diagnosis")
+PLATFORM_EXPERIENCE_IDS = ("exp_weekly_growth_quality", "exp_m1_risk_check")
 PLATFORM_VISIBLE_ANALYSIS_SKILL_IDS = frozenset(PLATFORM_ANALYSIS_SKILL_IDS)
+PLATFORM_VISIBLE_CATALOG_IDS = frozenset(
+    (
+        *PLATFORM_ANALYSIS_SKILL_IDS,
+        *PLATFORM_TOOL_IDS,
+        *PLATFORM_INTENT_IDS,
+        *PLATFORM_EXPERIENCE_IDS,
+    )
+)
 
 
 def canonical_core_topic_skill_id(item: dict[str, Any]) -> str:
@@ -267,11 +299,49 @@ def visible_items_for_tenant(tenant_id: str, item_type: str, items: list[dict[st
         if (
             not keep_system_defaults
             and _is_cloned_system_catalog_item(item_type, item)
-            and str(item.get("id") or "") not in PLATFORM_VISIBLE_ANALYSIS_SKILL_IDS
+            and str(item.get("id") or "") not in PLATFORM_VISIBLE_CATALOG_IDS
         ):
             continue
         visible.append(item)
     return visible
+
+
+def catalog_item_template(item_type: str, item_id: str) -> dict[str, Any] | None:
+    wanted = str(item_id or "").strip()
+    if not wanted:
+        return None
+    if item_type == "analysis_skill":
+        return analysis_skill_template(wanted)
+    for item in DEFAULT_ASSET_ITEMS.get(item_type, []):
+        if str(item.get("id") or "") == wanted:
+            return deepcopy(item)
+    return None
+
+
+def seed_platform_capability_catalog(store: Any, tenant_id: str, updated_by: str) -> None:
+    """Idempotently place the governed 双周报 Skill/tool/memory catalog on one tenant."""
+
+    catalog = (
+        ("analysis_skill", PLATFORM_ANALYSIS_SKILL_IDS),
+        ("external_tool", PLATFORM_TOOL_IDS),
+        ("intent", PLATFORM_INTENT_IDS),
+        ("analysis_experience", PLATFORM_EXPERIENCE_IDS),
+    )
+    for item_type, item_ids in catalog:
+        for item_id in item_ids:
+            template = catalog_item_template(item_type, item_id)
+            if template is None:
+                continue
+            existing = store.get_item(tenant_id, item_type, item_id)
+            if existing is not None and str(existing.get("lifecycleStatus") or "") == "active":
+                continue
+            store.upsert_item(
+                tenant_id,
+                item_type,
+                {**(existing or {}), **template, "id": item_id},
+                updated_by=updated_by,
+                lifecycle_status="active",
+            )
 
 
 def analysis_skill_template(skill_id: str) -> dict[str, Any] | None:
@@ -720,17 +790,12 @@ class InMemoryDataAssetStore:
                 self.upsert_item(tenant_id, item_type, item, updated_by=updated_by, lifecycle_status="active")
 
     def seed_missing_defaults(self, tenant_id: str, updated_by: str = "development_seed") -> None:
+        seed_platform_capability_catalog(self, tenant_id, updated_by)
         bundle = self.list_bundle(tenant_id)
         for item_type in DEFAULT_ASSET_ITEMS:
             # Tenant-maintained catalogs must not be re-cloned onto every
             # institution after an operator deletes or never created them.
             if item_type in TENANT_MAINTAINED_ASSET_TYPES:
-                if item_type == "analysis_skill":
-                    for skill_id in PLATFORM_ANALYSIS_SKILL_IDS:
-                        if self.get_item(tenant_id, item_type, skill_id) is None:
-                            template = analysis_skill_template(skill_id)
-                            if template:
-                                self.upsert_item(tenant_id, item_type, template, updated_by=updated_by, lifecycle_status="active")
                 continue
             existing = {
                 str(item.get("id") or ""): item
@@ -986,17 +1051,12 @@ class SQLiteDataAssetStore:
                 self.upsert_item(tenant_id, item_type, item, updated_by=updated_by, lifecycle_status="active")
 
     def seed_missing_defaults(self, tenant_id: str, updated_by: str = "development_seed") -> None:
+        seed_platform_capability_catalog(self, tenant_id, updated_by)
         bundle = self.list_bundle(tenant_id)
         for item_type in DEFAULT_ASSET_ITEMS:
             # Tenant-maintained catalogs must not be re-cloned onto every
             # institution after an operator deletes or never created them.
             if item_type in TENANT_MAINTAINED_ASSET_TYPES:
-                if item_type == "analysis_skill":
-                    for skill_id in PLATFORM_ANALYSIS_SKILL_IDS:
-                        if self.get_item(tenant_id, item_type, skill_id) is None:
-                            template = analysis_skill_template(skill_id)
-                            if template:
-                                self.upsert_item(tenant_id, item_type, template, updated_by=updated_by, lifecycle_status="active")
                 continue
             existing = {
                 str(item.get("id") or ""): item

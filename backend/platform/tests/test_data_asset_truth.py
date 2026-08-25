@@ -97,27 +97,20 @@ class DataAssetTruthTest(unittest.TestCase):
         self.assertIsNone(store.get_item("tenant_a", "raw_table", "raw_mock_customer_100"))
         self.assertIsNotNone(store.get_item("tenant_a", "raw_table", "production_delivery"))
 
-    def test_default_skill_scenes_can_be_deleted_without_bootstrap_resurrection(self) -> None:
+    def test_weekly_report_dispatch_skill_is_part_of_the_platform_pack(self) -> None:
         store = InMemoryDataAssetStore(seed_defaults=False)
-        store.seed_defaults("tenant_a")
+        store.seed_missing_defaults("tenant_a")
         self.assertIsNotNone(store.get_item("tenant_a", "analysis_skill", "scene-weekly-report"))
-        self.assertEqual(
+        self.assertIn(
+            "scene-weekly-report",
             {
                 item["id"]
                 for item in store.list_bundle("tenant_a")["analysis_skills"]
                 if item.get("category") == "场景"
             },
-            {
-                "scene-analysis-intent",
-                "scene-chart-followup",
-                "scene-page-rail",
-                "scene-textbox-voice",
-                "scene-self-analysis",
-            },
         )
-        self.assertTrue(store.delete_item("tenant_a", "analysis_skill", "scene-weekly-report"))
-        store.seed_missing_defaults("tenant_a")
-        self.assertIsNone(store.get_item("tenant_a", "analysis_skill", "scene-weekly-report"))
+        with self.assertRaises(PermissionError):
+            store.delete_item("tenant_a", "analysis_skill", "scene-weekly-report")
 
     def test_sqlite_defaults_require_explicit_seed(self) -> None:
         with TemporaryDirectory() as tmpdir:

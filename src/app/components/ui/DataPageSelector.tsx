@@ -45,13 +45,14 @@ export function DataPageSelector({
 export function useClientPagination<T>(items: T[], pageSize = 20) {
   const [page, setPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const safePage = Math.max(1, Math.min(page, totalPages));
   useEffect(() => setPage((current) => Math.min(current, totalPages)), [totalPages]);
   return {
-    page,
+    page: safePage,
     setPage,
     totalPages,
     total: items.length,
-    items: items.slice((page - 1) * pageSize, page * pageSize),
+    items: items.slice((safePage - 1) * pageSize, safePage * pageSize),
     paginated: items.length > pageSize,
   };
 }

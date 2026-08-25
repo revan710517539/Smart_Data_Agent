@@ -63,7 +63,7 @@ export function StandardAnalysisPageHeader({
         <p className="mt-1 text-[13px] text-[#aeaeb2]">{description}</p>
         {metadata ? <div className="mt-1 text-[10px] text-[#c7c7cc]">{metadata}</div> : null}
       </div>
-      <div className="flex max-w-full flex-wrap items-center justify-end gap-2" data-standard-analysis-page-actions="true">
+      <div className="flex w-fit min-h-9 max-w-full shrink-0 flex-wrap items-center justify-end gap-[0.2cm]" data-page-header-actions="true" data-standard-analysis-page-actions="true">
         {leadingActions}
         <StickyNoteButton onClick={stickyNote.show} />
         {canEditLayout ? <PageDataModeToggle controller={editController} /> : null}

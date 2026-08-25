@@ -46,6 +46,11 @@
       "version": "0036",
       "path": "migrations/0036_retire_default_model.sql",
       "sha256": "ac306f1050741ef58dc4352934edc559ab0a5c17f65ba4683ac61eaa5739d171"
+    },
+    {
+      "version": "0037",
+      "path": "migrations/0037_message_board_append_content.sql",
+      "sha256": "1574a149955d05cba868cffbae578eb51d75b23a8cd31bbd20752e0bcbe9ae4d"
     }
   ]
 }

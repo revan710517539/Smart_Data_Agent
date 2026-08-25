@@ -93,15 +93,15 @@ export function BusinessSandbox() {
     <div className="p-7">
       <div className="flex items-center justify-between mb-6">
         <div><h2 className="text-[18px] text-[#1d1d1f] tracking-tight">经营沙盘</h2><p className="text-[13px] text-[#aeaeb2] mt-1">分产品线经营深度分析 · 策略推演与ROI模拟</p></div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-fit min-h-9 shrink-0 items-center gap-[0.2cm]" data-page-header-actions="true">
           <div className="relative">
-            <select value={selectedBank} onChange={(event) => setSelectedBank(event.target.value)} className="appearance-none pl-8 pr-7 py-[6px] bg-white border border-[#e5e5ea] rounded-lg text-[12px] text-[#636366] focus:outline-none cursor-pointer">
+            <select value={selectedBank} onChange={(event) => setSelectedBank(event.target.value)} className="h-9 appearance-none rounded-lg border border-[#e5e5ea] bg-white pl-8 pr-7 text-[12px] text-[#3a3a3c] focus:outline-none cursor-pointer">
               <option>全部分行</option>{knownBanks.map((bank) => <option key={bank}>{bank}</option>)}
             </select>
             <Building2 className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#c7c7cc]" /><ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-[#c7c7cc] pointer-events-none" />
           </div>
-          <button onClick={() => setShowSimulation(!showSimulation)} className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-[12px] transition-all ${showSimulation ? "bg-[#1d1d1f] text-white" : "bg-white border border-[#e5e5ea] text-[#636366] hover:bg-[#f2f2f7]"}`}><SlidersHorizontal className="w-3.5 h-3.5" /> 策略模拟</button>
-          <button onClick={() => setNotice("沙盘导出需先形成可追溯模型运行 artifact；当前没有可导出的模拟产物。") } className="flex items-center gap-1 px-3 py-1.5 bg-white border border-[#e5e5ea] rounded-lg text-[12px] text-[#636366] hover:bg-[#f2f2f7]"><Download className="w-3.5 h-3.5" /> 导出</button>
+          <button onClick={() => setShowSimulation(!showSimulation)} className={`inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-[12px] transition-all ${showSimulation ? "bg-[#1d1d1f] text-white" : "border border-[#e5e5ea] bg-white text-[#3a3a3c] hover:bg-[#f2f2f7]"}`}><SlidersHorizontal className="w-3.5 h-3.5" /> 策略模拟</button>
+          <button onClick={() => setNotice("沙盘导出需先形成可追溯模型运行 artifact；当前没有可导出的模拟产物。") } className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] hover:bg-[#f2f2f7]"><Download className="w-3.5 h-3.5" /> 导出</button>
         </div>
       </div>
 
@@ -193,5 +193,5 @@ function rateKpi(label: string, value?: number, prior?: number) { const change =
 function parameterLabel(key: string) { return ({ rateAdjust: "利率调整", creditLimit: "额度调整", approvalRate: "审批率调整", pushRate: "触达率调整" } as Record<string, string>)[key] || key; }
 
 function SandboxState({ message }: { message: string }) {
-  return <div className="p-7"><h2 className="text-[18px] text-[#1d1d1f] tracking-tight">经营沙盘</h2><p className="text-[13px] text-[#aeaeb2] mt-1">分产品线经营深度分析 · 策略推演与ROI模拟</p><div className="mt-6 rounded-xl border border-[#f0f0f2] bg-white px-6 py-16 text-center text-[12px] text-[#aeaeb2]">{message}</div></div>;
+  return <div className="p-7"><div className="mb-6 flex items-start justify-between gap-4"><div><h2 className="text-[18px] text-[#1d1d1f] tracking-tight">经营沙盘</h2><p className="text-[13px] text-[#aeaeb2] mt-1">分产品线经营深度分析 · 策略推演与ROI模拟</p></div><div className="flex w-fit min-h-9 shrink-0 items-center gap-[0.2cm]" data-page-header-actions="true" /></div><div className="mt-6 rounded-xl border border-[#f0f0f2] bg-white px-6 py-16 text-center text-[12px] text-[#aeaeb2]">{message}</div></div>;
 }

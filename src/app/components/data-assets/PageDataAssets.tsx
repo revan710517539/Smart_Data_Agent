@@ -9,6 +9,7 @@ import type {
   RawTableAsset,
 } from "../../services/dataAssetApi";
 import { normalizeFieldSemantics } from "../../data/fieldSemantics";
+import { apiErrorMessage } from "../../services/apiClient";
 import { visualizationOptions, type VisualizationType } from "../self-analysis/domain";
 import { singleInstitutionAssignedPage } from "../page-data/assignment";
 
@@ -165,7 +166,7 @@ export const PageDataCreateModal = memo(function PageDataCreateModal({
         updatedAt: new Date().toISOString(),
       });
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "页面数据保存失败。");
+      setError(apiErrorMessage(reason, "页面数据保存失败。"));
     } finally {
       setSaving(false);
     }

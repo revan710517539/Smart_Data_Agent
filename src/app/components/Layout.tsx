@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import {
   BarChart3,
@@ -24,11 +24,12 @@ import {
 import { usePlatformContext } from "../platform/PlatformContext";
 import { runApplicationAction } from "../services/applicationApi";
 import { fetchNavigation } from "../services/navigationApi";
-import { preloadRoutePath, warmVisibleRoutePaths } from "../routePreload";
+import { prepareRoutePath, preloadRoutePath, warmVisibleRoutePaths } from "../routePreload";
 import { preloadRouteDataPath } from "../routeDataPreload";
 import { AgentSupervisor } from "./agent-supervisor/AgentSupervisor";
 import { contextRailWideEvent } from "./context-rail/ContextSideRail";
 import { GlobalContextRail } from "./context-rail/GlobalContextRail";
+import { GlobalMessageBoardShortcut } from "./message-board/GlobalMessageBoardShortcut";
 import { fetchSystemConfig } from "../services/systemConfigApi";
 import {
   configuredTextModelOptions,
@@ -133,6 +134,7 @@ export function Layout() {
     currentTenantRoles,
     institutions,
     isAuthenticated,
+    isSuperAdmin,
     logout,
     selectedInstitution,
     setSelectedInstitution,
@@ -145,9 +147,19 @@ export function Layout() {
   const sidebarCollapsedRef = useRef(false);
   const sidebarCollapsedBeforeWideRef = useRef(false);
   const contextRailWideRef = useRef(false);
+  const routeWarmupCancelRef = useRef<() => void>(() => undefined);
+  const routeIntentGenerationRef = useRef(0);
   const [sidebarEdgeVisible, setSidebarEdgeVisible] = useState(false);
-  const [allowedMenuKeys, setAllowedMenuKeys] = useState<Set<string> | null>(new Set());
-  const [navigationStatus, setNavigationStatus] = useState<"loading" | "ready" | "failed">("loading");
+  const [pendingRoutePath, setPendingRoutePath] = useState("");
+  const [allowedMenuKeys, setAllowedMenuKeys] = useState<Set<string> | null>(() => {
+    if (isSuperAdmin) return new Set(allMenuKeys(menuItems));
+    const cached = readCachedNavigation(userId, tenantId);
+    return cached.length ? new Set(cached) : new Set();
+  });
+  const [navigationStatus, setNavigationStatus] = useState<"loading" | "ready" | "failed">(() => {
+    if (isSuperAdmin) return "ready";
+    return readCachedNavigation(userId, tenantId).length ? "ready" : "loading";
+  });
   const [institutionOpen, setInstitutionOpen] = useState(false);
   const [todoReturnPath, setTodoReturnPath] = useState("/");
   const [textModelOptions, setTextModelOptions] = useState<TextModelOption[]>([]);
@@ -165,23 +177,30 @@ export function Layout() {
       return;
     }
     let cancelled = false;
-    const loadNavigation = async () => {
+    const optimisticKeys = isSuperAdmin ? allMenuKeys(menuItems) : readCachedNavigation(userId, tenantId);
+    if (optimisticKeys.length) {
+      setAllowedMenuKeys(new Set(optimisticKeys));
+      setNavigationStatus("ready");
+    } else {
       setNavigationStatus("loading");
-      setAllowedMenuKeys(new Set());
+    }
+    const loadNavigation = async () => {
       let lastError: unknown;
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
           const response = await fetchNavigation({ tenantId, userId });
           if (cancelled) return;
-          setAllowedMenuKeys(new Set(Array.isArray(response.menu_keys) ? response.menu_keys : []));
+          const keys = Array.isArray(response.menu_keys) ? response.menu_keys : [];
+          setAllowedMenuKeys(new Set(keys));
           setNavigationStatus("ready");
+          writeCachedNavigation(userId, tenantId, keys);
           return;
         } catch (error) {
           lastError = error;
           if (attempt < 2) await new Promise((resolve) => window.setTimeout(resolve, 400 * (attempt + 1)));
         }
       }
-      if (!cancelled) {
+      if (!cancelled && !optimisticKeys.length) {
         setAllowedMenuKeys(new Set());
         setNavigationStatus("failed");
         console.warn("navigation_load_failed", lastError);
@@ -191,7 +210,7 @@ export function Layout() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, tenantId, userId]);
+  }, [isAuthenticated, isSuperAdmin, tenantId, userId]);
 
   useEffect(() => {
     sidebarCollapsedRef.current = sidebarCollapsed;
@@ -227,7 +246,9 @@ export function Layout() {
       ...(item.path ? [item.path] : []),
       ...(item.children?.flatMap((child) => child.path ? [child.path] : []) || []),
     ]);
+    routeWarmupCancelRef.current();
     const cancelCodeWarmup = warmVisibleRoutePaths(visiblePaths, location.pathname);
+    routeWarmupCancelRef.current = cancelCodeWarmup;
     let dashboardIdleId: number | null = null;
     let dashboardTimeoutId: number | null = null;
     const warmDashboardData = () => {
@@ -244,10 +265,16 @@ export function Layout() {
     }
     return () => {
       cancelCodeWarmup();
+      if (routeWarmupCancelRef.current === cancelCodeWarmup) routeWarmupCancelRef.current = () => undefined;
       if (dashboardIdleId !== null && typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(dashboardIdleId);
       if (dashboardTimeoutId !== null) window.clearTimeout(dashboardTimeoutId);
     };
   }, [isAuthenticated, location.pathname, navigationStatus, tenantId, userId, visibleMenuItems]);
+
+  useEffect(() => {
+    routeIntentGenerationRef.current += 1;
+    setPendingRoutePath("");
+  }, [location.pathname, tenantId, userId]);
 
   useEffect(() => {
     const parent = menuItems.find((item) => item.children?.some((child) => child.path === location.pathname));
@@ -324,8 +351,44 @@ export function Layout() {
     navigate(isTodoPage ? todoReturnPath || "/" : "/agent/todos");
   };
 
+  const prepareMenuRoute = (path: string) => {
+    if (!path || path === location.pathname) return;
+    routeWarmupCancelRef.current();
+    preloadRoutePath(path);
+    preloadRouteDataPath(path, { tenantId, userId });
+  };
+
+  const navigatePreparedMenuRoute = async (event: React.MouseEvent<HTMLAnchorElement>, path: string) => {
+    if (
+      event.defaultPrevented
+      || event.button !== 0
+      || event.metaKey
+      || event.ctrlKey
+      || event.shiftKey
+      || event.altKey
+    ) return;
+    if (path === location.pathname) {
+      event.preventDefault();
+      routeIntentGenerationRef.current += 1;
+      setPendingRoutePath("");
+      return;
+    }
+    event.preventDefault();
+    const generation = routeIntentGenerationRef.current + 1;
+    routeIntentGenerationRef.current = generation;
+    setPendingRoutePath(path);
+    prepareMenuRoute(path);
+    try {
+      await prepareRoutePath(path, { navigationIntent: true });
+    } catch {
+      // The existing route error boundary remains authoritative for import failures.
+    }
+    if (routeIntentGenerationRef.current !== generation) return;
+    startTransition(() => { void navigate(path); });
+  };
+
   return (
-    <div className="flex h-screen bg-white overflow-hidden">
+    <div className="flex h-screen bg-white overflow-hidden" data-agent-layout-shell="true">
       {sidebarCollapsed ? (
         <div
           className="fixed bottom-0 left-0 top-0 z-[60] hidden w-10 lg:block"
@@ -352,7 +415,7 @@ export function Layout() {
       <aside data-agent-sidebar="true" data-collapsed={sidebarCollapsed ? "true" : "false"} className={`hidden lg:flex bg-[#fafbfc] flex-col shrink-0 overflow-hidden transition-[width,border-color] duration-200 ease-out ${sidebarCollapsed ? "lg:w-0" : "lg:w-[216px] border-r border-[#ebebf0]"}`}>
         {!sidebarCollapsed ? <>
         {/* Logo */}
-        <div className="px-5 pt-6 pb-4">
+        <div className="px-5 pt-6 pb-4" data-agent-sidebar-header="true">
           <div className="flex w-full items-start gap-2">
             <div className="flex min-w-0 items-center gap-2">
               <div className="w-[26px] h-[26px] rounded-md bg-[#1d1d1f] flex items-center justify-center" data-agent-logo-mark="true">
@@ -453,19 +516,23 @@ export function Layout() {
                             preloadRouteDataPath(child.path || "", { tenantId, userId });
                           }}
                           onPointerDown={() => {
-                            preloadRoutePath(child.path || "");
-                            preloadRouteDataPath(child.path || "", { tenantId, userId });
+                            prepareMenuRoute(child.path || "");
                           }}
-                          onClick={() => trackInteraction({ eventName: "secondary_menu_click", resourceType: "menu", resourceId: child.key, extension: { label: child.label } })}
+                          onClick={(event) => {
+                            trackInteraction({ eventName: "secondary_menu_click", resourceType: "menu", resourceId: child.key, extension: { label: child.label } });
+                            void navigatePreparedMenuRoute(event, child.path || "");
+                          }}
+                          aria-busy={pendingRoutePath === child.path}
                           className={({ isActive }) =>
-                            `flex items-center px-2.5 py-[6px] text-[13px] rounded-md transition-colors ${
-                              isActive
+                            `flex items-center justify-between gap-2 px-2.5 py-[6px] text-[13px] rounded-md transition-colors ${
+                              isActive || pendingRoutePath === child.path
                                 ? "text-[#1d1d1f] bg-black/[0.05]"
                                 : "text-[#8a8a8e] hover:text-[#3a3a3c] hover:bg-black/[0.03]"
                             }`
                           }
                         >
-                          {child.label}
+                          <span className="truncate">{child.label}</span>
+                          {pendingRoutePath === child.path && <span className="h-3 w-3 shrink-0 animate-spin rounded-full border border-[#c7c7cc] border-t-[#636366]" aria-hidden="true" data-menu-route-pending="true" />}
                         </NavLink>
                       ))}
                     </div>
@@ -486,20 +553,24 @@ export function Layout() {
                   preloadRouteDataPath(item.path || "", { tenantId, userId });
                 }}
                 onPointerDown={() => {
-                  preloadRoutePath(item.path || "");
-                  preloadRouteDataPath(item.path || "", { tenantId, userId });
+                  prepareMenuRoute(item.path || "");
                 }}
-                onClick={() => trackInteraction({ eventName: "primary_menu_click", resourceType: "menu", resourceId: item.key, extension: { label: item.label } })}
+                onClick={(event) => {
+                  trackInteraction({ eventName: "primary_menu_click", resourceType: "menu", resourceId: item.key, extension: { label: item.label } });
+                  void navigatePreparedMenuRoute(event, item.path || "");
+                }}
+                aria-busy={pendingRoutePath === item.path}
                 className={({ isActive }) =>
                   `flex items-center gap-2 px-2.5 py-[7px] text-[13px] rounded-md transition-colors mb-px ${
-                    isActive
+                    isActive || pendingRoutePath === item.path
                       ? "text-[#1d1d1f] bg-black/[0.05]"
                       : "text-[#8a8a8e] hover:text-[#3a3a3c] hover:bg-black/[0.03]"
                   }`
                 }
               >
                 <item.icon className="w-[15px] h-[15px] opacity-50" />
-                {item.label}
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                {pendingRoutePath === item.path && <span className="h-3 w-3 shrink-0 animate-spin rounded-full border border-[#c7c7cc] border-t-[#636366]" aria-hidden="true" data-menu-route-pending="true" />}
               </NavLink>
             );
           })}
@@ -619,7 +690,12 @@ export function Layout() {
       {/* Main */}
       <main data-agent-main-shell="true" className="flex-1 min-w-0 overflow-y-auto bg-[#f8f8fa]">
         {navigationStatus === "loading" ? (
-          <div className="p-7 text-[13px] text-[#8a8a8e]">正在校验页面权限...</div>
+          <div className="flex min-h-full items-center justify-center p-7" data-navigation-loading="true">
+            <div className="text-center">
+              <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-[#d7e6dd] border-t-[#178a53]" />
+              <div className="mt-3 text-[13px] text-[#8a8a8e]">正在加载页面权限…</div>
+            </div>
+          </div>
         ) : navigationStatus === "failed" ? (
           <div className="m-7 rounded-xl border border-[#ffd7d7] bg-[#fff5f5] px-4 py-3 text-[13px] text-[#b42318]">
             页面权限加载失败，请确认登录状态后刷新页面。
@@ -642,11 +718,42 @@ export function Layout() {
         )}
       </main>
 
+      <GlobalMessageBoardShortcut />
       <GlobalContextRail />
 
       <AgentSupervisor />
     </div>
   );
+}
+
+const navigationCachePrefix = "sda-navigation-keys-v1";
+
+function allMenuKeys(items: MenuItem[]): string[] {
+  return items.flatMap((item) => [item.key, ...(item.children?.map((child) => child.key) || [])]);
+}
+
+function navigationCacheKey(userId: string, tenantId: string) {
+  return `${navigationCachePrefix}:${userId}:${tenantId}`;
+}
+
+function readCachedNavigation(userId: string, tenantId: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.sessionStorage.getItem(navigationCacheKey(userId, tenantId));
+    const parsed = raw ? JSON.parse(raw) as unknown : [];
+    return Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === "string" && Boolean(key)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedNavigation(userId: string, tenantId: string, keys: string[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(navigationCacheKey(userId, tenantId), JSON.stringify(keys));
+  } catch {
+    // Private mode or quota errors must not block login.
+  }
 }
 
 function filterMenuItems(items: MenuItem[], allowedKeys: Set<string> | null, institutionCount: number): MenuItem[] {

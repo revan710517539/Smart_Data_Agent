@@ -130,14 +130,16 @@ export function AnalysisConfigManager() {
             <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">分析配置</h2>
             <p className="mt-1 text-[13px] text-[#8a8a8e]">维护智能分析输入框下方的快捷键；只有勾选展示的配置才会出现在查询页。</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setDraft({ ...emptyShortcut, ownerUserId: userId })}
-            disabled={loading}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-4 text-[12px] text-white disabled:cursor-wait disabled:opacity-50"
-          >
-            <Plus className="h-3.5 w-3.5" />新增分析配置
-          </button>
+          <div className="flex w-fit min-h-9 shrink-0 items-center gap-[0.2cm]" data-page-header-actions="true">
+            <button
+              type="button"
+              onClick={() => setDraft({ ...emptyShortcut, ownerUserId: userId })}
+              disabled={loading}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white disabled:cursor-wait disabled:opacity-50"
+            >
+              <Plus className="h-3.5 w-3.5" />新增分析配置
+            </button>
+          </div>
         </div>
         {notice ? <div className="mt-4 rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[12px] text-[#636366]">{notice}</div> : null}
         <div className="mt-6 overflow-hidden rounded-2xl border border-[#e5e5ea] bg-white">

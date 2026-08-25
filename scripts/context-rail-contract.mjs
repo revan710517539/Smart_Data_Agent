@@ -35,6 +35,12 @@ const visualVoice = read("src/app/components/visualization/useVisualizationVoice
 const visualCommand = read("src/app/components/visualization/visualizationCommand.ts");
 const messageBoard = read("src/app/components/message-board/MessageBoardPanel.tsx");
 const messageBoardAdmin = read("src/app/components/MessageBoardManagement.tsx");
+const messageBoardApi = read("src/app/services/messageBoardApi.ts");
+const messageBoardService = read("backend/platform/message_board/service.py");
+const dataAgentWorkspace = read("src/app/components/DataAgentWorkspace.tsx");
+const globalMessageBoard = read("src/app/components/message-board/GlobalMessageBoardShortcut.tsx");
+const messageBoardDraftStore = read("src/app/components/message-board/messageBoardDraftStore.ts");
+const messageBoardGallery = read("src/app/components/message-board/MessageBoardAttachmentGallery.tsx");
 const dataAssets = read("src/app/components/DataAssets.tsx");
 const systemSettings = read("src/app/components/SystemSettings.tsx");
 const settingsRoutes = read("backend/platform/api/routes/settings.py");
@@ -46,12 +52,14 @@ const pendingAnalysis = read("src/app/components/self-analysis/pendingAnalysisRu
 const pageData = read("src/app/components/page-data/PageDataComposer.tsx");
 const analysisRoute = read("backend/platform/api/routes/analysis.py");
 const workflow = read("backend/platform/orchestration/workflow.py");
+const theme = read("src/styles/theme.css");
 
 const checks = [
   [rail.includes('data-context-rail-collapse="true"'), "右栏必须保留整体收起入口"],
   [rail.includes("useState(true)") && !rail.includes("smart_data_agent_context_rail_collapsed"), "右栏每次进入页面必须默认折叠，不得被旧本地状态强制展开"],
-  [rail.includes('data-context-rail-edge-zone="true"'), "收起后必须保留右边缘悬浮感应区"],
+  [rail.includes('data-context-rail-edge-zone="true"') && rail.includes("pointer-events-none fixed bottom-0 right-0 top-0"), "收起后必须保留右边缘悬浮感应区，且感应区不得挡住页面滚动条拖动"],
   [rail.includes('style={{ top: "50%" }}') && !rail.includes("setEdgeY") && !rail.includes("clientY"), "右侧边缘展开按钮必须固定在垂直中线，不得随鼠标移动"],
+  [rail.includes("pointermove") && rail.includes("fromRight") && rail.includes("innerWidth - event.clientX"), "右栏展开按钮仍须在靠近右边缘时出现，但不能靠全高热区截获滚动条指针"],
   [rail.includes("contextRailRevealEvent") && rail.includes("setCollapsed(false)") && rail.includes("onTabChange(detail.tab)"), "点击页面标注时必须自动展开右栏并切换到对应评论或 AI 页签"],
   [rail.includes('data-context-rail-scroll="true"') && rail.includes("flex min-h-0 flex-1 flex-col overflow-hidden") && comments.includes("overflow-y-auto") && messageBoard.includes("overflow-y-auto") && workspacePanel.includes("overflow-y-auto"), "右栏必须用独立纵向滚动区，页签和输入框不得进入滚动层"],
   [rail.includes('activeTab === "comments" ? "flex h-full min-h-0 flex-1 flex-col overflow-hidden" : "hidden"') && rail.includes('activeTab === "analysis" ? "flex h-full min-h-0 flex-1 flex-col overflow-hidden" : "hidden"') && rail.includes('activeTab === "message-board" ? "flex h-full min-h-0 flex-1 flex-col overflow-hidden" : "hidden"'), "评论和 AI 标签切换不得卸载内部状态"],
@@ -92,6 +100,9 @@ const checks = [
   [comments.includes("activeDraftId || activeCommentId") && comments.includes("scroller.scrollTo") && comments.includes("CSS.escape(entryId)"), "点击评论标注后右栏必须自动滚动定位到对应评论或草稿"],
   [comments.includes("formatCommentTimestamp(comment.time)") && comments.includes("formatCommentTimestamp(reply.time)") && comments.includes('return `${year}-${month}-${day} ${hour}:${minute}:${second}`'), "评论和追评时间必须只显示年月日与时分秒，不得暴露毫秒或时区信息"],
   [layout.includes('data-agent-sidebar-expand-zone="true"') && layout.includes('style={{ top: "50%" }}') && !layout.includes("setSidebarEdgeY") && !layout.includes("clientY") && layout.includes("sidebarEdgeVisible"), "左侧菜单折叠后必须在整条左边缘显示居中稳定的展开按钮"],
+  [theme.includes("--sda-shell-edge-gap: 0.4cm") && theme.includes('[data-agent-main-shell="true"] > *') && theme.includes("padding-top: var(--sda-shell-edge-gap) !important") && theme.includes("padding-right: var(--sda-shell-edge-gap) !important"), "全局页面顶部和右侧外边距必须统一为 0.4cm"],
+  [theme.includes('[data-agent-main-shell="true"]') && theme.includes("padding-top: 0") && theme.includes("padding-right: 0") && layout.includes('data-agent-sidebar-header="true"'), "主滚动容器不得自带顶部或右侧内边距，避免滚动条右侧出现空隙"],
+  [theme.includes("scrollbar-gutter: auto") && !theme.includes("scrollbar-gutter: stable"), "文档不得为主工作区已经独立拥有的滚动条重复预留右侧空槽"],
   [dashboard.includes("pageData.visibleAssets.map") && dashboard.includes("rowCount: pageData.rowsById[asset.id]?.row_count") && !dashboard.includes("JSON.stringify(p.kpis)"), "多机构分析的指标、图表和表格评论目标必须使用页面数据摘要，不得生成旧快照 JSON 乱码"],
   [routes.includes("canSafelyReloadRouteImport") && routes.includes("routeImportRetryKey") && routes.includes("errorElement: createElement(RouteErrorPage)"), "动态页面模块失效时必须限制自动重载次数并提供路由错误边界"],
   [routeError.includes('data-route-error="true"') && routeError.includes("重新加载页面") && routeError.includes("返回智能分析"), "路由异常不得显示默认英文白屏，必须提供系统风格恢复操作"],
@@ -100,10 +111,11 @@ const checks = [
   [supervisor.includes("chatWithAgentSupervisor") && supervisor.includes("readPersistedTextModelSelection") && supervisor.includes("isExplicitAnalysisQuestion") && supervisor.includes("data-supervisor-pending"), "Agent 总管闲聊必须走当前所选文本模型，并显示等待状态，不得把寒暄丢进默认 loan_amount 分析流水线"],
   [resultViews.includes('data-visual-filter-value-menu], [data-visual-filter-value-trigger]') && resultViews.includes('data-visual-filter-value-menu="true" data-visual-filter-panel="true"'), "可视化条件值菜单必须排除在图表外点击关闭之外，避免选值时整个条件弹窗闪退"],
   [resultViews.includes('data-visual-filter-toggle') && !resultViews.includes(">条件{activeFilterCount") && resultViews.includes("applyFilterState") && resultViews.includes("filterSnapshotRef"), "条件只能出现在更多菜单中，选值后即时筛选，取消时恢复原条件"],
-  [supervisor.includes("data-supervisor-model") && supervisor.includes("textModelSelectionEvent"), "Agent 总管必须展示并跟随左下角当前文本模型"],
+  [supervisor.includes("data-supervisor-model") && supervisor.includes("textModelSelectionEvent") && !supervisor.includes("AGENT WORKSPACE") && !supervisor.includes("左下角切换后") && !supervisor.includes("未选择文本模型"), "Agent 总管跟随左下角当前文本模型，且不得展示工作区标签、路径副标题和模型说明文案"],
   [globalRail.includes("analysisWorkspaceRevealEvent") && globalRail.includes('setActiveTab("analysis")') && globalRail.includes("contextRailRevealEvent"), "图表或数据点追问必须携带锚点展开统一右栏并进入 AI 分析"],
   [globalRail.includes('"/dashboard": { pageKey: "multi-institution-analysis"') && globalRail.includes("commentTargetFromRailReveal") && globalRail.includes('detail.tab === "comments"'), "多机构分析必须接入全局右栏，追问和图表评论都要展开并生成评论草稿"],
   [globalRail.includes('"/customer-segment-analysis": { pageKey: "customer-segment-analysis"') && workspacePanel.includes('"/customer-segment-analysis": { pageKey: "customer-segment-analysis"'), "分客群分析必须接入统一评论与 AI 分析右栏"],
+  [!globalRail.includes('"/data-assets/metrics"') && !workspacePanel.includes('"/data-assets/metrics"') && !globalRail.includes("metric-management") && !workspacePanel.includes("metric-management"), "指标管理不得接入评论、留言板或 AI 分析右栏"],
   [workspacePanel.includes('"/dashboard": { pageKey: "multi-institution-analysis"') && dashboard.includes('updateAnalysisWorkspacePageContext("multi-institution-analysis"'), "多机构分析追问必须登记分析工作区并发布当前页面数据上下文"],
   [weekly.includes("contextRailRevealEvent") && weekly.includes("commentTargetFromRailReveal") && weekly.includes('detail.tab === "comments"') && weekly.includes("setDraftTargets"), "经营周报图表评论必须根据右栏展开事件创建可提交草稿，不得只打开空评论页"],
   [workspacePanel.includes('data-global-analysis-wide-toggle="true"') && !workspacePanel.includes("服务端持久化 · 分支历史不覆盖") && !workspacePanel.includes("输入问题后，本轮问题、规划、结论和证据会写入当前线程"), "AI 分析必须只保留一个线程 Tab 头并移除重复标题说明"],
@@ -130,7 +142,18 @@ const checks = [
   [!messageBoard.includes("onEditorKeyDown") && messageBoard.includes("回车换行") && messageBoard.includes("仅点击保存后提交") && messageBoard.includes(">取消</button>"), "留言编辑器必须允许回车换行，仅点击保存提交，并提供显式取消"],
   [messageBoard.includes("deleteMessageBoardEntry") && messageBoard.includes('aria-label="删除留言"') && !messageBoard.includes("留言已存档并标记为已完成") && messageBoardAdmin.includes('data-message-board-inline-summary="true"') && !messageBoardAdmin.includes("grid grid-cols-4 gap-4"), "关闭留言必须真正删除，管理页四项指标只能内联展示"],
   [messageBoard.includes("AudioLines") && !messageBoard.includes("ImagePlus") && !messageBoard.includes("<Mic"), "留言板实时语音图标必须与智能分析统一，且不得保留照片浮标"],
-  [rail.includes('wide ? "w-[640px]" : "w-[320px]"') && workspacePanel.includes('data-global-analysis-wide-toggle="true"') && layout.includes("sidebarCollapsedBeforeWideRef") && layout.includes("setSidebarCollapsed(sidebarCollapsedBeforeWideRef.current)"), "AI 卡片放大必须把右栏扩为两倍宽，并按放大前状态恢复左侧菜单"],
+  [layout.includes("<GlobalMessageBoardShortcut />") && globalMessageBoard.includes("createPortal") && globalMessageBoard.includes('data-global-message-board-trigger="true"') && globalMessageBoard.includes("findPageHeaderHost") && globalMessageBoard.includes('data-page-header-actions="true"') && globalMessageBoard.includes("flex h-9 items-center gap-1.5") && !globalMessageBoard.includes("shadow-sm shadow-black/[0.03]"), "所有登录后页面必须把留言板入口注入页头操作行，并与同排按钮保持 h-9"],
+  [[dataAssets, weekly, selfAnalysis, emailDaily, funnel, sandbox, systemSettings, messageBoardAdmin, dataAgentWorkspace].every((source) => source.includes('data-page-header-actions="true"')), "指标、周报、智能分析、邮件日报、漏斗、沙盘、系统管理、任务工作台和留言板管理页头必须提供操作行给留言板对齐"],
+  [globalMessageBoard.includes("w-[12cm] min-h-[10cm] max-h-[20cm]") && globalMessageBoard.includes("max-h-[calc(20cm-40px)]") && globalMessageBoard.includes("overflow-y-auto") && !globalMessageBoard.includes("草稿已自动保存"), "全局留言气泡必须为 12cm 宽、默认至少 10cm，高度最多 20cm 后独立滚动，且不得展示草稿已自动保存"],
+  [globalMessageBoard.includes("onPaste={onPaste}") && globalMessageBoard.includes("uploadMessageBoardImage") && globalMessageBoard.includes("useMessageBoardVoice") && globalMessageBoard.includes(">取消</button>") && globalMessageBoard.includes("提交"), "全局留言必须支持粘贴图片、实时语音、提交和显式取消"],
+  [globalMessageBoard.includes("messageBoardDraftKey(tenantId, userId, pageKey)") && globalMessageBoard.includes("saveMessageBoardDraft") && messageBoardDraftStore.includes('const databaseName = "smart-data-agent-message-board"') && messageBoardDraftStore.includes("indexedDB.open") && messageBoardDraftStore.includes("localStorage"), "留言草稿必须按机构、用户和页面自动隔离保存，并在 IndexedDB 不可用时保留文字兜底"],
+  [globalMessageBoard.includes("clearMessageBoardDraft(draftKey)") && globalMessageBoard.includes("createMessageBoardEntry") && messageBoardAdmin.includes("globalMessageBoardSubmittedEvent") && messageBoardAdmin.includes("<MessageBoardAttachmentGallery") && messageBoardGallery.includes("fetchMessageBoardAttachment"), "提交成功必须清除对应草稿、通知管理页刷新，并让超级管理员读取文字和截图"],
+  [messageBoardAdmin.includes('data-message-board-append-content="true"') && messageBoardAdmin.includes('aria-label="追加内容"') && !messageBoardAdmin.includes(">追加内容") && !messageBoardAdmin.includes("追加内容</") && messageBoardAdmin.includes("scheduleAppendSave") && messageBoardAdmin.includes("persistAppendContent") && messageBoardAdmin.includes("keepalive") && messageBoardApi.includes("/api/message-board/admin/append-content"), "超级管理员追加内容必须自动保存到服务端，切换页面或重新登录后仍保留"],
+  [messageBoardAdmin.includes('data-message-board-export="true"') && messageBoardAdmin.includes("Excel 文档") && messageBoardAdmin.includes("飞书表格") && messageBoardAdmin.includes("downloadAdoptedMessageBoardExport"), "留言板必须提供已采纳留言的 Excel 文档和飞书表格下载"],
+  [messageBoardAdmin.includes('data-message-board-status-filter="true"') && messageBoardAdmin.includes('value: "new"') && messageBoardAdmin.includes('value: "adopted"') && messageBoardAdmin.includes('value: "completed"') && messageBoardApi.includes("status, sort"), "留言板管理必须在搜索框左侧提供按状态筛选"],
+  [messageBoardAdmin.includes('data-message-board-time-sort="true"') && messageBoardAdmin.includes('current === "" ? "asc"') && messageBoardAdmin.includes('current === "asc" ? "desc"') && messageBoardService.includes('safe_sort not in {"", "asc", "desc"}'), "留言时间必须支持正排、倒排和恢复默认顺序"],
+  [!dataAgentWorkspace.includes("w-9 h-9 rounded-lg bg-[#f2f2f7] flex items-center justify-center") && !messageBoardAdmin.includes("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#f2f2f7]"), "任务工作台三个页面标题前不得放置小图标"],
+  [rail.includes('wide ? "w-[640px]" : "w-[320px]"') && rail.includes('w-[0.2cm]') && globalRail.includes("min-w-[0.2cm]") && workspacePanel.includes('data-global-analysis-wide-toggle="true"') && layout.includes("sidebarCollapsedBeforeWideRef") && layout.includes("setSidebarCollapsed(sidebarCollapsedBeforeWideRef.current)"), "收起右栏后只保留 0.2cm 占位，AI 卡片放大必须把右栏扩为两倍宽，并按放大前状态恢复左侧菜单"],
   [dashboard.includes("if (pageData.loading && !pageData.assets.length)") && dashboard.includes("<PageDataVisualizationModules controller={pageData}") && dashboard.includes("pageData.visibleAssets.length === 0") && !dashboard.includes('embedded />\n      {dashboardSideRail}') && weeklyRail.includes("if (!visible) return null"), "页面主数据为空时必须优先呈现已配置页面数据，且不得单独渲染页面右侧栏"],
   [selfAnalysis.includes("未找到可执行的数据表映射，可查看相关指标：") && selfAnalysis.includes("text-[11px] font-semibold leading-5 text-[#d93025]") && selfAnalysis.includes("queryInputRef.current?.focus()") && selfAnalysis.includes("选择对应数据表"), "数据表映射提示必须使用与外层一致的 11px 字号，指标可点击加粗并回填输入框，选择数据表保持原入口"],
   [!dashboard.includes("setSelectedBank") && !dashboard.includes("全部分行</option>") && !dashboard.includes('runDashboardAction("select_bank"'), "多机构分析右上角不得保留分支机构下拉选项"],

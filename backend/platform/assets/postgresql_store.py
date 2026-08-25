@@ -97,14 +97,9 @@ class PostgreSQLDataAssetStore:
         raise RuntimeError("production_data_assets_must_be_explicitly_imported_and_reviewed")
 
     def seed_missing_defaults(self, tenant_id: str, updated_by: str = "u_super_admin") -> None:
-        from .store import PLATFORM_ANALYSIS_SKILL_IDS, analysis_skill_template
+        from .store import seed_platform_capability_catalog
 
-        for skill_id in PLATFORM_ANALYSIS_SKILL_IDS:
-            if self.get_item(tenant_id, "analysis_skill", skill_id) is not None:
-                continue
-            template = analysis_skill_template(skill_id)
-            if template:
-                self.upsert_item(tenant_id, "analysis_skill", template, updated_by=updated_by, lifecycle_status="active")
+        seed_platform_capability_catalog(self, tenant_id, updated_by)
 
     def upsert_item(
         self,

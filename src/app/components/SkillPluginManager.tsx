@@ -131,9 +131,11 @@ export function SkillPluginManager() {
             <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">skill/插件</h2>
             <p className="mt-1 text-[13px] text-[#8a8a8e]">将提炼后的意图、分析经验、行为习惯与工具、分析方法组合为可复用解决方案；知识文件不会被 Skill 直接引用。</p>
           </div>
-          <button type="button" onClick={() => setDraft(emptySkill(activeCategory))} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-4 text-[12px] text-white hover:bg-[#2c2c2e]">
-            <Plus className="h-3.5 w-3.5" />新增{activeCategory}
-          </button>
+          <div className="flex w-fit min-h-9 shrink-0 items-center gap-[0.2cm]" data-page-header-actions="true">
+            <button type="button" onClick={() => setDraft(emptySkill(activeCategory))} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white hover:bg-[#2c2c2e]">
+              <Plus className="h-3.5 w-3.5" />新增{activeCategory}
+            </button>
+          </div>
         </div>
 
         <div className="mt-6 inline-flex rounded-xl bg-[#eeeef3] p-1">

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router";
 import {
   Settings,
@@ -15,6 +15,7 @@ import {
   Trash2,
   CheckCircle2,
   Clock,
+  Landmark,
   Search,
   Eye,
   EyeOff,
@@ -24,6 +25,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
+import { createTenant, deleteTenant, updateTenant } from "../services/tenantApi";
 import {
   deleteAccessUser,
   fetchAccessRolePolicies,
@@ -84,7 +86,7 @@ import {
   speechProviderLabel,
   modelSourceLabel,
   modelOptionDescription,
-  availableModelOptions,
+  stableOpenModelOptions,
   initialSystemDataParams,
   getSettingsSection,
   formatAuditLog,
@@ -122,12 +124,6 @@ function mergeSavedModel(models: ModelIntegration[], saved: ModelIntegration, dr
   return replaced ? next : [...next, saved];
 }
 
-function modelsPreservingSaved(latest: ModelIntegration[], saved: ModelIntegration) {
-  if (!latest.length) return [saved];
-  if (latest.some((item) => item.id === saved.id)) return latest;
-  return [saved, ...latest];
-}
-
 function normalizeAccessUserTenantLabels(
   user: AccessUser,
   institutions: string[],
@@ -152,6 +148,7 @@ export function SystemSettings() {
   const {
     institutions: visibleInstitutions,
     isSuperAdmin,
+    refreshTenantCatalog,
     selectedInstitution,
     setSelectedInstitution,
     tenantId,
@@ -161,6 +158,7 @@ export function SystemSettings() {
   } = usePlatformContext();
   const activeTab = getSettingsSection(location.pathname);
   const [searchTerm, setSearchTerm] = useState("");
+  const deferredSearchTerm = useDeferredValue(searchTerm.trim());
   const [accessModal, setAccessModal] = useState<AccessModal>(null);
   const [modelIntegrations, setModelIntegrations] = useState<ModelIntegration[]>(
     isDemoFallbackEnabled() ? initialModelIntegrations : [],
@@ -260,7 +258,13 @@ export function SystemSettings() {
         ]);
         if (cancelled) return;
         setUsers(userResponse.users.map((user) => normalizeAccessUserTenantLabels(user, visibleInstitutions, tenantIdForInstitution)));
-        setPermissionInstitutions(permissionResponse.permissions);
+        setPermissionInstitutions(
+          permissionResponse.permissions.map((item) => ({
+            ...item,
+            institution:
+              visibleInstitutions.find((name) => tenantIdForInstitution(name) === item.id) || item.institution,
+          })),
+        );
         setAccessNotice(`用户与授权已连接后端：${selectedInstitution}`);
       } catch (error) {
         if (cancelled) return;
@@ -365,18 +369,10 @@ export function SystemSettings() {
     };
     setModelIntegrations((current) => [...current, nextModel]);
     setModelForm(emptyModelForm);
-    const mutationEpoch = ++configMutationEpochRef.current;
+    configMutationEpochRef.current += 1;
     try {
       const response = await saveModelIntegration({ tenantId, userId, model: nextModel });
       setModelIntegrations((current) => mergeSavedModel(current, response.model, nextModel.id));
-      try {
-        const latest = await fetchSystemConfig({ tenantId, userId, forceRefresh: true });
-        if (mutationEpoch === configMutationEpochRef.current) {
-          setModelIntegrations(modelsPreservingSaved(latest.models, response.model));
-        }
-      } catch {
-        // Keep the saved row even if a later refresh is delayed or stale.
-      }
       setConfigNotice("模型接入已安全保存。请先完成连接测试并启用至少一个实际模型，测试通过后才会进入分析运行时。");
     } catch (error) {
       if (isDemoFallbackEnabled()) {
@@ -440,18 +436,10 @@ export function SystemSettings() {
     };
     if (!nextModel.key || !nextModel.value) return;
     setModelIntegrations((current) => current.map((item) => (item.id === model.id ? nextModel : item)));
-    const mutationEpoch = ++configMutationEpochRef.current;
+    configMutationEpochRef.current += 1;
     try {
       const response = await saveModelIntegration({ tenantId, userId, model: nextModel });
       setModelIntegrations((current) => mergeSavedModel(current, response.model, nextModel.id));
-      try {
-        const latest = await fetchSystemConfig({ tenantId, userId, forceRefresh: true });
-        if (mutationEpoch === configMutationEpochRef.current) {
-          setModelIntegrations(modelsPreservingSaved(latest.models, response.model));
-        }
-      } catch {
-        // Keep the saved row even if a later refresh is delayed or stale.
-      }
       setConfigNotice("模型接入已更新，并应用于全部非语音模型模块。");
     } catch (error) {
       if (isDemoFallbackEnabled()) {
@@ -786,6 +774,16 @@ export function SystemSettings() {
     : "text-[#258a3f]";
   const displayedAuditRows = auditRows;
   const auditPageCount = Math.max(1, Math.ceil(auditTotal / auditPageSize));
+  const filteredUsers = useMemo(() => {
+    const keyword = deferredSearchTerm.toLocaleLowerCase();
+    if (!keyword) return users;
+    return users.filter((user) => [user.name, user.email, user.department]
+      .some((value) => value.toLocaleLowerCase().includes(keyword)));
+  }, [deferredSearchTerm, users]);
+  const userPagination = useClientPagination(filteredUsers, 20);
+  useEffect(() => {
+    userPagination.setPage(1);
+  }, [deferredSearchTerm, tenantId]);
   const overviewStats = activeTab === "users"
     ? [
         { label: "角色数", value: String(roles.length), icon: Shield },
@@ -828,28 +826,33 @@ export function SystemSettings() {
   return (
     <div className="p-7">
       <div className="mb-7">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">{pageHeading.title}</h2>
-          {pageStatusNotice && (
-            <span className={`text-[11px] ${pageStatusClassName}`}>{pageStatusNotice}</span>
-          )}
-          {activeTab === "users" && accessNoticeTargetInstitution && (
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedInstitution(accessNoticeTargetInstitution);
-                setAccessNoticeTargetInstitution("");
-              }}
-              className="text-[11px] text-[#0f8f5f] underline underline-offset-2"
-            >
-              切换到{accessNoticeTargetInstitution}查看
-            </button>
-          )}
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">{pageHeading.title}</h2>
+              {pageStatusNotice && (
+                <span className={`text-[11px] ${pageStatusClassName}`}>{pageStatusNotice}</span>
+              )}
+              {activeTab === "users" && accessNoticeTargetInstitution && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedInstitution(accessNoticeTargetInstitution);
+                    setAccessNoticeTargetInstitution("");
+                  }}
+                  className="text-[11px] text-[#0f8f5f] underline underline-offset-2"
+                >
+                  切换到{accessNoticeTargetInstitution}查看
+                </button>
+              )}
+            </div>
+            <p className="text-[13px] text-[#aeaeb2] mt-1">{pageHeading.description}</p>
+          </div>
+          <div className="flex w-fit min-h-9 shrink-0 items-center gap-[0.2cm]" data-page-header-actions="true" />
         </div>
-        <p className="text-[13px] text-[#aeaeb2] mt-1">{pageHeading.description}</p>
         <div className="mt-5" data-settings-upper-module={upperModuleKind}>
           {activeTab === "config" ? (
-            <div className={`grid gap-4 ${canReadSystemParams ? "xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]" : ""}`}>
+            <div className={`grid gap-4 ${canReadSystemParams && isSuperAdmin ? "xl:grid-cols-3" : canReadSystemParams ? "xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]" : ""}`}>
               {canReadSystemParams && (
               <section className="rounded-xl border border-[#f0f0f2] bg-white p-4" data-system-config-summary="true">
                 <div className="mb-3 flex items-center justify-between">
@@ -869,6 +872,13 @@ export function SystemSettings() {
                   ))}
                 </div>
               </section>
+              )}
+              {isSuperAdmin && (
+                <TenantManagementCard
+                  institutions={visibleInstitutions}
+                  tenantIdForInstitution={tenantIdForInstitution}
+                  onCatalogChanged={refreshTenantCatalog}
+                />
               )}
               <AccessConfigCard
                 title="模型接入"
@@ -920,7 +930,7 @@ export function SystemSettings() {
 
       {activeTab === "users" && (
         <div className="bg-white rounded-xl border border-[#f0f0f2] p-5" data-settings-route-body="users">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between gap-3 mb-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
               <input
@@ -930,13 +940,18 @@ export function SystemSettings() {
                 className="pl-9 pr-4 py-2 bg-[#f2f2f7] rounded-lg text-[12px] w-[200px] focus:outline-none focus:ring-1 focus:ring-[#c7c7cc]"
               />
             </div>
-            <button
-              type="button"
-              onClick={() => openUserEditor()}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1d1d1f] text-white rounded-lg text-[12px]"
-            >
-              <Plus className="w-3.5 h-3.5" /> 添加用户
-            </button>
+            <div className="ml-auto flex items-center gap-2">
+              {userPagination.paginated && (
+                <DataPageSelector page={userPagination.page} totalPages={userPagination.totalPages} shownCount={userPagination.items.length} totalCount={userPagination.total} onChange={userPagination.setPage} ariaLabel="用户列表分页" compact />
+              )}
+              <button
+                type="button"
+                onClick={() => openUserEditor()}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1d1d1f] text-white rounded-lg text-[12px]"
+              >
+                <Plus className="w-3.5 h-3.5" /> 添加用户
+              </button>
+            </div>
           </div>
           <table className="w-full text-[12px]">
             <thead>
@@ -950,9 +965,7 @@ export function SystemSettings() {
               </tr>
             </thead>
             <tbody>
-              {users
-                .filter((u) => !searchTerm || u.name.includes(searchTerm) || u.department.includes(searchTerm))
-                .map((u) => (
+              {userPagination.items.map((u) => (
                   <tr key={u.id} className="border-t border-gray-50 text-gray-700 hover:bg-[#f5f5f7]">
                     <td className="py-3 px-3">
                       <div className="flex items-center gap-2.5">
@@ -966,14 +979,8 @@ export function SystemSettings() {
                       </div>
                     </td>
                     <td className="py-3 px-3">{u.department}</td>
-                    <td className="py-3 px-3 text-center">
-                      <div className="flex flex-col items-center gap-1">
-                        {u.tenantRoles.map((role) => (
-                          <span key={`${u.id}_${role.tenant}_${role.role}`} className="text-[10px] bg-[#f5f5f7] px-2 py-0.5 rounded-full">
-                            {role.tenant} · {role.role}
-                          </span>
-                        ))}
-                      </div>
+                    <td className="max-w-[240px] py-3 px-3">
+                      <UserRoleSummary roles={u.tenantRoles} />
                     </td>
                     <td className="py-3 px-3 text-center">
                       <span className={`text-[10px] px-2 py-0.5 rounded-full ${u.status === "active" ? "bg-[#34c759]/8 text-[#34c759]" : "bg-gray-100 text-gray-400"}`}>
@@ -1006,6 +1013,11 @@ export function SystemSettings() {
                     </td>
                   </tr>
                 ))}
+              {!userPagination.items.length && (
+                <tr className="border-t border-gray-50">
+                  <td className="px-3 py-8 text-center text-[12px] text-[#8a8a8e]" colSpan={6}>没有匹配的用户</td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -1138,6 +1150,201 @@ export function SystemSettings() {
   );
 }
 
+function TenantManagementCard({
+  institutions,
+  tenantIdForInstitution,
+  onCatalogChanged,
+}: {
+  institutions: string[];
+  tenantIdForInstitution: (institution: string) => string;
+  onCatalogChanged: () => Promise<void>;
+}) {
+  const [draftName, setDraftName] = useState("");
+  const [editingId, setEditingId] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const beginCreate = () => {
+    setEditingId("new");
+    setDraftName("");
+    setNotice("");
+  };
+
+  const beginEdit = (name: string) => {
+    setEditingId(tenantIdForInstitution(name));
+    setDraftName(name);
+    setNotice("");
+  };
+
+  const cancelEditor = () => {
+    setEditingId("");
+    setDraftName("");
+  };
+
+  const persist = async () => {
+    const name = draftName.trim();
+    if (!name || busy) return;
+    setBusy(true);
+    setNotice("");
+    try {
+      if (editingId === "new") {
+        await createTenant(name);
+        setNotice(`已新增租户「${name}」，角色权限已默认创建管理员和操作员。`);
+      } else {
+        await updateTenant(editingId, name);
+        setNotice(`已更新租户「${name}」。`);
+      }
+      cancelEditor();
+      await onCatalogChanged();
+    } catch (error) {
+      setNotice(apiErrorMessage(error, "租户保存失败"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (name: string) => {
+    if (busy) return;
+    if (!window.confirm(`确定删除租户「${name}」？删除后登录页、右上角机构、用户管理和角色权限将不再显示该租户。`)) {
+      return;
+    }
+    setBusy(true);
+    setNotice("");
+    try {
+      await deleteTenant(tenantIdForInstitution(name));
+      if (editingId && editingId !== "new" && tenantIdForInstitution(name) === editingId) {
+        cancelEditor();
+      }
+      await onCatalogChanged();
+      setNotice(`已删除租户「${name}」。`);
+    } catch (error) {
+      setNotice(apiErrorMessage(error, "租户删除失败"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="rounded-xl border border-[#f0f0f2] bg-white p-4" data-tenant-management="true">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#f2f2f7]">
+            <Landmark className="h-4 w-4 text-[#636366]" />
+          </div>
+          <div>
+            <div className="text-[14px] text-[#1d1d1f]">租户管理</div>
+            <div className="mt-0.5 text-[12px] text-[#8a8a8e]">统一维护登录页和右上角的银行机构</div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={beginCreate}
+          disabled={busy || editingId === "new"}
+          className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#e5e5ea] bg-white px-2.5 text-[11px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-40"
+        >
+          <Plus className="h-3 w-3" />
+          新增
+        </button>
+      </div>
+      <div className="max-h-[220px] space-y-2 overflow-y-auto pr-1">
+        {editingId === "new" && (
+          <div className="flex items-center gap-2 rounded-lg border border-[#e5e5ea] bg-[#fafbfc] p-2">
+            <input
+              value={draftName}
+              onChange={(event) => setDraftName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void persist();
+                if (event.key === "Escape") cancelEditor();
+              }}
+              placeholder="输入银行/机构名称"
+              autoFocus
+              className="h-8 min-w-0 flex-1 rounded-md border border-[#e5e5ea] bg-white px-2 text-[12px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
+            />
+            <button
+              type="button"
+              onClick={() => void persist()}
+              disabled={busy || !draftName.trim()}
+              className="rounded-md bg-[#1d1d1f] px-2 py-1 text-[11px] text-white disabled:opacity-40"
+            >
+              保存
+            </button>
+            <button type="button" onClick={cancelEditor} className="rounded-md px-2 py-1 text-[11px] text-[#8a8a8e]">
+              取消
+            </button>
+          </div>
+        )}
+        {institutions.map((name) => {
+          const tenantId = tenantIdForInstitution(name);
+          const editing = editingId === tenantId;
+          return (
+            <div
+              key={tenantId || name}
+              className="flex items-center gap-2 rounded-lg bg-[#fafbfc] px-3 py-2"
+              data-tenant-row={name}
+            >
+              {editing ? (
+                <>
+                  <input
+                    value={draftName}
+                    onChange={(event) => setDraftName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void persist();
+                      if (event.key === "Escape") cancelEditor();
+                    }}
+                    autoFocus
+                    className="h-8 min-w-0 flex-1 rounded-md border border-[#e5e5ea] bg-white px-2 text-[12px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void persist()}
+                    disabled={busy || !draftName.trim()}
+                    className="rounded-md bg-[#1d1d1f] px-2 py-1 text-[11px] text-white disabled:opacity-40"
+                  >
+                    保存
+                  </button>
+                  <button type="button" onClick={cancelEditor} className="rounded-md px-2 py-1 text-[11px] text-[#8a8a8e]">
+                    取消
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="min-w-0 flex-1 truncate text-[12px] text-[#1d1d1f]" title={name}>
+                    {name}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => beginEdit(name)}
+                    disabled={busy}
+                    className="rounded-md p-1 text-[#8a8a8e] hover:bg-white hover:text-[#1d1d1f] disabled:opacity-40"
+                    aria-label={`编辑${name}`}
+                  >
+                    <Edit3 className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void remove(name)}
+                    disabled={busy}
+                    className="rounded-md p-1 text-[#8a8a8e] hover:bg-[#fff0f0] hover:text-[#d93025] disabled:opacity-40"
+                    aria-label={`删除${name}`}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        })}
+        {!institutions.length && editingId !== "new" && (
+          <div className="rounded-lg bg-[#fafbfc] px-3 py-6 text-center text-[12px] text-[#aeaeb2]">暂无租户</div>
+        )}
+      </div>
+      <div className="mt-3 text-[11px] leading-5 text-[#8a8a8e]">
+        {notice || `共 ${institutions.length} 个租户，新增后可在用户管理和角色权限中授权。`}
+      </div>
+    </section>
+  );
+}
+
 function AccessConfigCard({
   title,
   subtitle,
@@ -1190,6 +1397,27 @@ function AccessConfigCard({
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function UserRoleSummary({ roles }: { roles: AccessTenantRole[] }) {
+  const text = roles.map((role) => `${role.tenant} · ${role.role}`).join("、");
+  return (
+    <div className="group relative min-w-0">
+      <div className="truncate whitespace-nowrap text-left text-[10px] text-[#3a3a3c]" data-user-role-summary="true">
+        {text || "—"}
+      </div>
+      {roles.length > 1 && (
+        <div
+          className="pointer-events-none absolute left-0 top-full z-30 mt-1 hidden w-max max-w-[280px] rounded-md bg-[#1d1d1f] px-2.5 py-1.5 text-left text-[10px] leading-5 text-white shadow-lg group-hover:block"
+          data-user-role-tooltip="true"
+        >
+          {roles.map((role) => (
+            <div key={`${role.tenant}_${role.role}`}>{role.tenant} · {role.role}</div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2152,6 +2380,7 @@ function ModelAccessModal({
   const [expandedSpeechId, setExpandedSpeechId] = useState("");
   const [modelEditDraft, setModelEditDraft] = useState({ name: "", modelName: "中转站", applicationModule: "global_text_model", key: "", value: "" });
   const [speechEditDraft, setSpeechEditDraft] = useState({ name: "", provider: "aliyun_fun_asr", source: "阿里云", apiBase: "", apiKey: "", applicationModule: "global_voice_model" });
+  const modelOptionOrderRef = useRef<Map<string, string[]>>(new Map());
 
   useEffect(() => {
     setExpandedModelId((current) => {
@@ -2237,7 +2466,13 @@ function ModelAccessModal({
     const enabledModels = current.includes(childModel)
       ? current.filter((item) => item !== childModel)
       : [...current, childModel];
-    void onUpdate(model, { enabledModels });
+    void onUpdate(model, { enabledModels }).catch(() => undefined);
+  };
+
+  const modelOptionsForCurrentOpen = (model: ModelIntegration) => {
+    const options = stableOpenModelOptions(modelOptionOrderRef.current.get(model.id), model);
+    modelOptionOrderRef.current.set(model.id, options);
+    return options;
   };
 
   return (
@@ -2248,11 +2483,13 @@ function ModelAccessModal({
           desc="每个登录账号都可以绑定自己的模型 Key 与 API 地址，账号下所有机构共用；可选子模型以测试接口的实际返回为准。"
           onClose={onClose}
         />
-        {notice && (
-          <div className={`border-b border-[#f0f0f2] px-5 py-2 text-[11px] ${isAccessFailureNotice(notice) ? "text-[#c83a3a]" : "text-[#258a3f]"}`} role="status">
-            {notice}
-          </div>
-        )}
+        <div
+          className={`flex h-9 shrink-0 items-center overflow-hidden border-b border-[#f0f0f2] px-5 text-[11px] ${notice ? (isAccessFailureNotice(notice) ? "text-[#c83a3a]" : "text-[#258a3f]") : "text-transparent"}`}
+          role="status"
+          aria-live="polite"
+        >
+          <span className="truncate" title={notice || undefined}>{notice || "\u00a0"}</span>
+        </div>
         <div className="border-b border-[#f0f0f2] px-5 pt-4">
           <div className="inline-flex rounded-lg bg-[#f2f2f7] p-1">
             {[
@@ -2284,10 +2521,15 @@ function ModelAccessModal({
                 <span>API密钥</span>
                 <span className="text-right">操作</span>
               </div>
-              <div className="min-h-0 flex-1 overflow-y-auto" data-model-integrations-scroll="true">
+              <div
+                className="min-h-0 flex-1 overflow-y-auto"
+                data-model-integrations-scroll="true"
+                data-model-option-order="stable-open"
+                style={{ overflowAnchor: "none", contain: "layout paint" }}
+              >
               {models.map((model) => {
                 const isEditing = editingModelId === model.id;
-                const availableModels = availableModelOptions(model);
+                const availableModels = modelOptionsForCurrentOpen(model);
                 const enabledModels = model.enabledModels || [];
                 const expanded = expandedModelId === model.id;
                 const result = testResults[model.id];
@@ -2398,6 +2640,8 @@ function ModelAccessModal({
                             {availableModels.map((childModel) => (
                               <label
                                 key={childModel}
+                                data-model-option={childModel}
+                                data-model-option-selected={enabledModels.includes(childModel) ? "true" : "false"}
                                 onClick={(event) => event.stopPropagation()}
                                 className="flex cursor-pointer items-start gap-2 rounded-lg border border-[#e5e5ea] bg-white px-2.5 py-2 text-left hover:bg-[#fafbfc]"
                               >

@@ -26,7 +26,6 @@ const pageDefinitions: Record<string, { pageKey: string; pageTitle: string }> = 
   "/self-analysis/visual-reports": { pageKey: "visual-reports", pageTitle: "可视化报表" },
   "/self-analysis/query": { pageKey: "self-analysis", pageTitle: "智能分析" },
   "/self-analysis/reports": { pageKey: "my-reports", pageTitle: "我的报表" },
-  "/data-assets/metrics": { pageKey: "metric-management", pageTitle: "指标管理" },
   "/data-assets/data-management": { pageKey: "data-management", pageTitle: "站内数据" },
 };
 
@@ -133,7 +132,7 @@ export function GlobalContextRail() {
   };
 
   return (
-    <div className="hidden h-full min-h-0 shrink-0 bg-[#f8f8fa] lg:flex lg:flex-col" data-global-context-rail="true">
+    <div className="hidden h-full min-h-0 w-auto min-w-[0.2cm] shrink-0 overflow-visible bg-transparent lg:flex lg:flex-col" data-global-context-rail="true">
       <ContextSideRail
         pageKey={definition.pageKey}
         activeTab={activeTab}

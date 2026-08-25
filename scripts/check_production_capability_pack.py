@@ -18,20 +18,15 @@ from backend.platform.analysis_profiles import (  # noqa: E402
     load_analysis_profiles,
     prepare_loan_analysis_capabilities,
 )
-from backend.platform.assets.store import InMemoryDataAssetStore  # noqa: E402
+from backend.platform.assets.store import (  # noqa: E402
+    InMemoryDataAssetStore,
+    PLATFORM_ANALYSIS_SKILL_IDS,
+    PLATFORM_TOOL_IDS,
+)
 from backend.platform.memory import InMemoryMemoryStore  # noqa: E402
 
 
-BASE_SKILL_IDS = {
-    "scene-analysis-intent",
-    "scene-chart-followup",
-    "scene-page-rail",
-    "scene-textbox-voice",
-    "scene-self-analysis",
-    "topic-descriptive",
-    "topic-attribution",
-    "topic-predictive",
-}
+BASE_SKILL_IDS = set(PLATFORM_ANALYSIS_SKILL_IDS)
 
 
 def main() -> None:
@@ -65,14 +60,24 @@ def main() -> None:
             if any(str(item.get("id") or "").startswith("institution.") for item in items):
                 raise SystemExit(f"institution_skill_duplicate:{tenant_id}")
             published = assets.list_published_bundle(tenant_id)["analysis_skills"]
-            if not BASE_SKILL_IDS.issubset({str(item.get("id") or "") for item in published}):
+            published_ids = {str(item.get("id") or "") for item in published}
+            if not BASE_SKILL_IDS.issubset(published_ids):
                 raise SystemExit(f"institution_base_skill_missing:{tenant_id}")
             canonical = [item for item in published if str(item.get("id") or "") in {"topic-descriptive", "topic-attribution", "topic-predictive"}]
             if len(canonical) != 3 or any(len(item.get("memoryRefs") or []) < 10 for item in canonical):
                 raise SystemExit(f"canonical_topic_skill_memory_invalid:{tenant_id}")
+            tool_ids = {str(item.get("id") or "") for item in assets.list_published_bundle(tenant_id)["external_tools"]}
+            if not set(PLATFORM_TOOL_IDS).issubset(tool_ids):
+                raise SystemExit(f"institution_platform_tool_missing:{tenant_id}")
+            catalog_experiences = {
+                str(item.get("id") or "")
+                for item in assets.list_published_bundle(tenant_id)["analysis_experiences"]
+            }
             memory_items = memories.search(tenant_id, statuses=("candidate",), limit=20)
             if len(memory_items) != 10 or any(item.created_by != "system" for item in memory_items):
                 raise SystemExit(f"institution_memory_candidate_invalid:{tenant_id}")
+            if any(item.memory_id not in catalog_experiences for item in memory_items):
+                raise SystemExit(f"institution_memory_catalog_missing:{tenant_id}")
 
         base = InMemoryDataAssetStore(seed_defaults=True).list_bundle("tenant_demo")["analysis_skills"]
         base_ids = {str(item.get("id") or "") for item in base}

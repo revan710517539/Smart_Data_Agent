@@ -644,6 +644,54 @@ class CustomerSegmentAnalysisTest(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, "customer_segment_detail_table_required"):
             _bind_page_data_asset(composite_handler, SimpleNamespace(tenant_id="tenant_a"), {**item, "sourceKey": "composite_source"})
 
+    def test_page_data_binding_uses_raw_table_metadata_overlay_for_customer_key(self) -> None:
+        raw_table = {
+            "id": "customer_detail",
+            "sourceKey": "customer_source",
+            "schemaFingerprint": "schema_v1",
+            "contentHash": "content_v1",
+            "relativePath": "customer.csv",
+            "tableNameEn": "customer_detail",
+            "tableNameCn": "客户明细",
+            "fields": [
+                {"fieldNameEn": "field_1", "fieldNameCn": "field_1", "type": "string"},
+                {"fieldNameEn": "loan_balance", "fieldNameCn": "贷款余额", "type": "decimal", "isMetric": True},
+            ],
+        }
+        overlay = {
+            "id": "overlay-1",
+            "metadataOverlayVersion": 1,
+            "sourceKey": "customer_source",
+            "schemaFingerprint": "schema_v1",
+            "fields": [
+                {"fieldNameEn": "field_1", "fieldNameCn": "客户号", "type": "string", "semanticRole": "dimension", "isPrimaryKey": True},
+                {"fieldNameEn": "loan_balance", "fieldNameCn": "贷款余额", "type": "decimal", "semanticRole": "metric", "isMetric": True},
+            ],
+        }
+        item = {
+            "id": "page_customer",
+            "name": "客户余额",
+            "institutionScope": "customer_segment",
+            "targetPages": ["customer_segment_analysis"],
+            "sourceKey": "customer_source",
+            "schemaFingerprint": "schema_v1",
+            "metricFields": ["loan_balance"],
+            "dimensionFields": ["field_1"],
+            "visualizationType": "table",
+        }
+        rejected_handler = SimpleNamespace(services=SimpleNamespace(
+            data_acquisition_service=SimpleNamespace(csv_source=_CsvSource(_Catalog(raw_table, []))),
+        ))
+        with self.assertRaisesRegex(PermissionError, "customer_segment_detail_table_required"):
+            _bind_page_data_asset(rejected_handler, SimpleNamespace(tenant_id="tenant_a"), item)
+
+        overlay_handler = SimpleNamespace(services=SimpleNamespace(
+            data_acquisition_service=SimpleNamespace(csv_source=_CsvSource(_Catalog(raw_table, []))),
+            data_asset_store=SimpleNamespace(list_bundle=lambda _tenant_id: {"raw_tables": [overlay]}),
+        ))
+        bound = _bind_page_data_asset(overlay_handler, SimpleNamespace(tenant_id="tenant_a"), item)
+        self.assertEqual(bound["customerKeyField"], "field_1")
+
 
 if __name__ == "__main__":
     unittest.main()

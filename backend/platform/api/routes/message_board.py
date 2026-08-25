@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 from backend.platform.api.support import first_query_value, send_route_exception
 
@@ -31,6 +31,8 @@ def handle_message_board_admin_get(handler: Any, query: str) -> None:
             query=first_query_value(params, "query") or "",
             page=int(first_query_value(params, "page") or 1),
             page_size=int(first_query_value(params, "page_size") or 50),
+            status=first_query_value(params, "status") or "",
+            sort=first_query_value(params, "sort") or "",
         )
         handler._send_json({"tenant_id": context.tenant_id, **result})
     except Exception as exc:
@@ -90,6 +92,57 @@ def handle_message_board_delete(handler: Any, _query: str = "") -> None:
             "page_key": message["page_key"], "lock_version": message["lock_version"],
         })
         handler._send_json({"tenant_id": context.tenant_id, "deleted_message_id": message["message_id"]})
+    except Exception as exc:
+        send_route_exception(handler, exc)
+
+
+def handle_message_board_admin_append_content_update(handler: Any) -> None:
+    try:
+        payload = handler._read_json()
+        context = handler._request_context(payload=payload)
+        handler._require_message_board_admin(context)
+        message = handler.services.message_board_service.set_append_content(payload, tenant_id=context.tenant_id)
+        handler._write_audit(context, "message_board.append_content.update", "message_board_entry", message["message_id"], {
+            "lock_version": message["lock_version"],
+        })
+        handler._send_json({"tenant_id": context.tenant_id, "message": message})
+    except Exception as exc:
+        send_route_exception(handler, exc)
+
+
+def handle_message_board_admin_export(handler: Any, query: str) -> None:
+    try:
+        params = parse_qs(query)
+        context = handler._request_context(params=params)
+        handler._require_message_board_admin(context)
+        status = (first_query_value(params, "status") or "adopted").strip().lower()
+        if status != "adopted":
+            raise ValueError("invalid_message_board_export_status")
+        export_format = (first_query_value(params, "format") or "excel").strip().lower()
+        if export_format not in {"excel", "xlsx", "feishu"}:
+            raise ValueError("invalid_message_board_export_format")
+        filename = "已采纳留言-飞书表格.xlsx" if export_format == "feishu" else "已采纳留言.xlsx"
+        ascii_name = "adopted-messages-feishu.xlsx" if export_format == "feishu" else "adopted-messages.xlsx"
+
+        def load_image(tenant_id: str, attachment_id: str) -> bytes:
+            _metadata, content = handler.services.knowledge_service.get_message_board_image_content(tenant_id, attachment_id)
+            return content
+
+        body, count = handler.services.message_board_service.export_adopted(
+            tenant_id=context.tenant_id,
+            load_image=load_image,
+        )
+        handler._write_audit(context, "message_board.adopted.export", "message_board_entry", "", {
+            "count": count, "format": export_format,
+        })
+        handler._send_bytes(
+            body,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}",
+                "X-Export-Count": str(count),
+            },
+        )
     except Exception as exc:
         send_route_exception(handler, exc)
 

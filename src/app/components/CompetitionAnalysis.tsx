@@ -152,7 +152,7 @@ export function CompetitionAnalysis() {
             payload: { productView: tab.key },
           }).catch(() => setNotice("产品视图已在当前页面切换，但服务端偏好同步失败。"));
         }}
-        className={`flex items-center gap-1.5 rounded-md px-4 py-[6px] text-[13px] transition-all ${productView === tab.key ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e]"}`}
+        className={`inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[12px] transition-all ${productView === tab.key ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e]"}`}
       >
         <tab.icon className="h-3.5 w-3.5" /> {tab.label}
       </button>

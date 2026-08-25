@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import threading
+import time
+import traceback
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -22,20 +25,24 @@ from backend.platform.bootstrap import (
     build_local_platform,
     build_production_platform,
 )
-from backend.platform.runtime_config import cors_origin_for_request
+from backend.platform.runtime_config import cors_origin_for_request, load_runtime_config
 from backend.platform.security import request_limits, resolve_request_context
 
 
 class AnalysisAPIServer(ThreadingHTTPServer):
-    services: PlatformServices
+    allow_reuse_address = True
+    services: PlatformServices | None = None
     automation_worker: AutomationWorker | None = None
+    startup_status: str = "ready"
+    startup_error: str = ""
 
     def server_close(self) -> None:
         try:
             try:
                 if self.automation_worker is not None:
                     self.automation_worker.close()
-                self.services.close()
+                if self.services is not None:
+                    self.services.close()
             finally:
                 super().server_close()
         except BaseException:
@@ -50,10 +57,12 @@ class AnalysisAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed_path = urlparse(self.path)
-        if not self._enforce_ip_rate_limit(parsed_path.path):
-            return
         if parsed_path.path == "/api/live":
-            self._send_json({"status": "ok", "service": "smart-data-agent-api"})
+            self._send_json({"status": "ok", "service": "smart-data-agent-api", "startup": getattr(self.server, "startup_status", "ready")})
+            return
+        if not self._ensure_ready(parsed_path.path):
+            return
+        if not self._enforce_ip_rate_limit(parsed_path.path):
             return
         if parsed_path.path == "/api/ready":
             health = _runtime_health(self)
@@ -94,6 +103,8 @@ class AnalysisAPIHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed_path = urlparse(self.path)
+        if not self._ensure_ready(parsed_path.path):
+            return
         if not self._enforce_ip_rate_limit(parsed_path.path):
             return
         route_handler = POST_ROUTE_HANDLERS.get(parsed_path.path)
@@ -104,6 +115,8 @@ class AnalysisAPIHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         parsed_path = urlparse(self.path)
+        if not self._ensure_ready(parsed_path.path):
+            return
         if not self._enforce_ip_rate_limit(parsed_path.path):
             return
         route_handler = PUT_ROUTE_HANDLERS.get(parsed_path.path)
@@ -114,6 +127,8 @@ class AnalysisAPIHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         parsed_path = urlparse(self.path)
+        if not self._ensure_ready(parsed_path.path):
+            return
         if not self._enforce_ip_rate_limit(parsed_path.path):
             return
         route_handler = DELETE_ROUTE_HANDLERS.get(parsed_path.path)
@@ -124,6 +139,35 @@ class AnalysisAPIHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:
         return
+
+    def _ensure_ready(self, path: str) -> bool:
+        status = getattr(self.server, "startup_status", "ready")
+        services = getattr(self.server, "services", None)
+        if services is not None:
+            return True
+        starting = status != "failed"
+        error = str(getattr(self.server, "startup_error", "") or "").strip()
+        payload = {
+            "status": "starting" if starting else "unavailable",
+            "ready": False,
+            "error": "api_starting" if starting else "api_unavailable",
+            "message": (
+                "Data Agent API 正在启动，请稍后重试。"
+                if starting
+                else (f"Data Agent API 启动失败：{error}" if error else "Data Agent API 启动失败，请查看服务日志后重试。")
+            ),
+            "service": "smart-data-agent-api",
+        }
+        if path in {"/api/ready", "/api/health"}:
+            payload["checks"] = {"startup": {"ready": False, "status": status, "error": error}}
+        self._send_json(payload, HTTPStatus.SERVICE_UNAVAILABLE, headers={"Retry-After": "2"})
+        return False
+
+    def _runtime_config(self):
+        services = getattr(self.server, "services", None)
+        if services is not None:
+            return services.runtime_config
+        return load_runtime_config()
 
     def _request_context(
         self,
@@ -383,14 +427,15 @@ class AnalysisAPIHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_common_headers(self) -> None:
-        allowed_origin = cors_origin_for_request(self.headers.get("Origin"), self.services.runtime_config)
+        runtime_config = self._runtime_config()
+        allowed_origin = cors_origin_for_request(self.headers.get("Origin"), runtime_config)
         if allowed_origin:
             self.send_header("Access-Control-Allow-Origin", allowed_origin)
             self.send_header("Access-Control-Allow-Credentials", "true")
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
         allowed_headers = "content-type,authorization,x-request-id,x-trace-id,x-idempotency-key,x-tenant-id"
-        if self.services.runtime_config.auth_mode == "development":
+        if runtime_config.auth_mode == "development":
             allowed_headers += ",x-user-id"
         self.send_header("Access-Control-Allow-Headers", allowed_headers)
         self.send_header("Cache-Control", "no-store")
@@ -538,23 +583,61 @@ def _external_worker_health(production: bool) -> dict[str, Any]:
 
 
 def create_server(host: str, port: int, test_sqlite_db: str | Path | None = None) -> ThreadingHTTPServer:
-    # SQLite remains an explicit isolated-test adapter. Every normal process,
-    # including local development, must be backed by the configured MySQL URL.
-    services = (
-        build_local_platform(db_path=test_sqlite_db)
-        if test_sqlite_db is not None
-        else build_production_platform()
-    )
+    # SQLite remains an explicit isolated-test adapter and stays synchronous so
+    # existing tests can use the server immediately after construction.
+    if test_sqlite_db is not None:
+        return _create_ready_server(host, port, build_local_platform(db_path=test_sqlite_db))
 
+    # Bind 8788 before MySQL bootstrap so the frontend proxy never sees
+    # ECONNREFUSED while schema checks are still running.
+    server = _listening_server(host, port, startup_status="starting")
+
+    def bootstrap() -> None:
+        last_error = ""
+        for attempt in range(1, 4):
+            try:
+                _attach_platform(server, build_production_platform())
+                server.startup_status = "ready"
+                server.startup_error = ""
+                print("Smart Data Agent API ready", flush=True)
+                return
+            except BaseException as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                traceback.print_exc()
+                time.sleep(2 * attempt)
+        server.startup_status = "failed"
+        server.startup_error = last_error
+        print(f"Smart Data Agent API startup failed: {last_error}", flush=True)
+
+    threading.Thread(target=bootstrap, name="sda-api-bootstrap", daemon=True).start()
+    return server
+
+
+def _listening_server(host: str, port: int, startup_status: str) -> AnalysisAPIServer:
     class BoundAnalysisAPIHandler(AnalysisAPIHandler):
         pass
 
-    BoundAnalysisAPIHandler.services = services
     server = AnalysisAPIServer((host, port), BoundAnalysisAPIHandler)
+    server.startup_status = startup_status
+    server.startup_error = ""
+    server.services = None
+    BoundAnalysisAPIHandler.services = None  # type: ignore[assignment]
+    return server
+
+
+def _create_ready_server(host: str, port: int, services: PlatformServices) -> AnalysisAPIServer:
+    server = _listening_server(host, port, startup_status="ready")
+    _attach_platform(server, services)
+    return server
+
+
+def _attach_platform(server: AnalysisAPIServer, services: PlatformServices) -> None:
     server.services = services
+    server.RequestHandlerClass.services = services
+    server.startup_status = "ready"
+    server.startup_error = ""
     server.automation_worker = AutomationWorker(services.automation_runtime)
     server.automation_worker.start()
-    return server
 
 
 def main() -> None:

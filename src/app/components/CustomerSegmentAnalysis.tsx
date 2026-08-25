@@ -64,8 +64,8 @@ export function CustomerSegmentAnalysis() {
       canEditLayout={isSuperAdmin}
       headerDataAttribute="customer-segment-analysis"
       leadingActions={<>
-        {customerList && <span className="rounded-lg border border-[#dce9e0] bg-[#f6faf7] px-3 py-2 text-[11px] text-[#5e7165]" data-customer-segment-current-list="true">当前名单 · {customerList.customerCount.toLocaleString("zh-CN")} 个客户号</span>}
-        <button type="button" onClick={() => setUploadOpen(true)} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#178a53] px-4 text-[12px] text-white hover:bg-[#127647]" data-upload-customer-segment-list="true"><Upload className="h-3.5 w-3.5" />上传客群名单</button>
+        {customerList && <span className="inline-flex h-9 items-center rounded-lg border border-[#dce9e0] bg-[#f6faf7] px-3 text-[12px] text-[#5e7165]" data-customer-segment-current-list="true">当前名单 · {customerList.customerCount.toLocaleString("zh-CN")} 个客户号</span>}
+        <button type="button" onClick={() => setUploadOpen(true)} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#178a53] px-3 text-[12px] text-white hover:bg-[#127647]" data-upload-customer-segment-list="true"><Upload className="h-3.5 w-3.5" />上传客群名单</button>
       </>}
     />
     <StandardAnalysisPageStickyNote stickyNote={stickyNote} />

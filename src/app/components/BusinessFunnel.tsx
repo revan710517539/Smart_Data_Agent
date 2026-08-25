@@ -109,7 +109,7 @@ export function BusinessFunnel() {
           <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">业务漏斗</h2>
           <p className="text-[13px] text-[#aeaeb2] mt-1">消费贷线上自助漏斗 vs 经营贷关系驱动漏斗 · 定位转化断点</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-fit min-h-9 shrink-0 items-center gap-[0.2cm]" data-page-header-actions="true">
           <div className="relative">
             <select
               value={selectedBank}
@@ -123,7 +123,7 @@ export function BusinessFunnel() {
                   payload: { selectedBank: e.target.value, productView },
                 }).catch(() => undefined);
               }}
-              className="appearance-none pl-8 pr-7 py-[6px] bg-white border border-[#e5e5ea] rounded-lg text-[12px] text-[#636366] focus:outline-none cursor-pointer">
+              className="h-9 appearance-none rounded-lg border border-[#e5e5ea] bg-white pl-8 pr-7 text-[12px] text-[#3a3a3c] focus:outline-none cursor-pointer">
               <option>全部分行</option>
               {banks.map((b) => (<option key={b}>{b}</option>))}
             </select>
@@ -132,7 +132,7 @@ export function BusinessFunnel() {
           </div>
           <button
             onClick={() => void exportFunnel()}
-            className="flex items-center gap-1 px-3 py-1.5 bg-white border border-[#e5e5ea] rounded-lg text-[12px] text-[#636366] hover:bg-[#f2f2f7]"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] hover:bg-[#f2f2f7]"
           >
             <Download className="w-3.5 h-3.5" /> 导出
           </button>
@@ -393,8 +393,13 @@ function snapshotDatasetSnapshot(snapshot: OperatingSnapshot) {
 function FunnelState({ message }: { message: string }) {
   return (
     <div className="p-7">
-      <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">业务漏斗</h2>
-      <p className="text-[13px] text-[#aeaeb2] mt-1">消费贷线上自助漏斗 vs 经营贷关系驱动漏斗 · 定位转化断点</p>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">业务漏斗</h2>
+          <p className="text-[13px] text-[#aeaeb2] mt-1">消费贷线上自助漏斗 vs 经营贷关系驱动漏斗 · 定位转化断点</p>
+        </div>
+        <div className="flex w-fit min-h-9 shrink-0 items-center gap-[0.2cm]" data-page-header-actions="true" />
+      </div>
       <div className="mt-6 rounded-xl border border-[#f0f0f2] bg-white px-6 py-16 text-center text-[12px] text-[#aeaeb2]">{message}</div>
     </div>
   );

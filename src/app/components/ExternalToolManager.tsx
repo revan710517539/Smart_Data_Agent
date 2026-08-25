@@ -72,7 +72,7 @@ export function ExternalToolManager() {
   return (
     <div className="min-h-full bg-[#f8f8fa] p-7">
       <div className="mx-auto max-w-[1260px]">
-        <div className="flex items-start justify-between gap-4"><div><h2 className="text-[18px] tracking-tight text-[#1d1d1f]">工具调用</h2><p className="mt-1 text-[13px] text-[#8a8a8e]">统一管理智能分析可调用的外部系统、企业工具和专业智能体。</p></div><button type="button" onClick={() => setDraft({ ...emptyTool })} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-4 text-[12px] text-white"><Plus className="h-3.5 w-3.5" />新增工具</button></div>
+        <div className="flex items-start justify-between gap-4"><div><h2 className="text-[18px] tracking-tight text-[#1d1d1f]">工具调用</h2><p className="mt-1 text-[13px] text-[#8a8a8e]">统一管理智能分析可调用的外部系统、企业工具和专业智能体。</p></div><div className="flex w-fit min-h-9 shrink-0 items-center gap-[0.2cm]" data-page-header-actions="true"><button type="button" onClick={() => setDraft({ ...emptyTool })} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white"><Plus className="h-3.5 w-3.5" />新增工具</button></div></div>
         {notice ? <div className="mt-4 rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[12px] text-[#636366]">{notice}</div> : null}
         <div className="mt-6 overflow-hidden rounded-2xl border border-[#e5e5ea] bg-white">
           <div className="grid grid-cols-[minmax(220px,1.1fr)_minmax(220px,1fr)_minmax(260px,1.4fr)_130px_110px] border-b border-[#f0f0f2] bg-[#fafbfc] px-5 py-3 text-[11px] text-[#8a8a8e]"><span>工具名称</span><span>来源与类型</span><span>能力</span><span>状态</span><span className="text-right">操作</span></div>

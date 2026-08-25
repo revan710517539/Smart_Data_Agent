@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable
 
 
 class MessageBoardService:
@@ -91,19 +91,83 @@ class MessageBoardService:
             _lock_version(payload),
         ))
 
+    def set_append_content(self, payload: dict[str, Any], *, tenant_id: str = "") -> dict[str, Any]:
+        message_id = _message_id(payload.get("message_id") or payload.get("messageId"))
+        getter = getattr(self.store, "_get", None)
+        if tenant_id and callable(getter):
+            current = getter(message_id)
+            if str(current.get("tenant_id") or "") != tenant_id:
+                raise PermissionError("message_board_tenant_scope_required")
+        return self._with_author_name(self.store.set_append_content(
+            message_id,
+            _text(payload.get("append_content") if payload.get("append_content") is not None else payload.get("appendContent"), "append_content", 5000),
+            _lock_version(payload),
+        ))
+
     def list_owned(self, tenant_id: str, user_id: str, page_key: str = "") -> list[dict[str, Any]]:
         return [self._with_author_name(row) for row in self.store.list_owned(tenant_id, user_id, _text(page_key, "page_key", 160))]
 
-    def list_all(self, *, tenant_id: str = "", query: str = "", page: int = 1, page_size: int = 50) -> dict[str, Any]:
+    def list_all(
+        self,
+        *,
+        tenant_id: str = "",
+        query: str = "",
+        page: int = 1,
+        page_size: int = 50,
+        status: str = "",
+        sort: str = "",
+    ) -> dict[str, Any]:
         safe_page = max(1, min(int(page or 1), 100000))
         safe_size = max(1, min(int(page_size or 50), 100))
+        safe_status = str(status or "").strip().lower()
+        if safe_status and safe_status not in {"new", "adopted", "completed"}:
+            raise ValueError("invalid_message_board_status")
+        safe_sort = str(sort or "").strip().lower()
+        if safe_sort not in {"", "asc", "desc"}:
+            raise ValueError("invalid_message_board_sort")
         rows, total = self.store.list_all(
             tenant_id=str(tenant_id or "").strip(),
             query=str(query or "")[:200],
             offset=(safe_page - 1) * safe_size,
             limit=safe_size,
+            status=safe_status,
+            sort=safe_sort,
         )
         return {"messages": [self._with_author_name(row) for row in rows], "total": total, "page": safe_page, "page_size": safe_size}
+
+    def list_adopted(self, *, tenant_id: str) -> list[dict[str, Any]]:
+        rows, _ = self.store.list_all(
+            tenant_id=str(tenant_id or "").strip(),
+            query="",
+            offset=0,
+            limit=5000,
+            status="adopted",
+        )
+        return [self._with_author_name(row) for row in rows]
+
+    def export_adopted(
+        self,
+        *,
+        tenant_id: str,
+        load_image: Callable[[str, str], bytes] | None = None,
+    ) -> tuple[bytes, int]:
+        from .export import build_adopted_workbook
+
+        messages = self.list_adopted(tenant_id=tenant_id)
+        images: dict[str, list[bytes]] = {}
+        for message in messages:
+            blobs: list[bytes] = []
+            for attachment_id in message.get("attachment_ids") or []:
+                if not load_image:
+                    break
+                try:
+                    content = load_image(str(message.get("tenant_id") or tenant_id), str(attachment_id))
+                except (KeyError, PermissionError, ValueError):
+                    continue
+                if content:
+                    blobs.append(content)
+            images[str(message.get("message_id") or "")] = blobs
+        return build_adopted_workbook(messages, images), len(messages)
 
     def _with_author_name(self, entry: dict[str, Any]) -> dict[str, Any]:
         result = dict(entry)
@@ -117,6 +181,7 @@ class MessageBoardService:
             if preserve_login_visitor
             else profile_name or (stored_name if stored_name and stored_name != author_user_id else "未知用户")
         )
+        result["append_content"] = str(result.get("append_content") or "")
         return result
 
     def _entry(self, tenant_id: str, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:

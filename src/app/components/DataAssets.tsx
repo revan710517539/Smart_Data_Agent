@@ -577,7 +577,7 @@ export function DataAssets() {
           </div>
           <p className="text-[13px] text-[#aeaeb2] mt-1">{sectionSubtitle}</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-fit min-h-9 shrink-0 flex-wrap items-center gap-[0.2cm] xl:ml-auto" data-page-header-actions="true">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#aeaeb2]" />
             <input
@@ -1096,8 +1096,10 @@ function MetricVisibilityEditor({
   visibleRoles: string[];
   onChange: (key: "visibleInstitutions" | "visibleRoles", value: string[]) => void;
 }) {
+  const { institutions } = usePlatformContext();
+  const catalogInstitutions = institutions.length ? institutions : operatingTenantNames;
   if (isSuperAdmin) {
-    const allSelected = operatingTenantNames.every((tenant) => visibleInstitutions.includes(tenant));
+    const allSelected = catalogInstitutions.every((tenant) => visibleInstitutions.includes(tenant));
     return (
       <div className="md:col-span-2 rounded-lg border border-[#f0f0f2] bg-white p-4">
         <div className="mb-3 flex items-center justify-between gap-3">
@@ -1107,14 +1109,14 @@ function MetricVisibilityEditor({
           </div>
           <button
             type="button"
-            onClick={() => onChange("visibleInstitutions", allSelected ? [] : operatingTenantNames)}
+            onClick={() => onChange("visibleInstitutions", allSelected ? [] : catalogInstitutions)}
             className="text-[11px] text-[#1d1d1f] hover:underline"
           >
             {allSelected ? "取消" : "全部机构"}
           </button>
         </div>
         <div className="grid gap-2 sm:grid-cols-3">
-          {operatingTenantNames.map((tenant) => (
+          {catalogInstitutions.map((tenant) => (
             <MetricVisibilityCheckbox
               key={tenant}
               label={tenant}

@@ -241,13 +241,13 @@ export function Notifications() {
           <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">推送与订阅</h2>
           <p className="text-[13px] text-[#aeaeb2] mt-1">智能预警规则 · 定期报告订阅 · 推送记录追踪</p>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => void startTeamsConnection()} disabled={teamsBusy} className="flex items-center gap-1.5 rounded-lg border border-[#d1d1d6] bg-white px-4 py-2 text-[13px] text-[#1d1d1f] transition-colors hover:bg-[#f5f5f7] disabled:opacity-50">
-            <Send className="w-4 h-4" />
+        <div className="flex w-fit min-h-9 shrink-0 items-center gap-[0.2cm]" data-page-header-actions="true">
+          <button onClick={() => void startTeamsConnection()} disabled={teamsBusy} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] transition-colors hover:bg-[#f2f2f7] disabled:opacity-50">
+            <Send className="w-3.5 h-3.5" />
             {teamsConnection.connected ? "Teams 已连接" : teamsDeviceCode ? "Teams 授权中" : "连接 Teams"}
           </button>
-          <button onClick={() => { setNotice(""); setTeamsModalNotice(""); setTeamsSetupOpen(true); }} className="flex items-center gap-1.5 px-4 py-2 bg-[#1d1d1f] text-white rounded-lg text-[13px] hover:bg-[#2c2c2e] transition-colors">
-            <Plus className="w-4 h-4" />
+          <button onClick={() => { setNotice(""); setTeamsModalNotice(""); setTeamsSetupOpen(true); }} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white transition-colors hover:bg-[#2c2c2e]">
+            <Plus className="w-3.5 h-3.5" />
             新建规则
           </button>
         </div>

@@ -265,12 +265,12 @@ export function VisualReportBuilder() {
           )}
           <p className="mt-1 text-[12px] text-[#9a9aa0]">双击名称编辑，点击其他位置自动保存 · 当前机构：{selectedInstitution}</p>
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="flex w-fit min-h-9 shrink-0 flex-wrap items-center justify-end gap-[0.2cm]" data-page-header-actions="true">
           <DestinationButton label="存我的" icon={BookmarkPlus} done={report.destinations.includes("mine")} disabled={saving} onClick={() => void saveDestination("mine")} />
           <DestinationButton label="存经验" icon={Lightbulb} done={report.destinations.includes("experience")} disabled={saving} onClick={() => void saveDestination("experience")} />
           <DestinationButton label="存周报" icon={BookmarkPlus} done={report.destinations.includes("weekly")} disabled={saving} onClick={() => void saveDestination("weekly")} />
-          <StickyNoteButton onClick={stickyNote.show} className="h-8 text-[11px] text-[#53615a]" />
-          <button type="button" onClick={() => void previewReport()} disabled={saving} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#dfe7e2] bg-white px-3 text-[11px] text-[#53615a] hover:bg-[#f4f8f5] disabled:cursor-wait disabled:opacity-60" data-visual-report-mode-toggle="true">
+          <StickyNoteButton onClick={stickyNote.show} className="text-[#53615a]" />
+          <button type="button" onClick={() => void previewReport()} disabled={saving} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#dfe7e2] bg-white px-3 text-[12px] text-[#53615a] hover:bg-[#f4f8f5] disabled:cursor-wait disabled:opacity-60" data-visual-report-mode-toggle="true">
             {mode === "browse" ? <Pencil className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
             {mode === "browse" ? "编辑" : "保存"}
           </button>
@@ -311,9 +311,12 @@ function VisualReportLanding({ loading, error, search, onSearch, onCreate, onOpe
   const hasLoadedReports = searchResults.length > 0 || recentReports.length > 0 || recommendedReports.length > 0;
   const showCollections = !loading || hasLoadedReports;
   return <div className="p-4 md:p-7" data-visual-report-landing="true">
-    <div className="mb-6">
-      <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">可视化报表</h2>
-      <p className="mt-1 text-[12px] text-[#9a9aa0]">查找并继续加工已有报表，或从空白画布新建报表。</p>
+    <div className="mb-6 flex items-start justify-between gap-3">
+      <div>
+        <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">可视化报表</h2>
+        <p className="mt-1 text-[12px] text-[#9a9aa0]">查找并继续加工已有报表，或从空白画布新建报表。</p>
+      </div>
+      <div className="flex w-fit min-h-9 shrink-0 items-center gap-[0.2cm]" data-page-header-actions="true" />
     </div>
     <div className="mb-6 flex items-center gap-3">
       <label className="relative min-w-0 flex-1">
@@ -500,7 +503,7 @@ function visualChartSessionKey(reportId: string, draftRevision: number, dataset:
 }
 
 function DestinationButton({ label, icon: Icon, done, disabled, onClick }: { label: string; icon: typeof BookmarkPlus; done: boolean; disabled: boolean; onClick: () => void }) {
-  return <button type="button" onClick={onClick} disabled={disabled} className={`inline-flex h-8 items-center gap-1 rounded-lg border px-2.5 text-[11px] transition-colors disabled:cursor-wait disabled:opacity-60 ${done ? "border-[#cfe6d6] bg-[#eef8f2] text-[#178a53]" : "border-[#e5e5ea] bg-white text-[#636366] hover:bg-[#f2f2f7]"}`}><Icon className="h-3.5 w-3.5" />{done ? `已${label}` : label}</button>;
+  return <button type="button" onClick={onClick} disabled={disabled} className={`inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-[12px] transition-colors disabled:cursor-wait disabled:opacity-60 ${done ? "border-[#cfe6d6] bg-[#eef8f2] text-[#178a53]" : "border-[#e5e5ea] bg-white text-[#3a3a3c] hover:bg-[#f2f2f7]"}`}><Icon className="h-3.5 w-3.5" />{done ? `已${label}` : label}</button>;
 }
 
 function newVisualReport(): VisualReport {

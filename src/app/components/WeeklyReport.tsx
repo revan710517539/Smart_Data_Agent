@@ -1459,39 +1459,42 @@ export function WeeklyReport() {
   }
 
   return (
-    <div className="p-4 md:p-7">
-      <div ref={reportBodyRef} className="relative grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_auto]" data-context-page-body="weekly-report">
+    <div className="p-7">
+      <div ref={reportBodyRef} className="relative grid items-start gap-y-5 gap-x-[0.2cm] xl:grid-cols-[minmax(0,1fr)_auto]" data-context-page-body="weekly-report">
         <div className="min-w-0">
-      <div className="weekly-report-print-hidden sticky top-0 z-20 mb-6 flex flex-col gap-4 bg-[#f8f8fa] py-3 xl:flex-row xl:items-start xl:justify-between" data-weekly-report-toolbar="true">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-[18px] text-[#1d1d1f] tracking-tight">银行经营分析周报工作台</h2>
+      <div
+        className="weekly-report-print-hidden mb-6 flex flex-wrap items-start justify-between gap-3"
+        data-weekly-report-toolbar="true"
+        data-standard-analysis-page-header="true"
+        data-default-report-page-template="institution-supervision"
+      >
+        <div className="min-w-0">
+          <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">银行经营分析周报工作台</h2>
+          <p className="mt-1 text-[13px] text-[#aeaeb2]">
+            机构周报生成与分析工作台 · {activeReport.institutionName}经营周报 · {activeReport.period}
+          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-[#c7c7cc]">
             <span className={`text-[11px] px-2 py-0.5 rounded-full border ${statusClass(activeReport.status)}`}>
               {activeReport.status}
             </span>
+            {activeHistoryVersion ? (
+              <span>当前查看历史版本：{activeHistoryVersion.name} · 保存于 {activeHistoryVersion.savedAt}</span>
+            ) : null}
           </div>
-          <p className="text-[13px] text-[#aeaeb2] mt-1">
-            机构周报生成与分析工作台 · {activeReport.institutionName}经营周报 · {activeReport.period}
-          </p>
-          {activeHistoryVersion && (
-            <p className="mt-1 text-[12px] text-[#8a8a8e]">
-              当前查看历史版本：{activeHistoryVersion.name} · 保存于 {activeHistoryVersion.savedAt}
-            </p>
-          )}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-fit min-h-9 max-w-full shrink-0 flex-wrap items-center justify-end gap-[0.2cm]" data-page-header-actions="true" data-standard-analysis-page-actions="true">
           <StickyNoteButton onClick={stickyNote.show} className="weekly-report-sticky-note-toggle" />
           {isSuperAdmin && <PageDataModeToggle controller={weeklyPageData} onSave={saveReportVersion} className="weekly-report-page-data-mode-toggle" />}
           <div className="relative" data-weekly-history-menu="true">
             <button
               onClick={() => void openReportHistory()}
-              className="flex h-8 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#636366] transition-colors hover:bg-[#f2f2f7]"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] transition-colors hover:bg-[#f2f2f7]"
             >
-              <FileText className="w-3.5 h-3.5" />
+              <FileText className="h-3.5 w-3.5" />
               历史版本
             </button>
             {isHistoryOpen && (
-              <div className="absolute right-0 top-[34px] z-[90] w-[280px] overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-xl shadow-black/10">
+              <div className="absolute right-0 top-full z-[90] mt-1 w-[280px] overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-xl shadow-black/10">
                 <div className="border-b border-[#f0f0f2] px-3 py-2 text-[11px] text-[#8a8a8e]">已保存版本</div>
                 <div className="max-h-[280px] overflow-y-auto py-1">
                   {reportVersions.length ? (
@@ -1529,9 +1532,9 @@ export function WeeklyReport() {
           </div>
           <button
             onClick={() => void exportReport()}
-            className="flex h-8 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white transition-colors hover:bg-[#2c2c2e]"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] transition-colors hover:bg-[#f2f2f7]"
           >
-            <Download className="w-3.5 h-3.5" />
+            <Download className="h-3.5 w-3.5" />
             导出
           </button>
         </div>

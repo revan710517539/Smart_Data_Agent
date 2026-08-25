@@ -39,6 +39,7 @@ class MySQLSQLClosureTest(unittest.TestCase):
                 "migrations/0034_capability_pack_snapshots.sql",
                 "migrations/0035_migration_attempts.sql",
                 "migrations/0036_retire_default_model.sql",
+                "migrations/0037_message_board_append_content.sql",
             ],
         )
         for path in REPO_MYSQL.rglob("*.sql"):

@@ -140,6 +140,23 @@ class MySQLMessageBoardStore:
             raise MessageBoardRevisionConflict("message_board_revision_conflict")
         return self._get(message_id)
 
+    def set_append_content(self, message_id: str, append_content: str, expected_lock_version: int) -> dict[str, Any]:
+        with self.pool.transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE platform_message_board_entries
+                SET append_content=%s,
+                    updated_at=UTC_TIMESTAMP(6), lock_version=lock_version+1
+                WHERE message_key=%s AND lock_version=%s
+                """,
+                (append_content, message_id, expected_lock_version),
+            )
+            changed = cursor.rowcount
+        if changed != 1:
+            self._get(message_id)
+            raise MessageBoardRevisionConflict("message_board_revision_conflict")
+        return self._get(message_id)
+
     def list_owned(self, tenant_id: str, user_id: str, page_key: str = "") -> list[dict[str, Any]]:
         with self.pool.connection() as connection:
             tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
@@ -155,16 +172,20 @@ class MySQLMessageBoardStore:
                 rows = list(cursor.fetchall())
         return [_row(row) for row in rows]
 
-    def list_all(self, *, tenant_id: str = "", query: str = "", offset: int = 0, limit: int = 50) -> tuple[list[dict[str, Any]], int]:
+    def list_all(self, *, tenant_id: str = "", query: str = "", offset: int = 0, limit: int = 50, status: str = "", sort: str = "") -> tuple[list[dict[str, Any]], int]:
         clauses: list[str] = []
         params: list[Any] = []
         if str(tenant_id or "").strip():
             clauses.append("tenant.tenant_code=%s")
             params.append(str(tenant_id).strip())
+        if str(status or "").strip():
+            clauses.append("e.status=%s")
+            params.append(str(status).strip())
         if query.strip():
             clauses.append("LOWER(CONCAT(e.author_name, ' ', author.external_subject, ' ', e.content, ' ', e.page_title, ' ', tenant.tenant_code)) LIKE %s")
             params.append(f"%{query.strip().lower()}%")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        direction = "ASC" if str(sort or "").strip().lower() == "asc" else "DESC"
         with self.pool.connection() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT COUNT(*) AS total FROM platform_message_board_entries e "
@@ -174,7 +195,7 @@ class MySQLMessageBoardStore:
             )
             total = int(_value(cursor.fetchone(), "total", 0) or 0)
             cursor.execute(
-                self._select() + where + " ORDER BY e.created_at DESC, e.message_key DESC LIMIT %s OFFSET %s",
+                self._select() + where + f" ORDER BY e.created_at {direction}, e.message_key {direction} LIMIT %s OFFSET %s",
                 (*params, limit, offset),
             )
             rows = list(cursor.fetchall())
@@ -195,7 +216,7 @@ class MySQLMessageBoardStore:
                    COALESCE(NULLIF(TRIM(author.display_name), ''), e.author_name) AS author_name,
                    e.page_key, e.page_title, e.page_url, e.content,
                    e.quote_context, e.attachment_ids, e.created_at, e.updated_at, e.lock_version,
-                   e.status, e.archived_at
+                   e.status, e.archived_at, e.append_content
             FROM platform_message_board_entries e
             JOIN platform_tenants tenant ON tenant.tenant_id=e.tenant_id
             JOIN platform_user_profiles author ON author.user_id=e.author_user_id
@@ -222,6 +243,7 @@ def _row(row: Any) -> dict[str, Any]:
         "lock_version": int(_value(row, "lock_version", 12) or 0),
         "status": str(_value(row, "status", 13) or "new"),
         "archived_at": _iso(_value(row, "archived_at", 14)) or None,
+        "append_content": str(_value(row, "append_content", 15) or ""),
     }
 
 

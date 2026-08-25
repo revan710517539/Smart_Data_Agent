@@ -28,6 +28,7 @@ type PlatformContextValue = {
   isSuperAdmin: boolean;
   login: (session: AuthSession) => void;
   logout: () => void;
+  refreshTenantCatalog: () => Promise<void>;
   selectedInstitution: string;
   setSelectedInstitution: (institution: string) => void;
   tenantId: string;
@@ -64,21 +65,26 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       ? authorizedInstitutions
       : tenantCatalog;
 
+  const applyTenantCatalog = useCallback((tenants: Array<{ id: string; name: string; status: string }>) => {
+    const names = normalizeSelectableInstitutions(
+      tenants.filter((tenant) => tenant.status === "active").map((tenant) => tenant.name || tenant.id),
+    );
+    setTenantCatalog(names);
+    setTenantIdByInstitution(buildTenantIdCatalog(tenants));
+    setTenantCatalogStatus("ready");
+  }, []);
+
+  const refreshTenantCatalog = useCallback(async () => {
+    const response = await fetchTenants({ forceRefresh: true });
+    applyTenantCatalog(response.tenants);
+  }, [applyTenantCatalog]);
+
   useEffect(() => {
     let cancelled = false;
     const loadTenants = async () => {
       try {
         const response = await fetchTenants();
-        const names = normalizeSelectableInstitutions(response.tenants
-          .filter((tenant) => tenant.status === "active")
-          .map((tenant) => tenant.name || tenant.id));
-        if (!cancelled && names.length) {
-          setTenantCatalog(names);
-          setTenantIdByInstitution(buildTenantIdCatalog(response.tenants));
-          setTenantCatalogStatus("ready");
-        } else if (!cancelled) {
-          setTenantCatalogStatus("unavailable");
-        }
+        if (!cancelled) applyTenantCatalog(response.tenants);
       } catch {
         if (!cancelled) {
           setTenantCatalogStatus("unavailable");
@@ -89,7 +95,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [applyTenantCatalog]);
 
   const syncCurrentSession = useCallback(() => {
     if (sessionSyncPromise.current) return sessionSyncPromise.current;
@@ -232,6 +238,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       isSuperAdmin,
       login,
       logout,
+      refreshTenantCatalog,
       selectedInstitution,
       setSelectedInstitution,
       tenantId: resolveTenantIdForInstitution(selectedInstitution, authSession, tenantIdByInstitution),
@@ -239,7 +246,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       userId: authSession?.user.id || getDefaultUserId(),
       userName: authSession?.user.name || "未登录",
     }),
-    [authSession, currentTenantRoles, institutions, isInstitutionAdmin, isSuperAdmin, selectedInstitution, setSelectedInstitution, tenantIdByInstitution, tenantIdForInstitution],
+    [authSession, currentTenantRoles, institutions, isInstitutionAdmin, isSuperAdmin, refreshTenantCatalog, selectedInstitution, setSelectedInstitution, tenantIdByInstitution, tenantIdForInstitution],
   );
 
   return (

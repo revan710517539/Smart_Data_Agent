@@ -147,7 +147,7 @@ class SchemaContractsTest(unittest.TestCase):
             services = build_local_platform(db_path=Path(tmpdir) / "platform.sqlite")
             try:
                 self.assertTrue(services.permission_broker.enforcer.repository.list_roles())
-                self.assertEqual(migration_status(Path(tmpdir) / "platform.sqlite")["current_version"], "0034")
+                self.assertEqual(migration_status(Path(tmpdir) / "platform.sqlite")["current_version"], "0037")
             finally:
                 services.close()
 

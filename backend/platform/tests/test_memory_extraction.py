@@ -333,6 +333,42 @@ class MemoryExtractionTest(unittest.TestCase):
 
         self.assertEqual(context["selected_data_tables"][0]["id"], "csv_current_delivery")
         self.assertEqual(context["selected_data_tables"][0]["relativePath"], current["relativePath"])
+
+    def test_analysis_selected_csv_resolves_stale_delivery_by_display_name(self) -> None:
+        current = {
+            "id": "csv_current_delivery",
+            "tableNameEn": "csv_current",
+            "tableNameCn": "融担双周报流量与审批转化_2026-08-25",
+            "fileName": "20260825_094222_融担双周报流量与审批转化.csv",
+            "sourceKey": "title_source_key",
+            "relativePath": "csv/yushu/2026-08-25/20260825_094222_融担双周报流量与审批转化.csv",
+            "fields": [],
+        }
+        csv_source = SimpleNamespace(
+            for_tenant=lambda tenant_id: SimpleNamespace(table_assets=lambda: [current], catalog_ready=True),
+        )
+        services = SimpleNamespace(
+            data_asset_store=self.store,
+            metric_dictionary_store=None,
+            data_acquisition_service=SimpleNamespace(csv_source=csv_source),
+        )
+
+        context = _build_asset_context(
+            services,
+            "tenant_demo",
+            "分析一下这个数据",
+            {
+                "selected_data_tables": [{
+                    "id": "csv_old_delivery",
+                    "code": "csv_old",
+                    "kind": "raw",
+                    "name": "融担双周报流量与审批转化_2026-08-14",
+                }],
+            },
+        )
+
+        self.assertEqual(context["selected_data_tables"][0]["id"], "csv_current_delivery")
+        self.assertEqual(context["selected_data_tables"][0]["tableNameCn"], current["tableNameCn"])
         with self.assertRaisesRegex(PermissionError, "selected_data_asset_not_published_or_not_authorized"):
             _build_asset_context(
                 services,

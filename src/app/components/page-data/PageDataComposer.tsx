@@ -362,7 +362,7 @@ export function PageDataModeToggle({ controller, className = "", onSave }: { con
     await onSave?.();
     controller.setMode("browse");
   };
-  return <button type="button" disabled={controller.savingLayout} data-page-data-mode-toggle="true" data-weekly-page-data-mode-toggle="true" onClick={() => void toggleMode()} className={`inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#636366] transition-colors hover:bg-[#f2f2f7] disabled:opacity-50 ${className}`}>{controller.mode === "browse" ? <Pencil className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}{controller.mode === "browse" ? "编辑" : controller.savingLayout ? "保存中" : "保存"}</button>;
+  return <button type="button" disabled={controller.savingLayout} data-page-data-mode-toggle="true" data-weekly-page-data-mode-toggle="true" onClick={() => void toggleMode()} className={`inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#636366] transition-colors hover:bg-[#f2f2f7] disabled:opacity-50 ${className}`}>{controller.mode === "browse" ? <Pencil className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}{controller.mode === "browse" ? "编辑" : controller.savingLayout ? "保存中" : "保存"}</button>;
 }
 
 export function PageDataVisualizationModules({

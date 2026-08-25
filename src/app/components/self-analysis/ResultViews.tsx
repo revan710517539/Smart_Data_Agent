@@ -47,6 +47,7 @@ import { formatFieldValue, type FieldDisplayMetadata } from "../../data/fieldSem
 import { usePlatformContext } from "../../platform/PlatformContext";
 import { normalizeNoteItems, noteItemsFromText, type RichNoteItem } from "../notes/richNote";
 import { VisualNoteFields, VisualNoteTitle } from "../visualization/VisualNoteFields";
+import { DataPageSelector, useClientPagination } from "../ui/DataPageSelector";
 import {
   buildVisualDataPoints,
   defaultComboLineFields,
@@ -61,6 +62,7 @@ import {
   numericValue,
   selectedTableFields,
   toggleVisualizationField,
+  visualizationRoleFields,
   visualizationChartColor,
   visualizationFilterGroupsToLegacyFilters,
   visualizationFilterOperators,
@@ -119,10 +121,14 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   const [moreMenuPos, setMoreMenuPos] = useState<{ top: number; left: number } | null>(null);
   const { tenantId, userId } = usePlatformContext();
   const fields = useMemo(() => analysisRawFields(rows), [rows]);
-  const numericFields = useMemo(() => numericRawFields(rows), [rows]);
-  const dimensionCandidates = useMemo(() => fields.filter((field) => !numericFields.includes(field)), [fields, numericFields]);
   const fieldLabels = rows[0]?.fieldLabels || {};
   const fieldMetadata = rows[0]?.fieldMetadata || {};
+  const roleFields = useMemo(
+    () => visualizationRoleFields(fields, fieldMetadata, numericRawFields(rows)),
+    [fields, fieldMetadata, rows],
+  );
+  const numericFields = roleFields.metrics;
+  const dimensionCandidates = roleFields.dimensions;
   const [metricFields, setMetricFields] = useState<string[]>(initialConfig?.metricFields || []);
   const [dimensionFields, setDimensionFields] = useState<string[]>(initialConfig?.dimensionFields || []);
   const [mergedDimensionFields, setMergedDimensionFields] = useState<string[]>(initialConfig?.mergedDimensionFields || []);
@@ -690,17 +696,20 @@ function ResultTable({ rows, emptyLabel, dimensionFields, metricFields, mergedDi
   const scrollerRef = useRef<HTMLDivElement>(null);
   useVisualTableScrollLock(scrollerRef);
   const instance = useId();
-  const availableFields = analysisRawFields(rows);
+  const availableFields = useMemo(() => analysisRawFields(rows), [rows]);
   const controlled = Boolean(dimensionFields && metricFields);
   const [localFields, setLocalFields] = useState(availableFields);
   const [sortState, setSortState] = useState<TableSortState>(null);
   const fields = controlled ? selectedTableFields(dimensionFields || [], metricFields || []) : localFields;
-  const availableRowKeys = rows.map(tableRowKey);
+  const rowEntries = useMemo(() => rows.map((row, index) => ({ key: tableRowKey(row, index), row, index })), [rows]);
+  const availableRowKeys = useMemo(() => rowEntries.map((entry) => entry.key), [rowEntries]);
+  const rowByKey = useMemo(() => new Map(rowEntries.map((entry) => [entry.key, entry.row])), [rowEntries]);
+  const originalIndexByRow = useMemo(() => new Map(rowEntries.map((entry) => [entry.row, entry.index])), [rowEntries]);
   const [rowKeys, setRowKeys] = useState(availableRowKeys);
   useEffect(() => setLocalFields((current) => reconcileFields(current, availableFields, availableFields)), [availableFields.join("\u0000")]);
   useEffect(() => setRowKeys((current) => reconcileFields(current, availableRowKeys, availableRowKeys)), [availableRowKeys.join("\u0000")]);
   useEffect(() => setSortState((current) => current && fields.includes(current.field) ? current : null), [fields.join("\u0000")]);
-  const orderedRows = rowKeys.map((key) => rows.find((row, index) => tableRowKey(row, index) === key)).filter((row): row is AnalysisRow => Boolean(row));
+  const orderedRows = useMemo(() => rowKeys.map((key) => rowByKey.get(key)).filter((row): row is AnalysisRow => Boolean(row)), [rowByKey, rowKeys]);
   const localReorder = useRightPressReorder(localFields, setLocalFields, `${instance}-columns`);
   const dimensionReorder = useRightPressReorder(dimensionFields || [], (updater) => onDimensionFieldsChange?.(updater(dimensionFields || [])), `${instance}-dimensions`, (field) => rows[0]?.fieldLabels[field] || field);
   const metricReorder = useRightPressReorder(metricFields || [], (updater) => onMetricFieldsChange?.(updater(metricFields || [])), `${instance}-metrics`, (field) => rows[0]?.fieldLabels[field] || field);
@@ -708,10 +717,10 @@ function ResultTable({ rows, emptyLabel, dimensionFields, metricFields, mergedDi
   const fieldLabels = rows[0]?.fieldLabels || {};
   const fieldMetadata = rows[0]?.fieldMetadata || {};
   const controllerFor = (field: string) => !controlled ? localReorder : dimensionFields?.includes(field) ? dimensionReorder : metricReorder;
-  const displayedRows = sortTableRows(
+  const displayedRows = useMemo(() => sortTableRows(
     groupRowsForMergedDimensions(orderedRows, dimensionFields || [], mergedDimensionFields),
     sortState,
-  );
+  ), [dimensionFields, mergedDimensionFields, orderedRows, sortState]);
   return <div ref={scrollerRef} className={`min-h-0 overflow-auto overscroll-contain rounded-lg border border-[#edf1ee] bg-white ${fillHeight ? "min-h-0 flex-1" : compact ? "max-h-[220px]" : "max-h-[300px]"}`} style={{ overscrollBehavior: "none" }} data-visual-table-scroll="true" data-table-long-press-reorder="true">
     <table className="w-full border-separate border-spacing-0 text-[12px]">
       <thead className="sticky top-0 z-20 bg-[#f5faf7]" data-visual-table-frozen-header="true"><tr className="text-[#6f8177]">{fields.map((field) => {
@@ -723,7 +732,7 @@ function ResultTable({ rows, emptyLabel, dimensionFields, metricFields, mergedDi
         return <th key={field} data-reorder-field={field} data-reorder-group={reorder.group} data-reorder-floating={reorder.floating === field ? "true" : "false"} data-reorder-target={reorder.target === field ? "true" : "false"} data-visual-table-dimension-header={dimension ? field : undefined} data-visual-table-metric-header={!dimension && controlled ? field : undefined} onContextMenu={dimension && onDimensionHeaderContextMenu ? (event) => onDimensionHeaderContextMenu(field, event) : undefined} onClick={(event) => { if (reorder.consumeClick()) event.stopPropagation(); }} onPointerDown={(event) => reorder.start(field, event)} onPointerUp={() => reorder.end(true)} onPointerCancel={() => reorder.end(false)} className={`sticky top-0 z-20 cursor-grab whitespace-nowrap border-b border-[#edf1ee] px-3 py-2.5 text-left font-medium active:cursor-grabbing ${reorder.floating === field ? "bg-[#eaf7ef] text-[#178a53] shadow-[inset_0_0_0_1px_#b7ddc3]" : reorder.target === field ? "bg-[#f6fbf8] text-[#178a53] shadow-[inset_2px_0_0_#2ca66f]" : "bg-[#f5faf7] shadow-[0_1px_0_0_#edf1ee]"}`}><span className="inline-flex items-center gap-1.5"><span>{fieldLabels[field] || field}</span><button type="button" onPointerDown={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setSortState((current) => nextTableSortState(current, field)); }} aria-label={`${fieldLabels[field] || field}：${nextLabel}`} title={nextLabel} data-visual-table-sort={field} data-visual-table-sort-direction={direction || "original"} className={`rounded p-0.5 transition-colors hover:bg-white ${direction ? "text-[#178a53]" : "text-[#9aa7a0]"}`}><SortIcon className="h-3 w-3" /></button></span></th>;
       })}</tr></thead>
       <tbody>{displayedRows.length ? displayedRows.map((row, index) => {
-        const originalIndex = rows.indexOf(row);
+        const originalIndex = originalIndexByRow.get(row) ?? index;
         const rowKey = tableRowKey(row, originalIndex);
         const cellSpans = fields.map((field) => mergedDimensionCellSpan(displayedRows, index, field, dimensionFields || [], mergedDimensionFields));
         const firstVisibleFieldIndex = Math.max(0, cellSpans.findIndex((span) => span > 0));
@@ -825,30 +834,87 @@ function chartColor(index: number) {
 }
 
 function PivotTable({ rows, dimensionFields, metricFields, labels, fieldMetadata, fillHeight }: { rows: AnalysisRow[]; dimensionFields: string[]; metricFields: string[]; labels: Record<string, string>; fieldMetadata: Record<string, FieldDisplayMetadata>; fillHeight?: boolean }) {
+  const rowField = dimensionFields[0];
+  if (!rowField || !metricFields.length) return <ResultTable rows={rows.slice(0, 50)} emptyLabel="当前数据维度不足，已回退明细表" dimensionFields={dimensionFields} metricFields={metricFields} fillHeight={fillHeight} />;
+  return <PaginatedPivotTable rows={rows} dimensionFields={dimensionFields} metricFields={metricFields} labels={labels} fieldMetadata={fieldMetadata} fillHeight={fillHeight} rowField={rowField} />;
+}
+
+function PaginatedPivotTable({ rows, dimensionFields, metricFields, labels, fieldMetadata, fillHeight, rowField }: { rows: AnalysisRow[]; dimensionFields: string[]; metricFields: string[]; labels: Record<string, string>; fieldMetadata: Record<string, FieldDisplayMetadata>; fillHeight?: boolean; rowField: string }) {
   const tableRef = useRef<HTMLDivElement>(null);
   useVisualTableScrollLock(tableRef);
-  const rowField = dimensionFields[0];
-  const columnFields = dimensionFields.slice(1);
-  if (!rowField || !metricFields.length) return <ResultTable rows={rows.slice(0, 50)} emptyLabel="当前数据维度不足，已回退明细表" dimensionFields={dimensionFields} metricFields={metricFields} fillHeight={fillHeight} />;
-  const columnFor = (row: AnalysisRow) => columnFields.length ? columnFields.map((field) => displayRawCell(row.raw[field], fieldMetadata[field])).join(" · ") : "汇总";
-  const rowLabels = Array.from(new Set(rows.map((row) => String(row.raw[rowField] ?? "未分类"))));
-  const columnLabels = Array.from(new Set(rows.map(columnFor)));
-  const values = new Map<string, number>();
-  rows.forEach((row) => {
-    const rowLabel = String(row.raw[rowField] ?? "未分类");
-    const columnLabel = columnFor(row);
-    metricFields.forEach((metric) => {
-      const key = `${rowLabel}\u0000${columnLabel}\u0000${metric}`;
-      values.set(key, (values.get(key) || 0) + (numberValue(row.raw[metric]) || 0));
+  const columnFields = useMemo(() => dimensionFields.slice(1), [dimensionFields]);
+  const pivotData = useMemo(() => {
+    const columnFor = (row: AnalysisRow) => columnFields.length ? columnFields.map((field) => displayRawCell(row.raw[field], fieldMetadata[field])).join(" · ") : "汇总";
+    const rowLabels = Array.from(new Set(rows.map((row) => String(row.raw[rowField] ?? "未分类"))));
+    const columnLabels = Array.from(new Set(rows.map(columnFor)));
+    const values = new Map<string, number>();
+    rows.forEach((row) => {
+      const rowLabel = String(row.raw[rowField] ?? "未分类");
+      const columnLabel = columnFor(row);
+      metricFields.forEach((metric) => {
+        const key = `${rowLabel}\u0000${columnLabel}\u0000${metric}`;
+        values.set(key, (values.get(key) || 0) + (numberValue(row.raw[metric]) || 0));
+      });
     });
-  });
+    return { rowLabels, columnLabels, values };
+  }, [columnFields, fieldMetadata, metricFields, rowField, rows]);
+  const { rowLabels, columnLabels, values } = pivotData;
+  const pivotColumnPageSize = Math.max(1, Math.min(12, Math.floor(24 / Math.max(1, metricFields.length))));
+  const rowPagination = useClientPagination(rowLabels, 20);
+  const columnPagination = useClientPagination(columnLabels, pivotColumnPageSize);
   const columns = columnLabels.flatMap((column) => metricFields.map((metric) => ({ column, metric })));
+  const visibleColumns = columnPagination.items.flatMap((column) => metricFields.map((metric) => ({ column, metric })));
   const cellValue = (row: string, column: string, metric: string) => values.get(`${row}\u0000${column}\u0000${metric}`) || 0;
   const rowMetricTotal = (row: string, metric: string) => columnLabels.reduce((sum, column) => sum + cellValue(row, column, metric), 0);
   const columnMetricTotal = (column: string, metric: string) => rowLabels.reduce((sum, row) => sum + cellValue(row, column, metric), 0);
   return <div data-pivot-table="true" className={fillHeight ? "flex min-h-0 flex-1 flex-col" : ""}>
-    <div className="mb-2 flex items-center justify-between gap-2"><div className="truncate text-[10px] text-[#8a9690]">维度：{dimensionFields.map((field) => labels[field] || field).join(" → ")} · 指标：{metricFields.map((field) => labels[field] || field).join("、")}</div><div className="flex shrink-0 gap-1.5"><PivotExportButton label="CSV" onClick={() => exportPivotCsv(labels[rowField] || rowField, rowLabels, columns, metricFields, cellValue, rowMetricTotal)} /><PivotExportButton label="HTML" onClick={() => exportPivotHtml(tableRef.current)} /><PivotExportButton label="PDF" onClick={() => void exportPivotPdf(tableRef.current)} /></div></div>
-    <div ref={tableRef} className={`${fillHeight ? "min-h-0 flex-1" : "max-h-[360px]"} overflow-auto overscroll-contain rounded-lg border border-[#e5e5ea] bg-white`} style={{ overscrollBehavior: "none" }} data-visual-table-scroll="true"><table className="min-w-full border-separate border-spacing-0 text-[11px]"><thead className="sticky top-0 z-20 bg-[#fafbfc]" data-visual-table-frozen-header="true"><tr><th rowSpan={2} className="sticky left-0 z-30 min-w-[120px] border-b border-r border-[#e5e5ea] bg-[#fafbfc] px-3 py-2 text-left font-normal text-[#636366]">{labels[rowField] || rowField}</th>{columnLabels.map((column) => <th key={column} colSpan={metricFields.length} className="border-b border-r border-[#e5e5ea] px-3 py-2 text-center font-normal text-[#636366]">{column}</th>)}<th colSpan={metricFields.length} className="border-b border-[#e5e5ea] px-3 py-2 text-center font-normal text-[#636366]">行小计</th></tr><tr>{[...columnLabels, "subtotal"].flatMap((column) => metricFields.map((metric) => <th key={`${column}-${metric}`} className="min-w-[96px] border-b border-r border-[#ececf0] px-3 py-2 text-right font-normal text-[#8a8a8e]">{labels[metric] || metric}</th>))}</tr></thead><tbody>{rowLabels.map((rowLabel) => <tr key={rowLabel}><th className="sticky left-0 z-10 border-b border-r border-[#ececf0] bg-white px-3 py-2 text-left font-normal text-[#3a3a3c]">{rowLabel}</th>{columns.map(({ column, metric }) => <td key={`${column}-${metric}`} className="border-b border-r border-[#f0f0f2] px-3 py-2 text-right tabular-nums text-[#3a3a3c]">{formatFieldValue(cellValue(rowLabel, column, metric), fieldMetadata[metric])}</td>)}{metricFields.map((metric) => <td key={`subtotal-${metric}`} className="border-b border-r border-[#ececf0] bg-[#fafbfc] px-3 py-2 text-right tabular-nums text-[#1d1d1f]">{formatFieldValue(rowMetricTotal(rowLabel, metric), fieldMetadata[metric])}</td>)}</tr>)}<tr><th className="sticky bottom-0 left-0 z-20 border-r border-[#e5e5ea] bg-[#f2f2f7] px-3 py-2 text-left font-normal text-[#1d1d1f]">总计</th>{columns.map(({ column, metric }) => <td key={`${column}-${metric}`} className="sticky bottom-0 border-r border-[#e5e5ea] bg-[#f2f2f7] px-3 py-2 text-right tabular-nums text-[#1d1d1f]">{formatFieldValue(columnMetricTotal(column, metric), fieldMetadata[metric])}</td>)}{metricFields.map((metric) => <td key={`total-${metric}`} className="sticky bottom-0 border-r border-[#e5e5ea] bg-[#e9e9ed] px-3 py-2 text-right tabular-nums text-[#1d1d1f]">{formatFieldValue(rowLabels.reduce((sum, row) => sum + rowMetricTotal(row, metric), 0), fieldMetadata[metric])}</td>)}</tr></tbody></table></div>
+    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+      <div className="min-w-0 flex-1 truncate text-[10px] text-[#8a9690]">维度：{dimensionFields.map((field) => labels[field] || field).join(" → ")} · 指标：{metricFields.map((field) => labels[field] || field).join("、")}</div>
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+        {rowPagination.paginated && <DataPageSelector page={rowPagination.page} totalPages={rowPagination.totalPages} shownCount={rowPagination.items.length} totalCount={rowPagination.total} onChange={rowPagination.setPage} ariaLabel="交叉表行分页" compact className="[&>span]:hidden" />}
+        {columnPagination.paginated && <DataPageSelector page={columnPagination.page} totalPages={columnPagination.totalPages} shownCount={columnPagination.items.length} totalCount={columnPagination.total} onChange={columnPagination.setPage} ariaLabel="交叉表列分页" compact className="[&>span]:hidden" />}
+        <PivotExportButton label="CSV" onClick={() => exportPivotCsv(labels[rowField] || rowField, rowLabels, columns, metricFields, cellValue, rowMetricTotal)} />
+        <PivotExportButton label="HTML" onClick={() => exportPivotHtml(tableRef.current)} />
+        <PivotExportButton label="PDF" onClick={() => void exportPivotPdf(tableRef.current)} />
+      </div>
+    </div>
+    <div
+      ref={tableRef}
+      className={`${fillHeight ? "min-h-0 flex-1" : "max-h-[360px]"} overflow-auto overscroll-contain rounded-lg border border-[#e5e5ea] bg-white`}
+      style={{ overscrollBehavior: "none", overflowAnchor: "none" }}
+      data-visual-table-scroll="true"
+      data-pivot-row-pagination={rowPagination.paginated ? "true" : "false"}
+      data-pivot-column-pagination={columnPagination.paginated ? "true" : "false"}
+    >
+      <table className="min-w-full border-separate border-spacing-0 text-[11px]">
+        <thead className="sticky top-0 z-20 bg-[#fafbfc]" data-visual-table-frozen-header="true">
+          <tr>
+            <th rowSpan={2} className="sticky left-0 z-30 min-w-[120px] border-b border-r border-[#e5e5ea] bg-[#fafbfc] px-3 py-2 text-left font-normal text-[#636366]">{labels[rowField] || rowField}</th>
+            {columnPagination.items.map((column) => <th key={column} colSpan={metricFields.length} className="border-b border-r border-[#e5e5ea] px-3 py-2 text-center font-normal text-[#636366]">{column}</th>)}
+            <th colSpan={metricFields.length} className="border-b border-[#e5e5ea] px-3 py-2 text-center font-normal text-[#636366]">行小计</th>
+          </tr>
+          <tr>
+            {[...columnPagination.items, "subtotal"].flatMap((column) => metricFields.map((metric) => (
+              <th key={`${column}-${metric}`} className="min-w-[96px] border-b border-r border-[#ececf0] px-3 py-2 text-right font-normal text-[#8a8a8e]">{labels[metric] || metric}</th>
+            )))}
+          </tr>
+        </thead>
+        <tbody>
+          {rowPagination.items.map((rowLabel) => (
+            <tr key={rowLabel}>
+              <th className="sticky left-0 z-10 border-b border-r border-[#ececf0] bg-white px-3 py-2 text-left font-normal text-[#3a3a3c]">{rowLabel}</th>
+              {visibleColumns.map(({ column, metric }) => <td key={`${column}-${metric}`} className="border-b border-r border-[#f0f0f2] px-3 py-2 text-right tabular-nums text-[#3a3a3c]">{formatFieldValue(cellValue(rowLabel, column, metric), fieldMetadata[metric])}</td>)}
+              {metricFields.map((metric) => <td key={`subtotal-${metric}`} className="border-b border-r border-[#ececf0] bg-[#fafbfc] px-3 py-2 text-right tabular-nums text-[#1d1d1f]">{formatFieldValue(rowMetricTotal(rowLabel, metric), fieldMetadata[metric])}</td>)}
+            </tr>
+          ))}
+          <tr>
+            <th className="sticky bottom-0 left-0 z-20 border-r border-[#e5e5ea] bg-[#f2f2f7] px-3 py-2 text-left font-normal text-[#1d1d1f]">总计</th>
+            {visibleColumns.map(({ column, metric }) => <td key={`${column}-${metric}`} className="sticky bottom-0 border-r border-[#e5e5ea] bg-[#f2f2f7] px-3 py-2 text-right tabular-nums text-[#1d1d1f]">{formatFieldValue(columnMetricTotal(column, metric), fieldMetadata[metric])}</td>)}
+            {metricFields.map((metric) => <td key={`total-${metric}`} className="sticky bottom-0 border-r border-[#e5e5ea] bg-[#e9e9ed] px-3 py-2 text-right tabular-nums text-[#1d1d1f]">{formatFieldValue(rowLabels.reduce((sum, row) => sum + rowMetricTotal(row, metric), 0), fieldMetadata[metric])}</td>)}
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>;
 }
 

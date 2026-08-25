@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import base64
+import html
 import http.client
 import json
 import threading
 import unittest
+from io import BytesIO
 from tempfile import TemporaryDirectory
 from urllib.parse import quote
+from zipfile import ZipFile
 
 from backend.platform.api.server import create_server
 
@@ -33,6 +37,55 @@ class MessageBoardTest(unittest.TestCase):
 
         self.assertEqual(result["messages"][0]["author_user_id"], "u_super_admin")
         self.assertEqual(result["messages"][0]["author_name"], "胥京波")
+
+    def test_admin_list_filters_by_status_and_sorts_created_at(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                for index, status in enumerate(("new", "adopted", "completed"), start=1):
+                    message_id = f"mb_{index:032x}"
+                    create_status, _ = self._request(port, "POST", "/api/message-board", "u_reviewer", "tenant_demo", {
+                        "message_id": message_id,
+                        "page_key": "self-analysis/query",
+                        "page_title": "智能分析",
+                        "page_url": "/self-analysis/query",
+                        "content": f"状态{status}留言",
+                        "quote_context": {},
+                        "attachment_ids": [],
+                    })
+                    self.assertEqual(create_status, 200)
+                    if status != "new":
+                        listed_status, listed = self._request(port, "GET", "/api/message-board/admin", "u_super_admin", "tenant_demo")
+                        self.assertEqual(listed_status, 200)
+                        message = next(item for item in listed["messages"] if item["message_id"] == message_id)
+                        update_status, _ = self._request(port, "PUT", "/api/message-board/admin/status", "u_super_admin", "tenant_demo", {
+                            "message_id": message["message_id"],
+                            "status": status,
+                            "expected_lock_version": message["lock_version"],
+                        })
+                        self.assertEqual(update_status, 200)
+                adopted_status, adopted = self._request(port, "GET", "/api/message-board/admin?status=adopted", "u_super_admin", "tenant_demo")
+                asc_status, ascending = self._request(port, "GET", "/api/message-board/admin?sort=asc", "u_super_admin", "tenant_demo")
+                desc_status, descending = self._request(port, "GET", "/api/message-board/admin?sort=desc", "u_super_admin", "tenant_demo")
+                invalid_status, invalid = self._request(port, "GET", "/api/message-board/admin?status=archived", "u_super_admin", "tenant_demo")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertEqual(adopted_status, 200)
+        self.assertEqual([item["status"] for item in adopted["messages"]], ["adopted"])
+        self.assertEqual(asc_status, 200)
+        self.assertEqual(desc_status, 200)
+        self.assertEqual(
+            [item["message_id"] for item in ascending["messages"]],
+            list(reversed([item["message_id"] for item in descending["messages"]])),
+        )
+        self.assertEqual(invalid_status, 400)
+        self.assertEqual(invalid["error"], "invalid_request")
 
     def test_owner_delete_removes_message_from_owner_and_admin_reads(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -219,6 +272,79 @@ class MessageBoardTest(unittest.TestCase):
         self.assertEqual(other_admin["tenant_id"], "tenant_other")
         self.assertEqual(cross_status, 403)
 
+    def test_append_content_and_adopted_export(self) -> None:
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        )
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                adopted_id = "mb_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                ignored_id = "mb_ffffffffffffffffffffffffffffffff"
+                image_status, image = self._request(port, "POST", "/api/message-board/image", "u_reviewer", "tenant_demo", {
+                    "message_id": adopted_id,
+                    "file_name": "screenshot.png",
+                    "content_base64": base64.b64encode(png).decode("ascii"),
+                })
+                created_adopted, created = self._request(port, "POST", "/api/message-board", "u_reviewer", "tenant_demo", {
+                    "message_id": adopted_id, "page_key": "weekly-report", "page_title": "经营周报",
+                    "page_url": "/weekly-report", "content": "请导出截图", "quote_context": {"selected_text": "本周环比"},
+                    "attachment_ids": [image["attachment"]["attachment_id"]],
+                })
+                created_new, _ = self._request(port, "POST", "/api/message-board", "u_reviewer", "tenant_demo", {
+                    "message_id": ignored_id, "page_key": "weekly-report", "page_title": "经营周报",
+                    "page_url": "/weekly-report", "content": "未采纳留言", "quote_context": {}, "attachment_ids": [],
+                })
+                non_admin_append, _ = self._request(port, "PUT", "/api/message-board/admin/append-content", "u_reviewer", "tenant_demo", {
+                    "message_id": adopted_id, "append_content": "越权追加", "expected_lock_version": 0,
+                })
+                append_status, appended = self._request(port, "PUT", "/api/message-board/admin/append-content", "u_super_admin", "tenant_demo", {
+                    "message_id": adopted_id, "append_content": "已安排下周处理", "expected_lock_version": 0,
+                })
+                reload_status, reloaded = self._request(port, "GET", "/api/message-board/admin", "u_super_admin", "tenant_demo")
+                adopted_status, adopted = self._request(port, "PUT", "/api/message-board/admin/status", "u_super_admin", "tenant_demo", {
+                    "message_id": adopted_id, "status": "adopted", "expected_lock_version": appended["message"]["lock_version"],
+                })
+                non_admin_export_status, _raw, _headers = self._request_bytes(port, "GET", "/api/message-board/admin/export?status=adopted&format=excel", "u_reviewer", "tenant_demo")
+                export_status, export_body, export_headers = self._request_bytes(port, "GET", "/api/message-board/admin/export?status=adopted&format=feishu", "u_super_admin", "tenant_demo")
+                other_export_status, other_body, other_headers = self._request_bytes(port, "GET", "/api/message-board/admin/export?status=adopted&format=excel", "u_super_admin", "tenant_other")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertEqual(image_status, 200)
+        self.assertEqual(created_adopted, 200)
+        self.assertEqual(created_new, 200)
+        self.assertEqual(non_admin_append, 403)
+        self.assertEqual(append_status, 200)
+        self.assertEqual(appended["message"]["append_content"], "已安排下周处理")
+        self.assertEqual(reload_status, 200)
+        self.assertEqual(next(item["append_content"] for item in reloaded["messages"] if item["message_id"] == adopted_id), "已安排下周处理")
+        self.assertEqual(adopted_status, 200)
+        self.assertEqual(adopted["message"]["status"], "adopted")
+        self.assertEqual(non_admin_export_status, 403)
+        self.assertEqual(export_status, 200)
+        self.assertEqual(export_headers.get("X-Export-Count"), "1")
+        self.assertIn("feishu", export_headers.get("Content-Disposition", ""))
+        self.assertTrue(export_body.startswith(b"PK"))
+        with ZipFile(BytesIO(export_body)) as archive:
+            names = set(archive.namelist())
+            workbook_text = html.unescape("\n".join(
+                archive.read(name).decode("utf-8", errors="ignore")
+                for name in names
+                if name.endswith(".xml")
+            ))
+        self.assertIn("xl/media/image1.png", names)
+        self.assertIn("已安排下周处理", workbook_text)
+        self.assertNotIn("未采纳留言", workbook_text)
+        self.assertEqual(other_export_status, 200)
+        self.assertEqual(other_headers.get("X-Export-Count"), "0")
+        self.assertNotIn("请导出截图".encode("utf-8"), other_body)
+
     @staticmethod
     def _request(port: int, method: str, path: str, user_id: str, tenant_id: str, payload: dict | None = None) -> tuple[int, dict]:
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
@@ -231,6 +357,16 @@ class MessageBoardTest(unittest.TestCase):
         raw = response.read().decode("utf-8")
         connection.close()
         return response.status, json.loads(raw) if raw else {}
+
+    @staticmethod
+    def _request_bytes(port: int, method: str, path: str, user_id: str, tenant_id: str) -> tuple[int, bytes, dict[str, str]]:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
+        connection.request(method, path, headers={"X-User-Id": user_id, "X-Tenant-Id": tenant_id})
+        response = connection.getresponse()
+        body = response.read()
+        headers = {key: value for key, value in response.getheaders()}
+        connection.close()
+        return response.status, body, headers
 
 
 if __name__ == "__main__":

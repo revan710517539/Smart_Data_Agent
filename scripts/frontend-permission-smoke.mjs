@@ -122,6 +122,16 @@ async function main() {
   await navigate(cdp, `${appUrl}/`);
   await waitForEval(cdp, `location.pathname === "/self-analysis/query" && document.body.innerText.includes("智能分析")`);
   await waitForEval(cdp, `JSON.parse(localStorage.getItem(${JSON.stringify(authStorageKey)}))?.user?.id === "u_super_admin"`);
+  if (process.env.SDA_SMOKE_SHELL_EDGE_ONLY === "true") {
+    await verifyShellEdgeSpacing(cdp);
+    console.log("全局工作区顶部和右侧 0.4cm 边距、滚动条贴齐且桌面与窄屏无溢出的浏览器验收通过");
+    return;
+  }
+  if (process.env.SDA_SMOKE_MENU_ROUTE_PERFORMANCE_ONLY === "true") {
+    await verifyMenuRoutePerformance(cdp, appUrl);
+    console.log("菜单冷路由保持当前页面、无顶部骨架闪现且无横向溢出的浏览器验收通过");
+    return;
+  }
   if (process.env.SDA_SMOKE_DASHBOARD_PERFORMANCE_ONLY === "true") {
     await delay(1_000);
     await cdp.evaluate(`performance.clearResourceTimings(); window.__dashboardNavigationStartedAt = performance.now()`);
@@ -184,9 +194,28 @@ async function main() {
   await configureApplicationModel(cdp, appUrl, "intelligent_analysis_reasoning", "经营分析中转站A", "中转站", ["gpt-5.5", "deepseek-v4-flash"], "model_analysis_relay_a");
   await configureApplicationModel(cdp, appUrl, "intelligent_analysis_reasoning", "经营分析中转站B", "中转站", ["qwen-plus"], "model_analysis_relay_b");
   await configureApplicationModel(cdp, appUrl, "intelligent_analysis_reasoning", "Claude 官方模型", "官方网站", ["claude-sonnet-4"], "model_analysis_official");
-  await configureApplicationModel(cdp, appUrl, "global_text_model", "通用分析中转站", "中转站", ["360/deepseek-v4-flash", "360/deepseek-v4-pro", "deepbank/glm-5.2", "glm-5.2-codex", "gpt-5.5"], "model_global_analysis_relay");
+  await configureApplicationModel(
+    cdp,
+    appUrl,
+    "global_text_model",
+    "通用分析中转站",
+    "中转站",
+    ["360/deepseek-v4-flash", "360/deepseek-v4-pro", "deepbank/glm-5.2", "glm-5.2-codex", "gpt-5.5", ...Array.from({ length: 40 }, (_, index) => `perf-model-${String(index + 1).padStart(2, "0")}`)],
+    "model_global_analysis_relay",
+    ["gpt-5.5"],
+  );
   await configureSpeechIntegration(cdp, appUrl, "realtime_voice_input", "speech_frontend_realtime");
   await configureSpeechIntegration(cdp, appUrl, "popup_voice_input", "speech_frontend_popup");
+  if (process.env.SDA_SMOKE_MESSAGE_BOARD_ONLY === "true") {
+    await verifyGlobalMessageBoardShortcut(cdp, appUrl);
+    console.log("全局留言板入口、页面草稿、图片、语音、失败保留及管理员回显浏览器验收通过");
+    return;
+  }
+  if (process.env.SDA_SMOKE_MODEL_PERFORMANCE_ONLY === "true") {
+    await verifyModelSelectionPerformance(cdp, appUrl);
+    console.log("模型选择滚动稳定、无冗余全量回读、重开后选中项置顶的浏览器验收通过");
+    return;
+  }
   await cdp.evaluate(`
     (() => {
       const session = JSON.parse(localStorage.getItem(${JSON.stringify(authStorageKey)}));
@@ -387,7 +416,7 @@ async function main() {
   await navigate(cdp, `${appUrl}/data-assets/data-management`);
   await waitForEval(cdp, `document.body.innerText.includes("原始表仅读取当前机构") && document.body.innerText.includes("原始表") && document.body.innerText.includes("主题表")`);
   await assertEval(cdp, `!document.body.innerText.includes("新增原始表") && !document.body.innerText.includes("数据接入") && !document.body.innerText.includes("爬虫")`, "CSV-only data management must not expose retired raw-upload, data-access, or crawler controls");
-  await assertEval(cdp, `(() => { const text = document.body.innerText; return text.includes("/app/data/华兴银行/") && !text.includes("Origin_Data"); })()`, "data management must describe the selected institution Data Crawler folder and never expose the retired shared Origin_Data source");
+  await assertEval(cdp, `(() => { const text = document.body.innerText; return text.includes("当前机构 Data Crawler 已下载的 CSV") && !text.includes("Origin_Data") && !text.includes("/app/data/"); })()`, "data management must describe the selected-institution Data Crawler delivery boundary without exposing retired or internal filesystem paths");
 
   await navigate(cdp, `${appUrl}/agent/tasks`);
   await waitForEval(cdp, `document.body.innerText.includes("自动化任务") && [...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增自动化任务"))`);
@@ -428,7 +457,7 @@ async function main() {
 
   await navigate(cdp, `${appUrl}/data-assets/tools`);
   await waitForEval(cdp, `document.body.innerText.includes("工具调用") && [...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增工具"))`);
-  await assertEval(cdp, `!["Confluence知识检索","Outlook邮箱调用","财务分析师"].some((name) => document.body.innerText.includes(name))`, "an operating institution must not inherit demo external-tool catalog entries");
+  await assertEval(cdp, `(() => { const text = document.body.innerText; return ["Confluence知识检索","Outlook邮箱调用","Teams-云文档工具","Teams-T5T工具","财务分析师"].every((name) => text.includes(name)) && !text.includes("华兴银行经营沙盘数据获取"); })()`, "an operating institution must receive the governed platform tool catalog without inheriting another institution's tool entries");
   await waitForEval(cdp, `[...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增工具"))`);
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.includes("新增工具"))?.click()`);
   await waitForEval(cdp, `Boolean(document.querySelector('[role="dialog"][aria-label="新增工具"]'))`);
@@ -514,6 +543,39 @@ async function main() {
   await waitForEval(cdp, `document.body.innerText.includes("模型接入管理") && document.body.innerText.includes("新增模型")`);
   await assertEval(cdp, `!document.body.innerText.includes("应用范围：全部非语音模型模块")`, "large-model dialog must not show the removed application-scope module");
   await assertEval(cdp, `![...document.querySelectorAll("select option")].some((option) => ["intelligent_analysis_reasoning","weekly_report_conclusion_regeneration","automatic_analysis","memory_extraction","skill_evolution_learning"].includes(option.value))`, "large-model integrations must apply to every non-voice placeholder without a per-module selector");
+  await cdp.evaluate(`document.querySelector('[data-model-edit-row="model_global_analysis_relay"]')?.click()`);
+  await waitForEval(cdp, `document.querySelectorAll('[data-model-option]').length >= 40`);
+  await cdp.evaluate(`performance.clearResourceTimings()`);
+  await cdp.evaluate(`(() => {
+    const scroll = document.querySelector('[data-model-integrations-scroll="true"]');
+    const labels = [...document.querySelectorAll('[data-model-option]')];
+    scroll.scrollTop = Math.max(0, scroll.scrollHeight - scroll.clientHeight - 80);
+    window.__modelOptionBefore = {
+      order: labels.map((label) => label.getAttribute('data-model-option')),
+      scrollTop: scroll.scrollTop,
+      target: labels.find((label) => label.getAttribute('data-model-option') === 'perf-model-40')?.getAttribute('data-model-option'),
+    };
+    labels.find((label) => label.getAttribute('data-model-option') === 'perf-model-40')?.querySelector('input')?.click();
+  })()`);
+  await waitForEval(cdp, `document.querySelector('[data-model-option="perf-model-40"]')?.getAttribute('data-model-option-selected') === "true" && document.querySelector('[role="status"]')?.textContent.includes("模型接入已更新")`);
+  await assertEval(cdp, `(() => {
+    const scroll = document.querySelector('[data-model-integrations-scroll="true"]');
+    const order = [...document.querySelectorAll('[data-model-option]')].map((label) => label.getAttribute('data-model-option'));
+    const base = window.__modelOptionBefore;
+    const configReads = performance.getEntriesByType('resource').filter((entry) => new URL(entry.name).pathname === '/api/system-config').length;
+    return base?.target === 'perf-model-40' && JSON.stringify(order) === JSON.stringify(base.order) && Math.abs(scroll.scrollTop - base.scrollTop) <= 2 && configReads === 0;
+  })()`, "model checkbox save must keep option order and scroll position without a redundant full configuration read");
+  await cdp.evaluate(`document.querySelector('button[aria-label="关闭弹窗"]')?.click()`);
+  await waitForEval(cdp, `!document.body.innerText.includes("模型接入管理")`);
+  await cdp.evaluate(`document.querySelector('button[aria-label="编辑模型接入"]')?.click()`);
+  await waitForEval(cdp, `document.body.innerText.includes("模型接入管理")`);
+  await cdp.evaluate(`document.querySelector('[data-model-edit-row="model_global_analysis_relay"]')?.click()`);
+  await waitForEval(cdp, `document.querySelectorAll('[data-model-option]').length >= 40`);
+  await assertEval(cdp, `(() => {
+    const selectedStates = [...document.querySelectorAll('[data-model-option]')].map((label) => label.getAttribute('data-model-option-selected') === 'true');
+    const firstUnselected = selectedStates.indexOf(false);
+    return firstUnselected === -1 || !selectedStates.slice(firstUnselected).includes(true);
+  })()`, "reopening model access must place all selected child models before unselected child models");
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.trim() === "语音转文字")?.click()`);
   await waitForEval(cdp, `["新增语音转文字接入","更新系统语音接入"].some((label) => document.body.innerText.includes(label))`);
   await assertEval(cdp, `!document.body.innerText.includes("须含 .aliyuncs.com") && !document.body.innerText.includes("此配置用于系统内全部语音应用")`, "speech access modal must omit the removed endpoint and shared-usage explanations");
@@ -531,6 +593,7 @@ async function main() {
 
   await navigate(cdp, `${appUrl}/weekly-report`);
   await waitForEval(cdp, `document.body.innerText.includes("经营周报") && !document.body.innerText.includes("核心指标表现")`);
+  await waitForEval(cdp, `document.querySelector('[data-report-meta-key="reporters"] input')?.value === "胥京波"`);
   await assertEval(cdp, `document.querySelector('[data-report-meta-key="reporters"] input')?.value === "胥京波"`, "weekly report reporter must default to the authenticated user's display name");
   await waitForEval(cdp, `(() => { const tabs = [...document.querySelectorAll("button")].filter((button) => ["可视化分析","分析结论"].includes(button.textContent.trim())); const ready = tabs[0]?.textContent.trim() === "可视化分析" && tabs[1]?.textContent.trim() === "分析结论" && !document.body.innerText.includes("待载入"); const explicitEmpty = document.body.innerText.includes("当前未显示周报数据，可通过右上角“周报数据”按钮重新启用。"); return ready || explicitEmpty; })()`);
   const weeklyVisualCard = await cdp.evaluate(`Boolean(document.querySelector('[data-visual-card]'))`);
@@ -627,7 +690,7 @@ async function main() {
   await cdp.evaluate(`document.querySelector('button[aria-label="选择分析模型"]')?.click()`);
   await waitForEval(cdp, `document.querySelectorAll("[data-model-group]").length === 4`);
   await assertEval(cdp, `[...document.querySelectorAll("[data-model-group]")].map((node) => node.dataset.modelGroup).join("|") === "经营分析中转站A|经营分析中转站B|通用分析中转站|其他"`, "user-configured relay integrations must each form a category and non-relay models must be grouped last under 其他");
-  await assertEval(cdp, `["360/deepseek-v4-flash","360/deepseek-v4-pro","deepbank/glm-5.2","glm-5.2-codex","gpt-5.5","deepseek-v4-flash","qwen-plus","claude-sonnet-4"].every((id) => Boolean(document.querySelector('button[data-model-option="' + id + '"]')))`, "all configured child models must be listed under their integration groups");
+  await assertEval(cdp, `(() => { const enabled = ["gpt-5.5","deepseek-v4-flash","qwen-plus","claude-sonnet-4","perf-model-40"]; const disabled = ["360/deepseek-v4-flash","360/deepseek-v4-pro","deepbank/glm-5.2","glm-5.2-codex"]; return enabled.every((id) => Boolean(document.querySelector('button[data-model-option="' + id + '"]'))) && disabled.every((id) => !document.querySelector('button[data-model-option="' + id + '"]')); })()`, "only enabled child models must be listed under their integration groups");
   await cdp.evaluate(`document.querySelector('button[data-model-option="qwen-plus"]')?.click()`);
   await waitForEval(cdp, `document.querySelector('button[aria-label="选择分析模型"]')?.innerText.toLowerCase().includes("qwen-plus")`);
   await navigate(cdp, `${appUrl}/weekly-report`);
@@ -747,6 +810,11 @@ async function runFullRouteSmoke(cdp, appUrl) {
     await navigate(cdp, `${appUrl}${requestedPath}`, 30_000);
     await waitForEval(cdp, `location.pathname === ${JSON.stringify(expectedPath)} && document.body.innerText.includes(${JSON.stringify(marker)})`, 30_000);
     await assertEval(cdp, `!document.body.innerText.includes("页面加载失败") && !document.body.innerText.includes("无法加载页面模块")`, `route ${requestedPath} must render without the error boundary`);
+    await assertEval(cdp, `document.querySelectorAll('[data-global-message-board-trigger="true"]').length === 1`, `route ${requestedPath} must expose exactly one global message-board shortcut`);
+    await assertEval(cdp, `(() => {
+      const wrapper = document.querySelector('[data-global-message-board-host]');
+      return wrapper?.getAttribute('data-global-message-board-host') === 'fallback' || wrapper === wrapper?.parentElement?.lastElementChild;
+    })()`, `route ${requestedPath} must keep the global message-board shortcut after all page-header actions`);
   }
 }
 
@@ -900,7 +968,7 @@ async function installSession(cdp, apiUrl, email, institution) {
   if (!userId) throw new Error(`failed to install session for ${email}`);
 }
 
-async function configureApplicationModel(cdp, apiUrl, applicationModule, name, source = "中转站", models = ["frontend-smoke-model"], id = `model_${applicationModule}`) {
+async function configureApplicationModel(cdp, apiUrl, applicationModule, name, source = "中转站", models = ["frontend-smoke-model"], id = `model_${applicationModule}`, enabledModels = models) {
   const result = await cdp.evaluate(`
     (async () => {
       const response = await fetch(${JSON.stringify(`${apiUrl}/api/system-config/model`)}, {
@@ -914,7 +982,7 @@ async function configureApplicationModel(cdp, apiUrl, applicationModule, name, s
           key: "http://127.0.0.1:9/v1",
           value: "frontend-smoke-secret",
           availableModels: ${JSON.stringify(models)},
-          enabledModels: ${JSON.stringify(models)},
+          enabledModels: ${JSON.stringify(enabledModels)},
           applicationModule: ${JSON.stringify(applicationModule)},
           testStatus: "connected",
           status: "available"
@@ -941,6 +1009,336 @@ async function configureSpeechIntegration(cdp, apiUrl, applicationModule, id) {
     })()
   `, true);
   if (!result?.ok) throw new Error(`failed to configure speech integration: ${result?.body || "unknown"}`);
+}
+
+async function verifyShellEdgeSpacing(cdp) {
+  await waitForEval(cdp, `[...document.querySelectorAll("main h2")].some((heading) => heading.textContent.trim() === "智能分析")`);
+  const measure = () => cdp.evaluate(`(() => {
+    const html = document.documentElement;
+    const main = document.querySelector('[data-agent-main-shell="true"]');
+    const page = main?.firstElementChild;
+    const sidebarHeader = document.querySelector('[data-agent-sidebar-header="true"]');
+    const heading = [...document.querySelectorAll("main h2")].find((node) => node.textContent.trim() === "智能分析");
+    const htmlRect = html.getBoundingClientRect();
+    const mainRect = main?.getBoundingClientRect();
+    const mainStyle = main ? getComputedStyle(main) : null;
+    const pageStyle = page ? getComputedStyle(page) : null;
+    return {
+      viewport: { width: innerWidth, height: innerHeight },
+      htmlRightGap: innerWidth - htmlRect.right,
+      htmlOverflow: html.scrollWidth > html.clientWidth,
+      main: mainRect && mainStyle ? {
+        top: mainRect.top,
+        rightGap: htmlRect.right - mainRect.right,
+        paddingTop: parseFloat(mainStyle.paddingTop),
+        paddingRight: parseFloat(mainStyle.paddingRight),
+        overflow: main.scrollWidth > main.clientWidth,
+      } : null,
+      page: pageStyle ? {
+        paddingTop: parseFloat(pageStyle.paddingTop),
+        paddingRight: parseFloat(pageStyle.paddingRight),
+        paddingBottom: parseFloat(pageStyle.paddingBottom),
+        paddingLeft: parseFloat(pageStyle.paddingLeft),
+      } : null,
+      headingTop: heading && mainRect ? heading.getBoundingClientRect().top - mainRect.top : null,
+      sidebarPaddingTop: sidebarHeader ? parseFloat(getComputedStyle(sidebarHeader).paddingTop) : null,
+    };
+  })()`);
+  const desktop = await measure();
+  assertShellEdgeMetrics(desktop, true);
+  await cdp.send("Emulation.setDeviceMetricsOverride", {
+    width: 900,
+    height: 700,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await delay(200);
+  const narrow = await measure();
+  assertShellEdgeMetrics(narrow, false);
+  console.log(JSON.stringify({ shellEdgeSpacing: { desktop, narrow } }));
+}
+
+function assertShellEdgeMetrics(metrics, expectSidebar) {
+  const nearEdgeGap = (value) => typeof value === "number" && value >= 14 && value <= 17;
+  if ((metrics?.main?.paddingTop || 0) > 0.5 || (metrics?.main?.paddingRight || 0) > 0.5) {
+    throw new Error(`main shell must not pad itself, so the scrollbar stays flush: ${JSON.stringify(metrics)}`);
+  }
+  if (metrics.htmlRightGap > 0.5 || metrics.htmlOverflow || metrics.main?.overflow) {
+    throw new Error(`shell must not reserve a document scrollbar gutter or overflow horizontally: ${JSON.stringify(metrics)}`);
+  }
+  if (!nearEdgeGap(metrics.page?.paddingTop) || !nearEdgeGap(metrics.page?.paddingRight) || metrics.page?.paddingLeft < 15 || metrics.page?.paddingBottom < 15) {
+    throw new Error(`page top and right inset must be 0.4cm while keeping left and bottom padding: ${JSON.stringify(metrics)}`);
+  }
+  if (!nearEdgeGap(metrics.headingTop)) {
+    throw new Error(`page heading must begin approximately 0.4cm below the viewport edge: ${JSON.stringify(metrics)}`);
+  }
+  if (expectSidebar && !nearEdgeGap(metrics.sidebarPaddingTop)) {
+    throw new Error(`desktop sidebar header must begin approximately 0.4cm below the viewport edge: ${JSON.stringify(metrics)}`);
+  }
+}
+
+async function verifyMenuRoutePerformance(cdp, appUrl) {
+  await waitForEval(cdp, `[...document.querySelectorAll("main h2")].some((heading) => heading.textContent.trim() === "智能分析")`);
+  await cdp.evaluate(`[...document.querySelectorAll("nav button")].find((button) => button.textContent.trim() === "系统管理")?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('nav a[href="/settings/config"]'))`);
+  await cdp.evaluate(`
+    (() => {
+      const startedAt = performance.now();
+      const startPath = location.pathname;
+      const probe = window.__menuRoutePerformanceProbe = {
+        active: true,
+        startedAt,
+        startPath,
+        samples: 0,
+        pendingSamples: 0,
+        fallbackSamples: 0,
+        overflowSamples: 0,
+        oldPageStable: true,
+      };
+      const sample = () => {
+        if (!probe.active) return;
+        const stillWaiting = location.pathname === startPath;
+        probe.samples += 1;
+        if (document.querySelector('[data-menu-route-pending="true"]')) probe.pendingSamples += 1;
+        if (document.querySelector('[aria-label="页面内容加载中"]')) probe.fallbackSamples += 1;
+        if (document.documentElement.scrollWidth > document.documentElement.clientWidth || document.body.scrollWidth > document.body.clientWidth) probe.overflowSamples += 1;
+        if (stillWaiting && ![...document.querySelectorAll("main h2")].some((heading) => heading.textContent.trim() === "智能分析")) probe.oldPageStable = false;
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    })()
+  `);
+  await dispatchRealClick(cdp, 'nav a[href="/settings/config"]');
+  await waitForEval(cdp, `location.pathname === "/settings/config" && Boolean(document.querySelector('[data-settings-upper-module="model-access"]'))`);
+  await delay(100);
+  const result = await cdp.evaluate(`(() => {
+    const probe = window.__menuRoutePerformanceProbe;
+    probe.active = false;
+    return { ...probe, elapsedMs: performance.now() - probe.startedAt, finalPath: location.pathname };
+  })()`);
+  if (!result.oldPageStable) throw new Error(`menu route must retain the current page while its target module prepares: ${JSON.stringify(result)}`);
+  if (result.fallbackSamples) throw new Error(`prepared menu navigation must not flash the page fallback: ${JSON.stringify(result)}`);
+  if (result.overflowSamples) throw new Error(`menu navigation must not create horizontal overflow: ${JSON.stringify(result)}`);
+  console.log(JSON.stringify({ menuRoutePerformance: result }));
+
+  await cdp.send("Network.setBlockedURLs", { urls: ["*CustomerSegmentAnalysis*"] });
+  await navigate(cdp, `${appUrl}/self-analysis/query`);
+  await waitForEval(cdp, `location.pathname === "/self-analysis/query" && document.body.innerText.includes("智能分析")`);
+  await cdp.evaluate(`[...document.querySelectorAll("nav button")].find((button) => button.textContent.trim() === "经营分析")?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('nav a[href="/customer-segment-analysis"]'))`);
+  await dispatchRealClick(cdp, 'nav a[href="/customer-segment-analysis"]');
+  await waitForEval(cdp, `location.pathname === "/customer-segment-analysis" && Boolean(document.querySelector('[data-route-error="true"]'))`, 30_000);
+  await assertEval(cdp, `!document.querySelector('[data-menu-route-pending="true"]') && !document.querySelector('[aria-label="页面内容加载中"]')`, "failed target module preparation must release menu pending and reach the existing route error boundary");
+  await cdp.send("Network.setBlockedURLs", { urls: [] });
+}
+
+async function verifyModelSelectionPerformance(cdp, appUrl) {
+  await navigate(cdp, `${appUrl}/settings/config`, 30_000);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-settings-upper-module="model-access"]'))`);
+  await cdp.evaluate(`document.querySelector('button[aria-label="编辑模型接入"]')?.click()`);
+  await waitForEval(cdp, `document.body.innerText.includes("模型接入管理")`);
+  await cdp.evaluate(`document.querySelector('[data-model-edit-row="model_global_analysis_relay"]')?.click()`);
+  await waitForEval(cdp, `document.querySelectorAll('[data-model-option]').length >= 40`);
+  await cdp.evaluate(`performance.clearResourceTimings()`);
+  await cdp.evaluate(`(() => {
+    const scroll = document.querySelector('[data-model-integrations-scroll="true"]');
+    const labels = [...document.querySelectorAll('[data-model-option]')];
+    scroll.scrollTop = Math.max(0, scroll.scrollHeight - scroll.clientHeight - 80);
+    window.__modelPerformanceBefore = {
+      order: labels.map((label) => label.getAttribute('data-model-option')),
+      scrollTop: scroll.scrollTop,
+    };
+    labels.find((label) => label.getAttribute('data-model-option') === 'perf-model-40')?.querySelector('input')?.click();
+  })()`);
+  await waitForEval(cdp, `document.querySelector('[data-model-option="perf-model-40"]')?.getAttribute('data-model-option-selected') === "true" && document.querySelector('[role="status"]')?.textContent.includes("模型接入已更新")`);
+  await assertEval(cdp, `(() => {
+    const scroll = document.querySelector('[data-model-integrations-scroll="true"]');
+    const currentOrder = [...document.querySelectorAll('[data-model-option]')].map((label) => label.getAttribute('data-model-option'));
+    const configReads = performance.getEntriesByType('resource').filter((entry) => new URL(entry.name).pathname === '/api/system-config').length;
+    return JSON.stringify(currentOrder) === JSON.stringify(window.__modelPerformanceBefore.order)
+      && Math.abs(scroll.scrollTop - window.__modelPerformanceBefore.scrollTop) <= 2
+      && configReads === 0;
+  })()`, "model checkbox save must keep scroll and order without a redundant system-config read");
+  await assertEval(cdp, `fetch('/api/system-config', { credentials: 'include' }).then(async (response) => {
+    if (!response.ok) return false;
+    const payload = await response.json();
+    return payload.models?.find((model) => model.id === 'model_global_analysis_relay')?.enabledModels?.includes('perf-model-40') === true;
+  })`, "selected child model must be persisted by the existing system-config API");
+  await cdp.evaluate(`(() => {
+    const originalFetch = window.fetch;
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (new URL(url, location.origin).pathname === '/api/system-config/model' && (init?.method || 'GET').toUpperCase() === 'POST') {
+        window.fetch = originalFetch;
+        return Promise.resolve(new Response(JSON.stringify({ detail: 'isolated save failure' }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+      }
+      return originalFetch(input, init);
+    };
+    const scroll = document.querySelector('[data-model-integrations-scroll="true"]');
+    window.__modelFailureBefore = {
+      order: [...document.querySelectorAll('[data-model-option]')].map((label) => label.getAttribute('data-model-option')),
+      scrollTop: scroll.scrollTop,
+    };
+    document.querySelector('[data-model-option="perf-model-39"] input')?.click();
+  })()`);
+  await waitForEval(cdp, `document.querySelector('[role="status"]')?.textContent.includes("失败") && document.querySelector('[data-model-option="perf-model-39"]')?.getAttribute('data-model-option-selected') === "false"`);
+  await assertEval(cdp, `(() => {
+    const scroll = document.querySelector('[data-model-integrations-scroll="true"]');
+    const order = [...document.querySelectorAll('[data-model-option]')].map((label) => label.getAttribute('data-model-option'));
+    return JSON.stringify(order) === JSON.stringify(window.__modelFailureBefore.order) && Math.abs(scroll.scrollTop - window.__modelFailureBefore.scrollTop) <= 2;
+  })()`, "failed child-model save must roll back selection without moving the list");
+  await cdp.evaluate(`document.querySelector('button[aria-label="关闭弹窗"]')?.click()`);
+  await waitForEval(cdp, `!document.body.innerText.includes("模型接入管理")`);
+  await cdp.evaluate(`document.querySelector('button[aria-label="编辑模型接入"]')?.click()`);
+  await waitForEval(cdp, `document.body.innerText.includes("模型接入管理")`);
+  await cdp.evaluate(`document.querySelector('[data-model-edit-row="model_global_analysis_relay"]')?.click()`);
+  await waitForEval(cdp, `document.querySelectorAll('[data-model-option]').length >= 40`);
+  await assertEval(cdp, `(() => {
+    const states = [...document.querySelectorAll('[data-model-option]')].map((label) => label.getAttribute('data-model-option-selected') === 'true');
+    const firstUnselected = states.indexOf(false);
+    return firstUnselected === -1 || !states.slice(firstUnselected).includes(true);
+  })()`, "reopened model dialog must place selected child models first");
+}
+
+async function verifyGlobalMessageBoardShortcut(cdp, appUrl) {
+  const representativeRoutes = [
+    ["/dashboard", "多机构分析"],
+    ["/self-analysis/query", "智能分析"],
+    ["/data-assets/data-management", "站内数据"],
+    ["/settings/config", "系统配置"],
+  ];
+  for (const [path, marker] of representativeRoutes) {
+    await navigate(cdp, `${appUrl}${path}`, 30_000);
+    await waitForEval(cdp, `location.pathname === ${JSON.stringify(path)} && document.body.innerText.includes(${JSON.stringify(marker)}) && Boolean(document.querySelector('[data-global-message-board-trigger="true"]'))`, 30_000);
+    const shortcutPosition = await cdp.evaluate(`(() => {
+      const trigger = document.querySelector('[data-global-message-board-trigger="true"]');
+      const wrapper = trigger?.parentElement;
+      const host = wrapper?.parentElement;
+      if (!trigger || !wrapper || !host) return { valid: false, reason: "missing" };
+      const right = trigger.getBoundingClientRect().right;
+      const childRects = [...host.children].filter((child) => child instanceof HTMLElement && child.getBoundingClientRect().width > 0)
+        .map((child) => ({ tag: child.tagName, text: child.textContent?.trim().slice(0, 30), right: child.getBoundingClientRect().right, isWrapper: child === wrapper }));
+      return {
+        valid: wrapper === host.lastElementChild && childRects.filter((child) => !child.isWrapper).every((child) => child.right <= right + 1),
+        host: host.getAttribute("data-page-header-actions") || host.getAttribute("data-standard-analysis-page-actions") || wrapper.getAttribute("data-global-message-board-host"),
+        hostClass: host.className,
+        right,
+        childRects,
+      };
+    })()`);
+    if (!shortcutPosition?.valid) throw new Error(`global message-board shortcut must be the rightmost page-header action on ${path}: ${JSON.stringify(shortcutPosition)}`);
+  }
+
+  await navigate(cdp, `${appUrl}/dashboard`, 30_000);
+  await waitForEval(cdp, `document.body.innerText.includes("多机构分析") && Boolean(document.querySelector('[data-global-message-board-trigger="true"]'))`);
+  await cdp.evaluate(`document.querySelector('[data-global-message-board-trigger="true"]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-global-message-board-popover="true"]'))`);
+  await assertEval(cdp, `(() => {
+    const popover = document.querySelector('[data-global-message-board-popover="true"]');
+    const rect = popover?.getBoundingClientRect();
+    const scroll = document.querySelector('[data-global-message-board-scroll="true"]');
+    return Boolean(rect && scroll && rect.width >= 450 && rect.width <= 458 && rect.height >= 375 && rect.height <= 760 && getComputedStyle(scroll).overflowY === "auto");
+  })()`, "message-board popover must use the requested 12cm width, 10cm minimum height and 20cm scroll ceiling");
+
+  const draftText = `全局留言板草稿与管理员回显 ${Date.now()}`;
+  await cdp.evaluate(`(() => {
+    const input = document.querySelector('[data-global-message-board-input="true"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+    setter.call(input, ${JSON.stringify(draftText)});
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  })()`);
+  await delay(700);
+  await waitForEval(cdp, `document.querySelector('[data-message-board-draft-status="saved"]')`);
+  await cdp.evaluate(`document.querySelector('button[aria-label="关闭留言气泡"]')?.click()`);
+  await waitForEval(cdp, `getComputedStyle(document.querySelector('[data-global-message-board-popover="true"]')).display === "none"`);
+  await cdp.evaluate(`document.querySelector('[data-global-message-board-trigger="true"]')?.click()`);
+  await waitForEval(cdp, `document.querySelector('[data-global-message-board-input="true"]')?.value === ${JSON.stringify(draftText)}`);
+
+  await cdp.evaluate(`(() => {
+    const input = document.querySelector('[data-global-message-board-input="true"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+    setter.call(input, Array.from({ length: 80 }, (_, index) => "页面问题明细 " + (index + 1)).join("\\n"));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  })()`);
+  await waitForEval(cdp, `(() => {
+    const popover = document.querySelector('[data-global-message-board-popover="true"]');
+    const scroll = document.querySelector('[data-global-message-board-scroll="true"]');
+    return Boolean(popover && scroll && popover.getBoundingClientRect().height <= 380 && scroll.scrollHeight > scroll.clientHeight);
+  })()`);
+  await cdp.evaluate(`(() => {
+    const input = document.querySelector('[data-global-message-board-input="true"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+    setter.call(input, ${JSON.stringify(draftText)});
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  })()`);
+
+  await cdp.evaluate(`(() => {
+    const input = document.querySelector('[data-global-message-board-input="true"]');
+    const bytes = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="), (char) => char.charCodeAt(0));
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], "page-problem.png", { type: "image/png" }));
+    input.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }));
+  })()`);
+  await waitForEval(cdp, `document.querySelectorAll('[data-global-message-board-images="true"] img').length === 1`);
+  await delay(700);
+
+  await cdp.evaluate(`(() => {
+    window.__messageBoardVoiceSockets = [];
+    class FakeWebSocket {
+      static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
+      constructor(url) { this.url = url; this.readyState = 0; window.__messageBoardVoiceSockets.push(this); setTimeout(() => { this.readyState = 1; this.onopen?.({}); }, 20); }
+      send(data) { if (typeof data !== "string") return; try { const payload = JSON.parse(data); if (payload.type === "start") { this.startPayload = payload; setTimeout(() => { this.onmessage?.({ data: JSON.stringify({ type: "config", provider: "aliyun_fun_asr" }) }); this.onmessage?.({ data: JSON.stringify({ type: "ready" }) }); }, 20); } } catch {} }
+      close() { if (this.readyState >= 2) return; this.readyState = 3; setTimeout(() => this.onclose?.({}), 10); }
+      emit(text) { this.onmessage?.({ data: JSON.stringify({ type: "transcript", text, final: true }) }); }
+    }
+    Object.defineProperty(window, "WebSocket", { value: FakeWebSocket, configurable: true });
+    Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) }, configurable: true });
+    class FakeAudioContext {
+      constructor() { this.sampleRate = 16000; this.destination = {}; }
+      createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+      createScriptProcessor() { return { onaudioprocess: null, connect() {}, disconnect() {} }; }
+      close() { return Promise.resolve(); }
+    }
+    Object.defineProperty(window, "AudioContext", { value: FakeAudioContext, configurable: true });
+  })()`);
+  await cdp.evaluate(`document.querySelector('[data-global-message-board-voice="true"]')?.click()`);
+  await waitForEval(cdp, `window.__messageBoardVoiceSockets.at(-1)?.startPayload?.applicationModule === "realtime_voice_input"`);
+  await cdp.evaluate(`window.__messageBoardVoiceSockets.at(-1).emit("语音补充页面操作卡顿")`);
+  await waitForEval(cdp, `document.querySelector('[data-global-message-board-input="true"]')?.value.includes("语音补充页面操作卡顿")`);
+  await cdp.evaluate(`document.querySelector('[data-global-message-board-voice="true"]')?.click()`);
+
+  await cdp.evaluate(`(() => {
+    const originalFetch = window.fetch;
+    window.fetch = (input, init = {}) => {
+      const url = new URL(typeof input === "string" ? input : input.url, location.origin);
+      if (url.pathname === "/api/message-board/image" && (init.method || "GET").toUpperCase() === "POST") {
+        window.fetch = originalFetch;
+        return Promise.resolve(new Response(JSON.stringify({ detail: "isolated image upload failure" }), { status: 503, headers: { "Content-Type": "application/json" } }));
+      }
+      return originalFetch(input, init);
+    };
+    [...document.querySelectorAll('[data-global-message-board-popover="true"] button')].find((button) => button.textContent.trim() === "提交")?.click();
+  })()`);
+  await waitForEval(cdp, `document.querySelector('[data-global-message-board-popover="true"] [role="status"]')?.textContent.includes("Data Agent API 请求失败")`);
+  await assertEval(cdp, `document.querySelector('[data-global-message-board-input="true"]')?.value.includes(${JSON.stringify(draftText)}) && document.querySelectorAll('[data-global-message-board-images="true"] img').length === 1`, "failed submission must keep the text and image draft in place");
+
+  await cdp.evaluate(`[...document.querySelectorAll('[data-global-message-board-popover="true"] button')].find((button) => button.textContent.trim() === "提交")?.click()`);
+  await waitForEval(cdp, `document.querySelector('[data-global-message-board-trigger="true"]')?.textContent.includes("已提交")`, 30_000);
+  await assertEval(cdp, `fetch('/api/message-board?page_key=dashboard', { credentials: 'include' }).then(async (response) => {
+    if (!response.ok) return false;
+    const payload = await response.json();
+    const message = payload.messages?.find((item) => item.content.includes(${JSON.stringify(draftText)}));
+    return Boolean(message && message.page_title === '多机构分析' && message.attachment_ids?.length === 1);
+  })`, "submitted text and screenshot must be readable from the existing message-board API");
+
+  await navigate(cdp, `${appUrl}/agent/message-board`, 30_000);
+  await waitForEval(cdp, `document.body.innerText.includes("留言板管理") && [...document.querySelectorAll('[data-message-board-admin-row]')].some((row) => row.textContent.includes(${JSON.stringify(draftText)}))`, 30_000);
+  await cdp.evaluate(`(() => {
+    const row = [...document.querySelectorAll('[data-message-board-admin-row]')].find((item) => item.textContent.includes(${JSON.stringify(draftText)}));
+    row?.querySelector('button[aria-label="展开留言详情"]')?.click();
+  })()`);
+  await waitForEval(cdp, `(() => { const row = [...document.querySelectorAll('[data-message-board-admin-row]')].find((item) => item.textContent.includes(${JSON.stringify(draftText)})); return Boolean(row?.querySelector('[data-message-board-attachment-gallery="true"] img')); })()`, 30_000);
+  await runFullRouteSmoke(cdp, appUrl);
 }
 
 async function navigate(cdp, url, timeoutMs = 10_000) {
@@ -1026,8 +1424,24 @@ async function waitForEval(cdp, expression, timeoutMs = 30000) {
     }
     await delay(150);
   }
-  const pageState = await cdp.evaluate(`({ path: location.pathname, body: document.body.innerText.slice(0, 600) })`).catch(() => null);
-  throw new Error(`timed out waiting for expression: ${expression}; page=${JSON.stringify(pageState)}`);
+  const pageState = await cdp.evaluate(`({
+    path: location.pathname,
+    body: document.body.innerText.slice(0, 1200),
+    dialogs: [...document.querySelectorAll('[role="dialog"]')].map((dialog) => ({
+      label: dialog.getAttribute('aria-label'),
+      text: dialog.innerText.slice(0, 600),
+    })),
+    inputs: [...document.querySelectorAll('input')].slice(0, 12).map((input) => ({
+      placeholder: input.getAttribute('placeholder'),
+      value: input.value,
+      meta: input.closest('[data-report-meta-key]')?.getAttribute('data-report-meta-key') || null,
+    })),
+  })`).catch(() => null);
+  const recentResponses = cdp.events
+    .filter((event) => event.method === "Network.responseReceived" && String(event.params?.response?.url || "").includes("/api/"))
+    .slice(-8)
+    .map((event) => ({ status: event.params?.response?.status, url: event.params?.response?.url }));
+  throw new Error(`timed out waiting for expression: ${expression}; page=${JSON.stringify(pageState)}; recentResponses=${JSON.stringify(recentResponses)}`);
 }
 
 async function openPage(debugPort, url) {

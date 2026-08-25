@@ -189,6 +189,8 @@ from .market import (
     handle_market_source_create,
 )
 from .message_board import (
+    handle_message_board_admin_append_content_update,
+    handle_message_board_admin_export,
     handle_message_board_admin_get,
     handle_message_board_admin_status_update,
     handle_message_board_archive,
@@ -228,7 +230,7 @@ from .settings import (
     handle_system_speech_integration_test,
     handle_system_speech_integration_upsert,
 )
-from .tenants import handle_tenants_get
+from .tenants import handle_tenants_create, handle_tenants_delete, handle_tenants_get, handle_tenants_update
 from .traces import handle_trace_spans_get
 
 GET_ROUTE_HANDLERS = {
@@ -296,6 +298,7 @@ GET_ROUTE_HANDLERS = {
     "/api/market-monitoring": handle_market_get,
     "/api/message-board": handle_message_board_get,
     "/api/message-board/admin": handle_message_board_admin_get,
+    "/api/message-board/admin/export": handle_message_board_admin_export,
     "/api/message-board/attachment": handle_message_board_attachment_get,
     "/api/email-daily": handle_daily_email_get,
     "/api/operating-snapshot": handle_operating_snapshot_get,
@@ -409,6 +412,7 @@ POST_ROUTE_HANDLERS = {
     "/api/message-board/image": handle_message_board_image_upload,
     "/api/capability-approval": handle_capability_approval_request,
     "/api/capability-approval/review": handle_capability_approval_review,
+    "/api/tenants": handle_tenants_create,
 }
 
 PUT_ROUTE_HANDLERS = {
@@ -420,7 +424,9 @@ PUT_ROUTE_HANDLERS = {
     "/api/message-board": handle_message_board_update,
     "/api/message-board/archive": handle_message_board_archive,
     "/api/message-board/admin/status": handle_message_board_admin_status_update,
+    "/api/message-board/admin/append-content": handle_message_board_admin_append_content_update,
     "/api/metric-dictionary": handle_metric_dictionary_replace,
+    "/api/tenants": handle_tenants_update,
 }
 
 DELETE_ROUTE_HANDLERS = {
@@ -435,6 +441,7 @@ DELETE_ROUTE_HANDLERS = {
     "/api/subscription": handle_subscription_delete,
     "/api/metric-dictionary": handle_metric_dictionary_delete,
     "/api/data-assets/item": handle_data_asset_item_delete,
+    "/api/tenants": handle_tenants_delete,
 }
 
 

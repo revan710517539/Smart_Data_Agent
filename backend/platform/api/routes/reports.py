@@ -7,9 +7,8 @@ from typing import Any
 from uuid import uuid4
 from urllib.parse import parse_qs
 
-from backend.authz import normalize_tenant_id
-from backend.authz.seed import OPERATING_TENANTS
 from backend.platform.api.support import first_query_value, send_route_exception
+from backend.platform.tenancy.catalog import list_active_tenants
 from backend.platform.memory import MemoryRecord
 from backend.platform.reports.weekly_learning import WeeklyReportLearningEngine
 from backend.platform.tenancy import ExecutionContext
@@ -32,10 +31,13 @@ def _institution_label(tenant_id: str) -> str:
     return str(tenant_id or "").split(":", 1)[-1].strip()
 
 
-def _institution_tenant_id(institution: str, fallback_tenant_id: str) -> str:
+def _institution_tenant_id(handler: Any, institution: str, fallback_tenant_id: str) -> str:
     """Resolve a recognised display label without accepting an arbitrary scope."""
     label = str(institution or "").strip()
-    return normalize_tenant_id(label) if label in OPERATING_TENANTS else fallback_tenant_id
+    for item in list_active_tenants(handler.services):
+        if item["name"] == label or item["id"] == label:
+            return item["id"]
+    return fallback_tenant_id
 
 
 def handle_report_analysis_results_get(handler: Any, query: str) -> None:
@@ -274,7 +276,9 @@ def handle_report_analysis_result_save_experience(handler: Any) -> None:
         }
         content_hash = _stable_hash(content)
         analysis_tenant_id = _institution_tenant_id(
-            str(content["institution_scope"]["analysis_institution"]), context.tenant_id
+            handler,
+            str(content["institution_scope"]["analysis_institution"]),
+            context.tenant_id,
         )
         scopes = [(analysis_tenant_id, "analysis")]
         if analysis_tenant_id != context.tenant_id:

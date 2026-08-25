@@ -95,8 +95,19 @@ class TenantCatalogIsolationTest(unittest.TestCase):
         self.assertIn("归因分析", names)
         self.assertIn("预测分析", names)
         self.assertIn("石嘴山本地场景", names)
-        self.assertNotIn("周报分析", names)
-        self.assertEqual(isolated["external_tools"], [])
+        self.assertIn("周报分析", names)
+        self.assertIn("运营日常分析", names)
+        self.assertIn("风险策略分析", names)
+        self.assertEqual(
+            {item["id"] for item in isolated["external_tools"]},
+            {
+                "tool-confluence-search",
+                "tool-outlook",
+                "tool-teams-cloud-doc",
+                "tool-teams-t5t",
+                "tool-financial-analyst",
+            },
+        )
         self.assertEqual(isolated["analysis_shortcuts"], [])
         self.assertIn("华兴银行经营沙盘数据获取", [item["name"] for item in huaxing_bundle["external_tools"]])
 
@@ -113,14 +124,32 @@ class TenantCatalogIsolationTest(unittest.TestCase):
                 "scene-page-rail",
                 "scene-textbox-voice",
                 "scene-self-analysis",
+                "scene-weekly-report",
+                "scene-daily-operation",
+                "scene-risk-strategy",
                 "topic-descriptive",
                 "topic-attribution",
                 "topic-predictive",
+                "topic-exploratory",
+                "topic-financial-budget",
+                "topic-credit-risk",
+                "topic-suspicious-transaction",
+                "topic-liquidity-risk",
+                "topic-overdue-risk",
             },
         )
-        self.assertEqual(store.list_bundle(shizuishan)["external_tools"], [])
+        self.assertEqual(
+            {item["id"] for item in store.list_bundle(shizuishan)["external_tools"]},
+            {
+                "tool-confluence-search",
+                "tool-outlook",
+                "tool-teams-cloud-doc",
+                "tool-teams-t5t",
+                "tool-financial-analyst",
+            },
+        )
         self.assertEqual(store.list_bundle(shizuishan)["analysis_shortcuts"], [])
-        self.assertIsNone(store.get_item(shizuishan, "analysis_skill", "scene-weekly-report"))
+        self.assertIsNotNone(store.get_item(shizuishan, "analysis_skill", "scene-weekly-report"))
 
 
 if __name__ == "__main__":

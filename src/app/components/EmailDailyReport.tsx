@@ -117,7 +117,7 @@ export function EmailDailyReport() {
             <p className="mt-0.5 text-[13px] text-[#aeaeb2]">经营指标自动汇总 · 风险异常提醒 · 邮件订阅分发</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-fit min-h-9 shrink-0 items-center gap-[0.2cm]" data-page-header-actions="true">
           <button onClick={() => void runDailyAction("generate")} disabled={Boolean(busyAction)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-50">
             <RefreshCw className={`h-3.5 w-3.5 ${busyAction === "generate" ? "animate-spin" : ""}`} />重新生成
           </button>

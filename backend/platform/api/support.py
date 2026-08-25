@@ -64,6 +64,26 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
         )
         return
     if isinstance(exc, PermissionError):
+        error_text = str(exc)
+        permission_messages = {
+            "customer_segment_detail_table_required": "该数据源不是客户号唯一主键的明细表，不能用于分客群分析。",
+            "customer_segment_page_data_customer_key_changed": "明细表的客户号主键已经变化，请由超级管理员在站内数据的“分客群页面”中重新保存配置。",
+            "page_data_source_unavailable": "页面数据源已不可用。请检查当前机构的数据目录和页面数据绑定。",
+            "page_data_source_schema_changed": "页面数据源结构已更新，当前图表字段不再兼容。请重新绑定数据源后保存。",
+            "global_super_admin_required": "仅超级管理员可以执行该操作。",
+            "tenant_catalog_super_admin_required": "仅超级管理员可以管理租户。",
+            "global_super_admin_required_for_page_data": "仅超级管理员可以新增或修改页面数据。",
+            "multi_institution_page_data_sources_unavailable": "当前账号已无法读取该多机构配置中的全部来源。请检查机构授权和表关联配置。",
+            "multi_institution_page_data_source_schema_changed": "多机构数据源结构已更新，当前图表所用字段或关联键不再兼容。请重新确认关联后保存。",
+            "raw_table_metadata_source_unavailable": "原始表已更新或不属于当前机构，请重新选择后再保存字段配置。",
+        }
+        if error_text in permission_messages:
+            handler._send_json(
+                {"error": error_text, "message": permission_messages[error_text], "request_id": request_id},
+                HTTPStatus.FORBIDDEN,
+                headers={"X-Request-Id": request_id},
+            )
+            return
         handler._send_json(
             {"error": "permission_denied", "message": "The requested operation is not permitted.", "request_id": request_id},
             HTTPStatus.FORBIDDEN,
@@ -135,6 +155,13 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             "registration_contact_required": "请填写手机号或邮箱。",
             "registration_institution_required": "请选择要加入的机构。",
             "registration_institution_unknown": "所选机构不在系统目录中，请重新选择。",
+            "tenant_name_required": "请填写租户名称。",
+            "tenant_name_too_long": "租户名称不能超过 50 个字符。",
+            "tenant_name_reserved": "该名称属于系统保留租户，不能使用。",
+            "tenant_name_invalid": "租户名称包含不支持的字符。",
+            "tenant_name_duplicate": "该租户已存在，请使用不同的名称。",
+            "tenant_id_required": "缺少要操作的租户。",
+            "tenant_not_found": "未找到对应租户，请刷新后重试。",
             "registration_password_required": "请输入登录密码。",
             "registration_already_pending": "该账号已提交注册申请，请等待超级管理员审批。",
             "registration_not_found": "未找到对应的注册申请。",

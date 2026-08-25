@@ -30,6 +30,7 @@ class InMemoryMessageBoardStore:
             stored = {
                 **entry,
                 "status": entry.get("status") or "new",
+                "append_content": str(entry.get("append_content") or ""),
                 "archived_at": None,
                 "created_at": now,
                 "updated_at": now,
@@ -102,6 +103,18 @@ class InMemoryMessageBoardStore:
             current["updated_at"] = _utcnow()
             return dict(current)
 
+    def set_append_content(self, message_id: str, append_content: str, expected_lock_version: int) -> dict[str, Any]:
+        with self._guard:
+            current = self._entries.get(message_id)
+            if not current:
+                raise KeyError("message_board_entry_not_found")
+            if int(current["lock_version"]) != expected_lock_version:
+                raise MessageBoardRevisionConflict("message_board_revision_conflict")
+            current["append_content"] = append_content
+            current["lock_version"] = expected_lock_version + 1
+            current["updated_at"] = _utcnow()
+            return dict(current)
+
     def list_owned(self, tenant_id: str, user_id: str, page_key: str = "") -> list[dict[str, Any]]:
         with self._guard:
             rows = [
@@ -113,14 +126,16 @@ class InMemoryMessageBoardStore:
             ]
         return sorted(rows, key=lambda item: (item["created_at"], item["message_id"]), reverse=True)
 
-    def list_all(self, *, tenant_id: str = "", query: str = "", offset: int = 0, limit: int = 50) -> tuple[list[dict[str, Any]], int]:
+    def list_all(self, *, tenant_id: str = "", query: str = "", offset: int = 0, limit: int = 50, status: str = "", sort: str = "") -> tuple[list[dict[str, Any]], int]:
         needle = query.strip().lower()
         scoped = str(tenant_id or "").strip()
+        wanted_status = str(status or "").strip()
         with self._guard:
             rows = [
                 dict(entry)
                 for entry in self._entries.values()
-                if not scoped or entry.get("tenant_id") == scoped
+                if (not scoped or entry.get("tenant_id") == scoped)
+                and (not wanted_status or entry.get("status") == wanted_status)
             ]
         if needle:
             rows = [
@@ -130,7 +145,7 @@ class InMemoryMessageBoardStore:
                     for key in ("author_name", "author_user_id", "content", "page_title", "tenant_id")
                 ).lower()
             ]
-        rows.sort(key=lambda item: (item["created_at"], item["message_id"]), reverse=True)
+        rows.sort(key=lambda item: (item["created_at"], item["message_id"]), reverse=str(sort or "").strip().lower() != "asc")
         return rows[offset : offset + limit], len(rows)
 
     def close(self) -> None:
@@ -152,6 +167,8 @@ class SQLiteMessageBoardStore:
             self._conn.execute("ALTER TABLE platform_message_board_entries ADD COLUMN status TEXT NOT NULL DEFAULT 'new'")
         if "archived_at" not in columns:
             self._conn.execute("ALTER TABLE platform_message_board_entries ADD COLUMN archived_at TEXT")
+        if "append_content" not in columns:
+            self._conn.execute("ALTER TABLE platform_message_board_entries ADD COLUMN append_content TEXT NOT NULL DEFAULT ''")
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_platform_message_board_status "
             "ON platform_message_board_entries(status, updated_at DESC, message_id)"
@@ -166,13 +183,14 @@ class SQLiteMessageBoardStore:
                 INSERT OR IGNORE INTO platform_message_board_entries(
                     message_id, tenant_id, author_user_id, author_name,
                     page_key, page_title, page_url, content, quote_context,
-                    attachment_ids, status, archived_at, created_at, updated_at, lock_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 0)
+                    attachment_ids, status, archived_at, append_content, created_at, updated_at, lock_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 0)
                 """,
                 (
                     entry["message_id"], entry["tenant_id"], entry["author_user_id"], entry["author_name"],
                     entry["page_key"], entry["page_title"], entry["page_url"], entry["content"],
-                    _json(entry["quote_context"]), _json(entry["attachment_ids"]), entry.get("status") or "new", now, now,
+                    _json(entry["quote_context"]), _json(entry["attachment_ids"]), entry.get("status") or "new",
+                    str(entry.get("append_content") or ""), now, now,
                 ),
             )
         saved = self._get(entry["message_id"])
@@ -263,6 +281,22 @@ class SQLiteMessageBoardStore:
             raise MessageBoardRevisionConflict("message_board_revision_conflict")
         return self._get(message_id)
 
+    def set_append_content(self, message_id: str, append_content: str, expected_lock_version: int) -> dict[str, Any]:
+        with self._conn:
+            cursor = self._conn.execute(
+                """
+                UPDATE platform_message_board_entries
+                SET append_content = ?, updated_at = ?, lock_version = lock_version + 1
+                WHERE message_id = ? AND lock_version = ?
+                """,
+                (append_content, _utcnow(), message_id, expected_lock_version),
+            )
+        if cursor.rowcount != 1:
+            if not self._conn.execute("SELECT 1 FROM platform_message_board_entries WHERE message_id = ?", (message_id,)).fetchone():
+                raise KeyError("message_board_entry_not_found")
+            raise MessageBoardRevisionConflict("message_board_revision_conflict")
+        return self._get(message_id)
+
     def _raise_write_failure(self, tenant_id: str, user_id: str, message_id: str) -> None:
         current = self._conn.execute(
             "SELECT tenant_id, author_user_id FROM platform_message_board_entries WHERE message_id = ?",
@@ -285,20 +319,24 @@ class SQLiteMessageBoardStore:
         ).fetchall()
         return [_row(row) for row in rows]
 
-    def list_all(self, *, tenant_id: str = "", query: str = "", offset: int = 0, limit: int = 50) -> tuple[list[dict[str, Any]], int]:
+    def list_all(self, *, tenant_id: str = "", query: str = "", offset: int = 0, limit: int = 50, status: str = "", sort: str = "") -> tuple[list[dict[str, Any]], int]:
         pattern = f"%{query.strip().lower()}%"
         clauses: list[str] = []
         params: list[Any] = []
         if str(tenant_id or "").strip():
             clauses.append("tenant_id = ?")
             params.append(str(tenant_id).strip())
+        if str(status or "").strip():
+            clauses.append("status = ?")
+            params.append(str(status).strip())
         if query.strip():
             clauses.append("lower(author_name || ' ' || author_user_id || ' ' || content || ' ' || page_title || ' ' || tenant_id) LIKE ?")
             params.append(pattern)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        direction = "ASC" if str(sort or "").strip().lower() == "asc" else "DESC"
         total = int(self._conn.execute(f"SELECT COUNT(*) FROM platform_message_board_entries {where}", params).fetchone()[0])
         rows = self._conn.execute(
-            f"SELECT * FROM platform_message_board_entries {where} ORDER BY created_at DESC, message_id DESC LIMIT ? OFFSET ?",
+            f"SELECT * FROM platform_message_board_entries {where} ORDER BY created_at {direction}, message_id {direction} LIMIT ? OFFSET ?",
             (*params, limit, offset),
         ).fetchall()
         return [_row(row) for row in rows], total
@@ -320,6 +358,7 @@ def _row(row: sqlite3.Row) -> dict[str, Any]:
     value = dict(row)
     value["quote_context"] = json.loads(value.get("quote_context") or "{}")
     value["attachment_ids"] = json.loads(value.get("attachment_ids") or "[]")
+    value["append_content"] = str(value.get("append_content") or "")
     return value
 
 

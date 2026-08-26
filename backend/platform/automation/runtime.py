@@ -12,6 +12,8 @@ from email.message import EmailMessage
 from email.utils import make_msgid
 from pathlib import Path
 from typing import Any, Callable
+
+from backend.platform.intelligent_analysis.contracts import AnalysisContractError
 from urllib.request import Request
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -172,7 +174,19 @@ class AutomationRuntime:
                 self.store.record_step(tenant_id, run_id, "execute_handler", 0, "skipped", error_code="cancelled_by_user")
                 return self.store.get_run(tenant_id, run_id)
             error_code, error_summary, retryable = _public_handler_failure(exc)
-            return self._handle_failure(run, task, error_code, error_summary, retryable=retryable)
+            failure_refs = (
+                [{"type": "analysis_error", "details": exc.public_details()}]
+                if isinstance(exc, AnalysisContractError)
+                else None
+            )
+            return self._handle_failure(
+                run,
+                task,
+                error_code,
+                error_summary,
+                retryable=retryable,
+                failure_refs=failure_refs,
+            )
 
     def process_notifications_once(self) -> int:
         expanded = self.store.expand_outbox_once()
@@ -241,6 +255,7 @@ class AutomationRuntime:
         error_summary: str,
         *,
         retryable: bool = True,
+        failure_refs: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         tenant_id = str(run["tenant_id"])
         run_id = str(run["automation_run_id"])
@@ -261,6 +276,7 @@ class AutomationRuntime:
                 error_code=error_code,
                 error_summary=error_summary,
                 next_retry_at=next_retry,
+                result_refs=failure_refs,
             )
             self._emit_run_event(tenant_id, run_id, task, failed, "automation.run.retry_scheduled")
             return failed
@@ -270,6 +286,7 @@ class AutomationRuntime:
             status="failed",
             error_code=error_code,
             error_summary=error_summary,
+            result_refs=failure_refs,
         )
         self._emit_run_event(tenant_id, run_id, task, failed, "automation.run.failed")
         return failed
@@ -301,6 +318,8 @@ class AutomationRuntime:
 
 def _public_handler_failure(exc: Exception) -> tuple[str, str, bool]:
     message = str(exc)
+    if isinstance(exc, AnalysisContractError):
+        return exc.code, exc.public_message(), exc.retryable
     if isinstance(exc, PermissionError):
         if "selected_data_asset_not_published_or_not_authorized" in message:
             return (

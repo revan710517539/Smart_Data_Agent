@@ -46,18 +46,18 @@ class WorkBuddyReportCliTest(unittest.TestCase):
         self.assertIn("integrations/workbuddy-smart-data-report/bin/sda_report.py", launcher.read_text(encoding="utf-8"))
 
     def test_windows_uses_appdata_for_non_secret_config_and_dpapi_token(self) -> None:
-        with patch.object(self.cli.sys, "platform", "win32"), patch.dict(os.environ, {"APPDATA": r"C:\\Users\\Ada\\AppData\\Roaming"}, clear=False):
+        with patch.object(self.cli.sys, "platform", "win32"), patch.dict(os.environ, {"APPDATA": r"C:\\path\\to\\AppData\\Roaming"}, clear=False):
             self.assertEqual(
                 self.cli._default_config_path(),
-                Path(r"C:\\Users\\Ada\\AppData\\Roaming") / "smart-data-agent" / "report-cli.json",
+                Path(r"C:\\path\\to\\AppData\\Roaming") / "smart-data-agent" / "report-cli.json",
             )
             self.assertEqual(
                 self.cli._windows_token_path(),
-                Path(r"C:\\Users\\Ada\\AppData\\Roaming") / "smart-data-agent" / "report-cli.token",
+                Path(r"C:\\path\\to\\AppData\\Roaming") / "smart-data-agent" / "report-cli.token",
             )
             self.assertEqual(
                 self.cli._windows_token_path("smart-data-agent-bridge-codex"),
-                Path(r"C:\\Users\\Ada\\AppData\\Roaming") / "smart-data-agent" / "report-cli-codex.token",
+                Path(r"C:\\path\\to\\AppData\\Roaming") / "smart-data-agent" / "report-cli-codex.token",
             )
 
     def test_config_accepts_windows_utf8_bom(self) -> None:

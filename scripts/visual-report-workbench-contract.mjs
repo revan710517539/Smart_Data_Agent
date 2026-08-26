@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [layout, routes, builder, library, cards, visualCard, visualNote, contextRail, selfAnalysis, dataTablePicker, analysisRoute, reportsRoute, application, applicationRoute, productionAssetStore, featuredReports, domain, dashboard, supervision, weekly, richNote, noteModel, stickyNote, stickyHook, pageDataComposer, standardAnalysisPage] = await Promise.all([
+const [layout, routes, builder, library, cards, reportData, visualCard, visualNote, contextRail, selfAnalysis, dataTablePicker, analysisRoute, reportsRoute, application, applicationRoute, productionAssetStore, featuredReports, domain, dashboard, supervision, weekly, richNote, noteModel, stickyNote, stickyHook, pageDataComposer, standardAnalysisPage] = await Promise.all([
   readFile("src/app/components/Layout.tsx", "utf8"),
   readFile("src/app/routes.ts", "utf8"),
   readFile("src/app/components/VisualReportBuilder.tsx", "utf8"),
   readFile("src/app/components/visual-report/VisualReportLibrary.tsx", "utf8"),
   readFile("src/app/components/visual-report/VisualReportCards.tsx", "utf8"),
+  readFile("src/app/components/visual-report/reportData.ts", "utf8"),
   readFile("src/app/components/self-analysis/ResultViews.tsx", "utf8"),
   readFile("src/app/components/visualization/VisualNoteFields.tsx", "utf8"),
   readFile("src/app/components/context-rail/ContextSideRail.tsx", "utf8"),
@@ -143,9 +144,12 @@ assert.match(dataTablePicker, /onChange\(\[table\]\)/, "选择新表必须替换
 assert.doesNotMatch(dataTablePicker, /多机构页面|pageDataTables|pageDataToSelection/, "智能分析数据表弹窗不得显示多机构页面");
 assert.match(domain, /singleAnalysisDataTableSelection[\s\S]*tables\.at\(-1\)/, "历史或外部多选状态必须收敛到最新一张数据表");
 assert.match(domain, /export function rematchAnalysisDataTableSelection/, "已选数据表必须能按 sourceKey 对齐当前交付");
+assert.doesNotMatch(domain, /if \(!matched && table\.contentHash\) \{[\s\S]*?item\.contentHash === table\.contentHash/, "站内数据表不得仅凭内容 Hash 跨相对路径重绑定");
+assert.match(domain, /if \(!matched && table\.kind !== "raw" && table\.code\)/, "原始表不得按代码或标题跨路径替换，主题与页面数据仍保留稳定代码兼容");
 assert.match(domain, /analysisTableLogicalTitle/, "已选数据表必须能按交付题目对齐当前文件，找不到时不得继续使用下线表");
 assert.match(selfAnalysis, /singleAnalysisDataTableSelection\(forcedDataTables \?\? selectedDataTables\)/, "每次分析提交前必须再次收敛单表契约");
-assert.match(selfAnalysis, /rematchAnalysisDataTableSelection\(effectiveDataTables, availableAnalysisTables\)/, "提交分析前必须把已选表重新对齐到当前目录");
+assert.match(selfAnalysis, /fetchDataAssets\(\{ tenantId, userId, forceRefresh: true \}\)/, "提交分析前必须强制刷新当前机构目录");
+assert.match(selfAnalysis, /rematchAnalysisDataTableSelectionResult\(effectiveDataTables, submissionCatalog\)/, "提交分析前必须重匹配并拦截不兼容字段");
 assert.match(selfAnalysis, /rematchAnalysisDataTableSelection\(snapshot.selectedDataTables, analysisCatalogRef.current\)/, "恢复工作台时必须把缓存数据表对齐到当前目录");
 assert.match(selfAnalysis, /runtimeAssetResponse\.topic_tables/, "智能分析主题表必须使用已发布 runtime 目录");
 assert.match(selfAnalysis, /rematchAnalysisDataTableSelection\(current/, "恢复或刷新目录后必须把已选表对齐到当前交付");
@@ -155,6 +159,29 @@ assert.match(builder, />主题表 \{topicTables.length\}<\/button>/, "可视化�
 assert.doesNotMatch(builder, /多机构页面 \{pageDataTables\.length\}|单机构页面|switchTab\("page_data"\)/, "可视化报表新增图表弹窗不得显示多机构页面或单机构页面");
 assert.match(builder, /pageCode: "visual_report"/, "可视化报表编辑器必须按自身消费者身份读取多机构页面");
 assert.match(cards, /railPageKey === "my-reports" \? "my_reports" : "visual_report"/, "我的报表回读可视化报表时必须重新校验多机构页面授权");
+assert.match(cards, /resolveVisualReportRawTable\(card\.dataset, rawTables\)/, "我的报表必须按稳定来源重绑原始表，而不是死盯一次交付文件 ID");
+assert.match(cards, /catalog\.status === "loading"/, "可视化目录尚未就绪时必须等待，不得把空目录当成表已消失");
+assert.match(cards, /visualReportCardHasData/, "浏览态必须按是否有数据决定是否渲染图表");
+assert.match(cards, /visibleCards.filter\(\(card\) => visualReportCardHasData/, "浏览态没有数据的图表必须整卡不渲染");
+assert.doesNotMatch(cards, /数据集不存在、无权限或 Schema 已变化/, "不得把轮转后的交付文件 ID 直接判成数据集不存在");
+assert.match(library, /empty:hidden/, "我的报表展开后若无图表不得留下空白底栏");
+assert.match(selfAnalysis, /analysisRows.length \? \(\s*<ResizableVisualizationGrid>/, "智能分析浏览态没有数据时不得挂载空白图表");
+assert.match(visualCard, /if \(!rows.length \|\| !metricFields.length\) return null/, "没有数据时图表区域必须整块不渲染，不得保留空态占位");
+assert.match(reportData, /export function resolveVisualReportRawTable/, "原始表回读必须有独立的重绑入口");
+assert.match(reportData, /uniqueRawTablesByLogicalTitle/, "历史报表必须能按去掉交付日期后的题目重绑当前 CSV");
+assert.match(reportData, /visualReportLogicalTitleCandidate/, "csv_hash 不得当作业务题目参与重绑");
+assert.match(applicationRoute, /def _resolve_visual_report_raw_source/, "保存可视化报表时必须按 sourceKey / 文件 ID / 题目重绑当前交付");
+assert.match(selfAnalysis, /已保存到我的报表「智能分析」/, "智能分析存报表必须明确落到我的报表智能分析页签");
+function analysisTableLogicalTitle(value) {
+  const stem = String(value || "").trim().replace(/\.csv$/i, "");
+  const withoutPrefix = stem.replace(/^\d{8}(?:_\d{6})?_/, "");
+  const withoutSuffix = withoutPrefix.replace(/_\d{4}-\d{2}-\d{2}$/, "");
+  const title = withoutSuffix.split("/").pop() || withoutSuffix;
+  return title.replace(/[\s_\-./]+/g, "").toLocaleLowerCase();
+}
+assert.equal(analysisTableLogicalTitle("标品双周会周度sql_2026-08-14"), analysisTableLogicalTitle("标品双周会周度sql_2026-05-06"));
+assert.equal(analysisTableLogicalTitle("标品双周会周度sql_2026-08-14"), "标品双周会周度sql");
+assert.match(domain, /export function analysisTableLogicalTitle\(value: string\)/, "题目归一化实现必须与报表重绑契约一致");
 assert.match(reportsRoute, /topic_data_store\.read_reference/, "我的报表智能分析 Tab 必须从分析执行的受治理快照回读数据");
 
 assert.match(application, /"upsert_visual_report", "delete_visual_report"/);

@@ -51,6 +51,11 @@
       "version": "0037",
       "path": "migrations/0037_message_board_append_content.sql",
       "sha256": "1574a149955d05cba868cffbae578eb51d75b23a8cd31bbd20752e0bcbe9ae4d"
+    },
+    {
+      "version": "0038",
+      "path": "migrations/0038_tenant_scope_governance.sql",
+      "sha256": "018fbcf8db5c4d079de2ac31665eebdfd1c5d05ecfd5d7ccc9d3aa9e53e19a0e"
     }
   ]
 }

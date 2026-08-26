@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from http import HTTPStatus
 from typing import Any
 from urllib.parse import parse_qs
@@ -123,9 +124,7 @@ def handle_application_action_post(handler: Any) -> None:
                 handler.services.permission_broker.enforcer.has_super_admin_role(context.user_id, context.tenant_id),
             )
         if module_key == "self_analysis" and action == "upsert_visual_report":
-            action_payload = _authorize_visual_report_upsert(
-                handler, context, _bind_visual_report_payload(handler, context, action_payload or {})
-            )
+            action_payload = _prepare_visual_report_upsert_payload(handler, context, action_payload or {})
         if module_key == "self_analysis" and action == "delete_visual_report":
             action_payload = dict(action_payload or {})
             _authorize_visual_report_delete(handler, context, str(action_payload.get("reportId") or action_payload.get("id") or ""))
@@ -276,9 +275,8 @@ def _bind_visual_report_payload(handler: Any, context: Any, payload: dict[str, A
         requested_dataset = raw_card["dataset"]
         dataset_id = str(requested_dataset.get("id") or "").strip()
         dataset_kind = str(requested_dataset.get("kind") or "").strip()
-        requested_source_key = str(requested_dataset.get("sourceKey") or "").strip()
         if dataset_kind == "raw":
-            source = raw_tables_by_source_key.get(requested_source_key) if requested_source_key else raw_tables.get(dataset_id)
+            source = _resolve_visual_report_raw_source(requested_dataset, raw_tables, raw_tables_by_source_key)
         elif dataset_kind == "page_data":
             source = multi_page_data.get(dataset_id)
         else:
@@ -318,6 +316,51 @@ def _bind_visual_report_payload(handler: Any, context: Any, payload: dict[str, A
             },
         })
     return {**payload, "report": {**report, "cards": bound_cards}}
+
+
+def _resolve_visual_report_raw_source(
+    requested_dataset: dict[str, Any],
+    raw_tables: dict[str, dict[str, Any]],
+    raw_tables_by_source_key: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    requested_source_key = str(requested_dataset.get("sourceKey") or "").strip()
+    if requested_source_key and requested_source_key in raw_tables_by_source_key:
+        return raw_tables_by_source_key[requested_source_key]
+    dataset_id = str(requested_dataset.get("id") or "").strip()
+    if dataset_id and dataset_id in raw_tables:
+        return raw_tables[dataset_id]
+    requested_titles = {
+        _visual_report_logical_title(str(value or ""))
+        for value in (requested_dataset.get("name"), requested_dataset.get("code"))
+        if _visual_report_logical_title_candidate(str(value or ""))
+    }
+    requested_titles.discard("")
+    if not requested_titles:
+        return None
+    matches = [
+        item
+        for item in raw_tables.values()
+        if requested_titles.intersection(
+            {
+                _visual_report_logical_title(str(item.get(key) or ""))
+                for key in ("tableNameCn", "tableNameEn", "fileName", "relativePath")
+            }
+        )
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _visual_report_logical_title_candidate(value: str) -> bool:
+    title = _visual_report_logical_title(value)
+    return bool(title) and re.fullmatch(r"csv[0-9a-f]{8,}", title) is None
+
+
+def _visual_report_logical_title(value: str) -> str:
+    stem = re.sub(r"\.csv$", "", str(value or "").strip(), flags=re.I)
+    without_prefix = re.sub(r"^\d{8}(?:_\d{6})?_", "", stem)
+    without_suffix = re.sub(r"_\d{4}-\d{2}-\d{2}$", "", without_prefix)
+    title = without_suffix.rsplit("/", 1)[-1]
+    return re.sub(r"[\s_\-./]+", "", title).casefold()
 
 
 def _merge_page_data_notes(
@@ -361,6 +404,42 @@ def _visual_reports_from_module(handler: Any, context: Any) -> list[dict[str, An
     )
     reports = (module.get("state") or {}).get("visualReports") or []
     return [item for item in reports if isinstance(item, dict)]
+
+
+def _prepare_visual_report_upsert_payload(handler: Any, context: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """Skip dataset rebinding when the only change is removing a report from 经营周报.
+
+    Weekly unpublish must still work after the original raw/topic/page dataset has
+    rotated or been unbound; otherwise edit-mode delete appears to do nothing.
+    """
+
+    incoming = dict(payload or {})
+    report = incoming.get("report") if isinstance(incoming.get("report"), dict) else {}
+    report_id = str(report.get("id") or "").strip()
+    existing = next(
+        (item for item in _visual_reports_from_module(handler, context) if str(item.get("id") or "") == report_id),
+        None,
+    )
+    requested_destinations = (
+        [str(item) for item in report.get("destinations") if str(item)]
+        if isinstance(report.get("destinations"), list)
+        else []
+    )
+    existing_destinations = [
+        str(item) for item in (existing or {}).get("destinations") or [] if str(item)
+    ]
+    removing_weekly = bool(existing) and "weekly" in existing_destinations and "weekly" not in requested_destinations
+    if removing_weekly:
+        authorized = _authorize_visual_report_upsert(handler, context, incoming)
+        destinations = [
+            str(item)
+            for item in ((authorized.get("report") or {}).get("destinations") or requested_destinations)
+            if str(item) and str(item) != "weekly"
+        ]
+        return {**authorized, "report": {**existing, "destinations": destinations}}
+    return _authorize_visual_report_upsert(
+        handler, context, _bind_visual_report_payload(handler, context, incoming)
+    )
 
 
 def _authorize_visual_report_upsert(handler: Any, context: Any, payload: dict[str, Any]) -> dict[str, Any]:

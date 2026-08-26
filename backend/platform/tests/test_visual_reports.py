@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from backend.platform.api.routes.application import _bind_visual_report_payload
+from backend.platform.api.routes.application import _bind_visual_report_payload, _prepare_visual_report_upsert_payload
 from backend.platform.api.routes.assets import handle_data_assets_get
 from backend.platform.application import InMemoryApplicationStore
 
@@ -25,6 +25,12 @@ class _Catalog:
         ]
 
 
+class _EmptyCsvSource:
+    def for_tenant(self, tenant_id: str) -> SimpleNamespace:
+        del tenant_id
+        return SimpleNamespace(table_assets=lambda: [])
+
+
 class _CsvSource:
     def for_tenant(self, tenant_id: str) -> _Catalog:
         if tenant_id != "tenant_a":
@@ -43,6 +49,27 @@ class _RotatedCsvSource(_CsvSource):
         if tenant_id != "tenant_a":
             raise AssertionError("unexpected tenant")
         return _RotatedCatalog()
+
+
+class _LogicalTitleCatalog(_Catalog):
+    def table_assets(self) -> list[dict]:
+        asset = super().table_assets()[0]
+        return [{
+            **asset,
+            "id": "csv_new_delivery_hash",
+            "sourceKey": "source_loans_current",
+            "tableNameCn": "标品双周会周度sql_2026-05-06",
+            "tableNameEn": "csv_newhash12ab",
+            "fileName": "标品双周会周度sql_2026-05-06.csv",
+            "relativePath": "华兴银行/标品双周会周度sql_2026-05-06.csv",
+        }]
+
+
+class _LogicalTitleCsvSource(_CsvSource):
+    def for_tenant(self, tenant_id: str) -> _Catalog:
+        if tenant_id != "tenant_a":
+            raise AssertionError("unexpected tenant")
+        return _LogicalTitleCatalog()
 
 
 class _VisualizationCatalog(_Catalog):
@@ -120,6 +147,44 @@ class VisualReportsTest(unittest.TestCase):
                 actor_user_id="u_other",
             )
 
+    def test_removing_weekly_destination_skips_dataset_rebind(self) -> None:
+        store = InMemoryApplicationStore()
+        saved = store.run_action(
+            "tenant_a",
+            "self_analysis",
+            "upsert_visual_report",
+            {"report": {**self.report, "id": "visual_report_weekly", "destinations": ["mine", "weekly"]}},
+            actor_user_id="u_owner",
+        )["result"]["report"]
+        handler = SimpleNamespace(
+            services=SimpleNamespace(
+                application_store=store,
+                permission_broker=SimpleNamespace(enforcer=SimpleNamespace(can_manage_shared_visual=lambda *_args: False)),
+                data_asset_store=SimpleNamespace(list_published_bundle=lambda _tenant_id: {"topic_tables": [], "page_data": []}),
+                data_acquisition_service=SimpleNamespace(csv_source=_EmptyCsvSource()),
+            )
+        )
+        context = SimpleNamespace(user_id="u_owner", tenant_id="tenant_a")
+        with self.assertRaisesRegex(PermissionError, "visual_report_dataset_unavailable"):
+            _bind_visual_report_payload(handler, context, {"report": saved})
+
+        prepared = _prepare_visual_report_upsert_payload(
+            handler,
+            context,
+            {"report": {**saved, "destinations": ["mine"], "cards": [{**saved["cards"][0], "dataset": {"id": "missing", "kind": "raw"}}]}},
+        )
+        unpublished = store.run_action(
+            "tenant_a",
+            "self_analysis",
+            "upsert_visual_report",
+            prepared,
+            actor_user_id="u_owner",
+        )["result"]["report"]
+        self.assertEqual(unpublished["id"], "visual_report_weekly")
+        self.assertNotIn("weekly", unpublished["destinations"])
+        other_state = store.get_module("tenant_a", "self_analysis", actor_user_id="u_other")["state"]
+        self.assertNotIn("visual_report_weekly", [report["id"] for report in other_state["visualReports"]])
+
     def test_reediting_existing_report_updates_original_id_without_new_version(self) -> None:
         store = InMemoryApplicationStore()
         first = store.run_action(
@@ -143,6 +208,35 @@ class VisualReportsTest(unittest.TestCase):
         self.assertEqual(edited["title"], "支行余额看板（二次加工）")
         self.assertEqual(len(reports), 1)
         self.assertEqual(reports[0]["id"], "visual_report_1")
+
+    def test_route_rebinds_rotated_delivery_by_logical_title_without_source_key(self) -> None:
+        handler = SimpleNamespace(
+            services=SimpleNamespace(
+                data_asset_store=SimpleNamespace(list_published_bundle=lambda tenant_id: {"topic_tables": []}),
+                data_acquisition_service=SimpleNamespace(csv_source=_LogicalTitleCsvSource()),
+            )
+        )
+        report = {
+            **self.report,
+            "cards": [{
+                **self.report["cards"][0],
+                "dataset": {
+                    "id": "csv_old_delivery_hash",
+                    "kind": "raw",
+                    "name": "标品双周会周度sql_2026-08-14",
+                    "code": "csv_oldhash12ab",
+                    "fields": [
+                        {"fieldNameEn": "branch", "fieldNameCn": "机构", "type": "string"},
+                        {"fieldNameEn": "balance", "fieldNameCn": "余额", "type": "decimal"},
+                    ],
+                },
+            }],
+        }
+        bound = _bind_visual_report_payload(handler, SimpleNamespace(tenant_id="tenant_a"), {"report": report})
+        dataset = bound["report"]["cards"][0]["dataset"]
+        self.assertEqual(dataset["id"], "csv_new_delivery_hash")
+        self.assertEqual(dataset["sourceKey"], "source_loans_current")
+        self.assertEqual(dataset["name"], "标品双周会周度sql_2026-05-06")
 
     def test_route_rebinds_rotated_delivery_by_stable_source_key(self) -> None:
         handler = SimpleNamespace(

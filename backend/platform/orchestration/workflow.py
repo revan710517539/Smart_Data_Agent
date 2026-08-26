@@ -14,6 +14,12 @@ from backend.platform.data_processing import PythonSandbox
 from backend.platform.agents import AgentRuntime
 from backend.platform.skills import SkillExecutor, SkillRequest
 from backend.platform.tenancy import ExecutionContext
+from backend.platform.intelligent_analysis.contracts import (
+    AnalysisContractError,
+    bind_plan_field_contract,
+    normalize_query_output_contract,
+    processing_output_error,
+)
 
 from .planning import AnalysisIntentRule, AnalysisPlanningCatalog
 from .state import AgentStep, AnalysisTask, TaskType
@@ -163,6 +169,7 @@ class AnalysisWorkflow:
                         "validation_errors": list(model_planning.get("validation_errors") or []),
                     },
                 )
+        task.analysis_plan = bind_plan_field_contract(task.analysis_plan, selected_raw_table)
         if self.agent_runtime:
             self.agent_runtime.complete_gate(
                 task.agent_group_run,
@@ -235,6 +242,37 @@ class AnalysisWorkflow:
                 },
             )
         result = self._execute_product_skill("data_query", skill_request)
+        try:
+            normalized_output = normalize_query_output_contract(task.analysis_plan, result.output)
+        except AnalysisContractError as exc:
+            query_context = skill_request.inputs.get("context")
+            can_retry_without_model_sql = (
+                exc.stage == "query_output"
+                and isinstance(query_context, dict)
+                and bool(str(query_context.get("model_sql_candidate") or "").strip())
+                and not bool(str(query_context.get("manual_sql_candidate") or "").strip())
+            )
+            if not can_retry_without_model_sql:
+                raise
+            retry_context = {**query_context, "model_sql_candidate": "", "field_contract_retry": 1}
+            retry_request = SkillRequest(
+                skill_id=skill_request.skill_id,
+                context=skill_request.context,
+                inputs={**skill_request.inputs, "context": retry_context},
+                trace_id=skill_request.trace_id,
+                agent_id=skill_request.agent_id,
+                approval_id=skill_request.approval_id,
+            )
+            result = self._execute_product_skill("data_query", retry_request)
+            normalized_output = normalize_query_output_contract(task.analysis_plan, result.output)
+            normalized_semantic = normalized_output.get("semantic_info")
+            if isinstance(normalized_semantic, dict):
+                normalized_semantic["field_contract_recovery"] = {
+                    "attempted": True,
+                    "attempts": 1,
+                    "strategy": "retry_without_model_sql",
+                }
+        result = type(result)(skill_id=result.skill_id, output=normalized_output, audit=result.audit)
         if self.agent_runtime:
             semantic_info = result.output.get("semantic_info", {})
             self.agent_runtime.complete_gate(
@@ -800,14 +838,24 @@ class AnalysisWorkflow:
         fallback_reason = ""
         try:
             processing_result = self.python_sandbox.process_data(processing_script, source_rows, processing_context)
-            _validate_processed_rows(source_rows, processing_result.rows, [*processing_context["dimensions"], *processing_context["metrics"]])
+            _validate_processed_rows(
+                source_rows,
+                processing_result.rows,
+                [*processing_context["dimensions"], *processing_context["metrics"]],
+                analysis_plan,
+            )
         except Exception:
             fallback_script = self._build_data_processing_script()
             if processing_script == fallback_script:
                 raise
             fallback_reason = "model_data_processing_integrity_rejected"
             processing_result = self.python_sandbox.process_data(fallback_script, source_rows, processing_context)
-            _validate_processed_rows(source_rows, processing_result.rows, [*processing_context["dimensions"], *processing_context["metrics"]])
+            _validate_processed_rows(
+                source_rows,
+                processing_result.rows,
+                [*processing_context["dimensions"], *processing_context["metrics"]],
+                analysis_plan,
+            )
         visualization_fallback_reason = ""
         try:
             result = self.python_sandbox.render_chart(script, processing_result.rows, context)
@@ -1188,12 +1236,18 @@ def _validate_processed_rows(
     source_rows: list[dict[str, Any]],
     processed_rows: list[dict[str, Any]],
     required_fields: list[str],
+    analysis_plan: dict[str, Any] | None = None,
 ) -> None:
     if len(source_rows) != len(processed_rows):
         raise ValueError("data_processing_row_count_changed")
     fields = list(dict.fromkeys(field for field in required_fields if field))
-    if any(any(field not in row for field in fields) for row in processed_rows):
-        raise ValueError("data_processing_required_field_missing")
+    missing = [
+        field
+        for field in fields
+        if any(field not in row for row in processed_rows)
+    ]
+    if missing:
+        raise processing_output_error(analysis_plan or {}, processed_rows, missing)
     source_projection = sorted(
         json.dumps({field: row.get(field) for field in fields}, ensure_ascii=False, sort_keys=True, default=str)
         for row in source_rows

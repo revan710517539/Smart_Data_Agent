@@ -46,8 +46,22 @@ export function boundedInteractionText(value: string) {
 function sanitizeExtension(value: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(value).slice(0, 30).map(([key, item]) => {
     if (/(password|secret|token|authorization|cookie|credential|sql|rows|raw_data)/i.test(key)) return [key, "[redacted]"];
-    if (typeof item === "string") return [key, boundedInteractionText(item)];
-    if (typeof item === "number" || typeof item === "boolean" || item == null) return [key, item];
-    return [key, JSON.stringify(item).slice(0, 500)];
+    return [key, sanitizeExtensionValue(item, 0)];
   }));
+}
+
+function sanitizeExtensionValue(value: unknown, depth: number): unknown {
+  if (depth > 2) return "[depth_limited]";
+  if (typeof value === "string") return boundedInteractionText(value);
+  if (typeof value === "number" || typeof value === "boolean" || value == null) return value;
+  if (Array.isArray(value)) return value.slice(0, 20).map((item) => sanitizeExtensionValue(item, depth + 1));
+  if (typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 20).map(([key, item]) => [
+      key.slice(0, 80),
+      /(password|secret|token|authorization|cookie|credential|sql|rows|raw_data)/i.test(key)
+        ? "[redacted]"
+        : sanitizeExtensionValue(item, depth + 1),
+    ]));
+  }
+  return String(value).slice(0, 240);
 }

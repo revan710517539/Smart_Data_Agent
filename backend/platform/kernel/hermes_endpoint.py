@@ -18,7 +18,7 @@ class HermesEndpoint:
 
         SMART_DATA_AGENT_HERMES_MODE=cli
         SMART_DATA_AGENT_HERMES_BIN=hermes
-        SMART_DATA_AGENT_HERMES_HOME=/Users/revan/.hermes
+        SMART_DATA_AGENT_HERMES_HOME=${HOME}/.hermes
 
     Server example::
 
@@ -29,7 +29,7 @@ class HermesEndpoint:
     Or HTTP on either side::
 
         SMART_DATA_AGENT_HERMES_MODE=http
-        SMART_DATA_AGENT_HERMES_ENDPOINT=http://127.0.0.1:8642
+        SMART_DATA_AGENT_HERMES_ENDPOINT=http://localhost:<managed-port>
     """
 
     mode: str

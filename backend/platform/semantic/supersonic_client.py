@@ -245,6 +245,7 @@ class InMemorySupersonicClient:
                     "dimension": dimension,
                     "metrics": list(metrics),
                     "dimensions": list(dimensions),
+                    "output_fields": list(dict.fromkeys([*dimensions, *metrics])),
                 },
                 "semantic_parser": "rule_then_llm",
                 "semantic_corrector": "rule_validation",

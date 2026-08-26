@@ -67,6 +67,39 @@ class MySQLDatabaseContractTest(unittest.TestCase):
         finally:
             pool.close()
 
+    def test_pool_clears_read_transaction_before_connection_reuse(self) -> None:
+        class Connection:
+            open = True
+
+            def __init__(self) -> None:
+                self.rollback_count = 0
+
+            def ping(self, reconnect=True):
+                del reconnect
+
+            def rollback(self):
+                self.rollback_count += 1
+
+            def close(self):
+                self.open = False
+
+        connection = Connection()
+        pool = MySQLConnectionPool(
+            "mysql://test@127.0.0.1/test",
+            min_size=1,
+            max_size=1,
+            connector=lambda **options: connection,
+        )
+        try:
+            with pool.connection() as borrowed:
+                self.assertIs(borrowed, connection)
+            self.assertEqual(connection.rollback_count, 1)
+            with pool.connection() as borrowed:
+                self.assertIs(borrowed, connection)
+            self.assertEqual(connection.rollback_count, 2)
+        finally:
+            pool.close()
+
     def test_url_parser_requires_mysql_and_preserves_encoded_secret(self) -> None:
         parsed = parse_mysql_url("mysql+pymysql://sda:p%40ss@127.0.0.1:3307/smart_data_agent?ssl_mode=required")
         self.assertEqual(parsed["database"], "smart_data_agent")

@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Callable
 
+from backend.platform.intelligent_analysis.contracts import (
+    ANALYSIS_RESOLUTION_KEY,
+    AnalysisContractError,
+)
 from backend.platform.intelligent_analysis.uploaded_source import is_uploaded_analysis_table
 from backend.platform.semantic import SemanticQueryRequest, SemanticQueryService
 from backend.platform.skills.models import SkillRequest, SkillResult, SkillSpec
@@ -94,35 +99,63 @@ def _query_selected_csv(csv_source: Any | None, request: SkillRequest) -> SkillR
         if csv_source is None:
             raise RuntimeError("selected_csv_source_unavailable")
         tenant_source = csv_source.for_tenant(request.context.tenant_id)
-        catalog = tenant_source.table_assets(preview_limit=1)
-        authorized = next(
-            (
-                table
-                for table in catalog
-                if str(table.get("id") or "").strip() == requested_id
-                and str(table.get("relativePath") or "").strip() == requested_path
-            ),
-            None,
-        )
-        if authorized is None:
-            requested_source_key = str(selected.get("sourceKey") or "").strip()
-            if requested_source_key:
-                authorized = next(
-                    (
-                        table
-                        for table in catalog
-                        if str(table.get("sourceKey") or "").strip() == requested_source_key
-                    ),
-                    None,
+        resolution = selected.get(ANALYSIS_RESOLUTION_KEY)
+        if isinstance(resolution, dict) and resolution.get("serverAuthorized") is True:
+            if str(resolution.get("tenantId") or "") != request.context.tenant_id:
+                raise AnalysisContractError("analysis_table_tenant_mismatch", "query_source")
+            pinned_path = str(resolution.get("relativePath") or "").strip()
+            pinned_hash = str(resolution.get("contentHash") or "").strip()
+            if not pinned_path or not pinned_hash or pinned_path != requested_path:
+                raise AnalysisContractError("analysis_table_reference_invalid", "query_source")
+            try:
+                source_content = tenant_source.read(pinned_path)
+            except (FileNotFoundError, PermissionError, ValueError) as exc:
+                raise AnalysisContractError(
+                    "analysis_table_unavailable",
+                    "query_source",
+                    asset=resolution,
+                    user_action="请刷新站内数据并重新选择数据表。",
+                ) from exc
+            if hashlib.sha256(source_content).hexdigest() != pinned_hash:
+                raise AnalysisContractError(
+                    "analysis_table_version_outdated",
+                    "query_source",
+                    asset=resolution,
+                    user_action="数据文件在任务执行期间发生变化，请刷新后重新提交。",
                 )
-        if authorized is None:
-            raise PermissionError("selected_csv_not_published_or_not_authorized")
-        # Daily deliveries keep superseded files on disk. Always read the
-        # current catalog path, never the stale picker snapshot.
-        headers, source_rows = tenant_source.read_rows(
-            str(authorized.get("relativePath") or requested_path),
-            max_rows=50_000,
-        )
+            authorized = selected
+            headers, source_rows = tenant_source.read_rows(pinned_path, max_rows=50_000)
+        else:
+            # Backward compatibility for internal callers created before
+            # task-start pinning. HTTP requests always arrive with a server
+            # authorized resolution snapshot.
+            catalog = tenant_source.table_assets(preview_limit=1)
+            authorized = next(
+                (
+                    table
+                    for table in catalog
+                    if str(table.get("id") or "").strip() == requested_id
+                    and str(table.get("relativePath") or "").strip() == requested_path
+                ),
+                None,
+            )
+            if authorized is None:
+                requested_source_key = str(selected.get("sourceKey") or "").strip()
+                if requested_source_key:
+                    authorized = next(
+                        (
+                            table
+                            for table in catalog
+                            if str(table.get("sourceKey") or "").strip() == requested_source_key
+                        ),
+                        None,
+                    )
+            if authorized is None:
+                raise PermissionError("selected_csv_not_published_or_not_authorized")
+            headers, source_rows = tenant_source.read_rows(
+                str(authorized.get("relativePath") or requested_path),
+                max_rows=50_000,
+            )
     fields = [field for field in authorized.get("fields") or [] if isinstance(field, dict)]
     page_data_selected = str(authorized.get("kind") or "") == "page_data"
     uploaded_selected = _is_uploaded_analysis_table(authorized)
@@ -225,7 +258,14 @@ def _query_selected_csv(csv_source: Any | None, request: SkillRequest) -> SkillR
             if str(field.get("fieldNameEn") or "").strip()
         }
     sql = _csv_query_statement(dataset_id, metrics, dimensions, definitions)
+    asset_resolution = (
+        dict(authorized.get(ANALYSIS_RESOLUTION_KEY) or {})
+        if isinstance(authorized.get(ANALYSIS_RESOLUTION_KEY), dict)
+        else {}
+    )
     source_snapshot = {
+        "asset_id": str(asset_resolution.get("assetId") or ""),
+        "asset_version": str(asset_resolution.get("assetVersion") or ""),
         "table_id": str(authorized.get("id") or requested_id),
         "relative_path": str(authorized.get("relativePath") or requested_path),
         "content_hash": str(authorized.get("contentHash") or ""),
@@ -274,6 +314,8 @@ def _query_selected_csv(csv_source: Any | None, request: SkillRequest) -> SkillR
                 "metrics": metrics,
                 "dimensions": dimensions,
                 "field_labels": field_labels,
+                "field_aliases": {code: code for code in dict.fromkeys([*dimensions, *metrics])},
+                "output_fields": list(dict.fromkeys([*dimensions, *metrics])),
             },
             "metric_semantics": metric_semantics,
             "metric_definitions_bound": True,

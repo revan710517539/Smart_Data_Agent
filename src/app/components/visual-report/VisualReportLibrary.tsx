@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { BarChart3, ChevronDown, ChevronRight, Star, Trash2 } from "lucide-react";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { usePlatformContext } from "../../platform/PlatformContext";
 import { apiErrorMessage } from "../../services/apiClient";
 import { deleteVisualReport, fetchVisualReports, upsertVisualReport, type VisualReport, type VisualReportDestination } from "../../services/visualReportApi";
@@ -21,6 +22,7 @@ export function VisualReportLibrary({
   const [expandedId, setExpandedId] = useState("");
   const [pendingDelete, setPendingDelete] = useState<VisualReport | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const allowFeatured = destination === "mine";
 
   return <section className={embedded ? "rounded-xl border border-[#eef1ef] bg-white p-4" : ""} data-visual-report-library={destination}>
@@ -35,19 +37,22 @@ export function VisualReportLibrary({
         railPageKey={railPageKey}
         featured={allowFeatured ? featuredReports.isFeatured("visual", report.id) : undefined}
         onToggleFeatured={allowFeatured ? () => featuredReports.toggle("visual", report.id) : undefined}
-        onRequestDelete={destination === "mine" || (destination === "weekly" && (isSuperAdmin || isInstitutionAdmin || report.ownerUserId === userId)) ? () => setPendingDelete(report) : undefined}
+        onRequestDelete={destination === "mine" || (destination === "weekly" && (isSuperAdmin || isInstitutionAdmin || report.ownerUserId === userId)) ? () => { setDeleteError(""); setPendingDelete(report); } : undefined}
       />)}
       {!reports.length && <div className="rounded-lg border border-dashed border-[#e0e5e2] px-3 py-10 text-center text-[11px] text-[#9ba19e]">{destination === "mine" ? "暂无存入我的可视化报表" : "暂无存入周报的可视化报表"}</div>}
     </div>}
-    {pendingDelete && <VisualReportDeleteConfirm destination={destination} report={pendingDelete} deleting={deleting} onCancel={() => { if (!deleting) setPendingDelete(null); }} onConfirm={() => {
+    {pendingDelete && <VisualReportDeleteConfirm destination={destination} report={pendingDelete} deleting={deleting} error={deleteError} onCancel={() => { if (!deleting) setPendingDelete(null); }} onConfirm={() => {
       void (async () => {
         setDeleting(true);
-        const removed = await remove(pendingDelete);
+        setDeleteError("");
+        const result = await remove(pendingDelete);
         setDeleting(false);
-        if (removed) {
+        if (result.ok) {
           featuredReports.remove("visual", pendingDelete.id);
           if (expandedId === pendingDelete.id) setExpandedId("");
           setPendingDelete(null);
+        } else {
+          setDeleteError(result.error);
         }
       })();
     }} />}
@@ -104,7 +109,7 @@ export function VisualReportRow({
           {onRequestDelete ? <button type="button" onClick={onRequestDelete} className="rounded-md p-1.5 text-[#8a8e8c] hover:bg-[#fff0f0] hover:text-[#c84034]" aria-label={`删除${report.title}`}><Trash2 className="h-3.5 w-3.5" /></button> : null}
         </div>
       </div>
-      {expanded ? <div className="border-t border-[#edf0ee] bg-white p-3"><VisualReportCards report={report} railPageKey={railPageKey} /></div> : null}
+      {expanded ? <div className="empty:hidden border-t border-[#edf0ee] bg-white p-3"><VisualReportCards report={report} railPageKey={railPageKey} /></div> : null}
     </div>
   );
 }
@@ -153,10 +158,11 @@ export function useVisualReportCollection(destination: Extract<VisualReportDesti
       }
       setReports((current) => current.filter((item) => item.id !== report.id));
       setError("");
-      return true;
+      return { ok: true as const };
     } catch (reason) {
-      setError(apiErrorMessage(reason, destination === "weekly" ? "可视化报表移出周报失败。" : "可视化报表删除失败。"));
-      return false;
+      const message = apiErrorMessage(reason, destination === "weekly" ? "可视化报表移出周报失败。" : "可视化报表删除失败。");
+      setError(message);
+      return { ok: false as const, error: message };
     }
   };
 
@@ -167,68 +173,36 @@ export function VisualReportDeleteConfirm({
   destination,
   report,
   deleting,
+  error = "",
   onCancel,
   onConfirm,
 }: {
   destination: Extract<VisualReportDestination, "mine" | "weekly">;
   report: VisualReport;
   deleting: boolean;
+  error?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
   const weekly = destination === "weekly";
   return (
-    <div
-      className="fixed inset-0 z-[180] flex items-center justify-center bg-black/20 px-4"
-      role="presentation"
+    <ConfirmDialog
+      open
+      title={weekly ? "从经营周报移除可视化报表？" : "删除这条可视化报表？"}
+      description={report.title}
+      hint={weekly ? "源报表仍会保留，仅从本周报移除。" : "确认后将从当前账号的可视化报表中删除，操作不可撤销。"}
+      error={error}
+      confirmLabel={weekly ? "确认移除" : "确认删除"}
+      busyLabel={weekly ? "移除中…" : "删除中…"}
+      busy={deleting}
+      zIndexClass="z-[180]"
       data-visual-report-delete-overlay="true"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !deleting) onCancel();
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="visual-report-delete-title"
-        aria-describedby="visual-report-delete-copy"
-        data-visual-report-delete-dialog="true"
-        className="w-full max-w-[420px] rounded-xl border border-[#e5e5ea] bg-white p-5 shadow-2xl shadow-black/20"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <div className="flex items-start gap-3">
-          <div className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#fff0f0] text-[#d93025]">
-            <Trash2 className="h-4 w-4" />
-          </div>
-          <div>
-            <h3 id="visual-report-delete-title" className="text-[14px] text-[#1d1d1f]">
-              {weekly ? "从经营周报移除可视化报表？" : "删除这条可视化报表？"}
-            </h3>
-            <p className="mt-1.5 text-[12px] leading-[1.7] text-[#636366]">{report.title}</p>
-            <p id="visual-report-delete-copy" className="mt-1 text-[11px] leading-[1.6] text-[#aeaeb2]">
-              {weekly ? "源报表仍会保留，仅从本周报移除。" : "确认后将从当前账号的可视化报表中删除，操作不可撤销。"}
-            </p>
-          </div>
-        </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={deleting}
-            className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-4 text-[12px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-40"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={deleting}
-            className="h-9 rounded-lg bg-[#d93025] px-4 text-[12px] text-white hover:bg-[#c5221f] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {deleting ? (weekly ? "移除中…" : "删除中…") : weekly ? "确认移除" : "确认删除"}
-          </button>
-        </div>
-      </div>
-    </div>
+      data-visual-report-delete-dialog="true"
+      titleId="visual-report-delete-title"
+      descriptionId="visual-report-delete-copy"
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    />
   );
 }
 

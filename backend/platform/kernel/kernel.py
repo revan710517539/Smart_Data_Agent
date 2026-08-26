@@ -92,6 +92,9 @@ class RuntimeKernel:
                 for entry in pack.entries
                 if str(entry.get("capability_id") or "").startswith("analysis_skill:")
             ]
+            topic_scope = getattr(self.platform_services, "tenant_scope_service", None)
+            if topic_scope is not None and not catalog and topic_scope.topic_assignments_configured(context.tenant_id):
+                catalog = [{"id": "tenant-topic-assignment-gate", "category": "系统", "enabled": True}]
             context.page_context.update(
                 apply_analysis_scene(
                     episode.question or str(context.page_context.get("question") or ""),
@@ -261,6 +264,7 @@ def build_runtime_kernel(services: Any) -> RuntimeKernel:
         mcp_gateway=services.mcp_gateway,
         memory_store=services.memory_store,
         data_asset_store=getattr(services, "data_asset_store", None),
+        tenant_scope_service=getattr(services, "tenant_scope_service", None),
     )
     router = IntentRouter(services.workflow.planning_catalog)
     model_gateway = ModelGateway(event_bus)

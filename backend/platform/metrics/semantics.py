@@ -162,7 +162,13 @@ def validate_metric_dictionary_semantics(metric: dict[str, Any]) -> None:
         str(metric.get(field) or "").strip()
         for field in ("metricCode", "datasetId", "aggregationType", "numeratorField", "denominatorField")
     )
-    if status in {"documentation", "draft"} and not structured:
+    # Documentation-only entries may carry a legacy metricCode for display and
+    # import traceability without being executable definitions.  Execution
+    # only consumes published entries, so keep these records editable without
+    # forcing unrelated dataset/aggregation fields to be fabricated.
+    if status == "documentation":
+        return
+    if status == "draft" and not structured:
         return
     if status == "deprecated" and not structured:
         return

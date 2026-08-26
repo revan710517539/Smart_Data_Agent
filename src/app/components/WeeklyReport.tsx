@@ -59,6 +59,7 @@ import {
 } from "../services/reportApi";
 import { isDemoFallbackEnabled } from "../services/apiContext";
 import { fetchReportImageObjectUrl, uploadReportImage } from "../services/reportAttachmentApi";
+import { boundedInteractionText, trackInteraction } from "../services/interactionTelemetry";
 import { buildWeeklyAnalysisModules, CoreMetricChart, SavedAnalysisEmbed, WeeklyAnalysisModuleMenu, loadWeeklyAnalysisModulePreferences, weeklyAnalysisModuleStorageKey, type WeeklyAnalysisModule, type WeeklyAnalysisModuleSettings, type WeeklyDataModule } from "./weekly-report/AnalysisModules";
 import {
   type AnalysisStatus,
@@ -147,6 +148,7 @@ import { NOTE_TEXT_CLASS, NOTE_TEXT_STYLE, placeCaretAtStart, selectionOffsetsWi
 import { useStickyNote } from "./notes/useStickyNote";
 import { canDeleteSharedVisual } from "./visualization/visualAccess";
 import { useVisualReportCollection, VisualReportDeleteConfirm } from "./visual-report/VisualReportLibrary";
+import { askConfirm } from "./ui/ConfirmDialog";
 import type { VisualReport } from "../services/visualReportApi";
 import { VisualReportCards } from "./visual-report/VisualReportCards";
 
@@ -186,6 +188,7 @@ export function WeeklyReport() {
   const [weeklyCoreDataReady, setWeeklyCoreDataReady] = useState(false);
   const [pendingVisualReportDelete, setPendingVisualReportDelete] = useState<VisualReport | null>(null);
   const [visualReportDeleting, setVisualReportDeleting] = useState(false);
+  const [visualReportDeleteError, setVisualReportDeleteError] = useState("");
   const [analysisProgressByBlock, setAnalysisProgressByBlock] = useState<Record<string, AnalysisProgressStep[]>>({});
   const [analysisErrorByBlock, setAnalysisErrorByBlock] = useState<Record<string, string>>({});
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
@@ -818,6 +821,7 @@ export function WeeklyReport() {
   async function deleteWeeklyDataItem(item: WeeklyDataModule) {
     if (weeklyPageData.mode !== "edit" || !item.deletable) return;
     if (item.kind === "page-data") {
+      if (!(await askConfirm({ title: "从经营周报移除", description: `确定移除「${item.title}」？`, hint: "可在编辑模式下重新加入。" }))) return;
       setAnalysisModuleSettings((current) => ({ ...current, preferences: weeklyDataItems.map((currentItem) => ({ id: currentItem.id, visible: currentItem.id === item.id ? false : currentItem.visible })) }));
       weeklyPageData.toggleAsset(item.sourceId);
       return;
@@ -825,16 +829,16 @@ export function WeeklyReport() {
     if (item.kind === "visual-report") {
       const report = weeklyVisualReports.reports.find((candidate) => candidate.id === item.sourceId);
       if (!report) return;
+      setVisualReportDeleteError("");
       setPendingVisualReportDelete(report);
       return;
     }
     if (item.kind === "saved-analysis") {
-      const module = analysisModules.find((candidate) => candidate.id === item.id);
-      if (module) await deleteAnalysisModule(module);
+      const module = analysisModules.find((candidate) => candidate.id === item.id); if (module) await deleteAnalysisModule(module);
     }
   }
   async function deleteAnalysisModule(module: WeeklyAnalysisModule) {
-    if (module.kind !== "saved" || !module.savedAnalysisId || !window.confirm(`确认从经营周报移除“${module.title}”吗？源报表仍会保留。`)) return;
+    if (module.kind !== "saved" || !module.savedAnalysisId || !(await askConfirm({ title: "从经营周报移除", description: `确定移除「${module.title}」？`, hint: "源报表仍会保留。" }))) return;
     const resultIds = module.savedAnalysisIds?.length ? module.savedAnalysisIds : [module.savedAnalysisId];
     try {
       await Promise.all(resultIds.map((resultId) => saveAnalysisResultToWeeklyReport({ tenantId, userId, resultId, weeklyReportEligible: false })));
@@ -1247,6 +1251,20 @@ export function WeeklyReport() {
         setWeeklyLearningTasks((current) => ({ ...current, [response.analysis_task!.version_id]: response.analysis_task! }));
       }
       const publicationStatus = String(response.version?.publicationStatus || "review_required");
+      const textBlocks = activeReport.sections.flatMap((section) => section.blocks.filter((block): block is TextBlock => block.type === "text"));
+      const textInput = boundedInteractionText(textBlocks.map((block) => `${block.title}：${block.content}`).filter(Boolean).join("\n"));
+      trackInteraction({
+        eventName: "weekly_report_text_saved",
+        resourceType: "weekly_report",
+        resourceId: activeReport.id,
+        extension: {
+          outcome: "success",
+          publication_status: publicationStatus,
+          text_block_count: textBlocks.length,
+          character_count: textBlocks.reduce((count, block) => count + block.content.length, 0),
+          input: textInput,
+        },
+      });
       setSavedAt(
         publicationStatus === "ready"
           ? `版本已由服务端保存并通过证据校验 · ${savedAt}`
@@ -1450,6 +1468,7 @@ export function WeeklyReport() {
         await downloadWeeklyExportPdf(documentNode, filename);
       }
       setIsExportDialogOpen(false);
+      trackInteraction({ eventName: "export_result", resourceType: "weekly_report", resourceId: activeReport.id, extension: { outcome: "success", format: exportFormat, include_comments: includeExportComments, include_ai_analysis: includeExportAnalysis } });
       setSavedAt(`经营周报已导出为 ${exportFormat.toUpperCase()} · ${formatNow()}`);
     } catch (error) {
       setSavedAt(error instanceof Error ? `周报导出失败：${error.message}` : "周报导出失败，请稍后重试。");
@@ -1470,13 +1489,13 @@ export function WeeklyReport() {
       >
         <div className="min-w-0">
           <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">银行经营分析周报工作台</h2>
-          <p className="mt-1 text-[13px] text-[#aeaeb2]">
-            机构周报生成与分析工作台 · {activeReport.institutionName}经营周报 · {activeReport.period}
-          </p>
+          <p className="mt-1 text-[13px] text-[#aeaeb2]">机构周报生成与分析工作台 · {activeReport.institutionName}经营周报 · {activeReport.period}</p>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-[#c7c7cc]">
-            <span className={`text-[11px] px-2 py-0.5 rounded-full border ${statusClass(activeReport.status)}`}>
-              {activeReport.status}
-            </span>
+            {activeReport.status !== "待分析" ? (
+              <span className={`text-[11px] px-2 py-0.5 rounded-full border ${statusClass(activeReport.status)}`}>
+                {activeReport.status}
+              </span>
+            ) : null}
             {activeHistoryVersion ? (
               <span>当前查看历史版本：{activeHistoryVersion.name} · 保存于 {activeHistoryVersion.savedAt}</span>
             ) : null}
@@ -1548,39 +1567,26 @@ export function WeeklyReport() {
           <FloatingSelectionActions selection={pendingTextSelection} onOpenComment={openCommentDraft} onOpenAnalysis={openContextAnalysis} />
         )}
         <section className="weekly-report-print-root bg-white rounded-xl border border-[#f0f0f2] overflow-hidden">
-          <div className="px-4 py-4 md:px-6">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div className="min-w-[180px]">
-                <div className="weekly-report-print-hidden flex items-center gap-2 text-[12px] text-[#8a8a8e] mb-2">
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>报告状态：{activeReport.status}</span>
-                </div>
-                <h3 className="whitespace-nowrap text-[20px] text-[#1d1d1f] tracking-tight">{activeReport.institutionName}经营周报</h3>
-              </div>
-              <div
-                className="grid w-full grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_minmax(190px,1.35fr)] lg:mr-[19px] lg:min-w-[540px] lg:max-w-[620px]"
-                data-weekly-report-meta-grid="true"
-              >
+          <div className="flex flex-col gap-3 px-4 py-3 md:px-6 lg:flex-row lg:items-center lg:justify-between">
+              <h3 className="whitespace-nowrap text-[20px] leading-8 text-[#1d1d1f] tracking-tight">{activeReport.institutionName}经营周报</h3>
+              <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)_minmax(220px,1.45fr)] lg:mr-[19px] lg:min-w-[640px] lg:max-w-[760px]" data-weekly-report-meta-grid="true">
                 {[
                   { label: "会议时间", key: "meetingTime" as const, value: activeReport.meetingTime },
                   { label: "汇报人", key: "reporters" as const, value: activeReport.reporters },
                   { label: "报告周期", key: "period" as const, value: activeReport.period },
                 ].map((item) => (
                   <div key={item.label} className="rounded-lg px-2.5 py-1.5" data-report-meta-key={item.key}>
-                    <div className="text-[10px] text-[#aeaeb2] mb-1">{item.label}</div>
-                    <input
-                      value={item.value}
-                      onChange={(event) => updateReportMeta(item.key, event.target.value)}
-                      className="w-full rounded-md border border-transparent bg-transparent px-0 py-0.5 text-[11px] leading-relaxed text-[#3a3a3c] outline-none transition-colors focus:border-[#d1d1d6] focus:bg-white focus:px-1"
-                    />
+                    <label className="flex min-w-0 items-center gap-2">
+                      <span className="shrink-0 text-[11px] leading-8 text-[#8a8a8e]">{item.label}</span>
+                      <input value={item.value} onChange={(event) => updateReportMeta(item.key, event.target.value)} className="h-8 min-w-0 flex-1 rounded-lg border border-[#e5e5ea] bg-white px-2.5 text-[12px] text-[#3a3a3c] outline-none transition-colors focus:border-[#c7c7cc]" />
+                    </label>
                   </div>
                 ))}
               </div>
-            </div>
           </div>
 
-          <div className="px-4 pb-5 pt-2 md:px-6">
-            <section className="mb-6 border-t border-[#f0f0f2] pt-2" data-weekly-report-body-start="true">
+          <div className="px-4 pb-5 md:px-6">
+            <section className="mb-6 border-t border-[#f0f0f2] pt-3" data-weekly-report-body-start="true">
               <div className="flex flex-col gap-2 mb-3 md:flex-row md:items-center md:justify-between">
                 <h4 className="text-[14px] text-[#1d1d1f]">一、业绩与业务波动</h4>
                 <div className="weekly-report-print-hidden flex items-center gap-2">
@@ -1796,20 +1802,24 @@ export function WeeklyReport() {
           destination="weekly"
           report={pendingVisualReportDelete}
           deleting={visualReportDeleting}
+          error={visualReportDeleteError}
           onCancel={() => {
             if (!visualReportDeleting) setPendingVisualReportDelete(null);
           }}
           onConfirm={() => {
             void (async () => {
               setVisualReportDeleting(true);
-              const removed = await weeklyVisualReports.remove(pendingVisualReportDelete);
+              setVisualReportDeleteError("");
+              const result = await weeklyVisualReports.remove(pendingVisualReportDelete);
               setVisualReportDeleting(false);
-              if (removed) {
+              if (result.ok) {
                 setAnalysisModuleSettings((current) => ({
                   ...current,
                   preferences: current.preferences.filter((preference) => preference.id !== `visual-report:${pendingVisualReportDelete.id}`),
                 }));
                 setPendingVisualReportDelete(null);
+              } else {
+                setVisualReportDeleteError(result.error);
               }
             })();
           }}
@@ -2636,7 +2646,7 @@ function CommentableText({
         >
           {value
             ? renderAnnotatedText(value, annotations, highlightedCommentId, onAnnotationClick)
-            : <span className="text-[#c4c4c8]">{placeholder}</span>}
+            : <span className="text-[12px] leading-[20px] text-[#aeaeb2]" style={{ color: "#aeaeb2", WebkitTextFillColor: "#aeaeb2" }}>{placeholder}</span>}
         </div>
       </div>
     );
@@ -2879,10 +2889,7 @@ function ResizableRichImage({
         >
           <button
             type="button"
-            onClick={() => {
-              setDeleteMenu(null);
-              onDelete();
-            }}
+            onClick={() => { setDeleteMenu(null); void askConfirm({ title: "删除图片", description: "确定删除这张图片？", hint: "此操作不可撤销。" }).then((ok) => { if (ok) onDelete(); }); }}
             className="w-full rounded-md px-2 py-1.5 text-left text-[12px] text-[#d92d20] hover:bg-[#fff1f0]"
           >
             删除

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import threading
 import time
 import traceback
@@ -459,8 +460,24 @@ def _websocket_session_token(protocol_header: str | None) -> str:
 
 
 def _runtime_health(handler: AnalysisAPIHandler) -> dict[str, Any]:
+    from backend.platform.runtime_config import runtime_capability_matrix
+
     services = handler.services
     checks: dict[str, dict[str, Any]] = {}
+    capability_matrix = runtime_capability_matrix(services.runtime_config)
+    if services.runtime_config.is_production:
+        try:
+            from backend.platform.ingestion.crawler_manifest import crawler_manifest_health
+
+            crawler_health = crawler_manifest_health(Path(services.runtime_config.data_crawler_root))
+            capability_matrix["data_crawler"].update(crawler_health)
+            capability_matrix["data_crawler"]["status"] = "ready"
+        except Exception as exc:
+            capability_matrix["data_crawler"].update({
+                "ready": False,
+                "status": "manifest_unavailable",
+                "error": str(exc)[:120],
+            })
     try:
         services.task_repository.runtime_summary()
         roles = services.permission_broker.enforcer.repository.list_roles()
@@ -508,6 +525,11 @@ def _runtime_health(handler: AnalysisAPIHandler) -> dict[str, Any]:
         "data_source_mode": services.data_source_mode,
         "fallback_mode": services.semantic_fallback_mode,
     }
+    for capability_name in ("public_origin", "wss", "asr", "data_crawler", "authentication"):
+        capability = dict(capability_matrix[capability_name])
+        if capability_name == "database":
+            continue
+        checks[f"capability_{capability_name}"] = capability
     kernel = getattr(services, "runtime_kernel", None)
     hermes_status = kernel.hermes_status() if kernel is not None and callable(getattr(kernel, "hermes_status", None)) else {"ready": True, "mode": "off", "configured": False}
     checks["hermes_draft"] = hermes_status
@@ -529,7 +551,18 @@ def _runtime_health(handler: AnalysisAPIHandler) -> dict[str, Any]:
     return {
         "status": "ok" if ready and not degraded else "degraded" if ready else "unavailable",
         "ready": ready,
-        "build": {"commit_sha": os.getenv("SMART_DATA_AGENT_COMMIT_SHA", "").strip()},
+        "build": {
+            "commit_sha": os.getenv("SMART_DATA_AGENT_COMMIT_SHA", "").strip(),
+            "image_reference": os.getenv("SMART_DATA_AGENT_IMAGE_REFERENCE", "").strip(),
+            "source_archive_sha256": os.getenv("SMART_DATA_AGENT_SOURCE_ARCHIVE_SHA256", "").strip(),
+            "dependency_lock_sha256": os.getenv("SMART_DATA_AGENT_DEPENDENCY_LOCK_SHA256", "").strip(),
+            "frontend_assets_sha256": os.getenv("SMART_DATA_AGENT_FRONTEND_ASSETS_SHA256", "").strip(),
+            "release_toolchain_sha256": os.getenv("SMART_DATA_AGENT_RELEASE_TOOLCHAIN_SHA256", "").strip(),
+        },
+        "runtime": {
+            "instance_id": os.getenv("SMART_DATA_AGENT_RUNTIME_INSTANCE_ID", "").strip() or socket.gethostname(),
+        },
+        "capabilities": capability_matrix,
         "checks": checks,
     }
 

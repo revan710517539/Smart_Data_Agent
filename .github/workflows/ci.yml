@@ -11,13 +11,13 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 60
     env:
       SMART_DATA_AGENT_TEST_MYSQL_URL: mysql+pymysql://sda_test:sda_test@127.0.0.1:3306/smart_data_agent_test
       SMART_DATA_AGENT_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
     services:
       mysql:
-        image: mysql:8.0.18
+        image: mysql:8.0.18@sha256:e1b0fd480a11e5c37425a2591b6fbd32af886bfc6d6f404bd362be5e50a2e632
         env:
           MYSQL_ROOT_PASSWORD: root_test
           MYSQL_DATABASE: smart_data_agent_test
@@ -34,18 +34,4 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-          cache: pip
-      - run: npm ci --ignore-scripts
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install uv==0.10.0
-      - run: python -m pip install -r requirements.lock
-      - run: python -m pip install -c requirements.lock -e '.[dev]'
-      - run: ./scripts/release-gate.sh
-      - run: ./scripts/build-image.sh ${{ github.sha }}
+      - run: SMART_DATA_AGENT_RELEASE_SCOPE=build SMART_DATA_AGENT_TARGET_PLATFORM=linux/amd64 ./scripts/release-gate.sh ${{ github.sha }}

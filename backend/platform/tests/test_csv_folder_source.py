@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from backend.platform.ingestion.csv_folder import CSVFolderSource
+from backend.platform.ingestion.crawler_manifest import CrawlerManifestError, crawler_manifest_health
 
 
 class CSVFolderSourceTest(unittest.TestCase):
@@ -37,6 +38,8 @@ class CSVFolderSourceTest(unittest.TestCase):
             self.assertEqual(table["relativePath"], "智能运营/sample.csv")
             self.assertEqual(table["rowCount"], 1)
             self.assertEqual(len(table["sourceKey"]), 32)
+            self.assertEqual(table["assetId"], f"raw:{table['sourceKey']}")
+            self.assertEqual(table["assetVersion"], table["contentHash"][:16])
             self.assertEqual(len(table["schemaFingerprint"]), 32)
             self.assertEqual(table["previewRows"], [{"机构": "华兴银行", "说明": "第一行\n第二行"}])
             self.assertEqual(table["fields"][0]["fieldNameCn"], "机构")
@@ -62,18 +65,17 @@ class CSVFolderSourceTest(unittest.TestCase):
             self.assertFalse(source.snapshot()["available"])
             self.assertEqual(source.for_tenant("tenant_a").snapshot()["files"], [])
 
-    def test_environment_uses_local_data_crawler_root_when_present(self) -> None:
-        local_root = CSVFolderSource.local_data_crawler_root
-        self.assertTrue(local_root.is_dir(), "local Data Crawler checkout must exist for this development test")
-        with TemporaryDirectory() as tmpdir, patch.dict(
-            os.environ,
-            {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": "", "DATA_CRAWLER_OUTPUT_DIR": ""},
-            clear=False,
-        ), patch.object(
-            CSVFolderSource, "container_data_crawler_root", Path(tmpdir) / "missing-app-data"
-        ):
-            source = CSVFolderSource.from_environment()
-        self.assertEqual(source.root, local_root.resolve())
+    def test_environment_without_explicit_root_uses_container_contract_path(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            app_data = Path(tmpdir) / "missing-app-data"
+            with patch.dict(
+                os.environ,
+                {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": "", "DATA_CRAWLER_OUTPUT_DIR": ""},
+                clear=False,
+            ), patch.object(CSVFolderSource, "container_data_crawler_root", app_data):
+                source = CSVFolderSource.from_environment()
+            self.assertEqual(source.root, app_data.resolve())
+            self.assertFalse(source.snapshot()["available"])
 
     def test_environment_follows_data_crawler_output_dir_on_the_host(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -96,28 +98,26 @@ class CSVFolderSourceTest(unittest.TestCase):
             self.assertEqual(source.root, output_root.resolve())
             self.assertEqual([item["file_name"] for item in tenant_source.snapshot()["files"]], ["loan.csv"])
 
-    def test_environment_uses_legacy_runtime_data_when_crawler_data_dir_is_absent(self) -> None:
+    def test_environment_does_not_probe_or_modify_legacy_runtime_data(self) -> None:
         with TemporaryDirectory() as tmpdir:
             runtime_root = Path(tmpdir) / "runtime-data"
             (runtime_root / "华兴银行").mkdir(parents=True)
-            (runtime_root / "华兴银行" / "loan.csv").write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
-            missing_data = Path(tmpdir) / "missing-data"
+            legacy_file = runtime_root / "华兴银行" / "loan.csv"
+            legacy_file.write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            before = (hashlib.sha256(legacy_file.read_bytes()).hexdigest(), legacy_file.stat().st_mtime_ns)
+            app_data = Path(tmpdir) / "missing-app-data"
             with patch.dict(
                 os.environ,
                 {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": "", "DATA_CRAWLER_OUTPUT_DIR": ""},
                 clear=False,
-            ), patch.object(
-                CSVFolderSource, "container_data_crawler_root", Path(tmpdir) / "missing-app-data"
-            ), patch.object(
-                CSVFolderSource, "local_data_crawler_root", missing_data
-            ), patch.object(
-                CSVFolderSource, "legacy_runtime_data_crawler_root", runtime_root
-            ):
+            ), patch.object(CSVFolderSource, "container_data_crawler_root", app_data):
                 source = CSVFolderSource.from_environment()
-            tenant_source = source.for_tenant("tenant:华兴银行")
-            tenant_source.prime_catalog()
-            self.assertEqual(source.root, runtime_root.resolve())
-            self.assertEqual([item["file_name"] for item in tenant_source.snapshot()["files"]], ["loan.csv"])
+            self.assertEqual(source.root, app_data.resolve())
+            self.assertEqual(source.for_tenant("tenant:华兴银行").snapshot()["files"], [])
+            self.assertEqual(
+                (hashlib.sha256(legacy_file.read_bytes()).hexdigest(), legacy_file.stat().st_mtime_ns),
+                before,
+            )
 
     def test_environment_uses_app_data_mount_before_local_checkout(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -165,19 +165,18 @@ class CSVFolderSourceTest(unittest.TestCase):
                     self.assertEqual([item["file_name"] for item in source.snapshot()["files"]], ["业务数据.csv"])
                     self.assertEqual(source.table_assets()[0]["previewRows"][0]["机构"], directory)
 
-    def test_environment_uses_local_checkout_when_app_data_mount_is_empty(self) -> None:
-        local_root = CSVFolderSource.local_data_crawler_root
-        self.assertTrue(local_root.is_dir(), "local Data Crawler checkout must exist for this development test")
-        with TemporaryDirectory() as tmpdir, patch.dict(
-            os.environ,
-            {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": "", "DATA_CRAWLER_OUTPUT_DIR": ""},
-            clear=False,
-        ), patch.object(
-            CSVFolderSource, "container_data_crawler_root", Path(tmpdir) / "empty-app-data"
-        ):
-            CSVFolderSource.container_data_crawler_root.mkdir()
-            source = CSVFolderSource.from_environment()
-        self.assertEqual(source.root, local_root.resolve())
+    def test_environment_keeps_empty_app_data_contract_without_host_checkout(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            app_data = Path(tmpdir) / "empty-app-data"
+            app_data.mkdir()
+            with patch.dict(
+                os.environ,
+                {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": "", "DATA_CRAWLER_OUTPUT_DIR": ""},
+                clear=False,
+            ), patch.object(CSVFolderSource, "container_data_crawler_root", app_data):
+                source = CSVFolderSource.from_environment()
+            self.assertEqual(source.root, app_data.resolve())
+            self.assertEqual(source.snapshot()["files"], [])
 
     def test_daily_delivery_versions_expose_only_the_latest_source_file(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -259,6 +258,8 @@ class CSVFolderSourceTest(unittest.TestCase):
             latest_table = source.table_assets(force=True)[0]
 
             self.assertEqual(first_table["sourceKey"], latest_table["sourceKey"])
+            self.assertEqual(first_table["assetId"], latest_table["assetId"])
+            self.assertNotEqual(first_table["assetVersion"], latest_table["assetVersion"])
             self.assertEqual(latest_table["tableNameCn"], "经营日报_2026-08-14")
             self.assertEqual(latest_table["fileName"], latest_path.name)
 
@@ -290,6 +291,19 @@ class CSVFolderSourceTest(unittest.TestCase):
             # bounded cache window expires or the batch forces a refresh.
             self.assertEqual(source.table_assets()[0]["previewRows"][0]["金额"], "1")
             self.assertEqual(source.table_assets(force=True)[0]["previewRows"][0]["金额"], "2")
+
+    def test_schema_fingerprint_includes_physical_headers_not_only_position_and_type(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_path = root / "daily.csv"
+            source_path.write_text("机构,金额\nA,1\n", encoding="utf-8")
+            source = CSVFolderSource(root)
+            first = source.table_assets(force=True)[0]
+
+            source_path.write_text("部门,金额\nA,1\n", encoding="utf-8")
+            second = source.table_assets(force=True)[0]
+
+            self.assertNotEqual(first["schemaFingerprint"], second["schemaFingerprint"])
 
     def test_tenant_catalog_never_falls_back_to_another_institution(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -355,6 +369,107 @@ class CSVFolderSourceTest(unittest.TestCase):
             self.assertEqual([item["file_name"] for item in snapshot["files"]], ["经营日报.csv"])
             self.assertEqual(snapshot["tenant_id"], "tenant:华兴银行")
 
+    def test_manifest_sql_lineage_is_preserved_on_the_raw_table_asset(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            approved = root / "华兴银行" / "经营日报_2026-08-26.csv"
+            approved.parent.mkdir()
+            approved.write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            self._write_manifest(
+                root,
+                "tenant:华兴银行",
+                "华兴银行",
+                approved,
+                sql_id="sql_yushu_daily",
+                run_id="run_daily_20260826",
+            )
+
+            with patch.dict(os.environ, {"SMART_DATA_AGENT_ENV": "production"}, clear=False):
+                table = CSVFolderSource(root).for_tenant("tenant:华兴银行").table_assets(force=True)[0]
+
+            self.assertEqual(table["sqlId"], "sql_yushu_daily")
+            self.assertEqual(table["crawlerRunId"], "run_daily_20260826")
+            self.assertEqual(table["relativePath"], approved.name)
+
+    def test_production_manifest_maps_canonical_and_legacy_tenant_ids_to_one_directory(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            approved = root / "华兴银行" / "经营日报.csv"
+            approved.parent.mkdir()
+            approved.write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            self._write_manifest(
+                root,
+                "tenant:华兴银行",
+                "华兴银行",
+                approved,
+                tenant_ids=["tenant:华兴银行", "tenant:huaxing"],
+            )
+
+            with patch.dict(os.environ, {"SMART_DATA_AGENT_ENV": "production"}, clear=False):
+                canonical = CSVFolderSource(root).for_tenant("tenant:华兴银行").snapshot(force=True)
+                legacy = CSVFolderSource(root).for_tenant("tenant:huaxing").snapshot(force=True)
+
+            self.assertEqual(canonical["contract_status"], "validated")
+            self.assertEqual(legacy["contract_status"], "validated")
+            self.assertEqual(canonical["institution_directory"], "华兴银行")
+            self.assertEqual(legacy["institution_directory"], "华兴银行")
+            self.assertEqual(canonical["files"][0]["content_hash"], legacy["files"][0]["content_hash"])
+
+    def test_manifest_health_validates_all_declared_files_for_readiness(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            approved = root / "华兴银行" / "经营日报.csv"
+            approved.parent.mkdir()
+            approved.write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            self._write_manifest(root, "tenant:华兴银行", "华兴银行", approved)
+
+            health = crawler_manifest_health(root)
+            self.assertTrue(health["ready"])
+            self.assertEqual(health["tenant_count"], 1)
+            self.assertEqual(health["file_count"], 1)
+
+            approved.write_text("机构,金额\n华兴银行,2\n", encoding="utf-8")
+            with self.assertRaisesRegex(CrawlerManifestError, "crawler_manifest_file_checksum_mismatch"):
+                crawler_manifest_health(root)
+
+    def test_production_manifest_rejects_an_alias_shared_by_two_institutions(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            huaxing = root / "华兴银行" / "经营日报.csv"
+            zhengzhou = root / "郑州银行" / "经营日报.csv"
+            huaxing.parent.mkdir()
+            zhengzhou.parent.mkdir()
+            huaxing.write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            zhengzhou.write_text("机构,金额\n郑州银行,2\n", encoding="utf-8")
+            payload = {
+                "schema_version": "smart-data-crawler-manifest/v1",
+                "generated_at": "2026-08-26T00:00:00+00:00",
+                "tenants": [
+                    {
+                        "tenant_id": "tenant:华兴银行",
+                        "tenant_ids": ["tenant:华兴银行", "tenant:shared"],
+                        "institution_directory": "华兴银行",
+                        "schema_version": "data-crawler-csv/v1",
+                        "files": [{"path": huaxing.name, "sha256": hashlib.sha256(huaxing.read_bytes()).hexdigest()}],
+                    },
+                    {
+                        "tenant_id": "tenant:郑州银行",
+                        "tenant_ids": ["tenant:郑州银行", "tenant:shared"],
+                        "institution_directory": "郑州银行",
+                        "schema_version": "data-crawler-csv/v1",
+                        "files": [{"path": zhengzhou.name, "sha256": hashlib.sha256(zhengzhou.read_bytes()).hexdigest()}],
+                    },
+                ],
+            }
+            (root / "manifest.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            with patch.dict(os.environ, {"SMART_DATA_AGENT_ENV": "production"}, clear=False):
+                snapshot = CSVFolderSource(root).for_tenant("tenant:shared").snapshot(force=True)
+
+            self.assertEqual(snapshot["contract_status"], "invalid")
+            self.assertEqual(snapshot["contract_error"], "crawler_tenant_directory_mapping_duplicate")
+            self.assertEqual(snapshot["files"], [])
+
     def test_production_manifest_missing_and_wrong_tenant_fail_closed(self) -> None:
         with TemporaryDirectory() as tmpdir, patch.dict(
             os.environ, {"SMART_DATA_AGENT_ENV": "production"}, clear=False
@@ -413,7 +528,16 @@ class CSVFolderSourceTest(unittest.TestCase):
             self.assertEqual(snapshot["files"], [])
 
     @staticmethod
-    def _write_manifest(root: Path, tenant_id: str, directory: str, file_path: Path) -> None:
+    def _write_manifest(
+        root: Path,
+        tenant_id: str,
+        directory: str,
+        file_path: Path,
+        *,
+        tenant_ids: list[str] | None = None,
+        sql_id: str = "",
+        run_id: str = "",
+    ) -> None:
         content = file_path.read_bytes()
         (root / "manifest.json").write_text(
             json.dumps(
@@ -423,12 +547,15 @@ class CSVFolderSourceTest(unittest.TestCase):
                     "tenants": [
                         {
                             "tenant_id": tenant_id,
+                            **({"tenant_ids": tenant_ids} if tenant_ids is not None else {}),
                             "institution_directory": directory,
                             "schema_version": "crawler-tenant/v1",
                             "files": [
                                 {
                                     "path": file_path.relative_to(root / directory).as_posix(),
                                     "sha256": hashlib.sha256(content).hexdigest(),
+                                    **({"sql_id": sql_id} if sql_id else {}),
+                                    **({"run_id": run_id} if run_id else {}),
                                 }
                             ],
                         }

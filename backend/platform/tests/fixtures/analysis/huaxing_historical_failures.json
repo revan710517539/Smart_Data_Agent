@@ -1,0 +1,67 @@
+{
+  "schema_version": "smart-data-agent-redacted-historical-analysis-fixture/v1",
+  "source": "User-provided Huaxing production failure signature; no customer rows or credentials retained.",
+  "asset_reference_failure": {
+    "legacy_error": "analysis_selected_data_asset_unavailable",
+    "tenant_id": "tenant:华兴银行",
+    "relative_path": "20260807_180009_员工维度报表.csv",
+    "content_hash_prefix": "9a1415",
+    "legacy_id": "legacy-dynamic-table-id",
+    "legacy_source_key": "legacy-dynamic-source-key",
+    "current_id": "current-dynamic-table-id",
+    "current_source_key": "current-dynamic-source-key",
+    "schema_fingerprint": "redacted-compatible-schema-v1",
+    "fields": [
+      {
+        "fieldNameEn": "department_level_2",
+        "fieldNameCn": "二级部门",
+        "physicalName": "field_3",
+        "type": "string",
+        "isMetric": false
+      },
+      {
+        "fieldNameEn": "loan_balance_current",
+        "fieldNameCn": "当日在贷余额",
+        "physicalName": "field_14",
+        "type": "decimal",
+        "isMetric": true
+      }
+    ]
+  },
+  "field_contract_failure": {
+    "legacy_error": "data_processing_required_field_missing",
+    "table_fields": [
+      {
+        "fieldNameEn": "department_level_2",
+        "fieldNameCn": "二级部门",
+        "physicalName": "field_3",
+        "type": "string",
+        "isMetric": false
+      },
+      {
+        "fieldNameEn": "loan_balance_current",
+        "fieldNameCn": "当日在贷余额",
+        "physicalName": "field_14",
+        "type": "decimal",
+        "isMetric": true
+      }
+    ],
+    "analysis_plan": {
+      "dimensions": ["department_level_2"],
+      "metrics": ["loan_balance_current"],
+      "metric_definitions": [
+        {
+          "metric_code": "loan_balance_current",
+          "metric_name": "当日在贷余额"
+        }
+      ]
+    },
+    "legacy_query_row": {
+      "department_level_2": "已脱敏机构",
+      "total_balance": 100.0
+    },
+    "field_aliases": {
+      "loan_balance_current": "total_balance"
+    }
+  }
+}

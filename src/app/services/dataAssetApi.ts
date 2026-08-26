@@ -3,7 +3,7 @@ import { getDefaultUserId } from "./apiContext";
 
 export type DataAssetGovernanceFields = {
   lifecycleStatus?: "draft" | "review" | "active" | "rejected" | "archived";
-  assetVersion?: number;
+  assetVersion?: number | string;
   schemaVersion?: string;
   lockVersion?: number;
   submittedBy?: string;
@@ -34,6 +34,8 @@ export type RawField = {
 
 export type RawTableAsset = DataAssetGovernanceFields & {
   id: string;
+  /** Stable analysis identity; unlike id it persists across delivery files. */
+  assetId?: string;
   tableNameEn: string;
   tableNameCn: string;
   source: string;
@@ -70,6 +72,10 @@ export type RawTableAsset = DataAssetGovernanceFields & {
   sourceKey?: string;
   /** Hash of current field names/types; a changed schema fails closed. */
   schemaFingerprint?: string;
+  /** Data Crawler-owned lineage for the exact institution-local table. */
+  sqlId?: string;
+  crawlerRunId?: string;
+  crawlerFinishedAt?: string;
   /** SDA-side policy only; it never changes the CSV file. */
   externalReferenceMode?: "private" | "shared";
   externalReferenceUpdatedAt?: string;
@@ -448,6 +454,7 @@ type DataAssetParams = {
   tenantId: string;
   userId?: string;
   scope?: "knowledge" | "runtime" | "visualization";
+  forceRefresh?: boolean;
 };
 
 export type RawFileUpload = {
@@ -467,12 +474,20 @@ export async function fetchDataAssets({
   tenantId,
   userId = getDefaultUserId(),
   scope,
+  forceRefresh = false,
 }: DataAssetParams): Promise<DataAssetBundle> {
-  const query = scope ? `?${new URLSearchParams({ scope }).toString()}` : "";
+  const params = new URLSearchParams();
+  if (scope) params.set("scope", scope);
+  if (forceRefresh && scope !== "runtime" && scope !== "knowledge") params.set("refresh", "1");
+  const query = params.size ? `?${params.toString()}` : "";
   const bundle = await apiRequest<DataAssetBundleWire>(`/api/data-assets${query}`, {
     method: "GET",
     context: { tenantId, userId },
-    readCache: { ttlMs: scope === "visualization" ? 60_000 : 20_000, tags: ["data-assets", scope ? `data-assets:${scope}` : "data-assets:catalog"] },
+    readCache: {
+      ttlMs: scope === "visualization" ? 60_000 : 20_000,
+      tags: ["data-assets", scope ? `data-assets:${scope}` : "data-assets:catalog"],
+      forceRefresh,
+    },
   });
   return normalizeDataAssetBundle(bundle);
 }
@@ -540,6 +555,7 @@ export type PageDataWorkspace = {
   notes: unknown[];
   rows: Record<string, PageDataRows>;
   row_errors: Record<string, string>;
+  raw_source_keys?: string[];
 };
 
 const pageDataWorkspaceMemory = new Map<string, PageDataWorkspace>();

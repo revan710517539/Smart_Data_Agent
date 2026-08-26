@@ -8,8 +8,9 @@
     "dev": "vite",
     "dev:api": "./.venv/bin/python -m backend.platform.api.server --host 127.0.0.1 --port 8788",
     "typecheck": "tsc --noEmit",
-    "test:backend": "uv run python -m unittest discover -s backend -t .",
+    "test:backend": "uv run --frozen python -m unittest discover -s backend -t .",
     "test:frontend-permissions": "node scripts/frontend-permission-smoke.mjs",
+    "test:browser-executable": "node scripts/browser-executable-contract.mjs",
     "test:context-rail": "node scripts/context-rail-contract.mjs",
     "test:client-uuid": "node scripts/client-uuid-contract.mjs",
     "test:visualization-interaction": "node scripts/visualization-interaction-contract.mjs",
@@ -21,11 +22,12 @@
     "test:field-semantics": "node scripts/field-semantics-contract.mjs",
     "test:visible-account-name": "node scripts/visible-account-name-contract.mjs",
     "test:product-consistency": "node scripts/product-consistency-telemetry-contract.mjs",
-    "test:frontend-size": "python3 scripts/check_frontend_module_size.py",
+    "test:frontend-contracts": "npm run test:browser-executable && npm run test:context-rail && npm run test:visualization-interaction && npm run test:visualization-workbench && npm run test:visual-report-workbench && npm run test:weekly-page-data-workbench && npm run test:page-data-modal && npm run test:route-performance && npm run test:field-semantics && npm run test:visible-account-name && npm run test:product-consistency",
+    "test:frontend-size": "uv run --frozen python scripts/check_frontend_module_size.py",
     "test:frontend-delivery": "node scripts/check_frontend_delivery.mjs",
-    "test:api-contract": "python3 scripts/generate_api_client.py --check",
-    "test:licenses": "uv run python scripts/check_open_source_licenses.py --write-sbom",
-    "test": "npm run typecheck && npm run test:client-uuid && npm run test:frontend-size && npm run test:api-contract && npm run test:licenses && npm run build && npm run test:frontend-delivery && npm run test:backend && npm run test:frontend-permissions"
+    "test:api-contract": "uv run --frozen python scripts/generate_api_client.py --check",
+    "test:licenses": "uv run --frozen python scripts/check_open_source_licenses.py --write-sbom",
+    "test": "npm run typecheck && npm run test:client-uuid && npm run test:frontend-contracts && npm run test:frontend-size && npm run test:api-contract && npm run test:licenses && npm run build && npm run test:frontend-delivery && npm run test:backend && npm run test:frontend-permissions"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
@@ -66,7 +68,7 @@
     "embla-carousel-react": "8.6.0",
     "html2canvas": "^1.4.1",
     "input-otp": "1.4.2",
-    "jspdf": "^3.0.1",
+    "jspdf": "4.2.1",
     "lucide-react": "0.487.0",
     "motion": "12.23.24",
     "next-themes": "0.4.6",
@@ -79,7 +81,7 @@
     "react-popper": "2.3.0",
     "react-resizable-panels": "2.1.7",
     "react-responsive-masonry": "2.7.1",
-    "react-router": "7.18.1",
+    "react-router": "7.18.2",
     "react-slick": "0.31.0",
     "recharts": "2.15.2",
     "sonner": "2.0.3",
@@ -93,13 +95,18 @@
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.7",
     "@vitejs/plugin-react": "4.7.0",
+    "playwright": "1.62.1",
     "tailwindcss": "4.1.12",
     "typescript": "6.0.3",
-    "vite": "6.4.3"
+    "vite": "6.4.3",
+    "ws": "8.21.3"
   },
   "pnpm": {
     "overrides": {
       "vite": "6.4.3"
     }
+  },
+  "overrides": {
+    "dompurify": "3.4.14"
   }
 }

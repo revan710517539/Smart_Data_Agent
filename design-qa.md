@@ -1,10 +1,10 @@
 # 定时任务 Tab 系统风格收敛 QA
 
-- source visual truth: `/var/folders/5j/1tdj8bb17jbc5z_08kq65_bc0000gn/T/codex-clipboard-9cb9e7d1-7757-4519-abbb-87df1a813f90.png`
-- implementation screenshot: `/Users/revan/Documents/Smart_Data_Agent/schedule-tab-system-refined.png`
-- calendar screenshot: `/Users/revan/Documents/Smart_Data_Agent/schedule-tab-calendar-refined.png`
-- combined comparison: `/Users/revan/Documents/Smart_Data_Agent/schedule-tab-reference-comparison.png`
-- browser: Codex in-app Browser，SDA 本地服务 `127.0.0.1:5174`
+- source visual truth: `<temporary-input>/schedule-tab-reference.png`
+- implementation screenshot: `<workspace>/schedule-tab-system-refined.png`
+- calendar screenshot: `<workspace>/schedule-tab-calendar-refined.png`
+- combined comparison: `<workspace>/schedule-tab-reference-comparison.png`
+- browser: Codex in-app Browser，SDA 本地开发地址 `${SDA_WEB_ORIGIN}`
 - viewport evidence: 浏览器截图为 1280×720；用户截图为 2302×934，组合图将用户截图按宽度归一到 1280px 后与实现截图纵向拼接
 - state: 华兴银行 / 站内数据 / 自营双周报放款与资产表现_2026-08-25 / 定时任务 / 每日 / today 为取值日前第 7 日
 

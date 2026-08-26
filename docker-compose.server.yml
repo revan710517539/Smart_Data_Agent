@@ -1,17 +1,22 @@
 x-sda-runtime: &sda-runtime
-  image: "${SMART_DATA_AGENT_IMAGE:?set an immutable 40-character SHA image tag}"
+  image: "${SMART_DATA_AGENT_IMAGE:?set an immutable repository@sha256 digest reference}"
   env_file:
     - path: .env.production
       required: true
   environment: &sda-environment
     SMART_DATA_AGENT_ENV: production
+    SMART_DATA_AGENT_IMAGE_REFERENCE: "${SMART_DATA_AGENT_IMAGE:?set an immutable image digest reference}"
     SMART_DATA_AGENT_AUTH_MODE: strict
     SMART_DATA_AGENT_AUTH_SECRET: "${SMART_DATA_AGENT_AUTH_SECRET:?set protected auth secret}"
     SMART_DATA_AGENT_CORS_ORIGINS: "${SMART_DATA_AGENT_PUBLIC_ORIGIN:?set public HTTPS origin}"
+    SMART_DATA_AGENT_PUBLIC_ORIGIN: "${SMART_DATA_AGENT_PUBLIC_ORIGIN:?set public HTTPS origin}"
+    SMART_DATA_AGENT_WSS_ENABLED: "${SMART_DATA_AGENT_WSS_ENABLED:?set exactly true or false}"
+    SMART_DATA_AGENT_ASR_ENABLED: "${SMART_DATA_AGENT_ASR_ENABLED:?set exactly true or false}"
     SMART_DATA_AGENT_DATABASE_URL: "${SMART_DATA_AGENT_DATABASE_URL:?set protected MySQL 8.0.18 URL with TLS}"
     SMART_DATA_AGENT_DB_POOL_MIN: "${SMART_DATA_AGENT_DB_POOL_MIN:-2}"
     SMART_DATA_AGENT_DB_POOL_MAX: "${SMART_DATA_AGENT_DB_POOL_MAX:-20}"
     SMART_DATA_AGENT_AUTO_MIGRATE: "false"
+    SMART_DATA_AGENT_ALLOW_HTTP_MODEL_EGRESS: "false"
     SMART_DATA_AGENT_DATA_WAREHOUSE: csv
     SMART_DATA_AGENT_DATA_CRAWLER_ROOT: /app/data
     SMART_DATA_AGENT_DATA_CRAWLER_ENDPOINTS: "${SMART_DATA_AGENT_DATA_CRAWLER_ENDPOINTS:-}"
@@ -46,7 +51,12 @@ x-sda-runtime: &sda-runtime
     AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
     AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN:-}"
   volumes:
-    - "${SMART_DATA_AGENT_DATA_CRAWLER_HOST_ROOT:-/opt/palywright/examples/data-crawler/data}:/app/data:ro"
+    - type: volume
+      source: data-crawler-shared
+      target: /app/data
+      read_only: true
+      volume:
+        nocopy: true
     - "${SMART_DATA_AGENT_MYSQL_CA_HOST_PATH:-/var/lib/mysql80/ca.pem}:/run/secrets/mysql_ca.pem:ro"
     - "${SMART_DATA_AGENT_KMS_PROVIDER_HOST_PATH:?set audited KMS provider host path}:/run/secrets/sda-kms-provider:ro"
     - smart-data-agent-runtime:/app/runtime
@@ -114,5 +124,8 @@ services:
     restart: unless-stopped
 
 volumes:
+  data-crawler-shared:
+    external: true
+    name: "${DATA_CRAWLER_MOUNT_SOURCE:?set the existing Data Crawler Docker volume source}"
   smart-data-agent-runtime:
   smart-data-agent-topic-data:

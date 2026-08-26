@@ -19,12 +19,14 @@ class CapabilityLoader:
         mcp_gateway: Any | None = None,
         memory_store: Any | None = None,
         data_asset_store: Any | None = None,
+        tenant_scope_service: Any | None = None,
     ) -> None:
         self.skill_registry = skill_registry
         self.capability_store = capability_store
         self.mcp_gateway = mcp_gateway
         self.memory_store = memory_store
         self.data_asset_store = data_asset_store
+        self.tenant_scope_service = tenant_scope_service
 
     def compile(self, context: ExecutionContext) -> CapabilityPack:
         entries: list[dict[str, Any]] = []
@@ -98,7 +100,10 @@ class CapabilityLoader:
                 bundle = self.data_asset_store.list_published_bundle(context.tenant_id)
             except Exception:
                 bundle = {}
-            for skill in bundle.get("analysis_skills") or []:
+            analysis_skills = list(bundle.get("analysis_skills") or [])
+            if self.tenant_scope_service is not None:
+                analysis_skills = self.tenant_scope_service.filter_analysis_skills(context.tenant_id, analysis_skills)
+            for skill in analysis_skills:
                 if not isinstance(skill, dict) or skill.get("enabled") is False:
                     continue
                 skill_id = str(skill.get("id") or "").strip()

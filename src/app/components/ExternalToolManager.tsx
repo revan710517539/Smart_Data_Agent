@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link2, Pencil, Plus, Trash2, X } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
 import { apiErrorMessage } from "../services/apiClient";
+import { askConfirm } from "./ui/ConfirmDialog";
 import { deleteDataAssetItem, fetchDataAssets, saveDataAssetItem, type ExternalToolAsset } from "../services/dataAssetApi";
 
 const emptyTool: ExternalToolAsset = {
@@ -50,7 +51,7 @@ export function ExternalToolManager() {
   };
 
   const remove = async (tool: ExternalToolAsset) => {
-    if (!window.confirm(`确认删除“${tool.name}”吗？`)) return;
+    if (!(await askConfirm({ title: "删除工具", description: `确定删除「${tool.name}」？`, hint: "此操作不可撤销。" }))) return;
     try {
       await deleteDataAssetItem({ tenantId, userId, itemType: "external_tool", itemId: tool.id });
       setNotice("外部工具已删除。");

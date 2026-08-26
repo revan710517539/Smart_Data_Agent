@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -20,21 +21,27 @@ from scripts.check_mysql_sql_closure import (  # noqa: E402
     assert_mysql_8018_datetime_defaults,
     assert_versioned_checksum_manifest,
 )
+from scripts.mysql_migration_receipt import SCHEMA as MIGRATION_RECEIPT_SCHEMA, current_migration_closure  # noqa: E402
 
 
 def main() -> None:
     database_url = os.getenv("SMART_DATA_AGENT_DATABASE_URL", "").strip()
     if not database_url:
         raise SystemExit("SMART_DATA_AGENT_DATABASE_URL is required")
+    commit_sha = os.getenv("SMART_DATA_AGENT_COMMIT_SHA", "").strip()
+    if re.fullmatch(r"[0-9a-f]{40}", commit_sha) is None:
+        raise SystemExit("SMART_DATA_AGENT_COMMIT_SHA must be a full lowercase SHA")
     assert_mysql_8018_datetime_defaults(MYSQL_SCHEMA_PATH.parent)
     assert_generated_mysql_schema_matches_repo()
     assert_versioned_checksum_manifest()
     result = apply_mysql_schema(database_url)
     print(json.dumps({
+        "schema_version": MIGRATION_RECEIPT_SCHEMA,
         "status": "passed",
-        "version": result.version,
-        "checksum": result.checksum,
-        "applied": result.applied,
+        "commit_sha": commit_sha,
+        "mysql_target_version": "8.0.18",
+        **current_migration_closure(),
+        "baseline_applied": result.applied,
         "execution_ms": result.execution_ms,
     }, sort_keys=True))
 

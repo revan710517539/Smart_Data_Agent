@@ -14,6 +14,7 @@ import { AnalysisVisualCard, type VisualizationCardConfig } from "../self-analys
 import { ResizableVisualizationGrid } from "../self-analysis/ResizableVisualizationGrid";
 import { visualDuplicateLayout } from "../self-analysis/visualGridLayout";
 import { pageDataToSelection, type AnalysisRow, type VisualizationType } from "../self-analysis/domain";
+import { askConfirm } from "../ui/ConfirmDialog";
 
 export type ComposerMode = "browse" | "edit";
 export const PAGE_DATA_PAGE_GUTTER_CLASS = "p-7";
@@ -76,7 +77,7 @@ function applyWorkspace(workspace: { assets?: PageDataAsset[]; layout?: string[]
   const available = (workspace.assets || []).filter((asset) => pageDataBelongsToPage(asset, pageCode));
   const availableIds = available.map((asset) => asset.id);
   const resolvedLayout = resolvePageDataLayout(workspace.layout || [], availableIds, {
-    includeNewlyAssigned: pageCode === "weekly_report" || pageCode === "institution_supervision" || pageCode === "customer_segment_analysis",
+    includeNewlyAssigned: true,
   });
   return {
     assets: available,
@@ -84,7 +85,9 @@ function applyWorkspace(workspace: { assets?: PageDataAsset[]; layout?: string[]
     visualTypes: Object.fromEntries(available.map((asset) => [asset.id, asset.visualizationType as VisualizationType])),
     notes: normalizePageDataNotes(workspace.notes, new Set(resolvedLayout)),
     rowsById: workspace.rows || {},
-    rowsFailed: {},
+    rowsFailed: Object.fromEntries(
+      Object.entries(workspace.row_errors || {}).map(([assetId, error]) => [assetId, pageDataRowErrorMessage(error)]),
+    ),
   };
 }
 
@@ -119,7 +122,7 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey, refreshK
       setVisualTypes(next.visualTypes);
       setNotes(next.notes);
       setRowsById(next.rowsById);
-      setRowsFailed({});
+      setRowsFailed(next.rowsFailed);
       setNotice("");
     }).catch((error) => {
       if (!cancelled) setNotice(apiErrorMessage(error, "页面数据配置加载失败。"));
@@ -131,6 +134,15 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey, refreshK
 
   const assetById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
   const visibleAssets = useMemo(() => layoutIds.map((id) => assetById.get(id)).filter((asset): asset is PageDataAsset => Boolean(asset)), [assetById, layoutIds]);
+  const hasSelectedPageData = visibleAssets.length > 0;
+  const hasRenderablePageData = useMemo(
+    () => visibleAssets.some((asset) => (rowsById[asset.id]?.rows || []).length > 0),
+    [rowsById, visibleAssets],
+  );
+  const waitingForPageDataRows = useMemo(
+    () => visibleAssets.some((asset) => !rowsById[asset.id] && !rowsFailed[asset.id]),
+    [rowsById, rowsFailed, visibleAssets],
+  );
 
   useEffect(() => {
     replaceVisualAnalysisSourceGroup(railPageKey, "page-data", visibleAssets.map((asset) => ({
@@ -285,6 +297,9 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey, refreshK
     assets,
     layoutIds,
     visibleAssets,
+    hasSelectedPageData,
+    hasRenderablePageData,
+    waitingForPageDataRows,
     rowsById,
     rowsFailed,
     visualTypes,
@@ -311,12 +326,15 @@ export function usePageDataComposer({ pageCode, moduleKey, railPageKey, refreshK
     },
     persistNoteChanges: () => { void writeNotes(notes); },
     removeNote: (noteId: string) => {
-      setNotes((current) => {
-        const target = current.find((note) => note.id === noteId);
-        if (target && !canDeleteOwnVisualCopy({ createdByUserId: target.createdByUserId, userId, isSuperAdmin })) return current;
-        const next = current.filter((note) => note.id !== noteId);
-        void writeNotes(next);
-        return next;
+      const target = notes.find((note) => note.id === noteId);
+      if (!target || !canDeleteOwnVisualCopy({ createdByUserId: target.createdByUserId, userId, isSuperAdmin })) return;
+      void askConfirm({ title: "删除结论卡片", description: `确定删除「${target.noteTitle || "该卡片"}」？`, hint: "此操作不可撤销。" }).then((ok) => {
+        if (!ok) return;
+        setNotes((current) => {
+          const next = current.filter((note) => note.id !== noteId);
+          void writeNotes(next);
+          return next;
+        });
       });
     },
     userId,
@@ -432,7 +450,7 @@ export function PageDataVisualizationModules({
           >
             {showEditorControls && mode === "edit" && <div className="mb-1 flex h-7 shrink-0 items-center justify-between rounded-lg bg-[#f6f8f7] px-2 text-[10px] text-[#7c8781]">
               <span className="inline-flex cursor-grab items-center gap-1 active:cursor-grabbing"><GripVertical className="h-3.5 w-3.5" />拖动排序</span>
-              <button type="button" onClick={() => void commitLayout(layoutIds.filter((id) => id !== asset.id))} className="inline-flex h-6 items-center gap-1 rounded-md px-2 hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3 w-3" />移除</button>
+              <button type="button" onClick={() => void askConfirm({ title: "移除图表", description: `确定从当前页面移除「${asset.name}」？`, hint: "此操作不可撤销。" }).then((ok) => { if (ok) void commitLayout(layoutIds.filter((id) => id !== asset.id)); })} className="inline-flex h-6 items-center gap-1 rounded-md px-2 hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3 w-3" />移除</button>
             </div>}
             <div className="min-h-0 flex-1">
               {!pageRows && !rowsFailed[asset.id] ? (
@@ -463,7 +481,7 @@ export function PageDataVisualizationModules({
                   setInstanceTitles((current) => ({ ...current, [`${asset.id}:${index + 1}`]: `${instanceTitles[instanceKey] || asset.name} · 副本` }));
                   void commitLayout(next);
                 } : (config, options) => { if (options?.asText) addTextCard(asset.id, config, instanceKey); }}
-                onDelete={showEditorControls && mode === "edit" ? () => { const next = layoutIds.filter((_, layoutIndex) => layoutIndex !== index); void commitLayout(next); } : undefined}
+                onDelete={showEditorControls && mode === "edit" ? () => { void askConfirm({ title: "移除图表", description: `确定从当前页面移除「${instanceTitles[instanceKey] || asset.name}」？`, hint: "此操作不可撤销。" }).then((ok) => { if (ok) void commitLayout(layoutIds.filter((_, layoutIndex) => layoutIndex !== index)); }); } : undefined}
               />}
             </div>
           </div>;

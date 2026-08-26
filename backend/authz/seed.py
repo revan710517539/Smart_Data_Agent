@@ -63,6 +63,7 @@ MENU_TREE = (
             MenuResource("task-workbench.todos", "待办任务"),
             MenuResource("task-workbench.tasks", "自动化任务"),
             MenuResource("task-workbench.message-board", "留言板管理"),
+            MenuResource("task-workbench.interaction-analytics", "埋点分析"),
         ),
     ),
     MenuResource(
@@ -112,6 +113,7 @@ SUPER_ADMIN_OPT_IN_MENU_KEYS = frozenset({
     "task-workbench.todos",
     "task-workbench.tasks",
     "task-workbench.message-board",
+    "task-workbench.interaction-analytics",
     "notifications",
     "notifications.alerts",
     "notifications.subscriptions",

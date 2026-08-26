@@ -5,6 +5,8 @@ from backend.platform.runtime_config import (
     RuntimeConfigurationError,
     cors_origin_for_request,
     load_runtime_config,
+    runtime_capability_matrix,
+    runtime_capability_summary,
 )
 from backend.platform.security import AuthenticationError, make_session_token, resolve_request_context, verify_session_token
 
@@ -65,6 +67,16 @@ class RuntimeConfigTest(unittest.TestCase):
                 "SMART_DATA_AGENT_AUTH_MODE": "development",
                 "SMART_DATA_AGENT_DATA_WAREHOUSE": "json",
                 "SMART_DATA_AGENT_SECRET_PROVIDER": "local",
+                "SMART_DATA_AGENT_WSS_ENABLED": "true",
+                "SMART_DATA_AGENT_ASR_ENABLED": "true",
+                "SMART_DATA_AGENT_EMBEDDED_WORKER": "false",
+                "SMART_DATA_AGENT_AUTO_MIGRATE": "false",
+                "SMART_DATA_AGENT_ALLOW_HTTP_MODEL_EGRESS": "false",
+                "SMART_DATA_AGENT_IMAGE_REFERENCE": "registry.example/sda@sha256:" + "a" * 64,
+                "SMART_DATA_AGENT_SOURCE_ARCHIVE_SHA256": "b" * 64,
+                "SMART_DATA_AGENT_DEPENDENCY_LOCK_SHA256": "c" * 64,
+                "SMART_DATA_AGENT_FRONTEND_ASSETS_SHA256": "d" * 64,
+                "SMART_DATA_AGENT_RELEASE_TOOLCHAIN_SHA256": "e" * 64,
             },
             clear=True,
         ):
@@ -90,6 +102,18 @@ class RuntimeConfigTest(unittest.TestCase):
                 "SMART_DATA_AGENT_OBJECT_BUCKET": "smart-data-agent-prod",
                 "SMART_DATA_AGENT_OBJECT_REGION": "cn-east-1",
                 "SMART_DATA_AGENT_CORS_ORIGINS": "https://analytics.example.com",
+                "SMART_DATA_AGENT_PUBLIC_ORIGIN": "https://analytics.example.com",
+                "SMART_DATA_AGENT_DATA_CRAWLER_ROOT": "/app/data",
+                "SMART_DATA_AGENT_WSS_ENABLED": "true",
+                "SMART_DATA_AGENT_ASR_ENABLED": "true",
+                "SMART_DATA_AGENT_EMBEDDED_WORKER": "false",
+                "SMART_DATA_AGENT_AUTO_MIGRATE": "false",
+                "SMART_DATA_AGENT_ALLOW_HTTP_MODEL_EGRESS": "false",
+                "SMART_DATA_AGENT_IMAGE_REFERENCE": "registry.example/sda@sha256:" + "a" * 64,
+                "SMART_DATA_AGENT_SOURCE_ARCHIVE_SHA256": "b" * 64,
+                "SMART_DATA_AGENT_DEPENDENCY_LOCK_SHA256": "c" * 64,
+                "SMART_DATA_AGENT_FRONTEND_ASSETS_SHA256": "d" * 64,
+                "SMART_DATA_AGENT_RELEASE_TOOLCHAIN_SHA256": "e" * 64,
                 "SMART_DATA_AGENT_EGRESS_ALLOWED_HOSTS": "idp.example.com,analytics.example.com",
                 "SMART_DATA_AGENT_OIDC_ISSUER": "https://idp.example.com",
                 "SMART_DATA_AGENT_OIDC_CLIENT_ID": "smart-data-agent",
@@ -106,6 +130,109 @@ class RuntimeConfigTest(unittest.TestCase):
             config = load_runtime_config()
         self.assertTrue(config.is_production)
         self.assertEqual(config.cors_origins, ("https://analytics.example.com",))
+        self.assertTrue(config.wss_enabled)
+        self.assertTrue(config.asr_enabled)
+        self.assertFalse(config.embedded_worker_enabled)
+
+    def test_production_requires_explicit_data_crawler_root(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "SMART_DATA_AGENT_ENV": "production",
+                "SMART_DATA_AGENT_WSS_ENABLED": "false",
+                "SMART_DATA_AGENT_ASR_ENABLED": "false",
+                "SMART_DATA_AGENT_EMBEDDED_WORKER": "false",
+                "SMART_DATA_AGENT_AUTO_MIGRATE": "false",
+                "SMART_DATA_AGENT_ALLOW_HTTP_MODEL_EGRESS": "false",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "DATA_CRAWLER_ROOT must be explicit"):
+                load_runtime_config()
+
+    def test_production_operational_booleans_are_explicit_and_strict(self) -> None:
+        for name, value in (
+            ("SMART_DATA_AGENT_WSS_ENABLED", "yes"),
+            ("SMART_DATA_AGENT_ASR_ENABLED", "1"),
+            ("SMART_DATA_AGENT_EMBEDDED_WORKER", "False"),
+            ("SMART_DATA_AGENT_AUTO_MIGRATE", "0"),
+            ("SMART_DATA_AGENT_ALLOW_HTTP_MODEL_EGRESS", "yes"),
+        ):
+            with self.subTest(name=name, value=value), patch.dict(
+                "os.environ",
+                {
+                    "SMART_DATA_AGENT_ENV": "production",
+                    "SMART_DATA_AGENT_WSS_ENABLED": "true",
+                    "SMART_DATA_AGENT_ASR_ENABLED": "true",
+                    "SMART_DATA_AGENT_EMBEDDED_WORKER": "false",
+                    "SMART_DATA_AGENT_AUTO_MIGRATE": "false",
+                    "SMART_DATA_AGENT_ALLOW_HTTP_MODEL_EGRESS": "false",
+                    name: value,
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(RuntimeConfigurationError, "exactly true or false"):
+                    load_runtime_config()
+
+        with patch.dict("os.environ", {"SMART_DATA_AGENT_ENV": "production"}, clear=True):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "must be explicitly set"):
+                load_runtime_config()
+
+    def test_asr_requires_wss_even_outside_production(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "SMART_DATA_AGENT_ENV": "test",
+                "SMART_DATA_AGENT_WSS_ENABLED": "false",
+                "SMART_DATA_AGENT_ASR_ENABLED": "true",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeConfigurationError, "requires SMART_DATA_AGENT_WSS_ENABLED=true"):
+                load_runtime_config()
+
+    def test_capability_matrix_has_no_database_secret_and_distinguishes_disabled(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "SMART_DATA_AGENT_ENV": "test",
+                "SMART_DATA_AGENT_DATABASE_URL": "mysql://user:secret@db.example/sda",
+                "SMART_DATA_AGENT_WSS_ENABLED": "false",
+                "SMART_DATA_AGENT_ASR_ENABLED": "false",
+                "SMART_DATA_AGENT_EMBEDDED_WORKER": "false",
+            },
+            clear=True,
+        ):
+            matrix = runtime_capability_matrix(load_runtime_config())
+        serialized = str(matrix)
+        self.assertNotIn("secret", serialized)
+        self.assertEqual(matrix["asr"]["status"], "disabled")
+        self.assertTrue(matrix["asr"]["ready"])
+        self.assertTrue(matrix["database"]["configured"])
+
+    def test_startup_capability_summary_is_redacted_and_reports_explicit_configuration(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "SMART_DATA_AGENT_ENV": "test",
+                "SMART_DATA_AGENT_PUBLIC_ORIGIN": "https://private.example.test",
+                "SMART_DATA_AGENT_CORS_ORIGINS": "https://private.example.test",
+                "SMART_DATA_AGENT_DATABASE_URL": "mysql://user:do-not-log@database.internal/sda",
+                "SMART_DATA_AGENT_DATA_CRAWLER_ROOT": "/private/server/data-crawler-volume",
+                "SMART_DATA_AGENT_WSS_ENABLED": "true",
+                "SMART_DATA_AGENT_ASR_ENABLED": "false",
+                "SMART_DATA_AGENT_EMBEDDED_WORKER": "false",
+            },
+            clear=True,
+        ):
+            summary = runtime_capability_summary(load_runtime_config())
+        serialized = str(summary)
+        self.assertNotIn("do-not-log", serialized)
+        self.assertNotIn("private.example.test", serialized)
+        self.assertNotIn("/private/server", serialized)
+        self.assertEqual(summary["public_origin_configured"], True)
+        self.assertEqual(summary["crawler_root_configured"], True)
+        self.assertEqual(summary["database_configured"], True)
 
     def test_cors_never_returns_wildcard_and_loopback_is_development_only(self) -> None:
         with patch.dict("os.environ", {"SMART_DATA_AGENT_ENV": "development"}, clear=True):
@@ -127,6 +254,18 @@ class RuntimeConfigTest(unittest.TestCase):
                 "SMART_DATA_AGENT_OBJECT_BUCKET": "smart-data-agent-prod",
                 "SMART_DATA_AGENT_OBJECT_REGION": "cn-east-1",
                 "SMART_DATA_AGENT_CORS_ORIGINS": "https://analytics.example.com",
+                "SMART_DATA_AGENT_PUBLIC_ORIGIN": "https://analytics.example.com",
+                "SMART_DATA_AGENT_DATA_CRAWLER_ROOT": "/app/data",
+                "SMART_DATA_AGENT_WSS_ENABLED": "true",
+                "SMART_DATA_AGENT_ASR_ENABLED": "true",
+                "SMART_DATA_AGENT_EMBEDDED_WORKER": "false",
+                "SMART_DATA_AGENT_AUTO_MIGRATE": "false",
+                "SMART_DATA_AGENT_ALLOW_HTTP_MODEL_EGRESS": "false",
+                "SMART_DATA_AGENT_IMAGE_REFERENCE": "registry.example/sda@sha256:" + "a" * 64,
+                "SMART_DATA_AGENT_SOURCE_ARCHIVE_SHA256": "b" * 64,
+                "SMART_DATA_AGENT_DEPENDENCY_LOCK_SHA256": "c" * 64,
+                "SMART_DATA_AGENT_FRONTEND_ASSETS_SHA256": "d" * 64,
+                "SMART_DATA_AGENT_RELEASE_TOOLCHAIN_SHA256": "e" * 64,
                 "SMART_DATA_AGENT_EGRESS_ALLOWED_HOSTS": "idp.example.com,analytics.example.com",
                 "SMART_DATA_AGENT_OIDC_ISSUER": "https://idp.example.com",
                 "SMART_DATA_AGENT_OIDC_CLIENT_ID": "smart-data-agent",

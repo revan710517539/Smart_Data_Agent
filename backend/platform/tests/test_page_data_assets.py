@@ -12,8 +12,11 @@ from backend.platform.api.routes.assets import (
     _join_institution_rows,
     _multi_institution_candidates,
     _multi_page_data_source_tables,
+    _page_data_available_for_raw_catalog,
     _page_data_source_table,
     _project_page_data_rows,
+    _resolve_page_data_layout,
+    _table_relationship_available_for_raw_catalog,
     read_page_data_rows_payload,
     read_page_data_workspace_payload,
 )
@@ -22,6 +25,7 @@ from backend.platform.application import InMemoryApplicationStore
 from backend.platform.application.postgresql_store import _shared_page_layout_module
 from backend.platform.assets import InMemoryDataAssetStore
 from backend.platform.assets.store import _validate_asset_schema
+from backend.platform.tenancy.governance import InMemoryTenantGovernanceStore, TenantScopeService
 
 
 class _Catalog:
@@ -36,6 +40,16 @@ class _Catalog:
         rows = [dict(row) for row in self._rows.get(relative_path, [])[:max_rows]]
         headers = list(rows[0]) if rows else []
         return headers, rows
+
+
+class _TrackingCatalog(_Catalog):
+    def __init__(self, tables: list[dict], rows: dict[str, list[dict[str, str]]] | None = None) -> None:
+        super().__init__(tables, rows)
+        self.table_asset_calls = 0
+
+    def table_assets(self) -> list[dict]:
+        self.table_asset_calls += 1
+        return super().table_assets()
 
 
 class _CsvSource:
@@ -236,6 +250,93 @@ class PageDataAssetTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "page_data_metric_fields_invalid"):
             _validate_asset_schema("page_data", {**self.asset, "metricFields": ["unknown_field"]})
 
+    def test_page_data_and_relationships_are_subsets_of_current_raw_tables(self) -> None:
+        keys = {"source_1"}
+        tenant = "tenant:a"
+        self.assertTrue(_page_data_available_for_raw_catalog(self.asset, tenant, keys))
+        self.assertFalse(_page_data_available_for_raw_catalog({**self.asset, "sourceKey": "retired_source"}, tenant, keys))
+        self.assertTrue(
+            _page_data_available_for_raw_catalog(
+                {
+                    **self.asset,
+                    "institutionScope": "multi_institution",
+                    "institutionSources": [
+                        {"tenantId": "tenant:a", "sourceKey": "source_1"},
+                        {"tenantId": "tenant:b", "sourceKey": "other_bank"},
+                    ],
+                },
+                tenant,
+                keys,
+            )
+        )
+        self.assertFalse(
+            _page_data_available_for_raw_catalog(
+                {
+                    **self.asset,
+                    "institutionScope": "multi_institution",
+                    "institutionSources": [
+                        {"tenantId": "tenant:a", "sourceKey": "retired_source"},
+                        {"tenantId": "tenant:b", "sourceKey": "other_bank"},
+                    ],
+                },
+                tenant,
+                keys,
+            )
+        )
+        live_relationship = {
+            "relationshipScope": "single_institution",
+            "nodes": [
+                {"tenantId": "tenant:a", "sourceKey": "source_1"},
+                {"tenantId": "tenant:a", "sourceKey": "source_1"},
+            ],
+        }
+        stale_relationship = {
+            "relationshipScope": "single_institution",
+            "nodes": [
+                {"tenantId": "tenant:a", "sourceKey": "source_1"},
+                {"tenantId": "tenant:a", "sourceKey": "retired_source"},
+            ],
+        }
+        self.assertTrue(_table_relationship_available_for_raw_catalog(live_relationship, tenant, keys))
+        self.assertFalse(_table_relationship_available_for_raw_catalog(stale_relationship, tenant, keys))
+        self.assertFalse(
+            _table_relationship_available_for_raw_catalog(
+                {
+                    "relationshipScope": "multi_institution",
+                    "nodes": [{"tenantId": "tenant:b", "sourceKey": "other_bank"}],
+                },
+                tenant,
+                keys,
+            )
+        )
+
+    def test_multi_overlays_require_every_institution_source_when_live_refs_are_known(self) -> None:
+        item = {
+            **self.asset,
+            "institutionScope": "multi_institution",
+            "sourceKey": "relationship_1",
+            "name": "经营周报底表 · 多机构数据",
+            "sourceTableName": "经营周报底表",
+            "institutionSources": [
+                {"tenantId": "tenant:a", "sourceKey": "source_1"},
+                {"tenantId": "tenant:b", "sourceKey": "other_bank"},
+            ],
+        }
+        relationship = {
+            "relationshipScope": "multi_institution",
+            "nodes": [
+                {"tenantId": "tenant:a", "sourceKey": "source_1"},
+                {"tenantId": "tenant:b", "sourceKey": "other_bank"},
+            ],
+        }
+        keys = {"source_1"}
+        live = {("tenant:a", "source_1"), ("tenant:b", "other_bank")}
+        self.assertTrue(_page_data_available_for_raw_catalog(item, "tenant:a", keys, live_source_refs=live))
+        self.assertTrue(_table_relationship_available_for_raw_catalog(relationship, "tenant:a", keys, live_source_refs=live))
+        self.assertFalse(_page_data_available_for_raw_catalog(item, "tenant:a", keys, live_source_refs={("tenant:a", "source_1")}))
+        self.assertFalse(_table_relationship_available_for_raw_catalog(relationship, "tenant:a", keys, live_source_refs={("tenant:a", "source_1")}))
+        self.assertFalse(_page_data_available_for_raw_catalog(item, "tenant:a", keys, [self.table], live_source_refs=set()))
+
     def test_binding_uses_authoritative_current_tenant_catalog_metadata(self) -> None:
         bound = _bind_page_data_asset(self._handler(), SimpleNamespace(tenant_id="tenant_a"), self.asset)
         self.assertEqual(bound["sourceTableName"], "经营周报底表")
@@ -244,8 +345,51 @@ class PageDataAssetTest(unittest.TestCase):
         self.assertEqual(bound["sourceFields"], self.table["fields"])
 
     def test_replaced_schema_fails_closed(self) -> None:
+        table = _page_data_source_table(self._handler(), "tenant_a", {**self.asset, "schemaFingerprint": "stale"})
+        self.assertEqual(table["sourceKey"], "source_1")
         with self.assertRaisesRegex(PermissionError, "page_data_source_schema_changed"):
-            _page_data_source_table(self._handler(), "tenant_a", {**self.asset, "schemaFingerprint": "stale"})
+            _page_data_source_table(
+                self._handler(),
+                "tenant_a",
+                {**self.asset, "schemaFingerprint": "stale", "metricFields": ["missing_metric"]},
+            )
+
+    def test_page_data_rematch_rotated_delivery_by_logical_title(self) -> None:
+        current = {
+            **self.table,
+            "id": "csv_new_delivery",
+            "sourceKey": "source_current",
+            "tableNameCn": "经营周报底表_2026-05-06",
+            "fileName": "经营周报底表_2026-05-06.csv",
+            "relativePath": "华兴银行/经营周报底表_2026-05-06.csv",
+        }
+        handler = SimpleNamespace(
+            services=SimpleNamespace(
+                data_acquisition_service=SimpleNamespace(csv_source=_CsvSource(_Catalog([current]))),
+            ),
+        )
+        table = _page_data_source_table(
+            handler,
+            "tenant_a",
+            {
+                **self.asset,
+                "sourceKey": "retired_source",
+                "sourceTableName": "经营周报底表_2026-08-11",
+                "name": "经营周报底表_2026-08-11 · 单机构数据",
+            },
+        )
+        self.assertEqual(table["sourceKey"], "source_current")
+        self.assertFalse(
+            _page_data_available_for_raw_catalog({**self.asset, "sourceKey": "retired_source"}, "tenant:a", {"source_current"})
+        )
+        self.assertTrue(
+            _page_data_available_for_raw_catalog(
+                {**self.asset, "sourceKey": "retired_source", "sourceTableName": "经营周报底表_2026-08-11"},
+                "tenant:a",
+                {"source_current"},
+                [current],
+            )
+        )
 
     def test_original_csv_headers_are_projected_to_stable_field_codes(self) -> None:
         rows = _project_page_data_rows(
@@ -372,6 +516,84 @@ class PageDataAssetTest(unittest.TestCase):
         self.assertEqual([source["tenantId"] for source in candidates[0]["sources"]], ["tenant:a", "tenant:b"])
         self.assertEqual(_multi_institution_candidates(self._multi_handler(include_relationship=False), context), [])
         self.assertEqual(_multi_institution_candidates(self._multi_handler(second_schema="schema_2"), context), [])
+
+    def test_recipient_only_user_sees_exact_cross_tenant_granted_table_fields(self) -> None:
+        fingerprint = "a" * 64
+        source_table = {**self.table, "schemaFingerprint": fingerprint}
+        recipient_table = {
+            **source_table,
+            "id": "csv_table_2",
+            "sourceKey": "source_2",
+            "relativePath": "reports/weekly_b.csv",
+        }
+        csv_source = _MultiCsvSource({
+            "tenant:a": _Catalog([source_table]),
+            "tenant:b": _Catalog([recipient_table]),
+        })
+        edge = {
+            "source_type": "raw_table",
+            "source_id": "tenant:a::source_1",
+            "target_type": "raw_table",
+            "target_id": "tenant:b::source_2",
+            "metadata": {
+                "relationshipScope": "multi_institution",
+                "sourceTenantId": "tenant:a",
+                "sourceSourceKey": "source_1",
+                "targetTenantId": "tenant:b",
+                "targetSourceKey": "source_2",
+            },
+        }
+        enforcer = _Enforcer()
+        scope_service = TenantScopeService(
+            InMemoryTenantGovernanceStore(),
+            enforcer,
+            InMemoryDataAssetStore(seed_defaults=False),
+            csv_source,
+        )
+        grant = scope_service.create_resource_grant(
+            actor_user_id="u_super_admin",
+            source_tenant_id="tenant:a",
+            recipient_tenant_id="tenant:b",
+            resource_type="raw_table",
+            resource_key="source_1",
+            actions=["read"],
+            field_scope=["report_date", "loan_amount"],
+            schema_fingerprint=fingerprint,
+            purpose="机构经营对标",
+            active_tenant_ids={"tenant:a", "tenant:b"},
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+        services = SimpleNamespace(
+            data_acquisition_service=SimpleNamespace(csv_source=csv_source),
+            data_asset_store=InMemoryDataAssetStore(seed_defaults=False),
+            lineage_store=_Lineage([edge]),
+            access_service=SimpleNamespace(session_for_user=lambda *_args, **_kwargs: {
+                "institutions": ["b"],
+                "institution": "b",
+            }),
+            permission_broker=SimpleNamespace(enforcer=enforcer),
+            tenant_scope_service=scope_service,
+            primary_database_pool=None,
+            _memory_tenant_catalog=[
+                {"id": "tenant:a", "name": "a", "status": "active"},
+                {"id": "tenant:b", "name": "b", "status": "active"},
+            ],
+        )
+        handler = SimpleNamespace(services=services)
+        context = SimpleNamespace(tenant_id="tenant:b", user_id="u_recipient")
+
+        labels, tables = _authorized_raw_table_catalog(handler, context)
+        self.assertEqual(labels, {"tenant:b": "b", "tenant:a": "a"})
+        self.assertEqual(
+            [field["fieldNameEn"] for field in tables[("tenant:a", "source_1")]["fields"]],
+            ["report_date", "loan_amount"],
+        )
+        self.assertEqual(len(_multi_institution_candidates(handler, context)), 1)
+
+        scope_service.revoke_resource_grant(grant["grant_id"], "u_super_admin", "停止共享")
+        labels_after, tables_after = _authorized_raw_table_catalog(handler, context)
+        self.assertEqual(labels_after, {"tenant:b": "b"})
+        self.assertNotIn(("tenant:a", "source_1"), tables_after)
 
     def test_multi_institution_binding_uses_authoritative_relationship_sources(self) -> None:
         context = SimpleNamespace(tenant_id="tenant:a", user_id="u_super_admin")
@@ -594,6 +816,62 @@ class PageDataAssetTest(unittest.TestCase):
         self.assertNotIn("tenant:c", csv_source.requested_tenants)
         self.assertEqual(set(enforcer.requested_tenants), {"tenant:a", "tenant:b"})
 
+    def test_saved_multi_institution_page_read_scans_only_bound_tenants(self) -> None:
+        table_b = {**self.table, "id": "csv_table_b", "sourceKey": "source_b", "relativePath": "reports/b.csv"}
+        table_c = {**self.table, "id": "csv_table_c", "sourceKey": "source_c", "relativePath": "reports/c.csv"}
+        csv_source = _TrackingMultiCsvSource({
+            "tenant:a": _Catalog([self.table]),
+            "tenant:b": _Catalog([table_b]),
+            "tenant:c": _Catalog([table_c]),
+        })
+        store = InMemoryDataAssetStore(seed_defaults=False)
+        handler = SimpleNamespace(services=SimpleNamespace(
+            data_acquisition_service=SimpleNamespace(csv_source=csv_source),
+            data_asset_store=store,
+            lineage_store=_Lineage([]),
+            access_service=SimpleNamespace(session_for_user=lambda *_args, **_kwargs: {
+                "institutions": ["a", "b", "c"],
+                "institution": "a",
+            }),
+            permission_broker=SimpleNamespace(enforcer=_Enforcer()),
+        ))
+        context = SimpleNamespace(tenant_id="tenant:a", user_id="u_super_admin")
+        relationship = _bind_table_relationship_asset(
+            handler,
+            context,
+            {
+                "id": "relationship_page_read",
+                "name": "页面只读取已绑定机构",
+                "nodes": [
+                    {"id": "a", "tenantId": "tenant:a", "sourceKey": "source_1", "schemaFingerprint": "schema_1"},
+                    {"id": "b", "tenantId": "tenant:b", "sourceKey": "source_b", "schemaFingerprint": "schema_1"},
+                ],
+                "edges": [{"sourceNodeId": "a", "sourceField": "report_date", "targetNodeId": "b", "targetField": "report_date"}],
+            },
+        )
+        saved = store.upsert_item(
+            "tenant:a",
+            "table_relationship",
+            relationship,
+            updated_by="u_super_admin",
+            lifecycle_status="active",
+        )
+        candidate = _multi_institution_candidates(handler, context)[0]
+        self.assertEqual(candidate["id"], saved["id"])
+        page_data = {
+            "relationshipGroupId": saved["id"],
+            "schemaFingerprint": candidate["schemaFingerprint"],
+            "sourceFields": candidate["fields"],
+            "institutionSources": candidate["sources"],
+            "dimensionFields": [MULTI_INSTITUTION_DIMENSION, "report_date"],
+            "metricFields": ["loan_amount"],
+        }
+
+        csv_source.requested_tenants.clear()
+        self.assertEqual(len(_multi_page_data_source_tables(handler, context, page_data)), 2)
+        self.assertEqual(csv_source.requested_tenants, ["tenant:a", "tenant:b"])
+        self.assertNotIn("tenant:c", csv_source.requested_tenants)
+
     def test_relationship_catalog_skips_unready_tenants_without_blocking(self) -> None:
         table_b = {**self.table, "id": "csv_table_b", "sourceKey": "source_b", "relativePath": "reports/b.csv"}
         unready = _UnreadyCatalog([table_b])
@@ -786,6 +1064,93 @@ class PageDataAssetTest(unittest.TestCase):
         self.assertEqual(payload["assets"][0]["id"], saved["id"])
         self.assertEqual(payload["rows"][saved["id"]]["row_count"], 1)
         self.assertEqual(payload["rows"][saved["id"]]["rows"][0]["loan_amount"], "125.5")
+
+    def test_single_institution_workspace_scans_catalog_once_for_all_cards(self) -> None:
+        store = InMemoryDataAssetStore(seed_defaults=False)
+        first = store.upsert_item("tenant_a", "page_data", self.asset, updated_by="u_admin", lifecycle_status="active")
+        second = store.upsert_item(
+            "tenant_a",
+            "page_data",
+            {**self.asset, "id": "page_data_2", "name": "周报放款明细"},
+            updated_by="u_admin",
+            lifecycle_status="active",
+        )
+        applications = InMemoryApplicationStore()
+        applications.run_action(
+            "tenant_a",
+            "weekly_report",
+            "set_page_data_layout",
+            {"assetIds": [first["id"], second["id"]]},
+            actor_user_id="u_admin",
+        )
+        catalog = _TrackingCatalog(
+            [self.table],
+            {self.table["relativePath"]: [{"日期": "2026-08-01", "放款金额": "125.5"}]},
+        )
+        payload = read_page_data_workspace_payload(
+            SimpleNamespace(
+                data_asset_store=store,
+                application_store=applications,
+                data_acquisition_service=SimpleNamespace(csv_source=_CsvSource(catalog)),
+            ),
+            tenant_id="tenant_a",
+            user_id="u_admin",
+            page_code="weekly_report",
+        )
+        self.assertEqual(set(payload["rows"]), {first["id"], second["id"]})
+        self.assertEqual(catalog.table_asset_calls, 1)
+
+    def test_workspace_omits_page_data_whose_raw_source_left_the_catalog(self) -> None:
+        store = InMemoryDataAssetStore(seed_defaults=False)
+        live = store.upsert_item(
+            "tenant_a",
+            "page_data",
+            {**self.asset, "targetPages": ["institution_supervision"]},
+            updated_by="u_admin",
+            lifecycle_status="active",
+        )
+        stale = store.upsert_item(
+            "tenant_a",
+            "page_data",
+            {**self.asset, "id": "page_data_retired", "name": "下线放款趋势", "sourceKey": "retired_source", "targetPages": ["institution_supervision"]},
+            updated_by="u_admin",
+            lifecycle_status="active",
+        )
+        applications = InMemoryApplicationStore()
+        applications.run_action(
+            "tenant_a",
+            "institution_supervision",
+            "set_page_data_layout",
+            {"assetIds": [live["id"], stale["id"]]},
+            actor_user_id="u_admin",
+        )
+        catalog = _Catalog([self.table], {self.table["relativePath"]: [{"日期": "2026-08-01", "放款金额": "125.5"}]})
+        payload = read_page_data_workspace_payload(
+            SimpleNamespace(
+                data_asset_store=store,
+                application_store=applications,
+                data_acquisition_service=SimpleNamespace(csv_source=_CsvSource(catalog)),
+            ),
+            tenant_id="tenant_a",
+            user_id="u_admin",
+            page_code="institution_supervision",
+        )
+        self.assertEqual([item["id"] for item in payload["assets"]], [live["id"]])
+        self.assertEqual(payload["layout"], [live["id"]])
+        self.assertNotIn(stale["id"], payload["rows"])
+        self.assertNotIn(stale["id"], payload["row_errors"])
+        self.assertEqual(payload["raw_source_keys"], ["source_1"])
+
+    def test_layout_appends_newly_assigned_page_data_for_all_analysis_pages(self) -> None:
+        self.assertEqual(_resolve_page_data_layout(["kept"], ["kept", "new"], include_newly_assigned=True), ["kept", "new"])
+        self.assertEqual(_resolve_page_data_layout([], ["a", "b"], include_newly_assigned=True), ["a", "b"])
+        self.assertEqual(_resolve_page_data_layout(["kept"], ["kept", "new"], include_newly_assigned=False), ["kept"])
+
+    def test_dashboard_workspace_appends_newly_assigned_multi_institution_page_data(self) -> None:
+        import inspect
+
+        source = inspect.getsource(read_page_data_workspace_payload)
+        self.assertIn("include_newly_assigned=True", source)
 
     def test_dashboard_layout_action_requires_super_admin(self) -> None:
         denied = _ApplicationHandler(super_admin=False)

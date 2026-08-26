@@ -26,6 +26,7 @@ const ExternalToolManager = preparedNamed(routeLoaders.tools, "ExternalToolManag
 const AnalysisConfigManager = preparedNamed(routeLoaders.analysisConfig, "AnalysisConfigManager");
 const BridgeAuthorization = preparedNamed(routeLoaders.bridge, "BridgeAuthorization");
 const MessageBoardManagement = preparedNamed(routeLoaders.messageBoard, "MessageBoardManagement");
+const InteractionAnalytics = preparedNamed(routeLoaders.interactionAnalytics, "InteractionAnalytics");
 
 /* Menu navigation fills this shared module cache before changing location.
  * Direct URLs still suspend here and retain the established recovery path. */
@@ -139,6 +140,7 @@ export const router = createBrowserRouter([
       { path: "agent/todos", Component: withPageSuspense(DataAgentWorkspace) },
       { path: "agent/tasks", Component: withPageSuspense(DataAgentWorkspace) },
       { path: "agent/message-board", Component: withPageSuspense(MessageBoardManagement) },
+      { path: "agent/interaction-analytics", Component: withPageSuspense(InteractionAnalytics) },
       { path: "agent/insights", Component: () => createElement(Navigate, { to: "/agent/tasks", replace: true }) },
       { path: "agent/abilities", Component: () => createElement(Navigate, { to: "/agent/tasks", replace: true }) },
       { path: "agent/skills", Component: withPageSuspense(SkillPluginManager) },

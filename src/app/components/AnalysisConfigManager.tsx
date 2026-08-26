@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Eye, EyeOff, Pencil, Plus, Trash2, X } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
 import { apiErrorMessage } from "../services/apiClient";
+import { askConfirm } from "./ui/ConfirmDialog";
 import { pageVisibleAnalysisSkills } from "../services/analysisSkillCatalog";
 import {
   deleteDataAssetItem,
@@ -112,7 +113,7 @@ export function AnalysisConfigManager() {
   };
 
   const remove = async (item: AnalysisShortcutAsset) => {
-    if (!window.confirm(`确认删除“${item.title}”吗？`)) return;
+    if (!(await askConfirm({ title: "删除分析配置", description: `确定删除「${item.title}」？`, hint: "此操作不可撤销。" }))) return;
     try {
       await deleteDataAssetItem({ tenantId, userId, itemType: "analysis_shortcut", itemId: item.id });
       setNotice("分析快捷键已删除。");

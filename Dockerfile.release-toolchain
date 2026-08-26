@@ -1,0 +1,29 @@
+FROM node:22.14.0-bookworm-slim@sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b AS node-toolchain
+
+FROM python:3.13.2-slim-bookworm@sha256:6b3223eb4d93718828223966ad316909c39813dee3ee9395204940500792b740
+ARG UV_VERSION=0.10.0
+ARG EXPECTED_NODE_VERSION=22.14.0
+ARG EXPECTED_NPM_VERSION=10.9.2
+ARG EXPECTED_PYTHON_VERSION=3.13.2
+COPY --from=node-toolchain /usr/local /usr/local
+RUN test "$(node --version)" = "v${EXPECTED_NODE_VERSION}" \
+    && test "$(npm --version)" = "${EXPECTED_NPM_VERSION}" \
+    && test "$(python --version | awk '{print $2}')" = "${EXPECTED_PYTHON_VERSION}" \
+    && printf 'Acquire::Retries "5";\nAcquire::Queue-Mode "access";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+        > /etc/apt/apt.conf.d/80-smart-data-agent-retries \
+    && sed -i 's|URIs: http://deb.debian.org|URIs: https://deb.debian.org|g' \
+        /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl docker.io git \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --no-cache-dir "uv==${UV_VERSION}" \
+    && test "$(uv --version | awk '{print $2}')" = "${UV_VERSION}"
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PYTHONUNBUFFERED=1
+WORKDIR /toolchain
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+RUN npx playwright install --with-deps chromium
+RUN node -e 'const fs=require("fs"); const path=require("path"); const p=require("playwright"); const root=path.dirname(require.resolve("playwright-core")); const manifest=JSON.parse(fs.readFileSync(path.join(root,"browsers.json"),"utf8")); const v=manifest.browsers.find(x=>x.name==="chromium"); if (!p.chromium.executablePath() || !v || v.revision!=="1234" || v.browserVersion!=="151.0.7922.34") process.exit(1)'
+WORKDIR /workspace
+CMD ["sh"]

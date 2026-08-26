@@ -106,6 +106,7 @@ from backend.platform.settings import (
 )
 from backend.platform.skills import SkillConfigCatalog, SkillExecutor, SkillRegistry
 from backend.platform.skills.builtin import build_data_product_skills, build_supersonic_query_skill
+from backend.platform.tenancy import TenantScopeService, build_tenant_scope_service
 
 
 # The local development fallback must use the same human account as the
@@ -184,6 +185,7 @@ class PlatformServices:
     audit_store: InMemoryAuditEventStore | SQLiteAuditEventStore
     interaction_event_store: InMemoryInteractionEventStore | MySQLInteractionEventStore
     access_service: AccessControlService
+    tenant_scope_service: TenantScopeService
     session_store: InMemorySessionStore | SQLiteSessionStore
     oidc_client: OIDCClient
     rate_limiter: object
@@ -223,6 +225,7 @@ class PlatformServices:
             self.report_store,
             self.audit_store,
             self.access_service,
+            self.tenant_scope_service,
             self.session_store,
             self.oidc_client,
             self.semantic_service,
@@ -236,7 +239,11 @@ class PlatformServices:
                 close()
 
 
-def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
+def build_local_platform(
+    db_path: str | Path | None = None,
+    *,
+    topic_data_root: str | Path | None = None,
+) -> PlatformServices:
     """Build a local runnable platform slice for tests and API adapters."""
 
     runtime_config = load_runtime_config()
@@ -256,7 +263,7 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
             max_size=max_size,
             compatible_versions=runtime_config.development_mysql_compatible_versions,
         )
-        if os.getenv("SMART_DATA_AGENT_AUTO_MIGRATE", "true").strip().lower() not in {"0", "false", "no"}:
+        if runtime_config.auto_migrate:
             with mysql_pool.connection() as connection:
                 apply_mysql_schema(
                     runtime_config.database_url,
@@ -356,10 +363,26 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         task_repository,
         data_asset_store=data_asset_store,
     )
+    tenant_scope_service = build_tenant_scope_service(
+        enforcer=enforcer,
+        data_asset_store=data_asset_store,
+        db_path=db_path if mysql_pool is None else None,
+        relational_pool=MySQLStoreConnectionPool(mysql_pool) if mysql_pool is not None else None,
+        raw_table_source=data_acquisition_service.csv_source,
+    )
     # Each request primes only its authenticated institution's Data Crawler
     # directory.  Do not warm the shared crawler root here: that would scan
     # another institution's files before the user selects one.
-    topic_data_store = TopicDataStore(PROJECT_ROOT / "Topic_Data")
+    # A SQLite path denotes an isolated test/local adapter. Keep every
+    # filesystem-backed write in that adapter's own directory as well; using
+    # the repository Topic_Data root makes otherwise temporary test servers
+    # race with each other and mutate developer/runtime snapshots.
+    resolved_topic_data_root = (
+        Path(topic_data_root)
+        if topic_data_root is not None
+        else (Path(db_path).expanduser().resolve().parent / "topic-data" if db_path is not None else PROJECT_ROOT / "Topic_Data")
+    )
+    topic_data_store = TopicDataStore(resolved_topic_data_root)
     topic_data_batch_service = TopicDataBatchService(data_acquisition_service.csv_source, topic_data_store, data_asset_store)
     topic_metadata_service = CSVTopicMetadataService(
         data_acquisition_store,
@@ -529,6 +552,7 @@ def build_local_platform(db_path: str | Path | None = None) -> PlatformServices:
         audit_store=audit_store,
         interaction_event_store=interaction_event_store,
         access_service=access_service,
+        tenant_scope_service=tenant_scope_service,
         session_store=session_store,
         oidc_client=oidc_client,
         rate_limiter=rate_limiter,
@@ -585,7 +609,7 @@ def _build_mysql_production_platform(runtime_config: RuntimeConfig) -> PlatformS
     )
     pool = MySQLStoreConnectionPool(raw_pool)
     try:
-        if os.getenv("SMART_DATA_AGENT_AUTO_MIGRATE", "true").strip().lower() not in {"0", "false", "no"}:
+        if runtime_config.auto_migrate:
             with raw_pool.connection() as connection:
                 apply_mysql_schema(
                     runtime_config.database_url,
@@ -637,6 +661,12 @@ def _build_mysql_production_platform(runtime_config: RuntimeConfig) -> PlatformS
             system_config_store,
             task_repository,
             data_asset_store=data_asset_store,
+        )
+        tenant_scope_service = build_tenant_scope_service(
+            enforcer=enforcer,
+            data_asset_store=data_asset_store,
+            relational_pool=pool,
+            raw_table_source=data_acquisition_service.csv_source,
         )
         _prime_csv_catalog_in_background(data_acquisition_service.csv_source)
         topic_data_store = TopicDataStore(PROJECT_ROOT / "Topic_Data")
@@ -781,6 +811,7 @@ def _build_mysql_production_platform(runtime_config: RuntimeConfig) -> PlatformS
             audit_store=audit_store,
             interaction_event_store=interaction_event_store,
             access_service=access_service,
+            tenant_scope_service=tenant_scope_service,
             session_store=session_store,
             oidc_client=oidc_client,
             rate_limiter=rate_limiter,

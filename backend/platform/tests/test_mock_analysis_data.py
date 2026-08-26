@@ -7,6 +7,7 @@ from unittest.mock import patch
 from backend.platform.api.routes.analysis import _build_asset_context
 from backend.platform.bootstrap import build_local_platform
 from backend.platform.intelligent_analysis import IntelligentAnalysisEngine
+from backend.platform.intelligent_analysis.contracts import AnalysisContractError
 from backend.platform.intelligent_analysis.engine import IntelligentAnalysisRequest
 from backend.platform.tests.governed_warehouse import build_governed_test_warehouse
 
@@ -24,7 +25,7 @@ class GovernedAnalysisDataTest(unittest.TestCase):
         services = build_local_platform()
         self.addCleanup(services.close)
 
-        with self.assertRaisesRegex(PermissionError, "selected_data_asset_not_published_or_not_authorized"):
+        with self.assertRaisesRegex(AnalysisContractError, "analysis_table_unavailable"):
             _build_asset_context(
                 services,
                 "tenant_demo",

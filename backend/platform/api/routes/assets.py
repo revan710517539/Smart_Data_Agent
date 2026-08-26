@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import re
 from copy import deepcopy
 from time import monotonic
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from uuid import uuid4
 from backend.authz import normalize_tenant_id
 from backend.platform.api.support import first_query_value, send_route_exception
 from backend.platform.customer_segment import MAX_CUSTOMER_IDS, customer_ids_for_user
+from backend.platform.tenancy.catalog import list_active_tenants
 
 
 RUNTIME_CONFIGURATION_ASSET_TYPES = frozenset({
@@ -105,13 +107,30 @@ def _authorized_raw_table_catalog(
     fail closed as a schema change.
     """
 
+    direct_tenant_labels = _direct_authorized_tenant_labels(handler, context)
     tenant_labels = _authorized_tenant_labels(handler, context)
+    active_tenant_ids = set(_active_tenant_labels(handler))
+    scope_service = getattr(handler.services, "tenant_scope_service", None)
+    granted_scopes = scope_service.resource_grant_scopes(
+        user_id=context.user_id,
+        recipient_tenant_id=context.tenant_id,
+        active_tenant_ids=active_tenant_ids,
+        resource_type="raw_table",
+        action="read",
+    ) if scope_service is not None else {}
     table_by_ref: dict[tuple[str, str], dict[str, Any]] = {}
     for tenant_id in tenant_labels:
         for table in _raw_tables_for_tenant(handler, tenant_id, wait_for_catalog=wait_for_catalog):
             source_key = str(table.get("sourceKey") or "").strip()
-            if source_key:
+            if not source_key:
+                continue
+            if tenant_id in direct_tenant_labels:
                 table_by_ref[(tenant_id, source_key)] = table
+                continue
+            scope = granted_scopes.get((tenant_id, source_key, str(table.get("schemaFingerprint") or "")))
+            projected = _granted_raw_table_projection(table, scope)
+            if projected is not None:
+                table_by_ref[(tenant_id, source_key)] = projected
     return tenant_labels, table_by_ref
 
 
@@ -140,6 +159,25 @@ def _authorized_raw_table_subset(
         context,
         set(requested_sources),
     )
+    session = handler.services.access_service.session_for_user(context.user_id, tenant_hint=context.tenant_id)
+    session_tenant_ids = {
+        _normalized_tenant_id(str(label or ""))
+        for label in session.get("institutions", [])
+        if str(label or "").strip()
+    }
+    session_tenant_ids.add(context.tenant_id)
+    direct_tenant_labels = {
+        tenant_id: label for tenant_id, label in tenant_labels.items() if tenant_id in session_tenant_ids
+    }
+    active_tenant_ids = set(_active_tenant_labels(handler))
+    scope_service = getattr(handler.services, "tenant_scope_service", None)
+    granted_scopes = scope_service.resource_grant_scopes(
+        user_id=context.user_id,
+        recipient_tenant_id=context.tenant_id,
+        active_tenant_ids=active_tenant_ids,
+        resource_type="raw_table",
+        action="read",
+    ) if scope_service is not None else {}
 
     table_by_ref: dict[tuple[str, str], dict[str, Any]] = {}
     data_asset_store = getattr(handler.services, "data_asset_store", None)
@@ -160,9 +198,15 @@ def _authorized_raw_table_subset(
             source_key = str(raw_table.get("sourceKey") or "").strip()
             if source_key not in remaining:
                 continue
-            table_by_ref[(tenant_id, source_key)] = _raw_table_with_metadata_overlay(
+            table = _raw_table_with_metadata_overlay(
                 dict(raw_table), overlays.get(source_key),
             )
+            if tenant_id not in direct_tenant_labels:
+                scope = granted_scopes.get((tenant_id, source_key, str(table.get("schemaFingerprint") or "")))
+                table = _granted_raw_table_projection(table, scope)
+                if table is None:
+                    continue
+            table_by_ref[(tenant_id, source_key)] = table
             remaining.discard(source_key)
             if not remaining:
                 break
@@ -337,7 +381,205 @@ def _normalized_tenant_id(value: str) -> str:
     return normalized if normalized.startswith("tenant:") or normalized == "tenant_demo" else normalize_tenant_id(normalized)
 
 
-def _authorized_tenant_labels(handler: Any, context: Any) -> dict[str, str]:
+def _current_raw_source_keys(raw_tables: list[dict[str, Any]]) -> set[str]:
+    return {
+        str(item.get("sourceKey") or "").strip()
+        for item in raw_tables
+        if isinstance(item, dict) and str(item.get("sourceKey") or "").strip()
+    }
+
+
+def _local_source_keys(entries: list[dict[str, Any]], tenant_id: str) -> list[str]:
+    current = _normalized_tenant_id(tenant_id)
+    keys: list[str] = []
+    for entry in entries:
+        source_key = str(entry.get("sourceKey") or "").strip()
+        if not source_key:
+            continue
+        owner = _normalized_tenant_id(str(entry.get("tenantId") or ""))
+        if owner and owner != current:
+            continue
+        keys.append(source_key)
+    return keys
+
+
+def _source_ref(entry: dict[str, Any]) -> tuple[str, str] | None:
+    tenant_id = _normalized_tenant_id(str(entry.get("tenantId") or ""))
+    source_key = str(entry.get("sourceKey") or "").strip()
+    if not tenant_id or not source_key:
+        return None
+    return tenant_id, source_key
+
+
+def _source_refs(entries: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    refs: list[tuple[str, str]] = []
+    for entry in entries:
+        ref = _source_ref(entry) if isinstance(entry, dict) else None
+        if ref is None:
+            return []
+        refs.append(ref)
+    return refs
+
+
+def _live_source_refs_for_nodes(handler: Any, context: Any, nodes: list[dict[str, Any]]) -> set[tuple[str, str]]:
+    """Return currently readable (tenant, sourceKey) pairs for multi-institution overlays."""
+
+    requested = [dict(node) for node in nodes if isinstance(node, dict)]
+    if not requested:
+        return set()
+    try:
+        _, table_by_ref = _authorized_raw_table_subset(handler, context, requested)
+    except Exception:
+        return set()
+    return set(table_by_ref)
+
+
+def _multi_overlay_nodes(page_data: list[Any], relationships: list[Any]) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
+    for item in page_data:
+        if not isinstance(item, dict) or _page_data_scope(item) != MULTI_INSTITUTION_PAGE_DATA_SCOPE:
+            continue
+        nodes.extend(source for source in item.get("institutionSources") or [] if isinstance(source, dict))
+    for item in relationships:
+        if not isinstance(item, dict) or str(item.get("relationshipScope") or "") != MULTI_INSTITUTION_RELATIONSHIP_SCOPE:
+            continue
+        nodes.extend(node for node in item.get("nodes") or [] if isinstance(node, dict))
+    return nodes
+
+
+def _page_data_logical_title(value: str) -> str:
+    text = re.sub(r"·\s*(单机构数据|页面数据|多机构数据|明细数据)$", "", str(value or "").strip())
+    stem = re.sub(r"\.csv$", "", text, flags=re.I)
+    without_prefix = re.sub(r"^\d{8}(?:_\d{6})?_", "", stem)
+    without_suffix = re.sub(r"_\d{4}-\d{2}-\d{2}$", "", without_prefix)
+    title = without_suffix.rsplit("/", 1)[-1]
+    return re.sub(r"[\s_\-./]+", "", title).casefold()
+
+
+def _page_data_logical_title_candidate(value: str) -> bool:
+    title = _page_data_logical_title(value)
+    return bool(title) and re.fullmatch(r"csv[0-9a-f]{8,}", title) is None
+
+
+def _unique_raw_table_by_page_data_title(page_data: dict[str, Any], raw_tables: list[dict[str, Any]]) -> dict[str, Any] | None:
+    requested = {
+        _page_data_logical_title(str(value or ""))
+        for value in (page_data.get("sourceTableName"), page_data.get("name"))
+        if _page_data_logical_title_candidate(str(value or ""))
+    }
+    requested.discard("")
+    if not requested:
+        return None
+    matches = [
+        item
+        for item in raw_tables
+        if isinstance(item, dict) and requested.intersection(
+            {
+                _page_data_logical_title(str(item.get(key) or ""))
+                for key in ("tableNameCn", "tableNameEn", "fileName", "relativePath")
+            }
+        )
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _resolve_page_data_raw_table(
+    page_data: dict[str, Any],
+    source_tables: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    source_key = str(page_data.get("sourceKey") or "").strip()
+    if source_key and source_key in source_tables:
+        return source_tables[source_key]
+    return _unique_raw_table_by_page_data_title(page_data, list(source_tables.values()))
+
+
+def _page_data_schema_compatible(page_data: dict[str, Any], table: dict[str, Any]) -> bool:
+    requested_schema = str(page_data.get("schemaFingerprint") or "").strip()
+    current_schema = str(table.get("schemaFingerprint") or "").strip()
+    if not requested_schema or not current_schema or requested_schema == current_schema:
+        return True
+    current_fields = {
+        str(field.get("fieldNameEn") or "").strip()
+        for field in (table.get("fields") or [])
+        if isinstance(field, dict) and str(field.get("fieldNameEn") or "").strip()
+    }
+    required = {
+        str(field).strip()
+        for field in [*(page_data.get("metricFields") or []), *(page_data.get("dimensionFields") or [])]
+        if str(field).strip()
+    }
+    return bool(required) and all(field in current_fields for field in required)
+
+
+def _page_data_available_for_raw_catalog(
+    item: dict[str, Any],
+    tenant_id: str,
+    source_keys: set[str],
+    raw_tables: list[dict[str, Any]] | None = None,
+    *,
+    live_source_refs: set[tuple[str, str]] | None = None,
+) -> bool:
+    """Keep page-data configs only when their live raw tables still exist.
+
+    Multi-institution overlays must keep every participating institution's
+    source, not just the current tenant's 原始表. Title rematch is only for
+    single-institution deliveries whose dated filename rotated.
+    """
+
+    if not isinstance(item, dict):
+        return False
+    if _page_data_scope(item) == MULTI_INSTITUTION_PAGE_DATA_SCOPE:
+        sources = [source for source in item.get("institutionSources") or [] if isinstance(source, dict)]
+        refs = _source_refs(sources)
+        local_keys = _local_source_keys(sources, tenant_id)
+        if len({tenant for tenant, _key in refs}) < 2 or not local_keys or any(key not in source_keys for key in local_keys):
+            return False
+        if live_source_refs is not None:
+            return all(ref in live_source_refs for ref in refs)
+        return True
+    key = str(item.get("sourceKey") or "").strip()
+    if key and key in source_keys:
+        return True
+    if raw_tables:
+        return _unique_raw_table_by_page_data_title(item, raw_tables) is not None
+    return False
+
+
+def _table_relationship_available_for_raw_catalog(
+    item: dict[str, Any],
+    tenant_id: str,
+    source_keys: set[str],
+    *,
+    live_source_refs: set[tuple[str, str]] | None = None,
+) -> bool:
+    """Keep table relationships only when every referenced raw table still exists."""
+
+    if not isinstance(item, dict):
+        return False
+    nodes = [node for node in item.get("nodes") or [] if isinstance(node, dict)]
+    if not nodes:
+        return False
+    local_keys = _local_source_keys(nodes, tenant_id)
+    if str(item.get("relationshipScope") or "") != MULTI_INSTITUTION_RELATIONSHIP_SCOPE:
+        all_keys = [str(node.get("sourceKey") or "").strip() for node in nodes if str(node.get("sourceKey") or "").strip()]
+        return bool(all_keys) and all(key in source_keys for key in all_keys)
+    refs = _source_refs(nodes)
+    if len({tenant for tenant, _key in refs}) < 2 or not local_keys or any(key not in source_keys for key in local_keys):
+        return False
+    if live_source_refs is not None:
+        return all(ref in live_source_refs for ref in refs)
+    return True
+
+
+def _active_tenant_labels(handler: Any) -> dict[str, str]:
+    return {
+        str(item.get("id") or ""): str(item.get("name") or item.get("id") or "")
+        for item in list_active_tenants(handler.services)
+        if str(item.get("id") or "")
+    }
+
+
+def _direct_authorized_tenant_labels(handler: Any, context: Any) -> dict[str, str]:
     session = handler.services.access_service.session_for_user(context.user_id, tenant_hint=context.tenant_id)
     labels = [str(label or "").strip() for label in session.get("institutions", []) if str(label or "").strip()]
     candidates = {_normalized_tenant_id(label): label for label in labels}
@@ -348,6 +590,22 @@ def _authorized_tenant_labels(handler: Any, context: Any) -> dict[str, str]:
         for tenant_id, label in candidates.items()
         if tenant_id and enforcer.enforce(context.user_id, tenant_id, "asset:*", "read")
     }
+
+
+def _authorized_tenant_labels(handler: Any, context: Any) -> dict[str, str]:
+    direct = _direct_authorized_tenant_labels(handler, context)
+    scope_service = getattr(handler.services, "tenant_scope_service", None)
+    if scope_service is None:
+        return direct
+    active = _active_tenant_labels(handler)
+    granted = scope_service.granted_source_tenant_ids(
+        user_id=context.user_id,
+        recipient_tenant_id=context.tenant_id,
+        active_tenant_ids=set(active),
+        resource_type="raw_table",
+        action="read",
+    )
+    return {**direct, **{tenant_id: active[tenant_id] for tenant_id in sorted(granted) if tenant_id in active}}
 
 
 def _authorized_requested_tenant_labels(
@@ -376,11 +634,45 @@ def _authorized_requested_tenant_labels(
     }
     candidates.setdefault(context.tenant_id, str(session.get("institution") or context.tenant_id))
     enforcer = handler.services.permission_broker.enforcer
-    return {
+    authorized = {
         tenant_id: candidates[tenant_id]
         for tenant_id in requested
         if tenant_id in candidates
         and enforcer.enforce(context.user_id, tenant_id, "asset:*", "read")
+    }
+    scope_service = getattr(handler.services, "tenant_scope_service", None)
+    if scope_service is None:
+        return authorized
+    active = _active_tenant_labels(handler)
+    granted = scope_service.granted_source_tenant_ids(
+        user_id=context.user_id,
+        recipient_tenant_id=context.tenant_id,
+        active_tenant_ids=set(active),
+        resource_type="raw_table",
+        action="read",
+    )
+    authorized.update({tenant_id: active[tenant_id] for tenant_id in requested & granted if tenant_id in active})
+    return authorized
+
+
+def _granted_raw_table_projection(table: dict[str, Any], scope: Any) -> dict[str, Any] | None:
+    if scope is None or not bool(getattr(scope, "allowed", False)):
+        return None
+    allowed_fields = set(getattr(scope, "field_scope", ()) or ())
+    fields = [
+        dict(field)
+        for field in table.get("fields", [])
+        if isinstance(field, dict) and str(field.get("fieldNameEn") or "") in allowed_fields
+    ]
+    if not fields:
+        return None
+    primary_keys = [str(field.get("fieldNameEn") or "") for field in fields if field.get("isPrimaryKey")]
+    return {
+        **table,
+        "fields": fields,
+        "primaryKey": primary_keys[0] if primary_keys else "",
+        "primaryKeys": primary_keys,
+        "crossTenantGrantIds": list(getattr(scope, "grant_ids", ()) or ()),
     }
 
 
@@ -474,6 +766,41 @@ def _multi_institution_candidates(handler: Any, context: Any) -> list[dict[str, 
             ],
         })
     return sorted(candidates, key=lambda item: (str(item.get("name") or ""), str(item.get("id") or "")))[:100]
+
+
+def _saved_multi_institution_candidate(
+    handler: Any,
+    context: Any,
+    relationship_id: str,
+) -> tuple[dict[str, Any] | None, bool, dict[tuple[str, str], dict[str, Any]]]:
+    """Rebind one saved relationship without enumerating unrelated tenants.
+
+    Page reads already carry the stable relationship ID. Rebuilding the full
+    relationship picker catalog on every dashboard open adds no authority and
+    makes latency grow with every institution visible to the account. The
+    returned boolean distinguishes a governed relationship that failed to
+    rebind from a legacy lineage ID that still needs the compatibility path.
+    """
+
+    data_asset_store = getattr(handler.services, "data_asset_store", None)
+    if data_asset_store is None or not relationship_id:
+        return None, False, {}
+    relationships = data_asset_store.list_published_bundle(context.tenant_id).get("table_relationships", [])
+    relationship = next(
+        (
+            item
+            for item in relationships
+            if isinstance(item, dict)
+            and str(item.get("id") or "") == relationship_id
+            and str(item.get("relationshipScope") or "") == MULTI_INSTITUTION_RELATIONSHIP_SCOPE
+        ),
+        None,
+    )
+    if relationship is None:
+        return None, False, {}
+    requested_nodes = [dict(item) for item in relationship.get("nodes", []) if isinstance(item, dict)]
+    tenant_labels, table_by_ref = _authorized_raw_table_subset(handler, context, requested_nodes)
+    return _candidate_from_relationship_asset(relationship, tenant_labels, table_by_ref), True, table_by_ref
 
 
 def _visualization_topic_tables(
@@ -867,6 +1194,7 @@ def handle_data_assets_get(handler: Any, query: str) -> None:
         context = handler._request_context(params=params)
         handler._require_asset_permission(context, "read")
         scope = str((params.get("scope") or [""])[0]).strip().lower()
+        force_refresh = str((params.get("refresh") or [""])[0]).strip().lower() in {"1", "true", "yes"}
         if scope == "runtime":
             # Runtime consumers must use the same published asset versions as
             # the analysis executor. A newer review candidate must not hide
@@ -916,7 +1244,7 @@ def handle_data_assets_get(handler: Any, query: str) -> None:
                     _raw_table_with_external_reference(item, references.get(str(item.get("sourceKey") or ""))),
                     overlays.get(str(item.get("sourceKey") or "")),
                 )
-                for item in csv_catalog.table_assets()
+                for item in (csv_catalog.table_assets(force=True) if force_refresh else csv_catalog.table_assets())
             ]
             topic_tables = _visualization_topic_tables(handler, context.tenant_id)
             published_reader = getattr(handler.services.data_asset_store, "list_published_bundle", None)
@@ -926,10 +1254,26 @@ def handle_data_assets_get(handler: Any, query: str) -> None:
                 for item in published.get("page_data", [])
                 if isinstance(item, dict) and _page_data_scope(item) == MULTI_INSTITUTION_PAGE_DATA_SCOPE
             ]
+            raw_source_keys = _current_raw_source_keys(raw_tables)
+            live_source_refs = _live_source_refs_for_nodes(
+                handler,
+                context,
+                _multi_overlay_nodes(multi_page_data, []),
+            )
             bundle = {key: [] for key in VISUALIZATION_ASSET_KEYS}
             bundle["raw_tables"] = raw_tables
             bundle["topic_tables"] = topic_tables
-            bundle["page_data"] = multi_page_data
+            bundle["page_data"] = [
+                item
+                for item in multi_page_data
+                if _page_data_available_for_raw_catalog(
+                    item,
+                    context.tenant_id,
+                    raw_source_keys,
+                    raw_tables,
+                    live_source_refs=live_source_refs,
+                )
+            ]
             handler._send_json({
                 "tenant_id": context.tenant_id,
                 **bundle,
@@ -961,7 +1305,7 @@ def handle_data_assets_get(handler: Any, query: str) -> None:
             for item in bundle.get("external_tools", [])
             if str(item.get("toolType") or "").casefold() not in {"browser_collector", "page_collector"}
         ]
-        csv_source = csv_catalog.snapshot()
+        csv_source = csv_catalog.snapshot(force=force_refresh)
         # Raw tables are generated only from the selected institution's
         # Data Crawler directory. Never merge or fall back to another tenant.
         # Do not merge in legacy stored raw-table records: they may describe a
@@ -974,6 +1318,36 @@ def handle_data_assets_get(handler: Any, query: str) -> None:
                 raw_metadata_overlays.get(str(item.get("sourceKey") or "")),
             )
             for item in csv_catalog.table_assets()
+        ]
+        # Page data and table relationships are overlays on the live raw catalog.
+        # Keep them as subsets of the current institution's 原始表, never leftover
+        # configs whose CSV/upload has already left the directory.
+        raw_source_keys = _current_raw_source_keys(bundle["raw_tables"])
+        live_source_refs = _live_source_refs_for_nodes(
+            handler,
+            context,
+            _multi_overlay_nodes(bundle.get("page_data", []), bundle.get("table_relationships", [])),
+        )
+        bundle["page_data"] = [
+            item
+            for item in bundle.get("page_data", [])
+            if _page_data_available_for_raw_catalog(
+                item,
+                context.tenant_id,
+                raw_source_keys,
+                bundle["raw_tables"],
+                live_source_refs=live_source_refs,
+            )
+        ]
+        bundle["table_relationships"] = [
+            item
+            for item in bundle.get("table_relationships", [])
+            if _table_relationship_available_for_raw_catalog(
+                item,
+                context.tenant_id,
+                raw_source_keys,
+                live_source_refs=live_source_refs,
+            )
         ]
         topic_snapshots = handler.services.topic_data_store.topic_table_snapshots(
             context.tenant_id,
@@ -1156,11 +1530,31 @@ def read_page_data_workspace_payload(
     page_consumers = {"dashboard", "weekly_report", "institution_supervision", "customer_segment_analysis"}
     if page_code not in page_consumers:
         raise ValueError("page_data_page_code_invalid")
-    bundle = services.data_asset_store.list_published_bundle(tenant_id)
+    bundle = services.data_asset_store.list_bundle(tenant_id)
+    catalog = services.data_acquisition_service.csv_source.for_tenant(tenant_id)
+    source_tables = {
+        str(table.get("sourceKey") or ""): table
+        for table in _csv_table_assets(catalog, wait_for_catalog=True)
+        if str(table.get("sourceKey") or "")
+    }
+    raw_source_keys = set(source_tables)
+    live_source_refs = _live_source_refs_for_nodes(
+        SimpleNamespace(services=services),
+        SimpleNamespace(tenant_id=tenant_id, user_id=user_id),
+        _multi_overlay_nodes(bundle.get("page_data", []), []),
+    )
     assets = [
         item
         for item in bundle.get("page_data", [])
-        if isinstance(item, dict) and _page_data_belongs_to_page(item, page_code)
+        if isinstance(item, dict)
+        and _page_data_belongs_to_page(item, page_code)
+        and _page_data_available_for_raw_catalog(
+            item,
+            tenant_id,
+            raw_source_keys,
+            list(source_tables.values()),
+            live_source_refs=live_source_refs,
+        )
     ]
     module = services.application_store.get_module(tenant_id, page_code, actor_user_id=user_id)
     state = module.get("state") if isinstance(module, dict) else {}
@@ -1171,7 +1565,7 @@ def read_page_data_workspace_payload(
     layout = _resolve_page_data_layout(
         saved_layout,
         available_ids,
-        include_newly_assigned=page_code in {"weekly_report", "institution_supervision", "customer_segment_analysis"},
+        include_newly_assigned=True,
     )
     workspace_key = (
         tenant_id,
@@ -1191,12 +1585,23 @@ def read_page_data_workspace_payload(
             for item in assets
             if str(item.get("id") or "") in set(layout)
         ),
+        tuple(
+            sorted(
+                (
+                    str(table.get("sourceKey") or ""),
+                    str(table.get("contentHash") or ""),
+                    str(table.get("schemaFingerprint") or ""),
+                )
+                for table in source_tables.values()
+            )
+        ),
     )
     cached_workspace = _PAGE_DATA_WORKSPACE_CACHE.get(workspace_key)
     if cached_workspace and cached_workspace[0] > monotonic():
         return deepcopy(cached_workspace[1])
     rows: dict[str, Any] = {}
     row_errors: dict[str, str] = {}
+    row_source_tables = source_tables if page_code != "dashboard" else None
     for asset_id in layout:
         page_data = next((item for item in assets if str(item.get("id") or "") == asset_id), None)
         if page_data is None:
@@ -1210,6 +1615,7 @@ def read_page_data_workspace_payload(
                 consumer=page_code,
                 bundle=bundle,
                 page_data=page_data,
+                source_tables=row_source_tables,
             )
         except Exception as exc:
             row_errors[asset_id] = str(exc) or "page_data_rows_unavailable"
@@ -1221,6 +1627,7 @@ def read_page_data_workspace_payload(
         "notes": list(state.get("pageDataNotes") or []),
         "rows": rows,
         "row_errors": row_errors,
+        "raw_source_keys": sorted(raw_source_keys),
     }
     complete = bool(assets) and bool(layout) and all(asset_id in rows for asset_id in layout)
     if complete and page_code != "customer_segment_analysis":
@@ -1239,6 +1646,7 @@ def read_page_data_rows_payload(
     consumer: str,
     bundle: dict[str, Any] | None = None,
     page_data: dict[str, Any] | None = None,
+    source_tables: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Resolve one page-data projection through its governed source chain.
 
@@ -1344,7 +1752,7 @@ def read_page_data_rows_payload(
             },
         }
     else:
-        table = _page_data_source_table(handler, tenant_id, page_data)
+        table = _page_data_source_table(handler, tenant_id, page_data, source_tables=source_tables)
         effective_schema_fingerprint = str(table.get("schemaFingerprint") or "")
         available = {str(field.get("fieldNameEn") or "") for field in table.get("fields", [])}
         if not selected_fields or any(field not in available for field in selected_fields):
@@ -1567,8 +1975,16 @@ def _multi_page_data_source_tables(handler: Any, context: Any, page_data: dict[s
     ):
         raise PermissionError("multi_institution_page_data_sources_unavailable")
     relationship_id = str(page_data.get("relationshipGroupId") or "")
-    candidates = _multi_institution_candidates(handler, context)
-    candidate = next((item for item in candidates if str(item.get("id") or "") == relationship_id), None)
+    candidate, saved_relationship_found, saved_tables = _saved_multi_institution_candidate(
+        handler,
+        context,
+        relationship_id,
+    )
+    if saved_relationship_found and candidate is None:
+        raise PermissionError("multi_institution_page_data_source_schema_changed")
+    if candidate is None:
+        candidates = _multi_institution_candidates(handler, context)
+        candidate = next((item for item in candidates if str(item.get("id") or "") == relationship_id), None)
     if candidate is None and not relationship_id:
         saved_refs = {
             (_normalized_tenant_id(str(source.get("tenantId") or "")), str(source.get("sourceKey") or ""))
@@ -1611,6 +2027,8 @@ def _multi_page_data_source_tables(handler: Any, context: Any, page_data: dict[s
         raise PermissionError("multi_institution_page_data_source_schema_changed")
     resolved: list[tuple[dict[str, Any], dict[str, Any]]] = []
     seen_refs: set[tuple[str, str]] = set()
+    direct_tenant_ids = set(_direct_authorized_tenant_labels(handler, context))
+    active_tenant_ids = set(_active_tenant_labels(handler))
     for raw_source in sources:
         if not isinstance(raw_source, dict):
             raise PermissionError("multi_institution_page_data_sources_unavailable")
@@ -1618,7 +2036,7 @@ def _multi_page_data_source_tables(handler: Any, context: Any, page_data: dict[s
         source_key = str(raw_source.get("sourceKey") or "").strip()
         if not tenant_id or not source_key or (tenant_id, source_key) in seen_refs:
             raise PermissionError("multi_institution_page_data_sources_unavailable")
-        table = next(
+        table = saved_tables.get((tenant_id, source_key)) if saved_relationship_found else next(
             (
                 candidate
                 for candidate in handler.services.data_acquisition_service.csv_source.for_tenant(tenant_id).table_assets()
@@ -1628,6 +2046,22 @@ def _multi_page_data_source_tables(handler: Any, context: Any, page_data: dict[s
         )
         if table is None or str(table.get("schemaFingerprint") or "") != str(raw_source.get("schemaFingerprint") or ""):
             raise PermissionError("multi_institution_page_data_source_schema_changed")
+        scope_service = getattr(handler.services, "tenant_scope_service", None)
+        if scope_service is not None:
+            access = scope_service.resolve_resource_access(
+                user_id=context.user_id,
+                recipient_tenant_id=context.tenant_id,
+                source_tenant_id=tenant_id,
+                active_tenant_ids=active_tenant_ids,
+                direct_source_tenant_ids=direct_tenant_ids,
+                resource_type="raw_table",
+                resource_key=source_key,
+                action="read",
+                schema_fingerprint=str(table.get("schemaFingerprint") or ""),
+                requested_fields=selected_fields,
+            )
+            if not access.allowed:
+                raise PermissionError("multi_institution_page_data_sources_unavailable")
         seen_refs.add((tenant_id, source_key))
         resolved.append(({
             "nodeId": str(raw_source.get("nodeId") or ""),
@@ -1689,19 +2123,24 @@ def _join_institution_rows(
     return joined
 
 
-def _page_data_source_table(handler: Any, tenant_id: str, page_data: dict[str, Any]) -> dict[str, Any]:
-    source_key = str(page_data.get("sourceKey") or "")
-    table = next(
-        (
-            candidate
-            for candidate in handler.services.data_acquisition_service.csv_source.for_tenant(tenant_id).table_assets()
-            if str(candidate.get("sourceKey") or "") == source_key
-        ),
-        None,
-    )
+def _page_data_source_table(
+    handler: Any,
+    tenant_id: str,
+    page_data: dict[str, Any],
+    *,
+    source_tables: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    if source_tables is None:
+        catalog = handler.services.data_acquisition_service.csv_source.for_tenant(tenant_id)
+        source_tables = {
+            str(item.get("sourceKey") or ""): item
+            for item in _csv_table_assets(catalog, wait_for_catalog=True)
+            if str(item.get("sourceKey") or "")
+        }
+    table = _resolve_page_data_raw_table(page_data, source_tables)
     if table is None:
         raise PermissionError("page_data_source_unavailable")
-    if str(page_data.get("schemaFingerprint") or "") != str(table.get("schemaFingerprint") or ""):
+    if not _page_data_schema_compatible(page_data, table):
         raise PermissionError("page_data_source_schema_changed")
     return table
 

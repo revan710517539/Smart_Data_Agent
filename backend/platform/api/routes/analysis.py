@@ -23,6 +23,12 @@ from backend.platform.analysis_workspace.service import (
 from backend.platform.analysis_workspace.visualization import VisualizationPlanner
 from backend.platform.api.support import MAX_UPLOAD_BODY_BYTES, send_route_exception
 from backend.platform.intelligent_analysis import IntelligentAnalysisEngine
+from backend.platform.intelligent_analysis.contracts import (
+    ANALYSIS_RESOLUTION_KEY,
+    AnalysisContractError,
+    resolve_analysis_table_reference,
+    resolved_asset_snapshot,
+)
 from backend.platform.intelligent_analysis.engine import IntelligentAnalysisRequest
 from backend.platform.intelligent_analysis.uploaded_source import (
     build_uploaded_document_summary,
@@ -50,7 +56,13 @@ def handle_analysis_run(handler: Any) -> None:
             return
         context = handler._request_context(payload=payload)
         handler.services.permission_broker.require_skill(context.to_execution_context(), "supersonic.query")
-        page_context = dict(payload.get("page_context") or {})
+        page_context = _preflight_analysis_page_context(
+            handler.services,
+            context.tenant_id,
+            question,
+            dict(payload.get("page_context") or {}),
+            user_id=context.user_id,
+        )
         request_id = str(handler.headers.get("Idempotency-Key") or payload.get("request_id") or "").strip()
         if request_id:
             page_context["request_id"] = request_id
@@ -96,7 +108,13 @@ def handle_analysis_run_async(handler: Any) -> None:
             raise ValueError("question_required")
         context = handler._request_context(payload=payload)
         handler.services.permission_broker.require_skill(context.to_execution_context(), "supersonic.query")
-        page_context = payload.get("page_context") if isinstance(payload.get("page_context"), dict) else {}
+        page_context = _preflight_analysis_page_context(
+            handler.services,
+            context.tenant_id,
+            question,
+            payload.get("page_context") if isinstance(payload.get("page_context"), dict) else {},
+            user_id=context.user_id,
+        )
         get_param = getattr(handler.services.system_config_store, "get_system_param_value", None)
         analysis_deadline = 900
         analysis_concurrency = 2
@@ -262,6 +280,16 @@ def handle_analysis_run_status(handler: Any, query: str) -> None:
             raise PermissionError("Analysis run is unavailable.")
         list_steps = getattr(handler.services.automation_store, "list_steps", None)
         run["progress_steps"] = list_steps(context.tenant_id, run_id) if callable(list_steps) else []
+        error_ref = next(
+            (
+                item
+                for item in run.get("result_refs") or []
+                if isinstance(item, dict) and item.get("type") == "analysis_error" and isinstance(item.get("details"), dict)
+            ),
+            None,
+        )
+        if error_ref is not None:
+            run["error_details"] = dict(error_ref["details"])
         handler._send_json({"tenant_id": context.tenant_id, "run": run})
     except Exception as exc:  # pragma: no cover - HTTP boundary.
         send_route_exception(handler, exc)
@@ -373,10 +401,14 @@ def run_analysis(
             requested_context,
             user_id=user_id,
         )
-    except PermissionError as exc:
+    except (PermissionError, AnalysisContractError) as exc:
         catalog_failed = exc
         if reused_visual is None:
-            if str(exc) == "selected_data_asset_not_published_or_not_authorized":
+            if str(exc) in {
+                "selected_data_asset_not_published_or_not_authorized",
+                "analysis_table_unavailable",
+                "analysis_table_retired",
+            }:
                 progress(
                     "context_understanding",
                     10,
@@ -924,6 +956,11 @@ def _apply_scene_and_resolve_skills(
     if store is not None:
         try:
             catalog = list((store.list_published_bundle(tenant_id) or {}).get("analysis_skills") or [])
+            scope_service = getattr(services, "tenant_scope_service", None)
+            if scope_service is not None:
+                catalog = scope_service.filter_analysis_skills(tenant_id, catalog)
+                if not catalog and scope_service.topic_assignments_configured(tenant_id):
+                    catalog = [{"id": "tenant-topic-assignment-gate", "category": "系统", "enabled": True}]
         except Exception:
             catalog = []
     try:
@@ -954,9 +991,13 @@ def _resolve_analysis_extensions(
         bundle = store.list_published_bundle(tenant_id)
     except Exception:
         return page_context
+    analysis_skills = list(bundle.get("analysis_skills", []))
+    scope_service = getattr(services, "tenant_scope_service", None)
+    if scope_service is not None:
+        analysis_skills = scope_service.filter_analysis_skills(tenant_id, analysis_skills)
     skill_by_id = {
         str(item.get("id") or ""): item
-        for item in bundle.get("analysis_skills", [])
+        for item in analysis_skills
         if isinstance(item, dict) and item.get("enabled") is not False
     }
     tool_by_id = {
@@ -1009,6 +1050,12 @@ def _resolve_analysis_extensions(
                 from backend.platform.assets.store import analysis_skill_template
 
                 configured = analysis_skill_template(legacy_skill_ids.get(skill_id, skill_id))
+                if (
+                    configured is not None
+                    and str(configured.get("category") or "") == "主题"
+                    and str(configured.get("id") or "") not in skill_by_id
+                ):
+                    configured = None
             except Exception:
                 configured = None
         if configured is None:
@@ -1568,76 +1615,39 @@ def _match_selected_analysis_table(
     requested: dict[str, Any],
     published_tables: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """Resolve a picker selection against the current tenant catalog.
+    """Compatibility wrapper around the single authoritative resolver."""
 
-    Data Crawler deliveries change ``id`` (hash of the dated relative path).
-    ``sourceKey`` is the logical source identity and must keep a previously
-    selected table authorized against the latest catalog entry.
-    """
+    try:
+        return resolve_analysis_table_reference(requested, published_tables).table
+    except AnalysisContractError:
+        return None
 
-    requested_id = str(requested.get("id") or "").strip()
-    if requested_id:
-        matched = next(
-            (item for item in published_tables if str(item.get("id") or "").strip() == requested_id),
-            None,
-        )
-        if matched is not None:
-            return matched
-    requested_code = str(requested.get("code") or "").strip()
-    if requested_code:
-        matched = next(
-            (
-                item
-                for item in published_tables
-                if requested_code
-                in {
-                    str(item.get("code") or "").strip(),
-                    str(item.get("tableNameEn") or "").strip(),
-                }
-            ),
-            None,
-        )
-        if matched is not None:
-            return matched
-    requested_source_key = str(requested.get("sourceKey") or "").strip()
-    if requested_source_key:
-        matched = next(
-            (
-                item
-                for item in published_tables
-                if str(item.get("sourceKey") or "").strip() == requested_source_key
-            ),
-            None,
-        )
-        if matched is not None:
-            return matched
-    requested_path = str(requested.get("relativePath") or "").strip()
-    if requested_path:
-        matched = next(
-            (
-                item
-                for item in published_tables
-                if str(item.get("relativePath") or "").strip() == requested_path
-            ),
-            None,
-        )
-        if matched is not None:
-            return matched
-    requested_titles = _analysis_table_title_keys(requested)
-    titled = [
-        item for item in published_tables
-        if requested_titles and requested_titles & _analysis_table_title_keys(item)
-    ]
-    if len(titled) == 1:
-        return titled[0]
-    requested_logical = _analysis_table_logical_keys(requested)
-    logical = [
-        item for item in published_tables
-        if requested_logical and requested_logical & _analysis_table_logical_keys(item)
-    ]
-    if len(logical) == 1:
-        return logical[0]
-    return None
+
+def _preflight_analysis_page_context(
+    services: PlatformServices,
+    tenant_id: str,
+    question: str,
+    page_context: dict[str, Any],
+    *,
+    user_id: str,
+) -> dict[str, Any]:
+    """Resolve client references before enqueueing and pin the authorized version."""
+
+    context = dict(page_context)
+    selected = []
+    for table in _list_of_dicts(context.get("selected_data_tables")):
+        sanitized = dict(table)
+        sanitized.pop(ANALYSIS_RESOLUTION_KEY, None)
+        selected.append(sanitized)
+    if selected:
+        context["selected_data_tables"] = selected
+    if selected or isinstance(context.get("files"), list):
+        resolved = _build_asset_context(services, tenant_id, question, context, user_id=user_id)
+        resolved_tables = _list_of_dicts(resolved.get("selected_data_tables"))
+        if resolved_tables:
+            context["selected_data_tables"] = resolved_tables
+    context["_analysis_asset_preflight_completed"] = True
+    return context
 
 
 def _analysis_table_title_keys(item: dict[str, Any]) -> set[str]:
@@ -1679,8 +1689,21 @@ def _build_asset_context(
     if uploaded.media_blocked:
         raise ValueError("analysis_uploaded_media_unsupported")
     if uploaded.data_tables:
+        selected_uploads = []
+        for table in uploaded.data_tables[:1]:
+            snapshot = resolved_asset_snapshot(table, tenant_id=tenant_id)
+            selected_uploads.append({
+                **table,
+                ANALYSIS_RESOLUTION_KEY: {
+                    **snapshot,
+                    "matchStrategy": "uploaded_content_hash",
+                    "requestedAssetVersion": snapshot["assetVersion"],
+                    "versionChanged": False,
+                    "serverAuthorized": True,
+                },
+            })
         return {
-            "selected_data_tables": uploaded.data_tables[:1],
+            "selected_data_tables": selected_uploads,
             "topics": [],
             "uploaded_data_source": True,
         }
@@ -1716,7 +1739,11 @@ def _build_asset_context(
                 waiter = getattr(catalog, "wait_until_ready", None)
                 if callable(waiter):
                     waiter(30.0)
-        raw_tables = [item for item in catalog.table_assets() if isinstance(item, dict)]
+        try:
+            raw_catalog = catalog.table_assets(force=True)
+        except TypeError:  # Lightweight isolated test catalogs may predate the refresh option.
+            raw_catalog = catalog.table_assets()
+        raw_tables = [item for item in raw_catalog if isinstance(item, dict)]
     else:
         # Isolated callers without the acquisition service retain the store
         # contract; all running application services have a CSV source.
@@ -1740,9 +1767,15 @@ def _build_asset_context(
     )
     selected_data_tables = []
     for requested in requested_data_tables[:8]:
-        matched = _match_selected_analysis_table(requested, published_tables)
-        if matched is None:
-            raise PermissionError("selected_data_asset_not_published_or_not_authorized")
+        # A preflight receipt proves only the submission-time catalog. Async
+        # tasks may start later, after a new Crawler delivery arrived. Always
+        # resolve again against the forced current catalog so a compatible
+        # version is rebound and an incompatible schema fails before planning.
+        matched = resolve_analysis_table_reference(
+            requested,
+            published_tables,
+            tenant_id=tenant_id,
+        ).table
         if str(matched.get("kind") or "") == "page_data":
             if not user_id:
                 raise PermissionError("selected_multi_page_data_requires_user_context")
@@ -2329,7 +2362,14 @@ def _analysis_cache_context(
         relative_path = str(table.get("relativePath") or "").strip()
         if len(content_hash) != 64 or not schema_fingerprint or not relative_path:
             return None
+        asset_id = str(
+            table.get("assetId")
+            or ((table.get(ANALYSIS_RESOLUTION_KEY) or {}).get("assetId") if isinstance(table.get(ANALYSIS_RESOLUTION_KEY), dict) else "")
+        ).strip()
+        if not asset_id:
+            return None
         csv_tables.append({
+            "asset_id": asset_id,
             "table_id": str(table.get("id") or table.get("code") or "").strip(),
             "source_key": str(table.get("sourceKey") or "").strip(),
             "relative_path": relative_path,
@@ -2338,7 +2378,7 @@ def _analysis_cache_context(
             "schema_version": str(table.get("schemaVersion") or schema_fingerprint).strip(),
             "asset_version": str(table.get("assetVersion") or table.get("version") or "").strip(),
         })
-    csv_tables.sort(key=lambda item: (item["table_id"], item["relative_path"]))
+    csv_tables.sort(key=lambda item: (item["asset_id"], item["table_id"], item["relative_path"]))
     csv_snapshot = {"tables": csv_tables}
 
     authorization_snapshot = _analysis_authorization_snapshot(

@@ -57,8 +57,8 @@ assert.match(views, /requestAnimationFrame\(\(\) =>/, "drag preview is frame sch
 assert.match(views, /if \(commit && source && destination[^\n]+setFields/, "field order commits once on release");
 assert.doesNotMatch(views, /pointermove[\s\S]{0,500}setFields\(/i, "pointer move does not mutate field order");
 for (const marker of ["data-visual-more", "条件", "复制", "删除", "求和", "data-visual-title-input", "双击修改标题", "转为", "柱状图", "趋势图", "data-filter-rule-relation=\"and\"", "data-filter-group-relation=\"or\"", "添加筛选", "添加“或”条件组"]) assert.ok(views.includes(marker), `shared card contains ${marker}`);
-for (const marker of ["data-visual-comment-action", "data-visual-table-dimension-header", "data-visual-table-header-menu", "data-visual-merge-dimension", "data-table-merged-dimension"]) assert.ok(views.includes(marker), `shared visualization contains ${marker}`);
-assert.match(views, /if \(cardType !== "table" \|\| !dimensionFields\.includes\(field\)\) return/, "合并菜单只能从标准表格的已选维度列进入");
+for (const marker of ["data-visual-comment-action", "data-visual-table-dimension-header", "data-visual-table-header-menu", "data-visual-merge-dimension", "data-table-merged-dimension", "data-visual-freeze-column", "data-visual-freeze-row"]) assert.ok(views.includes(marker), `shared visualization contains ${marker}`);
+assert.match(views, /if \(cardType !== "table"\) return/, "表格右键菜单仅在标准表格模式进入");
 assert.match(views, /if \(span === 0\) return null;[\s\S]*rowSpan=\{span > 1 \? span : undefined\}/, "重复维度必须通过真实 rowSpan 合并，不能只隐藏文字");
 for (const saturatedColor of ["#2f6fed", "#f0a23a", "#7c63d6", "#d15f7a"]) assert.ok(!views.includes(saturatedColor), `shared renderer no longer uses saturated series color ${saturatedColor}`);
 

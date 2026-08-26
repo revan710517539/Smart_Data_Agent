@@ -250,6 +250,14 @@ export type SavedAnalysisResult = {
   ownerUserId?: string;
   weeklyReportEligible?: boolean;
   weeklyReportSavedAt?: string;
+  selectedDataTables?: unknown[];
+  visualizations?: Array<{
+    id: string;
+    key?: "primary" | "secondary";
+    title: string;
+    type: string;
+    config?: Record<string, unknown>;
+  }>;
   rows: {
     branch: string;
     amount: number;
@@ -886,6 +894,10 @@ export function normalizeSavedAnalysisResult(result: BackendSavedAnalysisResult 
     ownerUserId: String(result.ownerUserId || ""),
     weeklyReportEligible: result.weeklyReportEligible === true,
     weeklyReportSavedAt: String(result.weeklyReportSavedAt || ""),
+    selectedDataTables: Array.isArray((result as { selectedDataTables?: unknown }).selectedDataTables) ? (result as { selectedDataTables: unknown[] }).selectedDataTables : [],
+    visualizations: Array.isArray((result as { visualizations?: unknown }).visualizations)
+      ? (result as { visualizations: NonNullable<SavedAnalysisResult["visualizations"]> }).visualizations
+      : [],
     rows: normalizeSavedAnalysisRows(result.rows),
   };
 }

@@ -56,6 +56,7 @@ import {
 import { ApiRequestError, apiErrorMessage } from "../services/apiClient";
 import { demoFallbackDisabledMessage, isDemoFallbackEnabled } from "../services/apiContext";
 import { DataPageSelector, useClientPagination } from "./ui/DataPageSelector";
+import { ConfirmDialog, askConfirm } from "./ui/ConfirmDialog";
 import {
   type UserFormKey,
   type AccessModal,
@@ -170,6 +171,7 @@ export function SystemSettings() {
     isDemoFallbackEnabled() ? initialSystemDataParams : [],
   );
   const [canReadSystemParams, setCanReadSystemParams] = useState(isDemoFallbackEnabled());
+  const [configReadStatus, setConfigReadStatus] = useState<"loading" | "ready" | "error">("loading");
   const [configNotice, setConfigNotice] = useState("");
   const [testingModelId, setTestingModelId] = useState("");
   const [testingSpeechIntegrationId, setTestingSpeechIntegrationId] = useState("");
@@ -197,6 +199,7 @@ export function SystemSettings() {
     if (activeTab !== "config") return;
     let cancelled = false;
     let retryTimer: number | undefined;
+    setConfigReadStatus("loading");
 
     let requestSeq = 0;
     const syncEpoch = configMutationEpochRef.current;
@@ -209,6 +212,7 @@ export function SystemSettings() {
         setSpeechIntegrations(response.speech_integrations || []);
         setSystemDataParams(response.system_params);
         setCanReadSystemParams(Boolean(response.can_read_system_params));
+        setConfigReadStatus("ready");
         setConfigNotice(
           response.count.models || response.count.speech_integrations || response.count.system_params
             ? `当前账号模型接入已连接后端：${selectedInstitution}`
@@ -227,6 +231,7 @@ export function SystemSettings() {
           setSpeechIntegrations(initialSpeechIntegrations);
           setSystemDataParams(initialSystemDataParams);
           setCanReadSystemParams(true);
+          setConfigReadStatus("ready");
           setConfigNotice(`系统接入配置后端暂不可用，已使用显式 demo 本地状态。${apiErrorMessage(error, "")}`);
           return;
         }
@@ -234,6 +239,7 @@ export function SystemSettings() {
         setSpeechIntegrations([]);
         setSystemDataParams([]);
         setCanReadSystemParams(false);
+        setConfigReadStatus("error");
         setConfigNotice(`${demoFallbackDisabledMessage("系统接入配置加载")} ${apiErrorMessage(error, "")}`);
       }
     };
@@ -385,6 +391,7 @@ export function SystemSettings() {
   };
 
   const removeModelIntegration = async (id: string) => {
+    if (!(await askConfirm({ title: "删除模型接入", description: `确定删除「${modelIntegrations.find((item) => item.id === id)?.name || "该模型"}」？`, hint: "此操作不可撤销。" }))) return;
     const previousModels = modelIntegrations;
     setModelIntegrations((current) => current.filter((item) => item.id !== id));
     configMutationEpochRef.current += 1;
@@ -552,6 +559,7 @@ export function SystemSettings() {
   };
 
   const removeSpeechIntegration = async (id: string) => {
+    if (!(await askConfirm({ title: "删除语音转文字接入", description: `确定删除「${speechIntegrations.find((item) => item.id === id)?.name || "该接入"}」？`, hint: "此操作不可撤销。" }))) return;
     const previousIntegrations = speechIntegrations;
     setSpeechIntegrations((current) => current.filter((item) => item.id !== id));
     configMutationEpochRef.current += 1;
@@ -711,6 +719,7 @@ export function SystemSettings() {
 
   const removeUser = async (user: SystemUser) => {
     if (user.tenantRoles.some((role) => role.role === "超级管理员")) return;
+    if (!(await askConfirm({ title: "删除用户", description: `确定删除用户「${user.name}」？`, hint: "用户和角色授权将一并删除，此操作不可撤销。" }))) return;
     const previousUsers = users;
     setUsers((current) => current.filter((item) => item.id !== user.id));
     try {
@@ -808,8 +817,8 @@ export function SystemSettings() {
         : [];
   const currentTenantParam = (paramId: string) =>
     systemDataParams.find((param) => param.id === paramId && (param.tenantId || tenantId) === tenantId)?.value
-    || systemDataParams.find((param) => param.id === paramId)?.value
-    || "未配置";
+    || (configReadStatus === "loading" ? "加载中…" : configReadStatus === "error" ? "暂不可用" : "未配置");
+  const showSystemConfigSummary = canReadSystemParams || (isSuperAdmin && configReadStatus !== "ready");
   const configOverviewStats = [
     { label: "数据刷新", value: currentTenantParam("data_refresh_frequency"), icon: Database },
     { label: "单次采集", value: currentTenantParam("acquisition_max_rows"), icon: Database },
@@ -837,7 +846,7 @@ export function SystemSettings() {
                 <button
                   type="button"
                   onClick={() => {
-                    setSelectedInstitution(accessNoticeTargetInstitution);
+                    void setSelectedInstitution(accessNoticeTargetInstitution);
                     setAccessNoticeTargetInstitution("");
                   }}
                   className="text-[11px] text-[#0f8f5f] underline underline-offset-2"
@@ -852,8 +861,8 @@ export function SystemSettings() {
         </div>
         <div className="mt-5" data-settings-upper-module={upperModuleKind}>
           {activeTab === "config" ? (
-            <div className={`grid gap-4 ${canReadSystemParams && isSuperAdmin ? "xl:grid-cols-3" : canReadSystemParams ? "xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]" : ""}`}>
-              {canReadSystemParams && (
+            <div className={`grid gap-4 ${showSystemConfigSummary && isSuperAdmin ? "xl:grid-cols-3" : showSystemConfigSummary ? "xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]" : ""}`}>
+              {showSystemConfigSummary && (
               <section className="rounded-xl border border-[#f0f0f2] bg-white p-4" data-system-config-summary="true">
                 <div className="mb-3 flex items-center justify-between">
                   <div>
@@ -1163,6 +1172,7 @@ function TenantManagementCard({
   const [editingId, setEditingId] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pendingDeleteName, setPendingDeleteName] = useState("");
 
   const beginCreate = () => {
     setEditingId("new");
@@ -1203,11 +1213,14 @@ function TenantManagementCard({
     }
   };
 
-  const remove = async (name: string) => {
+  const remove = (name: string) => {
     if (busy) return;
-    if (!window.confirm(`确定删除租户「${name}」？删除后登录页、右上角机构、用户管理和角色权限将不再显示该租户。`)) {
-      return;
-    }
+    setPendingDeleteName(name);
+  };
+
+  const confirmRemove = async () => {
+    const name = pendingDeleteName.trim();
+    if (!name || busy) return;
     setBusy(true);
     setNotice("");
     try {
@@ -1215,6 +1228,7 @@ function TenantManagementCard({
       if (editingId && editingId !== "new" && tenantIdForInstitution(name) === editingId) {
         cancelEditor();
       }
+      setPendingDeleteName("");
       await onCatalogChanged();
       setNotice(`已删除租户「${name}」。`);
     } catch (error) {
@@ -1341,6 +1355,21 @@ function TenantManagementCard({
       <div className="mt-3 text-[11px] leading-5 text-[#8a8a8e]">
         {notice || `共 ${institutions.length} 个租户，新增后可在用户管理和角色权限中授权。`}
       </div>
+      {pendingDeleteName ? (
+        <ConfirmDialog
+          open
+          title="删除租户"
+          description={`确定删除租户「${pendingDeleteName}」？删除后登录页、右上角机构、用户管理和角色权限将不再显示该租户。`}
+          hint="此操作不可撤销。"
+          busy={busy}
+          busyLabel="删除中..."
+          data-tenant-delete-dialog="true"
+          titleId="tenant-delete-title"
+          descriptionId="tenant-delete-desc"
+          onCancel={() => { if (!busy) setPendingDeleteName(""); }}
+          onConfirm={() => void confirmRemove()}
+        />
+      ) : null}
     </section>
   );
 }
@@ -1779,9 +1808,10 @@ function PermissionEditorModal({
     updateRoleConfig(activeConfig.name, { [field]: values });
   };
 
-  const removeCustomRole = (name: string) => {
+  const removeCustomRole = async (name: string) => {
     const target = roleConfigs.find((role) => role.name === name);
     if (!target || target.isSystem) return;
+    if (!(await askConfirm({ title: "删除角色", description: `确定删除角色「${name}」？`, hint: "此操作不可撤销。" }))) return;
     const nextConfigs = roleConfigs.filter((role) => role.name !== name);
     setDraft((current) => syncPermissionFromRoleConfigs(current, nextConfigs));
     if (activeConfig?.name === name) onRoleChange(nextConfigs[0]?.name || "管理员");
@@ -1836,15 +1866,20 @@ function PermissionEditorModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4">
-      <div className="w-full max-w-[1060px] overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${institution.institution}权限配置`}
+        className="flex h-[min(760px,86vh)] w-full max-w-[1060px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20"
+      >
         <ModalHeader
           title={`${institution.institution}权限配置`}
           desc="在机构域内维护默认管理员、操作员和自定义角色；菜单、指标数据范围和可管理角色统一在此配置。"
           onClose={onClose}
         />
-        <div className="grid max-h-[76vh] min-h-[560px] overflow-hidden lg:grid-cols-[220px_minmax(0,1fr)]">
-          <div className="border-r border-[#f0f0f2] bg-[#fafbfc] p-4">
-            <div className="mb-3 flex items-center justify-between">
+        <div className="grid min-h-0 flex-1 overflow-hidden max-lg:grid-rows-[minmax(0,36%)_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)]">
+          <div className="flex min-h-0 flex-col border-r border-[#f0f0f2] bg-[#fafbfc]">
+            <div className="flex shrink-0 items-center justify-between px-4 pb-2 pt-4">
               <span className="text-[12px] text-[#8a8a8e]">角色</span>
               <button
                 type="button"
@@ -1855,35 +1890,36 @@ function PermissionEditorModal({
                 <Plus className="h-3.5 w-3.5" />
               </button>
             </div>
-            {roleConfigs.map((role) => (
-              <div
-                key={role.name}
-                className={`mb-2 flex w-full items-center rounded-lg px-3 py-2 text-left text-[12px] transition-colors ${
-                  activeConfig?.name === role.name ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#636366] hover:bg-white"
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => onRoleChange(role.name)}
-                  className="flex min-w-0 flex-1 items-center justify-between"
+            <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-3">
+              {roleConfigs.map((role) => (
+                <div
+                  key={role.name}
+                  className={`flex h-9 w-full items-center rounded-lg px-1 transition-colors ${
+                    activeConfig?.name === role.name ? "bg-white shadow-sm" : "hover:bg-white"
+                  }`}
                 >
-                  <span className="min-w-0 truncate">{roleLabel(role)}</span>
-                  {role.isSystem ? <ChevronRight className="h-3.5 w-3.5 text-[#c7c7cc]" /> : null}
-                </button>
-                {role.isSystem ? null : (
                   <button
                     type="button"
-                    onClick={() => removeCustomRole(role.name)}
-                    className="ml-1 rounded-md p-1 text-[#c7c7cc] hover:bg-[#f2f2f7] hover:text-[#d93025]"
-                    aria-label={`删除${role.name}`}
+                    onClick={() => onRoleChange(role.name)}
+                    className="flex h-9 min-w-0 flex-1 items-center gap-1 px-2 text-left text-[13px] leading-5 text-[#1d1d1f]"
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
+                    <span className="min-w-0 flex-1 truncate text-[13px] leading-5 font-normal">{roleLabel(role)}</span>
+                    {role.isSystem ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[#c7c7cc]" /> : null}
                   </button>
-                )}
-              </div>
-            ))}
-
-            <div className="mt-5 rounded-lg border border-[#f0f0f2] bg-white p-3">
+                  {role.isSystem ? null : (
+                    <button
+                      type="button"
+                      onClick={() => void removeCustomRole(role.name)}
+                      className="mr-1 rounded-md p-1 text-[#c7c7cc] hover:bg-[#f2f2f7] hover:text-[#d93025]"
+                      aria-label={`删除${role.name}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="mx-3 mb-4 shrink-0 rounded-lg border border-[#f0f0f2] bg-white p-3">
               <div className="text-[12px] text-[#1d1d1f]">授权优先级</div>
               <p className="mt-1 text-[11px] leading-[1.6] text-[#8a8a8e]">
                 管理员默认可管理操作员和自定义角色；操作员与自定义角色只能使用被授予的菜单和指标权限。
@@ -1891,7 +1927,7 @@ function PermissionEditorModal({
             </div>
           </div>
 
-          <div className="overflow-y-auto p-5">
+          <div className="min-h-0 overflow-y-auto p-5" data-permission-editor-scroll="true">
             {activeConfig && (
               <div className="space-y-4">
                 <RoleAccessHeader
@@ -1941,7 +1977,7 @@ function PermissionEditorModal({
             )}
           </div>
         </div>
-        <div className="flex items-center justify-between border-t border-[#f0f0f2] px-5 py-4">
+        <div className="flex shrink-0 items-center justify-between border-t border-[#f0f0f2] px-5 py-3">
           <span className={`text-[12px] ${saveError ? "text-[#d93025]" : "text-[#8a8a8e]"}`}>
             {saveError || "保存后立即更新该机构角色权限配置。"}
           </span>
@@ -1949,7 +1985,7 @@ function PermissionEditorModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[12px] text-[#636366] hover:bg-[#f2f2f7]"
+              className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-4 text-[12px] text-[#636366] hover:bg-[#f2f2f7]"
             >
               取消
             </button>
@@ -1957,7 +1993,7 @@ function PermissionEditorModal({
               type="button"
               onClick={() => void save()}
               disabled={saving}
-              className="rounded-lg bg-[#1d1d1f] px-4 py-2 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-40"
+              className="h-9 rounded-lg bg-[#1d1d1f] px-4 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-40"
             >
               {saving ? "保存中" : "保存配置"}
             </button>
@@ -2175,8 +2211,8 @@ function ensurePermissionRoleConfigs(permission: InstitutionPermission): Institu
 }
 
 function stripAutomaticMenus(menus: string[]) {
-  const automatic = new Set(permissionMenuGroups.filter((group) => group.automatic).flatMap((group) => group.children));
-  return menus.filter((item) => !automatic.has(item));
+  const excluded = new Set(["留言板管理", "埋点分析", ...permissionMenuGroups.filter((group) => group.automatic).flatMap((group) => group.children)]);
+  return menus.filter((item) => !excluded.has(item));
 }
 
 function getPermissionRoleConfigs(permission: InstitutionPermission): AccessRoleConfig[] {

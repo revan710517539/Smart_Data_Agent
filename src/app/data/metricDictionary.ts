@@ -27,6 +27,7 @@ export type MetricDictionaryItem = {
   grain?: string;
   semanticStatus?: "documentation" | "draft" | "published" | "deprecated";
   semanticVersion?: string;
+  alignmentStatus?: "aligned" | "unaligned";
 };
 
 export const initialMetricDictionary: MetricDictionaryItem[] = [

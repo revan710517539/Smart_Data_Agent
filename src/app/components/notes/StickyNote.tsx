@@ -2,6 +2,7 @@ import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { StickyNote as StickyNoteIcon } from "lucide-react";
 import { RichNoteEditor, type RichNoteUploadContext } from "./RichNoteEditor";
 import { selectedTextWithin, type StickyNoteRecord } from "./richNote";
+import { askConfirm } from "../ui/ConfirmDialog";
 
 export function StickyNotePanel({
   note,
@@ -81,7 +82,7 @@ export function StickyNotePanel({
           <button
             type="button"
             data-sticky-note-delete="true"
-            onClick={() => { setDeleteMenu(null); onHide(); }}
+            onClick={() => { setDeleteMenu(null); void askConfirm({ title: "删除便签", description: "确定删除这条便签？", hint: "此操作不可撤销。" }).then((ok) => { if (ok) onHide(); }); }}
             className="w-full rounded-md px-2 py-1.5 text-left text-[12px] text-[#d92d20] hover:bg-[#fff1f0]"
           >
             删除

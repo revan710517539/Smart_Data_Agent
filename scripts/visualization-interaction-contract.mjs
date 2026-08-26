@@ -90,7 +90,7 @@ assert.deepEqual(
 assert.ok(visualCardSource.includes("visualizationRoleFields") && visualCardSource.includes("roleFields.metrics") && visualCardSource.includes("roleFields.dimensions"), "可视化指标和维度候选必须按数据表字段角色拆分");
 assert.ok(visualCardSource.includes('document.addEventListener("pointerdown", dismissTransientControls, true)'), "操作浮层必须支持点击页面其他区域收起");
 assert.ok(visualCardSource.includes("moreButtonRef.current?.contains(target)") && visualCardSource.includes('[data-visual-more-menu="true"]') && visualCardSource.includes("if (!inMoreMenu && !inMoreButton) setMoreOpen(false)"), "更多菜单必须在点击按钮和菜单之外时关闭，不得被卡片内其他交互区挡住");
-assert.ok(visualCardSource.includes('applyType(option.type); setActivePanel(null);') && !visualCardSource.includes('applyType(option.type); setActivePanel(null); setOperationsOpen(false);'), "选择样式后操作托盘不得自动折叠");
+assert.match(visualCardSource, /applyType\(option\.type\);[\s\S]{0,300}setActivePanel\(null\);(?!\s*setOperationsOpen\(false\);)/, "选择样式后操作托盘不得自动折叠");
 assert.ok(visualCardSource.includes('长按 2 秒后拖动排序') && visualCardSource.includes('}, 2_000)') && visualCardSource.includes('data-table-long-press-reorder="true"'), "指标、维度、表头和首列必须使用两秒长按排序");
 assert.match(visualCardSource, /data-visual-table-scroll="true"/, "超高表格必须在组件内滚动");
 assert.match(visualCardSource, /thead className="sticky top-0 z-20/, "表格滚动时表头必须吸顶");
@@ -111,7 +111,11 @@ assert.match(visualGridSource, /setPointerCapture\(event.pointerId\)/, "可视�
 assert.match(visualGridSource, /Math.min\(hintMaxWidth, edgeMaxWidth, effectiveWidth\)/, "可视化拖拽宽度不得超过底层页面/网格容器");
 assert.match(visualGridSource, /overflow-x-hidden/, "可视化网格不得把卡片画到页面宽度之外");
 assert.ok(visualCardSource.includes('onClick={(event) =>') && visualCardSource.includes('onContextMenu={(event) =>') && visualCardSource.includes('data-visual-comment-action="true"') && visualCardSource.includes('<MessageSquareText'), "单击或右键可视化必须显示统一评论气泡");
-assert.ok(visualCardSource.includes('cardType !== "table" || !dimensionFields.includes(field)') && visualCardSource.includes('data-visual-table-header-comment="true"') && visualCardSource.includes('data-visual-merge-dimension='), "仅标准表格维度列右键菜单可同时提供评论与合并重复单元格");
+assert.ok(visualCardSource.includes('eventInsideVisualTable') && visualCardSource.includes('closest("[data-visual-table-scroll]")'), "表格区域内单击或右键不得弹出评论浮圈");
+assert.ok(visualCardSource.includes('data-visual-table-header-comment="true"') && visualCardSource.includes("data-visual-merge-dimension=") && visualCardSource.includes("冻结到首列") && visualCardSource.includes("data-visual-freeze-column"), "表格列头右键必须提供评论、合并重复单元格和冻结到首列");
+assert.ok(visualCardSource.includes("冻结到首行") && visualCardSource.includes("data-visual-freeze-row") && visualCardSource.includes("data-visual-table-row-menu"), "表格行右键必须提供冻结到首行");
+assert.ok(visualCardSource.includes("有合并单元格的情况下，无法冻结，如需冻结请取消合并单元格") && visualCardSource.includes("data-visual-table-freeze-notice"), "有合并单元格时冻结必须提示且不可冻结");
+assert.ok(visualCardSource.includes("frozenColumnFields") && visualCardSource.includes("frozenRowKeys") && visualCardSource.includes("source.frozenColumnFields"), "列与行冻结顺序必须进入统一图表配置并按点击时间保留");
 assert.ok(visualCardSource.includes("mergedDimensionFields") && visualCardSource.includes("setMergedDimensionFields") && visualCardSource.includes("source.mergedDimensionFields"), "合并维度选择必须进入统一图表配置并支持恢复");
 assert.ok(!visualCardSource.includes("右键可评论；操作中可配置样式、指标、维度与语音"), "可视化卡片不得保留冗余操作说明");
 assert.ok(analysisWorkspaceSource.includes("const analysisTitle = selectedDataPoint?.label || definition.title"), "AI 分析栏标题必须使用所点可视化名称");

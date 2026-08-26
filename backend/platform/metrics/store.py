@@ -32,6 +32,7 @@ METRIC_STRING_FIELDS = (
     "grain",
     "semanticStatus",
     "semanticVersion",
+    "alignmentStatus",
 )
 METRIC_LIST_FIELDS = (
     "visibleInstitutions",
@@ -370,6 +371,7 @@ def _normalize_metric(metric: dict[str, Any]) -> dict[str, Any]:
     if not normalized["metricId"] or not normalized["metricName"]:
         raise ValueError("请至少填写指标ID和指标名称。")
     normalized["semanticStatus"] = normalized["semanticStatus"].lower() or "documentation"
+    normalized["alignmentStatus"] = _normalize_alignment_status(normalized["alignmentStatus"])
     raw_multiplier = metric.get("multiplier", 1)
     try:
         normalized["multiplier"] = float(1 if raw_multiplier in (None, "") else raw_multiplier)
@@ -405,11 +407,19 @@ def _normalize_string_list(value: Any) -> list[str]:
     return normalized
 
 
+def _normalize_alignment_status(value: Any) -> str:
+    status = str(value or "unaligned").strip().lower()
+    if status not in {"aligned", "unaligned"}:
+        raise ValueError("metric_alignment_status_invalid")
+    return status
+
+
 def _payload_from_row(row: sqlite3.Row) -> dict[str, Any]:
     payload = json.loads(row["payload"])
     payload["tenantId"] = payload.get("tenantId") or row["tenant_id"]
     payload["visibleInstitutions"] = _normalize_string_list(payload.get("visibleInstitutions"))
     payload["visibleRoles"] = _normalize_string_list(payload.get("visibleRoles"))
+    payload["alignmentStatus"] = _normalize_alignment_status(payload.get("alignmentStatus"))
     return payload
 
 

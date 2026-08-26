@@ -10,6 +10,7 @@ from backend.platform.security import AuthenticationError, RateLimitExceeded
 from backend.platform.reports.store import CommentRevisionConflict
 from backend.platform.message_board.store import MessageBoardRevisionConflict
 from backend.platform.tenancy import ExecutionContext
+from backend.platform.intelligent_analysis.contracts import AnalysisContractError
 
 
 MAX_JSON_BODY_BYTES = 512 * 1024
@@ -37,6 +38,14 @@ def first_query_value(params: dict[str, list[str]], key: str) -> str | None:
 def send_route_exception(handler: Any, exc: Exception) -> None:
     request_id = str(handler.headers.get("X-Request-Id") or f"req_{uuid4().hex[:20]}")
     trace_id = str(handler.headers.get("X-Trace-Id") or request_id)
+    if isinstance(exc, AnalysisContractError):
+        details = exc.public_details(request_id=request_id)
+        handler._send_json(
+            {**details, "message": exc.public_message(), "request_id": request_id, "trace_id": trace_id},
+            HTTPStatus.CONFLICT if exc.code.startswith("analysis_table_") else HTTPStatus.UNPROCESSABLE_ENTITY,
+            headers={"X-Request-Id": request_id, "X-Trace-Id": trace_id},
+        )
+        return
     if isinstance(exc, RateLimitExceeded):
         handler._send_json(
             {
@@ -69,13 +78,20 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             "customer_segment_detail_table_required": "该数据源不是客户号唯一主键的明细表，不能用于分客群分析。",
             "customer_segment_page_data_customer_key_changed": "明细表的客户号主键已经变化，请由超级管理员在站内数据的“分客群页面”中重新保存配置。",
             "page_data_source_unavailable": "页面数据源已不可用。请检查当前机构的数据目录和页面数据绑定。",
+            "visual_report_dataset_unavailable": "可视化报表引用的数据集已不可用，请重新绑定后再保存。",
+            "visual_report_dataset_schema_changed": "可视化报表引用的数据结构已变化，请重新绑定后再保存。",
+            "visual_report_owner_required": "只有报表创建人或机构管理员可以从经营周报移除该可视化报表。",
             "page_data_source_schema_changed": "页面数据源结构已更新，当前图表字段不再兼容。请重新绑定数据源后保存。",
             "global_super_admin_required": "仅超级管理员可以执行该操作。",
             "tenant_catalog_super_admin_required": "仅超级管理员可以管理租户。",
+            "tenant_governance_super_admin_required": "仅超级管理员可以管理租户主题和跨机构授权。",
+            "session_tenant_not_authorized": "当前账号无权进入所选机构，请重新选择。",
             "global_super_admin_required_for_page_data": "仅超级管理员可以新增或修改页面数据。",
             "multi_institution_page_data_sources_unavailable": "当前账号已无法读取该多机构配置中的全部来源。请检查机构授权和表关联配置。",
             "multi_institution_page_data_source_schema_changed": "多机构数据源结构已更新，当前图表所用字段或关联键不再兼容。请重新确认关联后保存。",
             "raw_table_metadata_source_unavailable": "原始表已更新或不属于当前机构，请重新选择后再保存字段配置。",
+            "data_crawler_sql_binding_override_forbidden": "当前请求中的 SQL 与数据表血缘不一致，系统已拒绝执行。",
+            "data_crawler_sql_binding_institution_mismatch": "关联 SQL 不属于当前机构，系统已拒绝执行。",
         }
         if error_text in permission_messages:
             handler._send_json(
@@ -128,6 +144,8 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             "tenant_not_provisioned": ("tenant_not_provisioned", "目标机构尚未开通，请先确认机构目录。"),
             "user_not_provisioned": ("user_not_provisioned", "用户档案不存在或尚未生效，请检查用户状态后重试。"),
             "role_not_provisioned": ("role_not_provisioned", "角色尚未开通，请检查机构角色后重试。"),
+            "tenant_topic_assignment_not_found": ("tenant_topic_assignment_not_found", "未找到对应主题分配。"),
+            "cross_tenant_resource_grant_not_found": ("cross_tenant_resource_grant_not_found", "未找到对应跨机构授权。"),
         }
         error_text = str(exc.args[0]) if exc.args else "not_found"
         error_code, message = identity_messages.get(error_text, ("not_found", "The requested resource was not found."))
@@ -137,6 +155,38 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             headers={"X-Request-Id": request_id},
         )
         return
+    if isinstance(exc, RuntimeError):
+        data_crawler_errors = {
+            "data_crawler_endpoint_not_configured": (
+                "data_crawler_endpoint_not_configured",
+                "当前机构尚未配置 Data Crawler 连接，请联系管理员完成机构连接后重试。",
+            ),
+            "data_crawler_unavailable": (
+                "data_crawler_unavailable",
+                "Data Crawler 当前不可用，请确认服务已启动后重试。",
+            ),
+            "data_crawler_response_invalid": (
+                "data_crawler_response_invalid",
+                "Data Crawler 返回了无效结果，请确认两端版本与机构配置后重试。",
+            ),
+            "当前机构未启用 SDA 集成": (
+                "data_crawler_integration_disabled",
+                "当前机构的 Data Crawler 尚未启用 SDA 集成，请联系管理员完成配置后重试。",
+            ),
+            "SDA 机构凭据无效": (
+                "data_crawler_credentials_invalid",
+                "Data Crawler 机构凭据无效，请联系管理员更新配置后重试。",
+            ),
+        }
+        mapped = data_crawler_errors.get(str(exc))
+        if mapped:
+            error_code, message = mapped
+            handler._send_json(
+                {"error": error_code, "message": message, "request_id": request_id},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                headers={"X-Request-Id": request_id},
+            )
+            return
     if isinstance(exc, ValueError):
         validation_messages = {
             "duplicate_model_name": "模型名称已存在，请使用不同的模型名称。",
@@ -162,6 +212,29 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             "tenant_name_duplicate": "该租户已存在，请使用不同的名称。",
             "tenant_id_required": "缺少要操作的租户。",
             "tenant_not_found": "未找到对应租户，请刷新后重试。",
+            "tenant_governance_kind_invalid": "请选择主题分配或跨机构资源授权操作。",
+            "tenant_governance_tenant_not_active": "目标机构不存在、已停用或已关闭。",
+            "tenant_governance_revoke_reason_required": "撤销时必须填写原因。",
+            "tenant_topic_skill_id_required": "请选择要分配的分析主题。",
+            "tenant_topic_skill_not_published": "该分析主题尚未在目标机构发布，不能分配。",
+            "tenant_topic_expiry_invalid": "主题分配到期时间必须是带时区的未来时间。",
+            "tenant_topic_assignment_id_required": "缺少要撤销的主题分配。",
+            "cross_tenant_resource_type_required": "请选择跨机构授权的资源类型。",
+            "cross_tenant_resource_type_unsupported": "该资源类型尚未接入受控跨机构授权。",
+            "cross_tenant_resource_key_required": "请选择要授权的具体资源。",
+            "cross_tenant_resource_wildcard_forbidden": "跨机构授权必须指定具体资源，不能使用通配符。",
+            "cross_tenant_actions_invalid": "跨机构授权动作无效；当前仅支持只读。",
+            "cross_tenant_field_scope_required": "跨机构原始表授权必须指定可见字段。",
+            "cross_tenant_field_scope_invalid": "授权字段不属于当前原始表结构。",
+            "cross_tenant_schema_fingerprint_required": "跨机构原始表授权必须绑定结构指纹。",
+            "cross_tenant_schema_fingerprint_invalid": "原始表结构指纹格式无效。",
+            "cross_tenant_schema_fingerprint_changed": "原始表结构已经变化，请刷新后重新确认授权字段。",
+            "cross_tenant_raw_table_not_found": "目标原始表不存在或已下线。",
+            "cross_tenant_purpose_required": "跨机构授权必须填写明确用途。",
+            "cross_tenant_expiry_invalid": "跨机构授权必须设置晚于生效时间的未来到期时间。",
+            "cross_tenant_grant_requires_distinct_tenants": "来源机构与接收机构不能相同。",
+            "cross_tenant_resource_grant_duplicate": "相同范围的有效跨机构授权已存在。",
+            "cross_tenant_resource_grant_id_required": "缺少要撤销的跨机构授权。",
             "registration_password_required": "请输入登录密码。",
             "registration_already_pending": "该账号已提交注册申请，请等待超级管理员审批。",
             "registration_not_found": "未找到对应的注册申请。",
@@ -203,10 +276,27 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             "customer_segment_list_metadata_invalid": "客群名单保存信息无效，请重新上传并确认。",
             "customer_segment_list_owner_required": "无法确认客群名单所属用户，请重新登录后再试。",
             "customer_segment_source_customer_key_duplicate": "明细表客户号主键存在重复值，请先修复源数据后再分析。",
-            "data_crawler_sql_binding_not_found": "未找到可运行的关联 SQL。请选择 SQL 后点击刷新。",
-            "data_crawler_sql_binding_ambiguous": "当前 CSV 对应多条 SQL，请先选择要运行的 SQL 再刷新。",
+            "data_crawler_sql_binding_not_found": "当前数据表未携带可用 SQL 血缘，请在同一机构的 Data Crawler 中重新运行对应脚本生成文件。",
+            "data_crawler_sql_binding_ambiguous": "当前数据表只能按名称找到多条同机构 SQL，系统已停止关联，请先修复 Data Crawler 脚本名称或重新生成带 SQL ID 的文件。",
+            "data_crawler_schedule_task_ambiguous": "同一机构和 SQL 存在多条已启用定时任务，系统已停止操作以避免重复执行，请先停用重复任务。",
             "data_crawler_run_id_required": "缺少 Data Crawler 运行记录标识。",
             "non_temporal_sql_parameters_not_supported": "该 SQL 含有非时间参数，暂不能从 SDA 刷新或定时。",
+            "table_relationship_nodes_invalid": "表关系需要 2 到 12 张数据表。",
+            "table_relationship_edges_invalid": "请至少建立一条字段关联，最多 24 条。",
+            "table_relationship_node_invalid": "表关系节点无效，请重新拖入数据表。",
+            "table_relationship_table_schema_changed": "数据表结构已更新，请关闭后重新打开表关系再保存。",
+            "table_relationship_duplicate_table": "同一张数据表不能重复加入表关系。",
+            "table_relationship_duplicate_node": "表关系节点重复，请重新拖入数据表。",
+            "table_relationship_edge_invalid": "字段关联无效，请删除后重新连接。",
+            "table_relationship_edge_node_invalid": "字段关联必须连接两张不同的数据表。",
+            "table_relationship_edge_field_invalid": "关联字段已不在当前表结构中，请删除连线后重新连接。",
+            "table_relationship_edge_primary_key_required": "关联字段必须至少一端是主键。当前连接的字段都不是主键；请先在「原始表」中标记主键，再连接主键字段。",
+            "table_relationship_edge_type_mismatch": "关联字段类型必须一致。",
+            "table_relationship_duplicate_edge": "这条字段关联已经存在。",
+            "table_relationship_graph_disconnected": "所有数据表必须通过字段关联连成一组，不能有孤立表。",
+            "table_relationship_institution_graph_disconnected": "同一机构内的多张表必须先互相连接。",
+            "table_relationship_cross_institution_edge_required": "跨机构表关系必须有一条连接不同机构的字段关联。",
+            "table_relationship_common_fields_required": "跨机构表关系要求各机构数据表具有相同字段结构，才能用于多机构页面。当前两侧表没有同名字段，请选择结构一致的数据表。",
         }
         metric_workbook_messages = {
             "请上传 .xlsx 格式的指标文件。": ("metric_workbook_file_type", "仅支持 .xlsx 格式的指标文件，请重新选择。"),
@@ -249,11 +339,14 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
                 "customer_segment_source_customer_key_duplicate",
                 "data_crawler_sql_binding_not_found",
                 "data_crawler_sql_binding_ambiguous",
+                "data_crawler_schedule_task_ambiguous",
                 "data_crawler_run_id_required",
                 "non_temporal_sql_parameters_not_supported",
             }
             else "invalid_request"
         )
+        if error_text.startswith(("tenant_governance_", "tenant_topic_", "cross_tenant_", "table_relationship_")):
+            error_code = error_text
         if error_text in metric_workbook_messages:
             error_code, message = metric_workbook_messages[error_text]
         if error_text == "name and email are required.":

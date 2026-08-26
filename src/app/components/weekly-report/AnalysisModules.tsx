@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronsDown, Eye, EyeOff, GripVertical, Trash2 } from "lucide-react";
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { visualizationLabel, type SavedAnalysisResult, type StoredVisualizationType, type TableBlock } from "./domain";
+import { type SavedAnalysisResult, type TableBlock } from "./domain";
+import { usePlatformContext } from "../../platform/PlatformContext";
+import { fetchAnalysisTask } from "../../services/analysisApi";
+import { AnalysisVisualCard } from "../self-analysis/ResultViews";
+import { ResizableVisualizationGrid } from "../self-analysis/ResizableVisualizationGrid";
+import { defaultVisualizationCards } from "../self-analysis/visualCards";
+import { mapBackendRows, type AnalysisDataTableSelection, type AnalysisRow, type VisualizationType } from "../self-analysis/domain";
+import { revealVisualComment, revealVisualFollowUp } from "../self-analysis/visualFollowUp";
+import type { VisualizationCardConfig } from "../visualization/visualizationDataModel";
 
 export type WeeklyAnalysisModulePreference = { id: string; visible: boolean };
 export type WeeklyAnalysisModuleSettings = {
@@ -85,17 +93,66 @@ function analysisTimestamp(value: string) {
 }
 
 export function SavedAnalysisEmbed({ result }: { result: SavedAnalysisResult }) {
+  const { tenantId, userId } = usePlatformContext();
+  const [rows, setRows] = useState<AnalysisRow[]>(() => analysisRowsFromWeeklyPreview(result.rows));
+  useEffect(() => {
+    let cancelled = false;
+    const tables = (result.selectedDataTables || []).filter((table): table is AnalysisDataTableSelection => (
+      Boolean(table) && typeof table === "object"
+      && typeof (table as AnalysisDataTableSelection).id === "string"
+      && typeof (table as AnalysisDataTableSelection).code === "string"
+    ));
+    if (!result.analysisTaskId) return;
+    void fetchAnalysisTask({ taskId: result.analysisTaskId, tenantId, userId }).then((task) => {
+      if (cancelled) return;
+      const mapped = mapBackendRows(task, result.query, tables);
+      if (mapped.length) setRows(mapped);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [result.analysisTaskId, result.id, result.query, result.selectedDataTables, tenantId, userId]);
+  const cards = result.visualizations?.length
+    ? result.visualizations.map((card) => ({ id: card.id, key: card.key, title: card.title, type: card.type as VisualizationType, config: card.config as VisualizationCardConfig | undefined }))
+    : defaultVisualizationCards({ primary: result.visualTypes.primary as VisualizationType, secondary: result.visualTypes.secondary as VisualizationType });
   return <div className="mb-4 rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-4" data-weekly-report-ai-module="true">
     <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between"><div><div className="text-[13px] text-[#1d1d1f]">{result.title}</div><div className="mt-0.5 text-[11px] text-[#aeaeb2]">来自自助分析 · {result.savedAt}</div></div><span className="w-fit rounded-md border border-[#e5e5ea] bg-white px-2 py-1 text-[11px] text-[#8a8a8e]">已引用分析结果</span></div>
-    <div className="mb-3 grid gap-3 md:grid-cols-2"><SavedAnalysisVisual title={`主视图 · ${visualizationLabel(result.visualTypes.primary)}`} type={result.visualTypes.primary} rows={result.rows} /><SavedAnalysisVisual title={`补充视图 · ${visualizationLabel(result.visualTypes.secondary)}`} type={result.visualTypes.secondary} rows={result.rows} /></div>
-    <div className="rounded-lg border border-[#f0f0f2] bg-white p-3"><div className="mb-1 text-[12px] text-[#1d1d1f]">AI分析结论</div><p className="text-[12px] leading-[1.7] text-[#636366]">{result.summary}</p></div>
+    {rows.length ? (
+    <ResizableVisualizationGrid>
+      {cards.map((card) => (
+        <AnalysisVisualCard
+          key={card.id}
+          id={card.id}
+          stateKey={`weekly-analysis:${result.id}:${card.id}`}
+          fillHeight
+          title={card.title}
+          type={card.type}
+          rows={rows}
+          initialConfig={card.config}
+          onFollowUp={(detail) => revealVisualFollowUp({ key: card.key || "primary", title: card.title, type: card.type, rows, taskId: result.analysisTaskId, reportId: result.id, question: result.query, summary: result.summary, plan: result.plan, railPageKey: "weekly-report", selectedText: detail?.selectedText })}
+          onComment={(detail) => revealVisualComment({ key: card.key || "primary", title: card.title, type: card.type, rows, taskId: result.analysisTaskId, reportId: result.id, question: result.query, summary: result.summary, plan: result.plan, railPageKey: "weekly-report", selectedText: detail?.selectedText })}
+          onTypeChange={() => undefined}
+        />
+      ))}
+    </ResizableVisualizationGrid>
+    ) : null}
+    <div className="mt-3 rounded-lg border border-[#f0f0f2] bg-white p-3"><div className="mb-1 text-[12px] text-[#1d1d1f]">AI分析结论</div><p className="text-[12px] leading-[1.7] text-[#636366]">{result.summary}</p></div>
   </div>;
 }
 
-function SavedAnalysisVisual({ title, type, rows }: { title: string; type: StoredVisualizationType; rows: SavedAnalysisResult["rows"] }) {
-  const maxAmount = Math.max(...rows.map((row) => row.amount), 1);
-  if (type === "table") return <div className="rounded-lg border border-[#f0f0f2] bg-white p-3"><div className="mb-2 text-[12px] text-[#1d1d1f]">{title}</div><div className="overflow-x-auto"><table className="w-full text-[11px]"><tbody>{rows.slice(0, 4).map((row) => <tr key={row.branch} className="border-b border-[#f8f8f8] last:border-b-0"><td className="py-1.5 text-[#3a3a3c]">{row.branch}</td><td className="py-1.5 text-right text-[#636366]">{row.amount}万</td><td className="py-1.5 text-right text-[#8a8a8e]">{row.completion}</td></tr>)}</tbody></table></div></div>;
-  return <div className="rounded-lg border border-[#f0f0f2] bg-white p-3"><div className="mb-2 flex items-center justify-between gap-2"><div className="text-[12px] text-[#1d1d1f]">{title}</div><span className="text-[10px] text-[#aeaeb2]">{visualizationLabel(type)}</span></div><div className="space-y-2">{rows.slice(0, 5).map((row, index) => <div key={row.branch} className="grid grid-cols-[48px_minmax(0,1fr)_54px] items-center gap-2 text-[11px]"><span className="truncate text-[#636366]">{row.branch}</span><div className="h-2 overflow-hidden rounded-full bg-[#f2f2f7]"><div className={`h-full rounded-full ${index === 0 ? "bg-[#1d1d1f]" : "bg-[#8e8e93]"}`} style={{ width: `${Math.max(12, (row.amount / maxAmount) * 100)}%` }} /></div><span className="text-right text-[#8a8a8e]">{row.amount}万</span></div>)}</div></div>;
+function analysisRowsFromWeeklyPreview(rows: SavedAnalysisResult["rows"]): AnalysisRow[] {
+  return rows.map((row) => ({
+    branch: row.branch,
+    productLine: "",
+    customerSegment: "",
+    amount: row.amount,
+    metricName: "",
+    metricUnit: "",
+    raw: { 维度: row.branch, 金额: row.amount, 完成: row.completion },
+    fieldLabels: { 维度: "维度", 金额: "金额", 完成: "完成" },
+    completion: row.completion,
+    conversion: row.conversion,
+    overdueRate: "",
+    weekChange: "",
+  }));
 }
 
 export function weeklyAnalysisModuleStorageKey(tenantId: string, userId: string) {
@@ -175,7 +232,7 @@ export function WeeklyAnalysisModuleMenu({
               onClick={() => onToggle(item)}
               className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#7d8982] hover:bg-white hover:text-[#258a3f]"
             >{item.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}</button>
-            {editable && item.deletable ? <button type="button" aria-label={`删除${item.title}`} title="删除" onClick={() => onDelete(item)} className="mr-2 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#aeaeb2] hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3.5 w-3.5" /></button> : <span className="mr-2 h-7 w-7 shrink-0" aria-hidden="true" />}
+            {editable && item.deletable ? <button type="button" aria-label={`删除${item.title}`} title="删除" onClick={() => onDelete(item)} className="mr-2 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#aeaeb2] hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3.5 w-3.5" /></button> : null}
           </div>)}
           {!loading && !items.length ? <div className="px-3 py-4 text-center text-[11px] text-[#aeaeb2]">暂无可编排的周报数据</div> : null}
           {notice ? <div className="mx-2 mt-1 rounded-md bg-[#f7faf8] px-2 py-1.5 text-[10px] text-[#68736d]">{notice}</div> : null}

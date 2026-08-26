@@ -321,7 +321,7 @@ def _classify_egress_policy_error(exc: EgressPolicyError) -> tuple[str, str, boo
         if "cannot be resolved" in str(exc):
             return (
                 code,
-                "模型地址域名无法解析：默认中转站是企业内部域名，后端需要走本机 Clash 代理（HTTPS_PROXY=http://127.0.0.1:7897）或企业 DNS/VPN。",
+                "模型地址域名无法解析：默认中转站是企业内部域名，后端需要使用受管 HTTPS_PROXY 或企业 DNS/VPN。",
                 transient,
             )
         return (
@@ -602,7 +602,7 @@ def _provider_http_error_marker(exc: HTTPError) -> str:
 
 def _model_allowed_schemes() -> tuple[str, ...]:
     environment = os.getenv("SMART_DATA_AGENT_ENV", "development").strip().lower()
-    allow_http = os.getenv("SMART_DATA_AGENT_ALLOW_HTTP_MODEL_EGRESS", "").strip().lower() in {"1", "true", "yes", "on"}
+    allow_http = os.getenv("SMART_DATA_AGENT_ALLOW_HTTP_MODEL_EGRESS", "false").strip() == "true"
     if environment == "development" or allow_http:
         return ("https", "http")
     return ("https",)

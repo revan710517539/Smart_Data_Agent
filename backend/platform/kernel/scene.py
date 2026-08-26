@@ -172,7 +172,7 @@ def plan_analysis_skills(
         tenant_match = _first_matching_skill(catalog_items, text, kind)
         if tenant_match:
             planned.append(str(tenant_match.get("id") or ""))
-        elif default_id:
+        elif default_id and (not catalog_items or default_id in catalog_by_id):
             planned.append(default_id)
 
     extras = _question_matched_skills(catalog_items, text)

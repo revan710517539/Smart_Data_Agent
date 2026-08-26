@@ -15,6 +15,32 @@ class CrawlerManifestError(ValueError):
     pass
 
 
+def crawler_manifest_health(root: Path) -> dict[str, Any]:
+    """Validate the complete production manifest and return bounded readiness."""
+
+    manifest_path = _manifest_path(root)
+    if not manifest_path.is_file():
+        raise CrawlerManifestError("crawler_manifest_missing")
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise CrawlerManifestError("crawler_manifest_invalid_json") from exc
+    tenants = payload.get("tenants") if isinstance(payload, dict) else None
+    if not isinstance(tenants, list) or not tenants:
+        raise CrawlerManifestError("crawler_manifest_tenants_required")
+    tenant_ids = [str(item.get("tenant_id") or "").strip() for item in tenants if isinstance(item, dict)]
+    if len(tenant_ids) != len(tenants):
+        raise CrawlerManifestError("crawler_manifest_tenant_invalid")
+    contracts = [resolve_crawler_tenant(root, tenant_id, required=True) for tenant_id in tenant_ids]
+    return {
+        "ready": True,
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "tenant_count": len(contracts),
+        "file_count": sum(len(contract.get("files") or []) for contract in contracts if contract),
+        "generated_at": str(payload.get("generated_at") or ""),
+    }
+
+
 def resolve_crawler_tenant(root: Path, tenant_id: str, *, required: bool) -> dict[str, Any] | None:
     manifest_path = _manifest_path(root)
     if not manifest_path.is_file():
@@ -33,6 +59,7 @@ def resolve_crawler_tenant(root: Path, tenant_id: str, *, required: bool) -> dic
     if not isinstance(tenants, list):
         raise CrawlerManifestError("crawler_manifest_tenants_required")
     tenant_ids: list[str] = []
+    tenant_aliases_by_entry: list[tuple[str, ...]] = []
     directories: list[str] = []
     for item in tenants:
         if not isinstance(item, dict):
@@ -43,13 +70,19 @@ def resolve_crawler_tenant(root: Path, tenant_id: str, *, required: bool) -> dic
             raise CrawlerManifestError("crawler_manifest_tenant_id_required")
         if not declared_directory:
             raise CrawlerManifestError("crawler_tenant_directory_invalid")
-        tenant_ids.append(declared_tenant)
+        aliases = _manifest_tenant_ids(item)
+        tenant_ids.extend(aliases)
+        tenant_aliases_by_entry.append(aliases)
         directories.append(declared_directory)
     if len(tenant_ids) != len(set(tenant_ids)):
         raise CrawlerManifestError("crawler_tenant_directory_mapping_duplicate")
     if len(directories) != len(set(directories)):
         raise CrawlerManifestError("crawler_institution_directory_duplicate")
-    matches = [item for item in tenants if isinstance(item, dict) and str(item.get("tenant_id") or "").strip() == tenant_id]
+    matches = [
+        item
+        for item, aliases in zip(tenants, tenant_aliases_by_entry, strict=True)
+        if tenant_id in aliases
+    ]
     if len(matches) != 1:
         raise CrawlerManifestError("crawler_tenant_directory_mapping_missing" if not matches else "crawler_tenant_directory_mapping_duplicate")
     entry = dict(matches[0])
@@ -74,10 +107,30 @@ def resolve_crawler_tenant(root: Path, tenant_id: str, *, required: bool) -> dic
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "generated_at": str(payload["generated_at"]),
         "tenant_id": tenant_id,
+        "manifest_tenant_id": str(entry.get("tenant_id") or "").strip(),
+        "tenant_ids": list(_manifest_tenant_ids(entry)),
+        "institution_id": str(entry.get("institution_id") or "").strip(),
         "institution_directory": directory,
         "tenant_schema_version": schema_version,
         "files": [dict(item) for item in files if isinstance(item, dict)],
     }
+
+
+def _manifest_tenant_ids(item: dict[str, Any]) -> tuple[str, ...]:
+    primary = str(item.get("tenant_id") or "").strip()
+    if not primary:
+        raise CrawlerManifestError("crawler_manifest_tenant_id_required")
+    raw_aliases = item.get("tenant_ids")
+    if raw_aliases is None:
+        return (primary,)
+    if not isinstance(raw_aliases, list) or not raw_aliases:
+        raise CrawlerManifestError("crawler_manifest_tenant_aliases_invalid")
+    aliases = tuple(str(value or "").strip() for value in raw_aliases)
+    if any(not value for value in aliases) or len(aliases) != len(set(aliases)):
+        raise CrawlerManifestError("crawler_manifest_tenant_aliases_invalid")
+    if primary not in aliases:
+        raise CrawlerManifestError("crawler_manifest_primary_tenant_alias_missing")
+    return aliases
 
 
 def _manifest_path(root: Path) -> Path:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
@@ -257,7 +258,23 @@ class PostgreSQLStoresIntegrationTest(unittest.TestCase):
             with connection.cursor() as cursor:
                 if getattr(self.pool, "dialect", "postgresql") == "mysql":
                     cursor.execute("SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema=DATABASE()")
-                    expected_table_count = 106
+                    from backend.platform.database.mysql import (
+                        MYSQL_ADDITIVE_MIGRATION_DIR,
+                        MYSQL_SCHEMA_PATH,
+                        split_mysql_statements,
+                    )
+
+                    declared_tables: set[str] = set()
+                    for path in (MYSQL_SCHEMA_PATH, *sorted(MYSQL_ADDITIVE_MIGRATION_DIR.glob("*.sql"))):
+                        for statement in split_mysql_statements(path.read_text(encoding="utf-8")):
+                            match = re.match(
+                                r"^CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+`?([A-Za-z0-9_]+)`?",
+                                statement,
+                                flags=re.IGNORECASE,
+                            )
+                            if match:
+                                declared_tables.add(match.group(1))
+                    expected_table_count = len(declared_tables)
                 else:
                     cursor.execute("SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema='public'")
                     expected_table_count = 99

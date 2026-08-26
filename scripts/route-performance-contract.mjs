@@ -81,7 +81,7 @@ const checks = [
   [apiClient.includes("method !== \"GET\"") && apiClient.includes("clearApiReadCache"), "成功写操作必须让读取缓存失效"],
   [apiClient.includes("apiReadCacheGeneration") && apiClient.includes("apiReadInflight.clear()"), "写操作后旧并发读取不得重新写回缓存"],
   [apiClient.includes("sessionRefreshRequest") && apiClient.includes("refreshSessionOnce"), "并发 401 必须合并为一次会话刷新，避免旋转 refresh token 互相失效"],
-  [visualCards.includes('data-visual-report-data-loading="true"') && visualCards.includes("!rows.length && !errorsByDataset[card.dataset.id]"), "真实数据投影完成前不得把标准图表挂载为空态"],
+  [visualCards.includes('data-visual-report-data-loading="true"') && visualCards.includes("visualReportCardHasData") && visualCards.includes("waitingForFirstRows"), "真实数据投影完成前不得把标准图表挂载为空态"],
   [dataPreload.includes('fetchPageDataWorkspace({ tenantId, userId, pageCode: "dashboard" })') && dataPreload.includes('pageCode: "weekly_report"') && dataPreload.includes('pageCode: "institution_supervision"'), "经营页必须预取页面数据工作区而不是整包资产目录"],
   [layout.includes('preloadRouteDataPath("/dashboard", { tenantId, userId })') && layout.includes('visiblePaths.includes("/dashboard")') && layout.includes("requestIdleCallback(warmDashboardData"), "多机构分析工作区必须在授权导航空闲时提前准备"],
   [dataAssetApi.includes('return `${tenantId}:${userId}:${pageCode}`') && dataAssetApi.includes("pageDataWorkspaceMemoryKey(tenantId, userId, pageCode)"), "页面工作区内存必须同时隔离租户、用户与页面"],

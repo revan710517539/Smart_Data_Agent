@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent
 import { createPortal } from "react-dom";
 import { Database, GitBranch, GripVertical, Link2, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { apiErrorMessage } from "../../services/apiClient";
+import { askConfirm } from "../ui/ConfirmDialog";
 import {
   deleteDataAssetItem,
   fetchTableRelationshipCatalog,
@@ -29,6 +30,33 @@ const nodeWidth = 248;
 const fieldHeight = 28;
 const headerHeight = 54;
 
+function relationshipDraftError(nodes: TableRelationshipNode[], edges: TableRelationshipEdge[]) {
+  for (const edge of edges) {
+    const source = nodes.find((node) => node.id === edge.sourceNodeId);
+    const target = nodes.find((node) => node.id === edge.targetNodeId);
+    const sourceField = source?.fields.find((field) => field.fieldNameEn === edge.sourceField);
+    const targetField = target?.fields.find((field) => field.fieldNameEn === edge.targetField);
+    if (!sourceField || !targetField) return "关联字段已不在当前表结构中，请删除连线后重新连接。";
+    if (!sourceField.isPrimaryKey && !targetField.isPrimaryKey) return "关联字段必须至少一端是主键。当前连接的字段都不是主键；请先在「原始表」中标记主键，再连接主键字段。";
+    if ((sourceField.type || "string") !== (targetField.type || "string")) return "关联字段类型必须一致。";
+  }
+  const tenantCodes = new Map<string, Set<string>>();
+  for (const node of nodes) {
+    const codes = tenantCodes.get(node.tenantId) || new Set<string>();
+    for (const field of node.fields) {
+      const code = String(field.fieldNameEn || "").trim();
+      if (code) codes.add(code);
+    }
+    tenantCodes.set(node.tenantId, codes);
+  }
+  if (tenantCodes.size > 1) {
+    const [first, ...rest] = [...tenantCodes.values()];
+    const common = rest.reduce((current, codes) => new Set([...current].filter((code) => codes.has(code))), first);
+    if (!common.size) return "跨机构表关系要求各机构数据表具有相同字段结构，才能用于多机构页面。当前两侧表没有同名字段，请选择结构一致的数据表。";
+  }
+  return "";
+}
+
 export function TableRelationshipWorkspace({
   tenantId,
   userId,
@@ -47,7 +75,7 @@ export function TableRelationshipWorkspace({
   const pagination = useClientPagination(shown);
 
   const remove = async (relationship: TableRelationshipAsset) => {
-    if (!window.confirm(`确认删除表关系“${relationship.name}”？已引用该关系的页面数据将停止读取。`)) return;
+    if (!(await askConfirm({ title: "删除表关系", description: `确定删除表关系「${relationship.name}」？`, hint: "已引用该关系的页面数据将停止读取。此操作不可撤销。" }))) return;
     try {
       await deleteDataAssetItem({ tenantId, userId, itemType: "table_relationship", itemId: relationship.id });
       onNotice("表关系已删除；多机构数据候选已同步失效。");
@@ -193,6 +221,8 @@ function TableRelationshipModal({ tenantId, userId, initial, onClose, onSaved }:
     if (!name.trim()) { setError("请输入表关系名称。"); return; }
     if (nodes.length < 2) { setError("请至少拖入两张数据表。"); return; }
     if (!edges.length) { setError("请至少建立一条主键关系。"); return; }
+    const draftError = relationshipDraftError(nodes, edges);
+    if (draftError) { setError(draftError); return; }
     setSaving(true);
     try {
       const response = await saveDataAssetItem({

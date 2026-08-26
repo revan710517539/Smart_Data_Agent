@@ -25,7 +25,11 @@ def handle_tenants_create(handler: Any) -> None:
         payload = handler._read_json()
         context = handler._request_context(payload=payload)
         _require_super_admin(handler, context)
-        tenant = create_tenant(handler.services, str(payload.get("name") or payload.get("tenant") or ""))
+        tenant = create_tenant(
+            handler.services,
+            str(payload.get("name") or payload.get("tenant") or ""),
+            actor_user_id=context.user_id,
+        )
         handler._write_audit(context, "tenancy.tenant.create", "tenant", tenant["id"], {"name": tenant["name"]})
         handler._send_json({"tenant": tenant, "tenants": list_active_tenants(handler.services)})
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.
@@ -54,7 +58,7 @@ def handle_tenants_delete(handler: Any, query: str) -> None:
         context = handler._request_context(params=params)
         _require_super_admin(handler, context)
         tenant_id = first_query_value(params, "tenant_id") or first_query_value(params, "id") or ""
-        tenant = delete_tenant(handler.services, tenant_id)
+        tenant = delete_tenant(handler.services, tenant_id, actor_user_id=context.user_id)
         handler._write_audit(context, "tenancy.tenant.delete", "tenant", tenant["id"], {"name": tenant["name"]})
         handler._send_json({"tenant": tenant, "deleted": True, "tenants": list_active_tenants(handler.services)})
     except Exception as exc:  # pragma: no cover - covered at HTTP boundary.

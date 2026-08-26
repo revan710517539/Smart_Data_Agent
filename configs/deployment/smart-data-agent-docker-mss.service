@@ -1,0 +1,18 @@
+[Unit]
+Description=Smart Data Agent direct-Docker Development controller
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/sysconfig/smart-data-agent
+ExecStartPre=/usr/bin/docker container inspect ${SMART_DATA_AGENT_CONTAINER_NAME}
+ExecStart=/usr/bin/docker start --attach ${SMART_DATA_AGENT_CONTAINER_NAME}
+ExecStop=/usr/bin/docker stop --time 90 ${SMART_DATA_AGENT_CONTAINER_NAME}
+Restart=always
+RestartSec=5
+TimeoutStartSec=900
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

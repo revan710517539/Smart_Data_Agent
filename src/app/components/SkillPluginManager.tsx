@@ -9,6 +9,7 @@ import {
   type ExternalToolAsset,
 } from "../services/dataAssetApi";
 import { apiErrorMessage } from "../services/apiClient";
+import { askConfirm } from "./ui/ConfirmDialog";
 import { analysisSkillDisplayLocation, displayedAnalysisSkills } from "../services/analysisSkillCatalog";
 import { operatingTenantNames } from "../data/operatingTenants";
 import { DataPageSelector, useClientPagination } from "./ui/DataPageSelector";
@@ -113,7 +114,7 @@ export function SkillPluginManager() {
   };
 
   const remove = async (skill: AnalysisSkillAsset) => {
-    if (!window.confirm(`确认删除“${skill.name}”吗？`)) return;
+    if (!(await askConfirm({ title: "删除 Skill", description: `确定删除「${skill.name}」？`, hint: "此操作不可撤销。" }))) return;
     try {
       await deleteDataAssetItem({ tenantId, userId, itemType: "analysis_skill", itemId: skill.id });
       setNotice("Skill 已删除。");

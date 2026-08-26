@@ -1,7 +1,7 @@
 {
   "group_id": "engineering",
   "group_name": "工程开发",
-  "source_file": "/Users/revan/Documents/Agent_Teams/01_工程开发_Engineering.zip",
+  "source_file": "/path/to/01_工程开发_Engineering.zip",
   "mission": "把 PRD、技术文档、用户需求转化为可执行、可验收、可持续迭代的工程任务，避免只有页面、没有数据库、没有后端、没有工作流、没有测试的玩具版交付。",
   "controller_agent": "engineering_controller",
   "agents": [

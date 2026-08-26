@@ -3,22 +3,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import net from "node:net";
+import { chromium } from "playwright";
+import { browserExecutableVersion, resolveBrowserExecutable } from "./browser-executable.mjs";
 
 const root = process.cwd();
-const chromePath = process.env.CHROME_PATH || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const browserExecutable = resolveBrowserExecutable();
+const chromePath = browserExecutable.path;
+const chromeVersion = browserExecutableVersion(chromePath);
 const authStorageKey = "smart_data_agent_auth_session_v1";
 const selectedInstitutionStorageKey = "smart_data_agent_selected_institution_v1";
 const testDevelopmentLoginPassword = "123456";
 
 async function main() {
+  console.log(JSON.stringify({ event: "browser_executable_resolved", ...browserExecutable, version: chromeVersion }));
   const apiPort = await freePort();
   const vitePort = await freePort();
-  const debugPort = await freePort();
   const workDir = await mkdtemp(join(tmpdir(), "sda-frontend-permissions-"));
   const apiUrl = `http://127.0.0.1:${apiPort}`;
   const appUrl = `http://127.0.0.1:${vitePort}`;
   const customerListPath = join(workDir, "customer-list.xlsx");
   const processes = [];
+  let browser = null;
   const reportIngressBindings = JSON.stringify({ bindings: [{
     id: "frontend-report-smoke",
     token: "frontend-report-smoke-token",
@@ -32,7 +37,7 @@ async function main() {
   await createCustomerListWorkbook(customerListPath);
   const api = spawn(
     "uv",
-    ["run", "python", "-m", "backend.platform.api.server", "--host", "127.0.0.1", "--port", String(apiPort), "--test-sqlite-db", join(workDir, "api.sqlite")],
+    ["run", "--frozen", "python", "-m", "backend.platform.api.server", "--host", "127.0.0.1", "--port", String(apiPort), "--test-sqlite-db", join(workDir, "api.sqlite")],
     {
       cwd: root,
       env: {
@@ -60,37 +65,35 @@ async function main() {
   processes.push(vite);
   await waitForHttp(appUrl, 45_000);
 
-  const chrome = spawn(
-    chromePath,
-    [
-      "--headless=new",
-      `--remote-debugging-port=${debugPort}`,
-      `--user-data-dir=${join(workDir, "chrome-profile")}`,
-      "--disable-gpu",
-      "--no-first-run",
-      "--no-default-browser-check",
-      "about:blank",
-    ],
-    { stdio: ["ignore", "pipe", "pipe"] },
-  );
-  processes.push(chrome);
-  await waitForHttp(`http://127.0.0.1:${debugPort}/json/version`);
-
-  const page = await openPage(debugPort, `${appUrl}/login`);
-  const cdp = new CDPClient(page.webSocketDebuggerUrl);
+  browser = await chromium.launch({
+    executablePath: chromePath,
+    headless: true,
+    args: ["--disable-gpu", "--no-first-run", "--no-default-browser-check"],
+  });
+  const browserContext = await browser.newContext({ viewport: { width: 1440, height: 960 } });
+  const browserPage = await browserContext.newPage();
+  const cdpSession = await browserContext.newCDPSession(browserPage);
+  const cdp = new CDPClient(browserPage, cdpSession);
   await cdp.open();
+  console.log(JSON.stringify({ event: "browser_cdp_opened" }));
   await cdp.send("Page.enable");
+  console.log(JSON.stringify({ event: "browser_cdp_page_enabled" }));
   await cdp.send("Network.enable");
+  console.log(JSON.stringify({ event: "browser_cdp_network_enabled" }));
   await cdp.send("Runtime.enable");
+  console.log(JSON.stringify({ event: "browser_cdp_runtime_enabled" }));
   await cdp.send("Log.enable");
+  console.log(JSON.stringify({ event: "browser_cdp_log_enabled" }));
   await cdp.send("Emulation.setDeviceMetricsOverride", {
     width: 1440,
     height: 960,
     deviceScaleFactor: 1,
     mobile: false,
   });
-  await navigate(cdp, `${appUrl}/login`);
+  console.log(JSON.stringify({ event: "browser_cdp_emulation_enabled" }));
+  await navigate(cdp, `${appUrl}/login`, 30_000);
   await waitForEval(cdp, `location.pathname === "/login" && document.readyState !== "loading"`);
+  console.log(JSON.stringify({ event: "browser_login_loaded" }));
   await delay(500);
   const unauthenticatedProtectedRequests = await cdp.evaluate(`
     performance.getEntriesByType("resource")
@@ -102,6 +105,7 @@ async function main() {
   }
 
   await installSession(cdp, appUrl, "xujingbo-jk@qifu.com", "华兴银行");
+  console.log(JSON.stringify({ event: "browser_session_installed" }));
   const restoredCookieUser = await cdp.evaluate(
     `fetch("/api/auth/me", { credentials: "include" }).then(async (response) => response.ok ? (await response.json()).user?.id : "")`,
     true,
@@ -186,11 +190,12 @@ async function main() {
     `JSON.parse(localStorage.getItem(${JSON.stringify(authStorageKey)}))?.user?.id === "u_super_admin"`,
     "the cached session marker must be revalidated against the HttpOnly session",
   );
+  await verifyNewTenantSessionSwitch(cdp, appUrl);
   await cdp.evaluate(`[...document.querySelectorAll("nav button")].find((button) => button.textContent.trim() === "自助分析")?.click()`);
   await assertEval(cdp, `(() => { const group = [...document.querySelectorAll("nav button")].find((button) => button.textContent.trim() === "自助分析")?.parentElement; return [...(group?.querySelectorAll("a") || [])].map((link) => link.getAttribute("href")).join("|") === "/self-analysis/visual-reports|/self-analysis/query|/self-analysis/config|/agent/skills"; })()`, "Visual reports must precede intelligent analysis and Skill plugins must follow analysis configuration under self analysis");
   await assertEval(cdp, `(() => { const nav = document.querySelector("nav"); const business = [...(nav?.querySelectorAll("button") || [])].find((button) => button.textContent.trim() === "经营分析"); const reports = nav?.querySelector('a[href="/self-analysis/reports"]'); const self = [...(nav?.querySelectorAll("button") || [])].find((button) => button.textContent.trim() === "自助分析"); return Boolean(business && reports && self && (business.compareDocumentPosition(reports) & Node.DOCUMENT_POSITION_FOLLOWING) && (reports.compareDocumentPosition(self) & Node.DOCUMENT_POSITION_FOLLOWING)); })()`, "My reports must be a top-level entry between business analysis and self analysis");
   await cdp.evaluate(`[...document.querySelectorAll("nav button")].find((button) => button.textContent.trim() === "任务工作台")?.click()`);
-  await assertEval(cdp, `(() => { const group = [...document.querySelectorAll("nav button")].find((button) => button.textContent.trim() === "任务工作台")?.parentElement; return [...(group?.querySelectorAll("a") || [])].map((link) => link.getAttribute("href")).join("|") === "/agent/todos|/agent/tasks|/agent/message-board"; })()`, "task workbench must render todos, automation tasks and message-board management, without Skill plugins");
+  await assertEval(cdp, `(() => { const group = [...document.querySelectorAll("nav button")].find((button) => button.textContent.trim() === "任务工作台")?.parentElement; return [...(group?.querySelectorAll("a") || [])].map((link) => link.getAttribute("href")).join("|") === "/agent/todos|/agent/tasks|/agent/message-board|/agent/interaction-analytics"; })()`, "super-admin task workbench must render todos, automation tasks, message-board management and interaction analytics, without Skill plugins");
   await configureApplicationModel(cdp, appUrl, "intelligent_analysis_reasoning", "经营分析中转站A", "中转站", ["gpt-5.5", "deepseek-v4-flash"], "model_analysis_relay_a");
   await configureApplicationModel(cdp, appUrl, "intelligent_analysis_reasoning", "经营分析中转站B", "中转站", ["qwen-plus"], "model_analysis_relay_b");
   await configureApplicationModel(cdp, appUrl, "intelligent_analysis_reasoning", "Claude 官方模型", "官方网站", ["claude-sonnet-4"], "model_analysis_official");
@@ -479,7 +484,9 @@ async function main() {
   await waitForEval(cdp, `document.querySelector('[role="dialog"][aria-label="新增分析配置"] [role="alert"]')?.textContent.includes("请填写快捷键名称和分析问题")`);
   await cdp.evaluate(`(() => { const dialog = document.querySelector('[role="dialog"][aria-label="新增分析配置"]'); const [title] = dialog.querySelectorAll("input"); const [query] = dialog.querySelectorAll("textarea"); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(title, "自动化测试分析配置"); title.dispatchEvent(new Event("input", { bubbles: true })); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(query, "测试保存后的配置回读"); query.dispatchEvent(new Event("input", { bubbles: true })); [...dialog.querySelectorAll("button")].find((button) => button.textContent.trim() === "保存")?.click(); })()`);
   await waitForEval(cdp, `!document.querySelector('[role="dialog"][aria-label="新增分析配置"]') && document.body.innerText.includes("自动化测试分析配置")`);
-  await cdp.evaluate(`window.confirm = () => true; document.querySelector('button[aria-label="删除自动化测试分析配置"]')?.click()`);
+  await cdp.evaluate(`document.querySelector('button[aria-label="删除自动化测试分析配置"]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-app-confirm-dialog="true"]'))`);
+  await cdp.evaluate(`[...document.querySelectorAll('[data-app-confirm-dialog="true"] button')].find((button) => button.textContent.trim() === "确认删除")?.click()`);
   await waitForEval(cdp, `!document.querySelector('button[aria-label="删除自动化测试分析配置"]')`);
 
   const importedReport = await cdp.evaluate(`
@@ -759,11 +766,60 @@ async function main() {
     await cdp.close();
     console.log("frontend permission smoke passed");
   } finally {
+    if (browser) {
+      await Promise.race([
+        browser.close().catch(() => undefined),
+        delay(10_000),
+      ]);
+    }
     for (const child of processes.reverse()) {
       await stopChild(child);
     }
     await rmWithRetry(workDir);
   }
+}
+
+async function verifyNewTenantSessionSwitch(cdp, appUrl) {
+  const tenantName = "浏览器新租户验收银行";
+  await cdp.evaluate(`(() => {
+    const card = document.querySelector('[data-tenant-management="true"]');
+    [...(card?.querySelectorAll('button') || [])].find((button) => button.textContent.trim() === '新增')?.click();
+  })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-tenant-management="true"] input[placeholder="输入银行/机构名称"]'))`);
+  await cdp.evaluate(`(() => {
+    const card = document.querySelector('[data-tenant-management="true"]');
+    const input = card?.querySelector('input[placeholder="输入银行/机构名称"]');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(tenantName)});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    [...card.querySelectorAll('button')].find((button) => button.textContent.trim() === '保存')?.click();
+  })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-tenant-row=${JSON.stringify(tenantName)}]'))`);
+  await assertEval(cdp, `document.querySelector('[data-tenant-management="true"]')?.innerText.includes('已新增租户')`, "tenant creation must read back in the management card");
+
+  await cdp.evaluate(`document.querySelector('aside[data-agent-sidebar] button[aria-expanded]')?.click()`);
+  await waitForEval(cdp, `[...document.querySelectorAll('aside[data-agent-sidebar] button')].some((button) => button.textContent.trim() === ${JSON.stringify(tenantName)})`);
+  await cdp.evaluate(`[...document.querySelectorAll('aside[data-agent-sidebar] button')].find((button) => button.textContent.trim() === ${JSON.stringify(tenantName)})?.click()`);
+  await waitForEval(cdp, `JSON.parse(localStorage.getItem(${JSON.stringify(authStorageKey)}))?.institution === ${JSON.stringify(tenantName)}`, 30_000);
+  const switchedSession = await cdp.evaluate(`fetch('/api/auth/me', { credentials: 'include' }).then(async (response) => response.ok ? await response.json() : null)`, true);
+  if (switchedSession?.institution !== tenantName) throw new Error(`server session did not switch to the new tenant: ${JSON.stringify(switchedSession)}`);
+  await waitForEval(cdp, `document.querySelector('aside[data-agent-sidebar] button[aria-expanded]')?.innerText.includes(${JSON.stringify(tenantName)})`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-system-config-summary="true"]')) && Boolean(document.querySelector('[data-tenant-management="true"]'))`);
+  await assertEval(cdp, `!document.body.innerText.includes('Authentication is required') && !document.body.innerText.includes('系统接入配置加载失败')`, "new tenant config must not render the stale-session authentication error");
+
+  await navigate(cdp, `${appUrl}/data-assets/metrics`);
+  await waitForEval(cdp, `document.body.innerText.includes(${JSON.stringify(`${tenantName}尚未配置指标，请由管理员新增或批量导入。`)})`);
+  await assertEval(cdp, `!document.body.innerText.includes('Authentication is required') && !document.body.innerText.includes('指标字典加载失败')`, "new tenant metric page must render a governed empty state instead of an authentication failure");
+
+  await navigate(cdp, `${appUrl}/settings/config`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-tenant-management="true"]'))`);
+  await cdp.evaluate(`document.querySelector('aside[data-agent-sidebar] button[aria-expanded]')?.click()`);
+  await waitForEval(cdp, `[...document.querySelectorAll('aside[data-agent-sidebar] button')].some((button) => button.textContent.trim() === '华兴银行')`);
+  await cdp.evaluate(`[...document.querySelectorAll('aside[data-agent-sidebar] button')].find((button) => button.textContent.trim() === '华兴银行')?.click()`);
+  await waitForEval(cdp, `JSON.parse(localStorage.getItem(${JSON.stringify(authStorageKey)}))?.institution === '华兴银行'`, 30_000);
+  const restoredSession = await cdp.evaluate(`fetch('/api/auth/me', { credentials: 'include' }).then(async (response) => response.ok ? await response.json() : null)`, true);
+  if (restoredSession?.institution !== "华兴银行") throw new Error(`server session did not switch back to 华兴银行: ${JSON.stringify(restoredSession)}`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-system-config-summary="true"]')) && !document.body.innerText.includes('Authentication is required')`);
+  console.log("new tenant create/switch/config/metric empty-state browser flow passed");
 }
 
 async function runFullRouteSmoke(cdp, appUrl) {
@@ -1342,7 +1398,7 @@ async function verifyGlobalMessageBoardShortcut(cdp, appUrl) {
 }
 
 async function navigate(cdp, url, timeoutMs = 10_000) {
-  await cdp.send("Page.navigate", { url });
+  await cdp.navigate(url, timeoutMs);
   await waitForEval(cdp, "document.readyState === 'complete' || document.readyState === 'interactive'", timeoutMs);
   await delay(500);
 }
@@ -1444,46 +1500,28 @@ async function waitForEval(cdp, expression, timeoutMs = 30000) {
   throw new Error(`timed out waiting for expression: ${expression}; page=${JSON.stringify(pageState)}; recentResponses=${JSON.stringify(recentResponses)}`);
 }
 
-async function openPage(debugPort, url) {
-  const response = await fetch(`http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent(url)}`, { method: "PUT" });
-  if (!response.ok) throw new Error(`failed to open Chrome target: ${response.status}`);
-  return response.json();
-}
-
 class CDPClient {
-  constructor(wsUrl) {
-    this.wsUrl = wsUrl;
-    this.nextId = 1;
-    this.pending = new Map();
+  constructor(page, session) {
+    this.page = page;
+    this.session = session;
     this.events = [];
   }
 
-  open() {
-    return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(this.wsUrl);
-      this.ws.addEventListener("open", resolve, { once: true });
-      this.ws.addEventListener("error", reject, { once: true });
-      this.ws.addEventListener("message", (event) => {
-        const message = JSON.parse(event.data);
-        if (!message.id) {
-          this.events.push(message);
-          return;
-        }
-        const pending = this.pending.get(message.id);
-        if (!pending) return;
-        this.pending.delete(message.id);
-        if (message.error) pending.reject(new Error(message.error.message));
-        else pending.resolve(message.result);
-      });
-    });
+  async open() {
+    for (const method of ["Runtime.exceptionThrown", "Runtime.consoleAPICalled", "Network.responseReceived"]) {
+      this.session.on(method, (params) => this.events.push({ method, params }));
+    }
   }
 
-  send(method, params = {}) {
-    const id = this.nextId++;
-    this.ws.send(JSON.stringify({ id, method, params }));
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-    });
+  send(method, params = {}, timeoutMs = 15_000) {
+    return Promise.race([
+      this.session.send(method, params),
+      delay(timeoutMs).then(() => { throw new Error(`timed out waiting for CDP command ${method}`); }),
+    ]);
+  }
+
+  navigate(url, timeoutMs) {
+    return this.page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   }
 
   async evaluate(expression, awaitPromise = false) {
@@ -1504,8 +1542,8 @@ class CDPClient {
     return result.result?.value;
   }
 
-  close() {
-    this.ws?.close();
+  async close() {
+    await this.session.detach().catch(() => undefined);
   }
 }
 
@@ -1570,3 +1608,8 @@ async function rmWithRetry(path) {
 }
 
 await main();
+// Chrome/CDP can leave a platform WebSocket handle alive after the browser,
+// API and Vite children have all been stopped. Reaching this line proves the
+// full smoke and finally cleanup completed; terminate deterministically so the
+// aggregate test gate receives the successful exit instead of hanging.
+process.exit(0);

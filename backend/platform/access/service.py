@@ -924,6 +924,7 @@ class AccessControlService:
             hinted_label = _tenant_label(_tenant_id_from_label(hinted))
             if hinted_label in selectable_tenants:
                 return _tenant_id_from_label(hinted_label)
+            raise PermissionError("session_tenant_not_authorized")
         return _tenant_id_from_label(selectable_tenants[0])
 
 

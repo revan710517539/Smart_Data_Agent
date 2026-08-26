@@ -214,10 +214,35 @@ export async function runSelfAnalysis({
 export type AsyncAnalysisRun = {
   automation_run_id: string;
   status: "queued" | "running" | "retry_wait" | "succeeded" | "failed" | "cancelled";
-  result_refs?: Array<{ type?: string; id?: string; hash?: string }>;
+  result_refs?: Array<{
+    type?: string;
+    id?: string;
+    hash?: string;
+    details?: AnalysisContractErrorDetails;
+  }>;
   error_code?: string | null;
   error_summary?: string | null;
+  error_details?: AnalysisContractErrorDetails;
   progress_steps?: AnalysisProgressStep[];
+};
+
+export type AnalysisContractErrorDetails = {
+  error: string;
+  stage: string;
+  missingFields: Array<{ canonicalId: string; displayName: string; expectedKey: string }>;
+  fieldDifferences: Array<{
+    canonicalId: string;
+    displayName: string;
+    change: string;
+    previous: string;
+    current: string;
+  }>;
+  requiredFields: string[];
+  availableFields: string[];
+  asset: Record<string, string>;
+  retryable: boolean;
+  userAction: string;
+  requestId: string;
 };
 
 export type AnalysisProgressStep = {

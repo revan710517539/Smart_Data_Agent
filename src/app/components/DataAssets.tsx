@@ -73,7 +73,6 @@ import {
   fetchDataCrawlerSchedule,
   fetchDataCrawlerScheduleExecution,
   fetchDataCrawlerScheduleStatuses,
-  refreshDataCrawlerSchedule,
   saveDataCrawlerSchedule,
   testDataCrawlerSchedule,
   type DataCrawlerScheduleDraft,
@@ -106,9 +105,10 @@ import {
   uploadRawDataFile,
 } from "../services/dataAssetApi";
 import { customerDetailTableKey, PageDataAssetList, PageDataCreateButton, PageDataCreateModal } from "./data-assets/PageDataAssets";
-import { pageDataScope } from "./page-data/assignment";
+import { pageDataAvailableForRawCatalog, pageDataScope } from "./page-data/assignment";
 import { TableRelationshipWorkspace } from "./data-assets/TableRelationshipBuilder";
 import { DataPageSelector } from "./ui/DataPageSelector";
+import { ConfirmDialog, askConfirm } from "./ui/ConfirmDialog";
 import { Calendar } from "./ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
@@ -139,6 +139,7 @@ const emptyMetricForm: MetricForm = {
   systemSource: "",
   statTime: "",
   referenceDocument: "",
+  alignmentStatus: "unaligned",
   visibleInstitutions: [],
   visibleRoles: [],
 };
@@ -171,6 +172,7 @@ const sectionCopy: Record<
 
 const metricDictionaryStorageKey = "smart_data_agent_metric_dictionary_v2";
 const metricPageSize = 10;
+const metricOperationColumnWidth = 120;
 const dataTablePageSize = 10;
 
 const metricColumns: {
@@ -329,6 +331,7 @@ export function DataAssets() {
   const [metricImportNotice, setMetricImportNotice] = useState("");
   const [metricImporting, setMetricImporting] = useState(false);
   const [versionMetric, setVersionMetric] = useState<MetricDictionaryItem | null>(null);
+  const [metricAlignmentSavingId, setMetricAlignmentSavingId] = useState<string | null>(null);
 
   const filteredMetrics = useMemo(
     () => metrics.filter((metric) => matchesMetric(metric, searchTerm)),
@@ -512,6 +515,7 @@ export function DataAssets() {
   };
 
   const deleteMetric = async (metric: MetricDictionaryItem) => {
+    if (!(await askConfirm({ title: "删除指标", description: `确定删除指标「${metric.metricName}」？`, hint: "确认后将从指标字典中删除，操作不可撤销。" }))) return;
     const previousMetrics = metrics;
     setMetrics((current) => current.filter((item) => item.metricId !== metric.metricId));
     try {
@@ -527,6 +531,34 @@ export function DataAssets() {
         setMetricDataSource("unavailable");
         setMetricNotice(`${demoFallbackDisabledMessage("指标删除")} ${apiErrorMessage(error, "未知错误")}`);
       }
+    }
+  };
+
+  const updateMetricAlignment = async (metric: MetricDictionaryItem, alignmentStatus: "aligned" | "unaligned") => {
+    if (metricAlignmentSavingId || (metric.alignmentStatus || "unaligned") === alignmentStatus) return;
+    const previousMetric = metric;
+    const nextMetric = { ...metric, alignmentStatus };
+    setMetricAlignmentSavingId(metric.metricId);
+    setMetrics((current) => current.map((item) => item.metricId === metric.metricId ? nextMetric : item));
+    try {
+      const response = await saveMetricDictionaryItem({
+        tenantId: metric.tenantId || tenantId,
+        userId,
+        metric: nextMetric,
+      });
+      setMetrics((current) => current.map((item) => item.metricId === metric.metricId ? response.metric : item));
+      setMetricDataSource("backend");
+      setMetricNotice(`指标「${metric.metricName}」已标记为${alignmentStatus === "aligned" ? "已对齐" : "未对齐"}。`);
+    } catch (error) {
+      if (isDemoFallbackEnabled()) {
+        setMetricDataSource("local");
+        setMetricNotice(`对齐状态已保存在 demo 本地缓存，后端同步失败：${apiErrorMessage(error, "未知错误")}`);
+      } else {
+        setMetrics((current) => current.map((item) => item.metricId === metric.metricId ? previousMetric : item));
+        setMetricNotice(`对齐状态保存失败：${apiErrorMessage(error, "未知错误")}`);
+      }
+    } finally {
+      setMetricAlignmentSavingId(null);
     }
   };
 
@@ -639,6 +671,8 @@ export function DataAssets() {
           canEditMetric={(metric) => canEditMetric(metric, { isSuperAdmin, tenantId, userId })}
           canDeleteMetric={(metric) => canEditMetric(metric, { isSuperAdmin, tenantId, userId })}
           onVersions={setVersionMetric}
+          alignmentSavingId={metricAlignmentSavingId}
+          onAlignmentChange={updateMetricAlignment}
         />
       )}
 
@@ -708,6 +742,8 @@ function MetricManagement({
   canEditMetric,
   canDeleteMetric,
   onVersions,
+  alignmentSavingId,
+  onAlignmentChange,
 }: {
   metrics: MetricDictionaryItem[];
   filteredMetrics: MetricDictionaryItem[];
@@ -724,6 +760,8 @@ function MetricManagement({
   canEditMetric: (metric: MetricDictionaryItem) => boolean;
   canDeleteMetric: (metric: MetricDictionaryItem) => boolean;
   onVersions: (metric: MetricDictionaryItem) => void;
+  alignmentSavingId: string | null;
+  onAlignmentChange: (metric: MetricDictionaryItem, alignmentStatus: "aligned" | "unaligned") => void | Promise<void>;
 }) {
   const [columnWidths, setColumnWidths] = useState<Record<MetricColumnKey, number>>(defaultColumnWidths);
   const completeValueLogicCount = metrics.filter((metric) => metric.valueLogic.trim()).length;
@@ -732,7 +770,14 @@ function MetricManagement({
     : "0%";
   const referencedFieldCount = extractReferencedFields(metrics).size;
   const totalTableWidth =
-    metricColumns.reduce((total, column) => total + columnWidths[column.key], 0) + 92;
+    metricColumns.reduce((total, column) => total + columnWidths[column.key], 0) + metricOperationColumnWidth;
+  const emptyMetricMessage = metrics.length
+    ? "没有匹配的指标"
+    : dataSource === "syncing"
+      ? "正在加载当前机构指标…"
+      : dataSource === "unavailable"
+        ? "指标字典暂不可用，请根据页面提示重试。"
+        : `${institutionName}尚未配置指标，请由管理员新增或批量导入。`;
 
   const startColumnResize = (key: MetricColumnKey, event: MouseEvent<HTMLSpanElement>) => {
     event.preventDefault();
@@ -781,7 +826,7 @@ function MetricManagement({
                     />
                   </th>
                 ))}
-                <th className="sticky right-0 min-w-[92px] bg-[#fafbfc] px-3 py-2.5 text-left font-normal">
+                <th className="sticky right-0 w-[120px] min-w-[120px] bg-[#fafbfc] px-3 py-2.5 text-left font-normal">
                   操作
                 </th>
               </tr>
@@ -799,33 +844,47 @@ function MetricManagement({
                     </td>
                   ))}
                   <td className="sticky right-0 bg-white px-3 py-2.5 align-top">
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => onVersions(metric)}
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#e5e5ea] text-[#636366] hover:bg-[#f2f2f7]"
-                        aria-label={`查看${metric.metricName}版本`}
+                    <div className="w-24 space-y-1.5" data-metric-action-stack="true">
+                      <div className="grid grid-cols-3 gap-1.5" data-metric-primary-actions="true">
+                        <button
+                          type="button"
+                          onClick={() => onVersions(metric)}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#e5e5ea] text-[#636366] hover:bg-[#f2f2f7]"
+                          aria-label={`查看${metric.metricName}版本`}
+                        >
+                          <History className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onEdit(metric)}
+                          disabled={!canEditMetric(metric)}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#e5e5ea] text-[#636366] hover:bg-[#f2f2f7] disabled:cursor-not-allowed disabled:opacity-30"
+                          aria-label={`编辑${metric.metricName}`}
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDelete(metric)}
+                          disabled={!canDeleteMetric(metric)}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#e5e5ea] text-[#8a8a8e] hover:bg-[#fff0f0] hover:text-[#d93025] disabled:cursor-not-allowed disabled:opacity-30"
+                          aria-label={`删除${metric.metricName}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <select
+                        value={metric.alignmentStatus === "aligned" ? "aligned" : "unaligned"}
+                        onChange={(event) => void onAlignmentChange(metric, event.target.value as "aligned" | "unaligned")}
+                        disabled={!canEditMetric(metric) || Boolean(alignmentSavingId)}
+                        aria-label={`${metric.metricName}对齐状态`}
+                        aria-busy={alignmentSavingId === metric.metricId}
+                        className="h-7 w-24 rounded-md border border-[#e5e5ea] bg-white px-2 text-[10px] text-[#636366] outline-none transition-colors hover:border-[#c7c7cc] focus:border-[#8fbda4] disabled:cursor-not-allowed disabled:bg-[#f7f7f8] disabled:text-[#aeaeb2]"
+                        data-metric-alignment-select="true"
                       >
-                        <History className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onEdit(metric)}
-                        disabled={!canEditMetric(metric)}
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#e5e5ea] text-[#636366] hover:bg-[#f2f2f7]"
-                        aria-label={`编辑${metric.metricName}`}
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onDelete(metric)}
-                        disabled={!canDeleteMetric(metric)}
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#e5e5ea] text-[#8a8a8e] hover:bg-[#fff0f0] hover:text-[#d93025] disabled:cursor-not-allowed disabled:opacity-30"
-                        aria-label={`删除${metric.metricName}`}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                        <option value="unaligned">未对齐</option>
+                        <option value="aligned">已对齐</option>
+                      </select>
                     </div>
                   </td>
                 </tr>
@@ -833,7 +892,7 @@ function MetricManagement({
               {!shownMetrics.length && (
                 <tr>
                   <td colSpan={metricColumns.length + 1} className="px-3 py-10 text-center text-[12px] text-[#aeaeb2]">
-                    没有匹配的指标
+                    {emptyMetricMessage}
                   </td>
                 </tr>
               )}
@@ -1212,6 +1271,39 @@ const emptyAssetBundle: DataAssetBundle = {
       count: {},
 };
 
+function catalogTenantId(value: string) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  return normalized.startsWith("tenant:") || normalized === "tenant_demo" ? normalized : `tenant:${normalized}`;
+}
+
+function currentRawSourceKeys(tables: RawTableAsset[]) {
+  return new Set(tables.map((item) => String(item.sourceKey || "").trim()).filter(Boolean));
+}
+
+function localSourceKeys(entries: Array<{ tenantId?: string; sourceKey?: string }>, tenantId: string) {
+  const current = catalogTenantId(tenantId);
+  return entries.flatMap((entry) => {
+    const sourceKey = String(entry.sourceKey || "").trim();
+    if (!sourceKey) return [];
+    const owner = catalogTenantId(String(entry.tenantId || ""));
+    if (owner && owner !== current) return [];
+    return [sourceKey];
+  });
+}
+
+function tableRelationshipAvailableForRawCatalog(item: TableRelationshipAsset, tenantId: string, sourceKeys: Set<string>) {
+  const nodes = item.nodes || [];
+  if (!nodes.length) return false;
+  if (item.relationshipScope !== "multi_institution") {
+    const keys = nodes.map((node) => String(node.sourceKey || "").trim()).filter(Boolean);
+    return keys.length > 0 && keys.every((key) => sourceKeys.has(key));
+  }
+  const tenants = new Set(nodes.map((node) => catalogTenantId(String(node.tenantId || ""))).filter(Boolean));
+  const localKeys = localSourceKeys(nodes, tenantId);
+  return tenants.size >= 2 && localKeys.length > 0 && localKeys.every((key) => sourceKeys.has(key));
+}
+
 function useDataAssetBundle(tenantId: string, userId: string, scope?: "knowledge") {
   const [bundle, setBundle] = useState<DataAssetBundle>(emptyAssetBundle);
   const [notice, setNotice] = useState("资产配置同步中...");
@@ -1329,9 +1421,12 @@ function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { search
   const keyword = searchTerm.trim().toLowerCase();
   const rawTables = bundle.raw_tables.filter((item) => assetMatches(item, keyword)).sort(sortAssetNewestFirst);
   const topicTables = bundle.topic_tables.filter((item) => assetMatches(item, keyword)).sort(sortAssetNewestFirst);
-  const singlePageDataAssets = bundle.page_data.filter((item) => pageDataScope(item) === "single_institution" && assetMatches(item, keyword)).sort(sortAssetNewestFirst);
-  const multiPageDataAssets = bundle.page_data.filter((item) => pageDataScope(item) === "multi_institution" && assetMatches(item, keyword)).sort(sortAssetNewestFirst);
-  const customerSegmentPageDataAssets = bundle.page_data.filter((item) => pageDataScope(item) === "customer_segment" && assetMatches(item, keyword)).sort(sortAssetNewestFirst);
+  const rawSourceKeys = currentRawSourceKeys(bundle.raw_tables);
+  const catalogPageData = bundle.page_data.filter((item) => pageDataAvailableForRawCatalog(item, tenantId, rawSourceKeys));
+  const catalogRelationships = bundle.table_relationships.filter((item) => tableRelationshipAvailableForRawCatalog(item, tenantId, rawSourceKeys));
+  const singlePageDataAssets = catalogPageData.filter((item) => pageDataScope(item) === "single_institution" && assetMatches(item, keyword)).sort(sortAssetNewestFirst);
+  const multiPageDataAssets = catalogPageData.filter((item) => pageDataScope(item) === "multi_institution" && assetMatches(item, keyword)).sort(sortAssetNewestFirst);
+  const customerSegmentPageDataAssets = catalogPageData.filter((item) => pageDataScope(item) === "customer_segment" && assetMatches(item, keyword)).sort(sortAssetNewestFirst);
   const customerDetailTables = bundle.raw_tables.filter((item) => Boolean(customerDetailTableKey(item)));
   const rawPageCount = Math.max(1, Math.ceil(rawTables.length / dataTablePageSize));
   const topicPageCount = Math.max(1, Math.ceil(topicTables.length / dataTablePageSize));
@@ -1547,7 +1642,7 @@ function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { search
                 tabs={[
                   { key: "raw", label: `原始表 ${rawTables.length}` },
                   { key: "single_page", label: `单机构页面 ${singlePageDataAssets.length}` },
-                  { key: "relationships", label: `表关系 ${bundle.table_relationships.length}` },
+                  { key: "relationships", label: `表关系 ${catalogRelationships.length}` },
                   { key: "multi_page", label: `多机构页面 ${multiPageDataAssets.length}` },
                   { key: "customer_segment_page", label: `分客群页面 ${customerSegmentPageDataAssets.length}` },
                   { key: "topic", label: `主题表 ${topicTables.length}` },
@@ -1588,6 +1683,10 @@ function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { search
                 })}
                 onExternalReferenceChange={updateExternalReference}
                 onSave={saveRawTableMetadata}
+                onDataDelivered={() => {
+                  setNotice("数据拉取完成，当前机构 CSV 已生成并通过回执校验；原始表已更新为最新文件。");
+                  reload();
+                }}
               />
             ))}
             {!rawTables.length && <EmptyAssetState text="暂无匹配的原始表配置" />}
@@ -1647,7 +1746,7 @@ function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { search
             ))}
             {!topicTables.length && <EmptyAssetState text="暂无匹配的主题表配置" />}
           </div>
-        ) : <TableRelationshipWorkspace tenantId={tenantId} userId={userId} relationships={bundle.table_relationships} keyword={keyword} onNotice={setNotice} onChanged={(saved) => { if (saved) upsertTableRelationship(saved); else reload(); }} createRequestId={relationshipCreateRequestId} />}
+        ) : <TableRelationshipWorkspace tenantId={tenantId} userId={userId} relationships={catalogRelationships} keyword={keyword} onNotice={setNotice} onChanged={(saved) => { if (saved) upsertTableRelationship(saved); else reload(); }} createRequestId={relationshipCreateRequestId} />}
       </div>
       {rawUploadOpen && <StaticWorkbookUploadModal
         tenantId={tenantId}
@@ -2256,24 +2355,17 @@ function DataTableDeleteConfirm({
   const protectedAsset = Boolean(topic?.systemManaged || topic?.deletable === false);
   const itemName = itemType === "raw_table" ? (item as RawTableAsset).tableNameCn : (item as TopicTableAsset).name;
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/20 px-4">
-      <div role="dialog" aria-modal="true" aria-label={`删除${itemName}`} className="w-full max-w-[420px] rounded-xl border border-[#e5e5ea] bg-white p-5 shadow-2xl shadow-black/20">
-        <div className="flex items-start gap-3">
-          <div className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#fff0f0] text-[#d93025]"><Trash2 className="h-4 w-4" /></div>
-          <div>
-            <h3 className="text-[14px] text-[#1d1d1f]">你正在删除这条记录</h3>
-            <p className="mt-1.5 text-[12px] leading-[1.7] text-[#636366]">{itemName}</p>
-            <p className="mt-1 text-[11px] leading-[1.6] text-[#aeaeb2]">
-              {protectedAsset ? "该主题表是系统内置资产，关联经营周报和智能分析，不能删除。" : "确认后将从站内数据列表和后端资产配置中删除，操作不可撤销。"}
-            </p>
-          </div>
-        </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <button type="button" onClick={onCancel} disabled={deleting} className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-4 text-[12px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-50">取消</button>
-          <button type="button" onClick={onConfirm} disabled={deleting || protectedAsset} className="h-9 rounded-lg bg-[#d93025] px-4 text-[12px] text-white hover:bg-[#c5221f] disabled:cursor-not-allowed disabled:opacity-40">{deleting ? "删除中..." : "确认删除"}</button>
-        </div>
-      </div>
-    </div>
+    <ConfirmDialog
+      open
+      title="删除这条记录"
+      description={itemName}
+      hint={protectedAsset ? "该主题表是系统内置资产，关联经营周报和智能分析，不能删除。" : "确认后将从站内数据列表和后端资产配置中删除，操作不可撤销。"}
+      busy={deleting}
+      disabledConfirm={protectedAsset}
+      zIndexClass="z-[60]"
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    />
   );
 }
 
@@ -2631,7 +2723,6 @@ function defaultDataCrawlerDraft(state: DataCrawlerScheduleState): DataCrawlerSc
     execution.setDate(targetDay);
   }
   return {
-    sqlId: binding?.sqlId || state.available_bindings[0]?.sqlId || "",
     recurrence,
     executionAt: formatLocalDateTime(execution),
     parameters: { ...(taskConfig.parameters || {}) },
@@ -2837,11 +2928,13 @@ function DataCrawlerSchedulePanel({
   tenantId,
   userId,
   onScheduleStatusChange,
+  onDataDelivered,
 }: {
   table: RawTableAsset;
   tenantId: string;
   userId: string;
   onScheduleStatusChange: (sourceKey: string, status: DataCrawlerScheduleListStatus | null) => void;
+  onDataDelivered: () => void;
 }) {
   const [state, setState] = useState<DataCrawlerScheduleState | null>(null);
   const [draft, setDraft] = useState<DataCrawlerScheduleDraft | null>(null);
@@ -2850,7 +2943,6 @@ function DataCrawlerSchedulePanel({
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState("");
   const [configurationUnavailable, setConfigurationUnavailable] = useState(false);
-  const [selectedSqlId, setSelectedSqlId] = useState("");
 
   const reload = async () => {
     if (!table.sourceKey) return null;
@@ -2860,7 +2952,6 @@ function DataCrawlerSchedulePanel({
       const nextDraft = defaultDataCrawlerDraft(response);
       setState(response);
       setDraft(nextDraft);
-      setSelectedSqlId(nextDraft.sqlId);
       setConfigurationUnavailable(false);
       if (!refreshing) setNotice("");
       return response;
@@ -2874,23 +2965,13 @@ function DataCrawlerSchedulePanel({
 
   useEffect(() => { void reload(); }, [table.sourceKey, table.contentHash, tenantId, userId]);
 
-  const runRefresh = async (sqlId = selectedSqlId) => {
+  const runRefresh = async () => {
     if (!table.sourceKey) return;
     setRefreshing(true);
-    setNotice("正在触发 Data Crawler SQL 运行并拆解时间参数…");
+    setNotice("正在根据当前数据表重新关联 Data Crawler SQL 并读取参数…");
     try {
-      const result = await refreshDataCrawlerSchedule({ tenantId, userId, sourceKey: table.sourceKey, sqlId });
-      const deadline = Date.now() + 30 * 60 * 1000;
-      let status = result.run.status;
-      while (Date.now() < deadline && !["succeeded", "failed"].includes(status)) {
-        await new Promise((resolve) => window.setTimeout(resolve, 1_500));
-        const current = await fetchDataCrawlerScheduleExecution({ tenantId, userId, runId: result.run.run_id });
-        status = String(current.run.status || "");
-        if (["failed", "cancelled"].includes(status)) throw new Error(current.run.message || "SQL 运行失败");
-        if (status === "succeeded") break;
-      }
-      if (status !== "succeeded") throw new Error("SQL 运行等待超时");
       const refreshed = await reload();
+      if (!refreshed?.binding) throw new Error("当前数据表未携带唯一 SQL 血缘，请先在 Data Crawler 重新运行对应脚本生成文件。");
       const nextState = {
         ...(refreshed || state || {}),
         tenant_id: refreshed?.tenant_id || state?.tenant_id || tenantId,
@@ -2900,13 +2981,12 @@ function DataCrawlerSchedulePanel({
         validation_required: true,
         available_bindings: refreshed?.available_bindings || state?.available_bindings || [],
         task: refreshed?.task || state?.task || null,
-        binding: result.binding || refreshed?.binding || null,
+        binding: refreshed.binding,
       };
       const nextDraft = defaultDataCrawlerDraft(nextState);
       setState(nextState);
       setDraft(nextDraft);
-      setSelectedSqlId(result.binding?.sqlId || nextDraft.sqlId);
-      setNotice("数据已开始刷新；SQL 时间参数已拆解到本页，可继续完成定时配置。");
+      setNotice("已按当前数据表自动关联唯一 SQL，并读取参数配置；未执行脚本。");
     } catch (error) {
       setNotice(apiErrorMessage(error, "刷新失败，请确认 Data Crawler 可连通后重试。"));
     } finally {
@@ -2933,7 +3013,7 @@ function DataCrawlerSchedulePanel({
       <div className="flex items-start justify-between gap-4 px-5 py-5">
         <div className="min-w-0 text-[11px] leading-5 text-[#7a837e]">
           <div className="font-medium text-[#4e5752]">暂未读取到定时任务配置</div>
-          <div className="mt-1">打开 Tab 不会自动执行 SQL。点击刷新将触发 Data Crawler 中该 SQL 的「运行」，并拆解时间参数到本页。{configurationUnavailable ? "若连接失败，请确认 Data Crawler 可用后重试。" : ""}</div>
+          <div className="mt-1">打开 Tab 或点击刷新只会按当前数据表自动关联唯一 SQL，并读取参数信息；只有点击测试或执行时才会进入执行链路。{configurationUnavailable ? "若连接失败，请确认 Data Crawler 可用后重试。" : ""}</div>
           {notice ? <div className={`mt-2 ${notice.includes("失败") ? "text-[#a83c32]" : "text-[#087647]"}`}>{notice}</div> : null}
         </div>
         {refreshButton}
@@ -2967,12 +3047,23 @@ function DataCrawlerSchedulePanel({
   const testConnection = async () => {
     if (!binding || unsupported.length) return;
     setTesting(true);
-    setNotice("正在测试机构连接、SQL 绑定、CSV 回执与时间参数…");
+    setNotice("正在按当前机构与唯一 SQL 执行一次测试，并等待 CSV 交付…");
     try {
       const result = await testDataCrawlerSchedule({ tenantId, userId, sourceKey: table.sourceKey!, draft });
-      setNotice(`连接测试通过：${result.institution_id}、关联 SQL 与 ${result.parameter_count} 个时间参数均可用。`);
+      const deadline = Date.now() + 30 * 60 * 1000;
+      let current: { runId?: string; status: string; message?: string; sqlId?: string } = result.run;
+      while (!["succeeded", "failed"].includes(current.status) && Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1_500));
+        current = (await fetchDataCrawlerScheduleExecution({ tenantId, userId, runId: result.run.runId })).run;
+      }
+      if (current.status !== "succeeded") {
+        if (current.status === "failed") throw new Error(current.message || "测试执行失败");
+        throw new Error("测试执行等待超时");
+      }
+      setNotice(`测试执行完成：${result.institution_id}、唯一关联 SQL 与 ${result.parameter_count} 个时间参数均已验证，CSV 已生成。`);
+      onDataDelivered();
     } catch (error) {
-      setNotice(apiErrorMessage(error, "连接测试失败"));
+      setNotice(apiErrorMessage(error, "测试执行失败"));
     } finally {
       setTesting(false);
     }
@@ -2991,8 +3082,8 @@ function DataCrawlerSchedulePanel({
           await new Promise((resolve) => window.setTimeout(resolve, 1_500));
           const current = await fetchAutomationRun({ tenantId, userId, runId: result.run.automation_run_id });
           if (current.run.status === "succeeded") {
-            await reload();
             setNotice("数据拉取完成，当前机构 CSV 已生成并通过回执校验。");
+            onDataDelivered();
             return;
           }
           if (["failed", "cancelled", "dead_letter"].includes(current.run.status)) throw new Error(current.run.error_summary || "数据拉取失败");
@@ -3035,41 +3126,35 @@ function DataCrawlerSchedulePanel({
       {!binding ? (
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 leading-5 text-[#7a837e]">
-            <div className="font-medium text-[#4e5752]">暂未识别到唯一的关联 SQL</div>
-            <p className="mt-1 text-[10px]">点击刷新将按 Data Crawler「运行」执行一次 SQL，并把时间参数拆解到本页。打开 Tab 不会自动执行。</p>
-            {state.available_bindings.length > 1 ? (
-              <label className="mt-3 block max-w-md">
-                <span className="mb-1.5 block text-[11px] font-medium text-[#626b66]">选择要运行的 SQL</span>
-                <select aria-label="选择要运行的 SQL" className={scheduleControlClass} value={selectedSqlId} onChange={(event) => setSelectedSqlId(event.target.value)}>
-                  <option value="">请选择 SQL</option>
-                  {state.available_bindings.map((item) => (
-                    <option key={item.sqlId} value={item.sqlId}>{item.sqlName}</option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
+            <div className="font-medium text-[#4e5752]">当前数据表缺少唯一的 SQL 血缘</div>
+            <p className="mt-1 text-[10px]">系统只会按当前表的任务 ID 或同机构唯一名称自动关联，不允许手动切换到其他 SQL。点击刷新只重新读取关联与参数，不会执行脚本。</p>
             {notice ? <div className={`mt-2 text-[11px] ${notice.includes("失败") ? "text-[#a83c32]" : "text-[#087647]"}`}>{notice}</div> : null}
           </div>
           {refreshButton}
         </div>
       ) : (
         <>
-          <div className="grid items-start gap-3 md:grid-cols-[minmax(0,1.15fr)_minmax(0,0.8fr)_minmax(0,1fr)_auto]">
-              <div>
-                <div className="mb-1.5 text-[11px] font-medium text-[#626b66]">关联 SQL</div>
-                <div className="flex h-9 min-w-0 items-center gap-2 rounded-lg border border-[#e4e8e5] bg-[#f8faf9] px-3 text-[12px] text-[#303633]">
-                  <Link2 className="h-3.5 w-3.5 shrink-0 text-[#818a85]" />
-                  <span className="min-w-0 flex-1 truncate" title={binding.sqlName}>{binding.sqlName}</span>
-                  <span className="shrink-0 text-[10px] text-[#25825a]">待校验</span>
+          <div className="flex items-start gap-3">
+              <div className={`grid min-w-0 flex-1 items-start gap-3 ${draft.recurrence !== "none" ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
+                <div>
+                  <div className="mb-1.5 text-[11px] font-medium text-[#626b66]">关联 SQL</div>
+                  <div className="flex h-9 min-w-0 items-center gap-2 rounded-lg border border-[#e4e8e5] bg-[#f8faf9] px-3 text-[12px] text-[#303633]">
+                    <Link2 className="h-3.5 w-3.5 shrink-0 text-[#818a85]" />
+                    <span className="min-w-0 flex-1 truncate" title={binding.sqlName}>{binding.sqlName}</span>
+                    <span className="shrink-0 text-[10px] text-[#25825a]">待校验</span>
+                  </div>
                 </div>
+                <div>
+                  <span className="mb-1.5 block text-[11px] font-medium text-[#626b66]">循环方式</span>
+                  <ScheduleSelect label="循环方式" value={draft.recurrence} onValueChange={(value) => setDraft({ ...draft, recurrence: value as DataCrawlerScheduleDraft["recurrence"] })} options={[{ value: "none", label: "不循环（仅手动执行）" }, { value: "daily", label: "每日", disabled: !binding.parameters.length }, { value: "weekly", label: "每周", disabled: !binding.parameters.length }, { value: "biweekly", label: "每双周", disabled: !binding.parameters.length }, { value: "monthly", label: "每月", disabled: !binding.parameters.length }]} />
+                  {!binding.parameters.length && <span className="mt-1.5 block text-[10px] text-[#8a928d]">无参数 SQL 仅支持手动执行一次。</span>}
+                </div>
+                {draft.recurrence !== "none" && <div><span className="mb-1.5 block text-[11px] font-medium text-[#626b66]">执行日期与时间</span><ScheduleDateControl label="执行日期与时间" value={draft.executionAt} includeTime onChange={(value) => setDraft({ ...draft, executionAt: value })} /></div>}
               </div>
-              <div>
-                <span className="mb-1.5 block text-[11px] font-medium text-[#626b66]">循环方式</span>
-                <ScheduleSelect label="循环方式" value={draft.recurrence} onValueChange={(value) => setDraft({ ...draft, recurrence: value as DataCrawlerScheduleDraft["recurrence"] })} options={[{ value: "none", label: "不循环（仅手动执行）" }, { value: "daily", label: "每日", disabled: !binding.parameters.length }, { value: "weekly", label: "每周", disabled: !binding.parameters.length }, { value: "biweekly", label: "每双周", disabled: !binding.parameters.length }, { value: "monthly", label: "每月", disabled: !binding.parameters.length }]} />
-                {!binding.parameters.length && <span className="mt-1.5 block text-[10px] text-[#8a928d]">无参数 SQL 仅支持手动执行一次。</span>}
+              <div className="shrink-0" data-schedule-refresh="true">
+                <span className="mb-1.5 block text-[11px] font-medium text-transparent" aria-hidden="true">循环方式</span>
+                {refreshButton}
               </div>
-              {draft.recurrence !== "none" && <div><span className="mb-1.5 block text-[11px] font-medium text-[#626b66]">执行日期与时间</span><ScheduleDateControl label="执行日期与时间" value={draft.executionAt} includeTime onChange={(value) => setDraft({ ...draft, executionAt: value })} /></div>}
-              <div className="flex h-9 items-end self-start pt-6">{refreshButton}</div>
           </div>
           <div className="mt-5 border-t border-[#e8ece9] pt-3.5">
               <div className="flex items-center justify-between gap-3">
@@ -3140,6 +3225,7 @@ function RawTableCard({
   onScheduleStatusChange,
   onExternalReferenceChange,
   onSave,
+  onDataDelivered,
 }: {
   table: RawTableAsset;
   tenantId: string;
@@ -3148,6 +3234,7 @@ function RawTableCard({
   onScheduleStatusChange: (sourceKey: string, status: DataCrawlerScheduleListStatus | null) => void;
   onExternalReferenceChange: (table: RawTableAsset, mode: "private" | "shared") => Promise<void>;
   onSave: (table: RawTableAsset, fields: RawField[]) => Promise<void>;
+  onDataDelivered: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -3245,7 +3332,7 @@ function RawTableCard({
               onChange={(index, key, value) => setDraftFields((current) => updateFieldSemanticValue(current, index, key, value))}
             />
           ) : (
-            <DataCrawlerSchedulePanel table={table} tenantId={tenantId} userId={userId} onScheduleStatusChange={onScheduleStatusChange} />
+            <DataCrawlerSchedulePanel table={table} tenantId={tenantId} userId={userId} onScheduleStatusChange={onScheduleStatusChange} onDataDelivered={onDataDelivered} />
           )}
         </div>
       )}
@@ -3749,17 +3836,18 @@ function MemoryEditorField({ label, value, readOnly, onChange, required = false,
 }
 
 function MemoryDeleteConfirm({ itemType, item, deleting, onCancel, onConfirm }: { itemType: MemoryItemType; item: ManagedMemoryAsset; deleting: boolean; onCancel: () => void; onConfirm: () => void }) {
-  const title = memoryItemTitle(itemType, item);
   return (
-    <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/20 px-4">
-      <div role="dialog" aria-modal="true" aria-label={`删除${title}`} className="w-full max-w-[420px] rounded-xl border border-[#e5e5ea] bg-white p-5 shadow-2xl shadow-black/20">
-        <div className="flex items-start gap-3">
-          <div className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#fff0f0] text-[#d93025]"><Trash2 className="h-4 w-4" /></div>
-          <div><h3 className="text-[14px] font-medium text-[#1d1d1f]">删除这条{memoryItemTypeLabel(itemType)}？</h3><p className="mt-1.5 text-[12px] leading-5 text-[#636366]">{title}</p><p className="mt-1 text-[11px] leading-5 text-[#8a8a8e]">删除会移除当前机构中的全部版本，并写入审计记录；此操作不可撤销。</p></div>
-        </div>
-        <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onCancel} disabled={deleting} className="h-9 rounded-lg border border-[#e5e5ea] px-4 text-[12px] text-[#636366] disabled:opacity-40">取消</button><button type="button" onClick={onConfirm} disabled={deleting} className="h-9 rounded-lg bg-[#d93025] px-4 text-[12px] text-white disabled:opacity-40">{deleting ? "删除中…" : "确认删除"}</button></div>
-      </div>
-    </div>
+    <ConfirmDialog
+      open
+      title={`删除这条${memoryItemTypeLabel(itemType)}？`}
+      description={memoryItemTitle(itemType, item)}
+      hint="删除会移除当前机构中的全部版本，并写入审计记录；此操作不可撤销。"
+      busy={deleting}
+      busyLabel="删除中…"
+      zIndexClass="z-[130]"
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    />
   );
 }
 
@@ -4015,6 +4103,11 @@ function QualityMonitor({ searchTerm, tenantId, userId }: { searchTerm: string; 
   const failedHealthChecks = Object.entries(health?.checks || {})
     .filter(([, check]) => check.ready === false)
     .map(([name, check]) => `${name}${check.error ? `(${check.error})` : ""}`);
+  const issueEmptyText = !qualityResults.length
+    ? "尚无质量评估结果，暂时无法判断是否存在异常"
+    : searchTerm.trim()
+      ? "没有匹配当前搜索条件的质量异常"
+      : "当前质量评估未发现异常";
   const healthCards = [
     {
       label: "服务状态",
@@ -4054,36 +4147,44 @@ function QualityMonitor({ searchTerm, tenantId, userId }: { searchTerm: string; 
   ];
 
   return (
-    <div className="space-y-5">
-      <div className="rounded-xl border border-[#f0f0f2] bg-white p-5">
-        <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-2">
-            <Activity className="w-4 h-4 text-[#aeaeb2]" />
-            <div>
-              <h3 className="text-[13px] text-[#1d1d1f]">运行健康</h3>
-              <p className="mt-0.5 text-[11px] text-[#aeaeb2]">
-                来源：后端 /api/health · 分析请求、语义层降级和耗时摘要
+    <div className="space-y-4" data-quality-monitor="true">
+      <section className="rounded-xl border border-[#eceef0] bg-white p-5" data-quality-runtime-panel="true">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#f2f7f4]">
+              <Activity className="h-4 w-4 text-[#4f9d70]" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-[14px] text-[#1d1d1f]">运行健康</h3>
+              <p className="mt-0.5 truncate text-[11px] text-[#8a8a8e]" title="实时读取后端 /api/health，汇总分析请求、语义层降级与响应耗时">
+                实时读取 /api/health · 请求、降级与响应耗时
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => void loadHealth()}
-            disabled={healthLoading}
-            className="inline-flex h-8 w-fit items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[11px] text-[#636366] transition-colors hover:bg-[#f2f2f7] disabled:opacity-50"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${healthLoading ? "animate-spin" : ""}`} />
-            刷新
-          </button>
+          <div className="flex items-center gap-2">
+            <span className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[11px] ${healthLoading ? "bg-[#f5f5f7] text-[#8a8a8e]" : healthOk ? "bg-[#edf8f1] text-[#26724a]" : "bg-[#fff4f2] text-[#b42318]"}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${healthLoading ? "bg-[#aeaeb2]" : healthOk ? "bg-[#4eaa75]" : "bg-[#d92d20]"}`} />
+              {healthLoading ? "同步中" : health ? healthStatusLabel : "未连接"}
+            </span>
+            <button
+              type="button"
+              onClick={() => void loadHealth()}
+              disabled={healthLoading}
+              className="inline-flex h-8 w-fit items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[11px] text-[#636366] transition-colors hover:bg-[#f5f5f7] disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${healthLoading ? "animate-spin" : ""}`} />
+              刷新
+            </button>
+          </div>
         </div>
-        <div data-health-summary-grid="true" className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <div data-health-summary-grid="true" className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-6">
           {healthCards.map((item) => (
-            <div key={item.label} className="rounded-lg bg-[#fafbfc] px-4 py-3">
-              <div className="text-[11px] text-[#8a8a8e]">{item.label}</div>
-              <div className={`mt-1 text-[16px] tracking-tight ${item.label === "服务状态" && !healthOk && health ? "text-[#d93025]" : "text-[#1d1d1f]"}`}>
+            <div key={item.label} className="min-w-0 rounded-xl border border-[#f0f1f3] bg-[#fafbfc] px-3.5 py-3">
+              <div className="text-[10px] text-[#8a8a8e]">{item.label}</div>
+              <div title={item.value} className={`mt-2 truncate text-[18px] font-light leading-none tracking-tight tabular-nums ${item.label === "服务状态" ? healthOk ? "text-[#26724a]" : health ? "text-[#b42318]" : "text-[#1d1d1f]" : "text-[#1d1d1f]"}`}>
                 {item.value}
               </div>
-              <div className="mt-1 truncate text-[10px] text-[#aeaeb2]" title={item.hint}>
+              <div className="mt-2 truncate text-[10px] text-[#aeaeb2]" title={item.hint}>
                 {item.hint}
               </div>
             </div>
@@ -4094,7 +4195,7 @@ function QualityMonitor({ searchTerm, tenantId, userId }: { searchTerm: string; 
             运行健康暂不可用；不会用内置数字补位。{healthError}
           </div>
         )}
-      </div>
+      </section>
 
       {qualityError && (
         <div role="alert" className="rounded-lg border border-[#ffe3aa] bg-[#fff7e6] px-3 py-2 text-[12px] text-[#8a5a00]">
@@ -4102,67 +4203,90 @@ function QualityMonitor({ searchTerm, tenantId, userId }: { searchTerm: string; 
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-4">
-        {qualityMetrics.map((qm) => (
-          <div key={qm.metric} className="rounded-xl border border-[#f0f0f2] bg-white p-5">
-            <div className="mb-2 text-[12px] text-[#aeaeb2]">{qm.metric}</div>
-            <div className="text-[24px] text-[#1d1d1f] tracking-tight">{qm.score === null ? "—" : `${qm.score.toFixed(1)}%`}</div>
-            <span className={`text-[11px] ${qm.status === "good" ? "text-[#34a853]" : "text-[#f59e0b]"}`}>
-              {qm.trend}
-            </span>
+      <section className="rounded-xl border border-[#eceef0] bg-white p-5" data-quality-overview="true">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-[14px] text-[#1d1d1f]">质量概览</h3>
+            <p className="mt-1 text-[11px] text-[#8a8a8e]">基于当前机构已落库的质量评估结果计算</p>
           </div>
-        ))}
-      </div>
-
-      <div className="rounded-xl border border-[#f0f0f2] bg-white p-5">
-        <div className="mb-4 flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 text-[#aeaeb2]" />
-          <h3 className="text-[13px] text-[#1d1d1f]">质量异常</h3>
+          <span className="inline-flex h-7 items-center rounded-full bg-[#f5f5f7] px-2.5 text-[10px] tabular-nums text-[#77777d]">{qualityResults.length} 条评估</span>
         </div>
-        <div className="space-y-2">
-          {issues.map((item) => (
-            <div key={item.table} className="flex items-center gap-3 rounded-lg bg-[#fafbfc] p-3.5">
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  item.level === "high" ? "bg-[#ea4335]" : item.level === "medium" ? "bg-[#f59e0b]" : "bg-[#c7c7cc]"
-                }`}
-              />
-              <div className="flex-1">
-                <div className="font-mono text-[12px] text-[#1d1d1f]">{item.table}</div>
-                <div className="mt-0.5 text-[11px] text-[#8a8a8e]">{item.issue}</div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" data-quality-metric-grid="true">
+          {qualityMetrics.map((qm) => (
+            <article key={qm.metric} className="min-w-0 rounded-xl border border-[#f0f1f3] bg-[#fafbfc] p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="truncate text-[11px] text-[#636366]">{qm.metric}</div>
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${qm.score === null ? "bg-[#c7c7cc]" : qm.status === "good" ? "bg-[#4eaa75]" : "bg-[#d9a441]"}`} />
               </div>
-              <span className="text-[10px] text-[#c7c7cc]">{item.time}</span>
-            </div>
+              <div className="mt-3 text-[26px] font-light leading-none tracking-tight tabular-nums text-[#1d1d1f]">{qm.score === null ? "—" : `${qm.score.toFixed(1)}%`}</div>
+              <div className={`mt-2 truncate text-[10px] ${qm.score === null ? "text-[#9a9aa0]" : qm.status === "good" ? "text-[#26724a]" : "text-[#9a6a18]"}`} title={qm.trend}>{qm.trend}</div>
+            </article>
           ))}
-          {!issues.length && (
-            <div className="rounded-lg bg-[#fafbfc] p-8 text-center text-[12px] text-[#aeaeb2]">
-              没有匹配的质量异常
-            </div>
-          )}
         </div>
-      </div>
+      </section>
 
-      <div className="rounded-xl border border-[#f0f0f2] bg-white p-5">
-        <div className="mb-4 flex items-center gap-2">
-          <Shield className="w-4 h-4 text-[#aeaeb2]" />
-          <h3 className="text-[13px] text-[#1d1d1f]">监控覆盖</h3>
-        </div>
-        <div className="grid gap-3 md:grid-cols-3">
-          {qualityJobs.map((job) => (
-            <div key={job.acquisition_job_id} className="rounded-lg bg-[#fafbfc] px-4 py-3">
-              <div className="flex items-center gap-2 text-[12px] text-[#636366]">
-                <Database className="w-3.5 h-3.5 text-[#aeaeb2]" />
-                {job.target_dataset_id}
+      <div className="grid gap-4 xl:grid-cols-2" data-quality-detail-grid="true">
+        <section className="rounded-xl border border-[#eceef0] bg-white p-5" data-quality-issues-panel="true">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <AlertTriangle className="h-4 w-4 text-[#8a8a8e]" />
+              <div>
+                <h3 className="text-[14px] text-[#1d1d1f]">质量异常</h3>
+                <p className="mt-0.5 text-[10px] text-[#9a9aa0]">仅展示未通过的质量评估</p>
               </div>
-              <div className="mt-1 text-[13px] text-[#1d1d1f]">{job.status === "active" ? "质量规则已接入" : `任务状态：${job.status}`}</div>
             </div>
-          ))}
-          {!qualityJobs.length && (
-            <div className="rounded-lg bg-[#fafbfc] px-4 py-6 text-center text-[12px] text-[#aeaeb2] md:col-span-3">
-              暂无已配置的数据获取任务，不能声称任何数据表已被质量监控覆盖
+            <span className="text-[10px] tabular-nums text-[#8a8a8e]">{issues.length} 项</span>
+          </div>
+          <div className="space-y-2">
+            {issues.map((item) => (
+              <div key={item.table} className="flex items-center gap-3 rounded-xl bg-[#fafbfc] px-3.5 py-3">
+                <span className={`h-2 w-2 shrink-0 rounded-full ${item.level === "high" ? "bg-[#d92d20]" : item.level === "medium" ? "bg-[#d9a441]" : "bg-[#c7c7cc]"}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-mono text-[11px] text-[#1d1d1f]" title={item.table}>{item.table}</div>
+                  <div className="mt-0.5 truncate text-[10px] text-[#77777d]" title={item.issue}>{item.issue}</div>
+                </div>
+                <span className="shrink-0 text-[9px] tabular-nums text-[#aeaeb2]">{item.time}</span>
+              </div>
+            ))}
+            {!issues.length && (
+              <div className="flex min-h-32 flex-col items-center justify-center rounded-xl border border-dashed border-[#e4e6e8] bg-[#fafbfc] px-6 text-center">
+                {qualityResults.length ? <CheckCircle2 className="h-5 w-5 text-[#69a980]" /> : <Activity className="h-5 w-5 text-[#b5b8bc]" />}
+                <div className="mt-2 text-[11px] text-[#77777d]">{issueEmptyText}</div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-[#eceef0] bg-white p-5" data-quality-coverage-panel="true">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <Shield className="h-4 w-4 text-[#8a8a8e]" />
+              <div>
+                <h3 className="text-[14px] text-[#1d1d1f]">监控覆盖</h3>
+                <p className="mt-0.5 text-[10px] text-[#9a9aa0]">已配置数据获取任务的质量接入状态</p>
+              </div>
             </div>
-          )}
-        </div>
+            <span className="text-[10px] tabular-nums text-[#8a8a8e]">{qualityJobs.length} 个任务</span>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {qualityJobs.map((job) => (
+              <div key={job.acquisition_job_id} className="min-w-0 rounded-xl bg-[#fafbfc] px-3.5 py-3">
+                <div className="flex min-w-0 items-center gap-2 text-[11px] text-[#636366]">
+                  <Database className="h-3.5 w-3.5 shrink-0 text-[#8a8a8e]" />
+                  <span className="truncate" title={job.target_dataset_id}>{job.target_dataset_id}</span>
+                </div>
+                <div className="mt-2 text-[11px] text-[#1d1d1f]">{job.status === "active" ? "质量规则已接入" : `任务状态：${job.status}`}</div>
+              </div>
+            ))}
+            {!qualityJobs.length && (
+              <div className="flex min-h-32 flex-col items-center justify-center rounded-xl border border-dashed border-[#e4e6e8] bg-[#fafbfc] px-6 text-center sm:col-span-2">
+                <Shield className="h-5 w-5 text-[#b5b8bc]" />
+                <div className="mt-2 text-[11px] text-[#77777d]">暂无已配置的数据获取任务</div>
+                <div className="mt-1 max-w-sm text-[10px] leading-4 text-[#a0a0a5]">当前不能声称任何数据表已被质量监控覆盖</div>
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );
@@ -4201,6 +4325,7 @@ function healthSemanticModeLabel(mode: string) {
 function healthDataSourceModeLabel(mode?: string) {
   if (mode === "json_mock_warehouse") return "JSON Mock";
   if (mode === "csv_folder") return "CSV 文件夹";
+  if (mode === "governed_origin_topic_csv") return "治理主题 CSV";
   if (mode === "production_data_source_not_configured") return "未配置";
   if (mode === "local") return "本地";
   return mode || "未配置";

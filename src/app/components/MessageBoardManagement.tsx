@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, ClipboardList, Download, Image as ImageIcon, LoaderCircle, MessageSquarePlus, Quote, RefreshCw, Search } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
 import { ApiRequestError } from "../services/apiClient";
+import { trackInteraction } from "../services/interactionTelemetry";
 import {
   downloadAdoptedMessageBoardExport,
   fetchMessageBoardAdmin,
@@ -171,6 +172,7 @@ export function MessageBoardManagement() {
     setNotice("");
     try {
       const count = await downloadAdoptedMessageBoardExport(format, { tenantId, userId });
+      trackInteraction({ eventName: "export_result", resourceType: "message_board", extension: { outcome: "success", format, exported_count: count } });
       setNoticeTone("info");
       setNotice(count ? `已导出 ${count} 条已采纳留言` : "当前没有已采纳的留言");
     } catch (error) {

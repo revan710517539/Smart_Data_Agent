@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { selectVisibleVisualPoints } from "../src/app/components/visualization/visualPointWindow.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const weekly = await readFile(path.join(root, "src/app/components/WeeklyReport.tsx"), "utf8");
@@ -9,12 +10,15 @@ const menu = await readFile(path.join(root, "src/app/components/weekly-report/An
 const composer = await readFile(path.join(root, "src/app/components/page-data/PageDataComposer.tsx"), "utf8");
 const assignment = await readFile(path.join(root, "src/app/components/page-data/assignment.ts"), "utf8");
 const scrollSource = await readFile(path.join(root, "src/app/components/weekly-report/scrollToReportBody.ts"), "utf8");
+const resultViews = await readFile(path.join(root, "src/app/components/self-analysis/ResultViews.tsx"), "utf8");
+const pointWindow = await readFile(path.join(root, "src/app/components/visualization/visualPointWindow.ts"), "utf8");
 
 assert.doesNotMatch(weekly, /<PageDataComposer\b/, "周报页不应继续渲染独立页面数据入口");
 assert.match(composer, /data-weekly-page-data-mode-toggle="true"/, "周报页应复用单一编辑保存切换按钮");
 assert.match(composer, /controller\.mode === "browse" \? "编辑" : controller\.savingLayout \? "保存中" : "保存"/, "编辑态按钮必须显示保存并提供保存中状态");
 assert.match(weekly, /PageDataModeToggle controller=\{weeklyPageData\} onSave=\{saveReportVersion\}/, "周报保存按钮应同时保存页面布局与周报版本");
 assert.match(weekly, /data-weekly-report-toolbar="true"/, "周报工具栏必须吸顶");
+assert.match(weekly, /activeReport\.status !== "待分析" \? \([\s\S]{0,260}statusClass\(activeReport\.status\)/, "周报页头不得渲染待分析状态标签，其他状态仍应保留");
 assert.match(weekly, /data-weekly-report-body-start="true"/, "周报正文必须保留业绩与业务波动分节锚点");
 assert.match(weekly, /scheduleWeeklyReportBodyScroll/, "点开经营周报必须把滚动定位到页面最上方");
 assert.match(weekly, /const \[editing, setEditing\] = useState\(false\)/, "周报正文空段落不得在打开时自动进入输入框并抢走页面滚动");
@@ -53,9 +57,15 @@ assert.match(assignment, /singleInstitutionAssignedPage\(asset\) === pageCode/, 
 assert.match(assignment, /includeNewlyAssigned/, "经营周报和机构督导必须把数据管理新指定的单机构数据追加进页面布局");
 assert.match(assignment, /kept.length \? kept : \[\.\.\.availableIds\]/, "多机构分析在没有可用已保存项时仍回落到当前页已配置数据集");
 assert.match(composer, /pageDataBelongsToPage\(asset, pageCode\)/, "周报和督导必须按放置页过滤页面数据");
+assert.match(composer, /hasRenderablePageData/, "页面必须能区分有行数据的图表和无数据空态");
+assert.match(composer, /hasSelectedPageData/, "已选入布局的页面数据必须作为图表区域，不能因为空行被整页空态盖住");
+assert.match(composer, /const renderedAssets = assetIds\?\.length \? visibleAssets\.filter\(\(asset\) => assetIds\.includes\(asset\.id\)\) : visibleAssets/, "已选页面数据必须渲染为图表卡片，浏览态不得因空行或读失败把卡片丢掉");
+assert.doesNotMatch(composer, /if \(rowsFailed\[asset\.id\]\) return mode === "edit"/, "读失败的页面数据必须在浏览态显示错误卡，不得只在编辑态出现");
 assert.match(composer, /resolvePageDataLayout\(workspace.layout \|\| \[\], availableIds, \{/, "页面必须用统一规则解析已保存布局");
 assert.match(composer, /export function usePageDataComposer/, "页面数据状态应复用统一控制器");
 assert.match(composer, /fetchPageDataWorkspace/, "页面数据必须一次读取布局与行，避免目录后再逐图请求");
+assert.match(composer, /rowsFailed: Object\.fromEntries\(\s*Object\.entries\(workspace\.row_errors \|\| \{\}\)/, "工作区返回的逐图错误必须直接进入失败状态，禁止再逐图重复请求");
+assert.match(composer, /setRowsFailed\(next\.rowsFailed\)/, "工作区错误必须在挂载时保留，不能清空后触发重复补读");
 assert.match(composer, /export function PageDataVisualizationModules/, "页面数据图表应支持无独立工具栏渲染");
 assert.match(composer, /showEditorControls = true/, "页面数据渲染器应允许周报关闭卡片级删除控件");
 assert.match(composer, /layoutEditable = showEditorControls/, "图表网格编辑能力必须与卡片删除复制控件解耦");
@@ -64,5 +74,15 @@ assert.match(composer, /onCreateText=\{\(config\) => addTextCard\(asset.id, conf
 assert.match(composer, /action: "set_page_data_notes"/, "文本框必须能在不进入布局编辑时单独保存");
 assert.match(composer, /data-page-data-picker="true"/, "其他页面原有页面数据选择器必须保留");
 assert.match(composer, /data-page-data-mode-switch="true"/, "其他页面原有编辑保存开关必须保留");
+assert.match(resultViews, /selectVisibleVisualPoints\(points, type, compact\)/, "所有可视化必须经过统一的数据点窗口");
+assert.match(pointWindow, /points\.slice\(-40\)/, "所有图形类可视化必须保留最近 40 个点，不能优先截掉最新一期");
+assert.doesNotMatch(resultViews, /const visiblePoints = points\.slice\(0, compact \? 12 : 40\)/, "紧凑趋势图不得再固定截取前 12 个点");
+const thirteenPeriods = Array.from({ length: 13 }, (_, index) => `period-${index + 1}`);
+assert.deepEqual(selectVisibleVisualPoints(thirteenPeriods, "line", true), thirteenPeriods, "13 期紧凑趋势必须完整呈现");
+assert.equal(selectVisibleVisualPoints(Array.from({ length: 45 }, (_, index) => index + 1), "line", true).at(-1), 45, "超限趋势必须保留最新一期");
+for (const chartType of ["kpi", "area", "bar", "column", "stacked_bar", "combo", "donut", "scatter", "funnel", "treemap", "radar"]) {
+  assert.deepEqual(selectVisibleVisualPoints(thirteenPeriods, chartType, true), thirteenPeriods, `${chartType} 紧凑图也必须完整呈现第 13 条`);
+}
+assert.deepEqual(selectVisibleVisualPoints(Array.from({ length: 45 }, (_, index) => index + 1), "bar", true), Array.from({ length: 40 }, (_, index) => index + 6), "非趋势图超限时也必须保留最新 40 条");
 
 console.log("weekly page data workbench contract passed");

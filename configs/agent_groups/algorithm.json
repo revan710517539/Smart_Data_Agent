@@ -1,7 +1,7 @@
 {
   "group_id": "algorithm_engineering",
   "group_name": "算法工程师",
-  "source_file": "/Users/revan/Documents/Agent_Teams/06_算法工程师_AlgorithmEngineer.zip",
+  "source_file": "/path/to/06_算法工程师_AlgorithmEngineer.zip",
   "mission": "把银行业务问题转化为可训练、可评估、可上线、可监控的算法方案，要求可解释、可审计、可复核。",
   "controller_agent": "algorithm_controller",
   "agents": [

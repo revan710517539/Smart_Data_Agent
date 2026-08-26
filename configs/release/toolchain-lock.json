@@ -1,0 +1,20 @@
+{
+  "schema_version": "smart-data-agent-release-toolchain/v1",
+  "node": {
+    "version": "22.14.0",
+    "npm_version": "10.9.2",
+    "image": "node:22.14.0-bookworm-slim@sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b"
+  },
+  "python": {
+    "version": "3.13.2",
+    "uv_version": "0.10.0",
+    "image": "python:3.13.2-slim-bookworm@sha256:6b3223eb4d93718828223966ad316909c39813dee3ee9395204940500792b740"
+  },
+  "browser": {
+    "provider": "playwright",
+    "playwright_version": "1.62.1",
+    "name": "chromium",
+    "revision": "1234",
+    "version": "151.0.7922.34"
+  }
+}

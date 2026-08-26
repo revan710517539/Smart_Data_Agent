@@ -23,6 +23,7 @@ import {
 } from "../self-analysis/domain";
 import type { CommentTarget } from "../weekly-report/domain";
 import { MessageBoardAttachmentGallery } from "./MessageBoardAttachmentGallery";
+import { askConfirm } from "../ui/ConfirmDialog";
 
 type DraftImage = { file: File; previewUrl: string };
 
@@ -161,6 +162,7 @@ export function MessageBoardPanel({
 
   const removeMessage = async (message: MessageBoardEntry) => {
     if (archivingId) return;
+    if (!(await askConfirm({ title: "删除留言", description: "确定删除这条留言？", hint: "此操作不可撤销。" }))) return;
     setArchivingId(message.message_id);
     setNotice("");
     try {

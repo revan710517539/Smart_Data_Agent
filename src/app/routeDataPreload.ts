@@ -5,6 +5,7 @@ import { fetchAutomationWorkspace } from "./services/automationApi";
 import { fetchPlatformCapabilities } from "./services/capabilitiesApi";
 import { fetchDataAssets, fetchPageDataWorkspace } from "./services/dataAssetApi";
 import { fetchMessageBoardAdmin } from "./services/messageBoardApi";
+import { fetchInteractionAnalytics } from "./services/interactionAnalyticsApi";
 import { fetchMetricDictionary } from "./services/metricDictionaryApi";
 import { fetchSavedAnalysisResults } from "./services/reportApi";
 import { fetchAnalysisRuntimeConfig, fetchSystemConfig } from "./services/systemConfigApi";
@@ -62,6 +63,9 @@ function routeDataTasks(path: string, { tenantId, userId }: RouteDataContext): A
   }
   if (path.startsWith("/agent/message-board")) {
     return [fetchMessageBoardAdmin({ page: 1, pageSize: 20 }, { tenantId, userId })];
+  }
+  if (path.startsWith("/agent/interaction-analytics")) {
+    return [fetchInteractionAnalytics({ days: 30, page: 1, pageSize: 50 }, { tenantId, userId })];
   }
   if (path.startsWith("/data-assets/tools")) {
     return [fetchDataAssets({ tenantId, userId })];

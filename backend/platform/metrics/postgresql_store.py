@@ -9,7 +9,7 @@ from typing import Any, Iterator
 from backend.platform.database.identity import PostgreSQLIdentityResolver
 from backend.platform.database.postgresql import PostgreSQLConnectionPool
 
-from .store import _assert_unique_metric_names, _metric_visible, _normalize_metric
+from .store import _assert_unique_metric_names, _metric_visible, _normalize_alignment_status, _normalize_metric
 
 
 class PostgreSQLMetricDictionaryStore:
@@ -332,6 +332,7 @@ class PostgreSQLMetricDictionaryStore:
             payload["createdBy"] = str(payload.get("createdBy") or _value(row, "owner_code", 6) or "")
             payload["visibleInstitutions"] = list(payload.get("visibleInstitutions") or [])
             payload["visibleRoles"] = list(payload.get("visibleRoles") or [])
+            payload["alignmentStatus"] = _normalize_alignment_status(payload.get("alignmentStatus"))
             items.append(payload)
         return items
 

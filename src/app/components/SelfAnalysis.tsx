@@ -52,6 +52,7 @@ import { syncSelfAnalysisWorkspaceContext } from "./self-analysis/workspaceConte
 import { resolveVisualAnalysisTables, revealVisualComment, revealVisualFollowUp } from "./self-analysis/visualFollowUp";
 import { AnalysisSkillMenu } from "./self-analysis/AnalysisSkillMenu";
 import { DataPageSelector, useClientPagination } from "./ui/DataPageSelector";
+import { askConfirm } from "./ui/ConfirmDialog";
 import {
   type VisualizationType,
   type ResultVisualKey,
@@ -72,6 +73,8 @@ import {
   type AnalysisDataTableSelection,
   singleAnalysisDataTableSelection,
   rematchAnalysisDataTableSelection,
+  rematchAnalysisDataTableSelectionResult,
+  formatAnalysisTableFieldDifferences,
   type AnalysisRow,
   type AudioContextConstructorLike,
   type FunAsrContextMessage,
@@ -824,24 +827,14 @@ export function SelfAnalysis() {
   const addAnalysisTopicShortcut = (shortcut: AnalysisTopicShortcut) => {
     setAnalysisTopicShortcuts((current) => [shortcut, ...current].slice(0, 40));
   };
-  const hideAnalysisTopicShortcut = (topicId: string) => {
-    setAnalysisTopicShortcuts((current) =>
-      current.map((topic) =>
-        topic.id === topicId
-          ? { ...topic, hidden: true, updatedAt: new Date().toISOString() }
-          : topic,
-      ),
-    );
+  const hideAnalysisTopicShortcut = async (topicId: string) => {
+    const topic = analysisTopicShortcuts.find((item) => item.id === topicId);
+    if (!(await askConfirm({ title: "删除快捷键", description: `确定删除快捷键「${topic?.title || "该项"}」？`, hint: "此操作不可撤销。" }))) return;
+    setAnalysisTopicShortcuts((current) => current.map((item) => item.id === topicId ? { ...item, hidden: true, updatedAt: new Date().toISOString() } : item));
     setTopicShortcutMenu(null);
   };
   const renameAnalysisTopicShortcut = (topicId: string, title: string) => {
-    setAnalysisTopicShortcuts((current) =>
-      current.map((topic) =>
-        topic.id === topicId
-          ? { ...topic, title, updatedAt: new Date().toISOString() }
-          : topic,
-      ),
-    );
+    setAnalysisTopicShortcuts((current) => current.map((topic) => topic.id === topicId ? { ...topic, title, updatedAt: new Date().toISOString() } : topic));
   };
   const finishAnalysisTopicEditing = (topicId: string) => {
     setAnalysisTopicShortcuts((current) =>
@@ -857,10 +850,7 @@ export function SelfAnalysis() {
     );
     setEditingTopicId(null);
   };
-  const startAnalysisTopicEditing = (topicId: string) => {
-    setTopicShortcutMenu(null);
-    setEditingTopicId(topicId);
-  };
+  const startAnalysisTopicEditing = (topicId: string) => { setTopicShortcutMenu(null); setEditingTopicId(topicId); };
   const uploadKnowledgeFiles = async (files: File[]) => {
     if (!files.length) return;
     const { accepted, rejectedMessage } = await ingestAnalysisUploads(files, { tenantId, userId });
@@ -1099,15 +1089,38 @@ export function SelfAnalysis() {
       ...nextQuerySkillReferences.map((reference) => reference.skill),
     ]);
     let effectiveDataTables = singleAnalysisDataTableSelection(forcedDataTables ?? selectedDataTables);
-    if (effectiveDataTables.length && availableAnalysisTables.length) {
-      const rematched = rematchAnalysisDataTableSelection(effectiveDataTables, availableAnalysisTables);
-      if (!rematched.length) {
-        setSelectedDataTables([]);
-        setAnalysisError("所选数据表已更新、下线或不属于当前机构，请重新选择数据表后重试。");
+    let submissionCatalog = availableAnalysisTables;
+    try {
+      const [latestAssets, latestRuntimeAssets] = await Promise.all([fetchDataAssets({ tenantId, userId, forceRefresh: true }),
+        fetchDataAssets({ tenantId, userId, scope: "runtime", forceRefresh: true })]);
+      const latestRawTables = latestAssets.raw_tables.filter((table) => table.lifecycleStatus === "active");
+      const latestTopicTables = (latestRuntimeAssets.topic_tables || []).filter((table) => table.lifecycleStatus === "active");
+      const latestPageDataTables = (latestAssets.page_data || []).filter(
+        (table) => table.lifecycleStatus === "active" && table.institutionScope === "multi_institution");
+      submissionCatalog = [...latestRawTables.map(rawTableToSelection), ...latestTopicTables.map(topicTableToSelection),
+        ...latestPageDataTables.map(pageDataToSelection)];
+      setAvailableRawTables(latestRawTables);
+      setAvailableTopicTables(latestTopicTables);
+      setAvailablePageDataTables(latestPageDataTables);
+      analysisCatalogRef.current = submissionCatalog;
+    } catch (error) {
+      setAnalysisError(apiErrorMessage(error, "提交前无法刷新当前机构的数据目录，请稍后重试。"));
+      return;
+    }
+    if (effectiveDataTables.length) {
+      const rematch = rematchAnalysisDataTableSelectionResult(effectiveDataTables, submissionCatalog);
+      if (rematch.incompatible.length) {
+        const fields = formatAnalysisTableFieldDifferences(rematch.incompatible[0].fieldDifferences, effectiveDataTables[0]?.fieldLabels);
+        setAnalysisError(`数据表“${effectiveDataTables[0]?.name || "已选数据表"}”的字段结构已变化，涉及：${fields}。请重新选择数据表或调整分析方案。`);
         return;
       }
-      if (rematched[0]?.id !== effectiveDataTables[0]?.id) setSelectedDataTables(rematched);
-      effectiveDataTables = rematched;
+      if (!rematch.tables.length) {
+        setSelectedDataTables([]);
+        setAnalysisError("所选数据表当前不可用；系统没有按名称或其他机构的数据自动替代。请刷新站内数据后重新选择。");
+        return;
+      }
+      if (rematch.tables[0]?.id !== effectiveDataTables[0]?.id) setSelectedDataTables(rematch.tables);
+      effectiveDataTables = rematch.tables;
     }
     let resolvedViaMetricPreset = false;
     const uploadGate = uploadedAnalysisGate(knowledgeFiles);
@@ -1116,7 +1129,7 @@ export function SelfAnalysis() {
       return;
     }
     if (!effectiveDataTables.length && !topic && !uploadGate.hasDataSource && !uploadGate.hasTextDocument) {
-      const preset = resolveMetricPreset(nextQuery, availableMetrics, availableAnalysisTables);
+      const preset = resolveMetricPreset(nextQuery, availableMetrics, submissionCatalog);
       if (preset.table) {
         effectiveDataTables = [preset.table];
         resolvedViaMetricPreset = true;
@@ -1401,7 +1414,11 @@ export function SelfAnalysis() {
       return [...current.slice(0, index + 1), duplicate, ...current.slice(index + 1)];
     });
   };
-  const deleteVisualCard = (id: string) => setVisualCards((current) => current.filter((card) => card.id !== id));
+  const deleteVisualCard = async (id: string) => {
+    const card = visualCards.find((item) => item.id === id);
+    if (!(await askConfirm({ title: "删除图表", description: `确定删除图表「${card?.title || "该图表"}」？`, hint: "此操作不可撤销。" }))) return;
+    setVisualCards((current) => current.filter((item) => item.id !== id));
+  };
   const reportVisualTypesFor = (result: SavedAnalysisResult): Record<ResultVisualKey, VisualizationType> => (
     reportVisualTypeOverrides[result.id] || {
       primary: result.visualTypes.primary as VisualizationType,
@@ -1873,7 +1890,7 @@ export function SelfAnalysis() {
     }
   };
   const deleteSavedReport = async (result: SavedAnalysisResult) => {
-    if (!window.confirm(`确认删除报告“${result.title || result.query}”吗？`)) return;
+    if (!(await askConfirm({ title: "删除报告", description: `确定删除报告「${result.title || result.query}」？`, hint: "此操作不可撤销。" }))) return;
     try {
       await deleteSavedAnalysisResult({ tenantId, userId, resultId: result.id });
       setSavedAnalysisResults((current) => current.filter((item) => item.id !== result.id));
@@ -1947,7 +1964,7 @@ export function SelfAnalysis() {
         : response.result as SavedAnalysisResult;
       setSavedAnalysisResults((current) => [saved, ...current.filter((item) => item.id !== saved.id)].slice(0, 50));
       window.dispatchEvent(new CustomEvent("smart-data-agent-analysis-saved", { detail: saved }));
-      setSaveMessage(saveToWeekly ? "已保存到我的报告和经营周报，数据、结论、图表配置与脚本已关联 Topic_Data 最新快照。" : "已保存到我的报告，问题、分析结果和当前全部可视化配置已完整保留。");
+      setSaveMessage(saveToWeekly ? "已保存到我的报表「智能分析」和经营周报，数据、结论、图表配置与脚本已关联 Topic_Data 最新快照。" : "已保存到我的报表「智能分析」。问题、分析结果和当前图表配置已完整保留，请到该页签查看，而不是可视化报表。");
     } catch (error) {
       if (isDemoFallbackEnabled()) {
         const nextResults = [result, ...loadSavedAnalysisResults()].slice(0, 12);
@@ -2322,7 +2339,7 @@ export function SelfAnalysis() {
     }
   };
   const deleteExecution = async (task: BackendAnalysisResponse) => {
-    if (!window.confirm(`确认删除“${task.question || "未命名分析问题"}”这条执行记录吗？`)) return;
+    if (!(await askConfirm({ title: "删除执行记录", description: `确定删除「${task.question || "未命名分析问题"}」这条执行记录？`, hint: "此操作不可撤销。" }))) return;
     try {
       await deleteAnalysisHistoryTask({ tenantId, userId, taskId: task.task_id });
       setExecutionHistoryTasks((current) => current.filter((item) => item.task_id !== task.task_id));
@@ -2760,6 +2777,7 @@ export function SelfAnalysis() {
                       onHide={analysisSticky.hide}
                       uploadContext={analysisSticky.uploadContext}
                     />
+                  {analysisRows.length ? (
                   <ResizableVisualizationGrid>
                     {visualCards.map((card) => <AnalysisVisualCard
                       key={card.id} id={card.id} stateKey={`current:${analysisTaskId || query}:${card.id}`} fillHeight visualGridSpan={card.config?.layoutSpan} visualGridHeight={card.config?.layoutHeight} visualGridMaxSpan={card.config?.maxLayoutSpan} visualGridMaxHeight={card.config?.maxLayoutHeight}
@@ -2777,6 +2795,7 @@ export function SelfAnalysis() {
                       onDelete={() => deleteVisualCard(card.id)}
                     />)}
                   </ResizableVisualizationGrid>
+                  ) : null}
                   </div>
                 ) : (
                   <RawDataTable rows={analysisRows} onDownload={() => void downloadAnalysisRows()} />
@@ -2854,7 +2873,8 @@ export function SelfAnalysis() {
                         <div className="rounded-lg bg-[#fafbfc] px-3 py-8 text-center text-[12px] text-[#8a8a8e]">正在从 Topic_Data 读取该报告的最新数据…</div>
                       ) : (
                         <>
-                          <ResizableVisualizationGrid>
+                          {analysisRows.length ? (
+                  <ResizableVisualizationGrid>
                             {reportVisualizationsFor(entry.result).map((card, cardIndex, cards) => <AnalysisVisualCard
                               key={card.id} id={card.id} stateKey={`featured:${entry.result.id}:${card.id}`} fillHeight
                               title={card.title}
@@ -2868,9 +2888,10 @@ export function SelfAnalysis() {
                               onTitleChange={(nextTitle) => void persistSavedReportVisualizations(entry.result, cards.map((item) => item.id === card.id ? { ...item, title: nextTitle } : item))}
                               onConfigChange={(config) => setSavedAnalysisResults((current) => current.map((item) => item.id === entry.result.id ? { ...item, visualizations: cards.map((visual) => visual.id === card.id ? { ...visual, config } : visual) } : item))}
                               onDuplicate={(config, options) => { const duplicate = { ...card, id: `visual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, key: undefined, type: options?.asText ? "text" as const : card.type, title: options?.asText ? `${card.title} · 结论` : `${card.title} · 副本`, config: options?.asText ? { ...config, noteTitle: "", noteBody: "", noteItems: [], noteTitleHidden: false, ...visualDuplicateLayout(card.id) } : config }; void persistSavedReportVisualizations(entry.result, [...cards.slice(0, cardIndex + 1), duplicate, ...cards.slice(cardIndex + 1)]); }}
-                              onDelete={() => void persistSavedReportVisualizations(entry.result, cards.filter((item) => item.id !== card.id))}
+                              onDelete={() => { void askConfirm({ title: "删除图表", description: `确定删除图表「${card.title}」？`, hint: "此操作不可撤销。" }).then((ok) => { if (ok) void persistSavedReportVisualizations(entry.result, cards.filter((item) => item.id !== card.id)); }); }}
                             />)}
                           </ResizableVisualizationGrid>
+                  ) : null}
                           <div className="mt-4 rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-3 text-[12px] leading-[1.7] whitespace-pre-wrap text-[#3a3a3c]">{analysisSummary || entry.result.summary || "当前报告尚无可展示结论。"}</div>
                         </>
                       )}
@@ -2980,7 +3001,8 @@ export function SelfAnalysis() {
                     {reportLoadingId === result.id ? (
                       <div className="rounded-lg bg-[#fafbfc] px-3 py-8 text-center text-[12px] text-[#8a8a8e]">正在从 Topic_Data 读取该报告的最新数据…</div>
                     ) : <>
-                    <ResizableVisualizationGrid>
+                    {analysisRows.length ? (
+                  <ResizableVisualizationGrid>
                       {reportVisualizationsFor(result).map((card, cardIndex, cards) => <AnalysisVisualCard
                         key={card.id} id={card.id} stateKey={`report:${result.id}:${card.id}`} fillHeight
                         title={card.title}
@@ -2994,9 +3016,10 @@ export function SelfAnalysis() {
                         onTitleChange={(nextTitle) => void persistSavedReportVisualizations(result, cards.map((item) => item.id === card.id ? { ...item, title: nextTitle } : item))}
                         onConfigChange={(config) => setSavedAnalysisResults((current) => current.map((item) => item.id === result.id ? { ...item, visualizations: cards.map((visual) => visual.id === card.id ? { ...visual, config } : visual) } : item))}
                         onDuplicate={(config, options) => { const duplicate = { ...card, id: `visual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, key: undefined, type: options?.asText ? "text" as const : card.type, title: options?.asText ? `${card.title} · 结论` : `${card.title} · 副本`, config: options?.asText ? { ...config, noteTitle: "", noteBody: "", noteItems: [], noteTitleHidden: false, ...visualDuplicateLayout(card.id) } : config }; void persistSavedReportVisualizations(result, [...cards.slice(0, cardIndex + 1), duplicate, ...cards.slice(cardIndex + 1)]); }}
-                        onDelete={() => void persistSavedReportVisualizations(result, cards.filter((item) => item.id !== card.id))}
+                        onDelete={() => { void askConfirm({ title: "删除图表", description: `确定删除图表「${card.title}」？`, hint: "此操作不可撤销。" }).then((ok) => { if (ok) void persistSavedReportVisualizations(result, cards.filter((item) => item.id !== card.id)); }); }}
                       />)}
                     </ResizableVisualizationGrid>
+                  ) : null}
                     <div className="mt-4 rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-3 text-[12px] leading-[1.7] whitespace-pre-wrap text-[#3a3a3c]">{analysisSummary || result.summary || "当前报告尚无可展示结论。"}</div>
                     </>}
                   </div>

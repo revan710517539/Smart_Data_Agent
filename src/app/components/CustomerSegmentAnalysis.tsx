@@ -86,9 +86,11 @@ export function CustomerSegmentAnalysis() {
 function CustomerSegmentWorkspace({ pageData, canEdit }: { pageData: ReturnType<typeof usePageDataComposer>; canEdit: boolean }) {
   if (pageData.loading && !pageData.assets.length) return <CustomerSegmentStateCard message="正在读取分客群页面数据…" />;
   return <section data-customer-segment-workspace="true">
-    {pageData.visibleAssets.length > 0
+    {(pageData.hasSelectedPageData || pageData.mode === "edit")
       ? <PageDataVisualizationModules controller={pageData} showEditorControls={canEdit} layoutEditable={canEdit} showAssetPicker />
-      : <CustomerSegmentStateCard message={pageData.notice || "暂无分客群明细数据。请由超级管理员在站内数据的“分客群页面”中新增。"} />}
+      : null}
+    {pageData.waitingForPageDataRows && !pageData.hasSelectedPageData ? <CustomerSegmentStateCard message="正在读取分客群页面数据…" /> : null}
+    {!pageData.loading && !pageData.waitingForPageDataRows && !pageData.hasSelectedPageData ? <CustomerSegmentStateCard message={pageData.notice || "暂无分客群明细数据。请由超级管理员在站内数据的“分客群页面”中新增。"} /> : null}
   </section>;
 }
 

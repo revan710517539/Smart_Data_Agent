@@ -1,7 +1,7 @@
 # Smart Data Agent 生产开发与发布规范
 
 - Standard ID: `sda-production-development/v1`
-- Version: `1.0.0`
+- Version: `1.1.0`
 - Owner: Smart Data Agent 项目负责人
 - Authority: 本文件是本仓库开发、测试、候选发布和生产交付的唯一项目级规范入口。
 
@@ -18,16 +18,21 @@ Simulator。SDA 只消费 Data Crawler 已落盘的数据，不修改 Crawler �
 数据。
 
 ```text
-Data Crawler 宿主机目录：/opt/palywright/examples/data-crawler/data
-SDA 容器目录：/app/data
-访问模式：只读
+服务器权威存储：DATA_CRAWLER_MOUNT_TYPE + DATA_CRAWLER_MOUNT_SOURCE
+Data Crawler 容器：同一 Source -> /app/data（读写）
+SDA 容器：同一 Source -> /app/data（只读）
 ```
 
-必须比较 Docker mount 的宿主机 `Source`，不能因为两个容器内路径相同就判定为同一
-数据源。该宿主机目录必须等于 Data Crawler 的 `DATA_CRAWLER_OUTPUT_DIR`（本机与
-服务器默认都是采集仓库下的 `data/`，不是单独的 `runtime-data/`）。业务 CSV 不进入
-镜像；`/app/runtime` 和 `/app/Topic_Data` 是 SDA 自己的持久卷。生产适配不得改变
-分析场景、模型选择、Skill/Memory 语义、报表口径或其他业务模块。
+`DATA_CRAWLER_MOUNT_TYPE` 只允许 `bind` 或 `volume`；`DATA_CRAWLER_MOUNT_SOURCE`
+分别是规范化的宿主机绝对目录或 Docker 卷名。必须比较 Docker mount 的实际 Type、
+Source、目标路径和读写位，不能因为两个容器内路径相同就判定为同一数据源。严格
+Compose 拓扑继续用 `DATA_CRAWLER_SHARED_VOLUME`，但它必须与
+`DATA_CRAWLER_MOUNT_TYPE=volume`、`DATA_CRAWLER_MOUNT_SOURCE` 完全一致；该旧变量只是
+volume 兼容入口，不是唯一服务器形态。直接 Docker/systemd 服务器可以使用受保护
+环境配置中的 bind Source，目录变化时只更新配置，不修改业务代码或复制 CSV。
+本机测试仍只能使用临时目录。业务 CSV 不进入镜像；`/app/runtime` 和
+`/app/Topic_Data` 是 SDA 自己的持久存储。部署适配不得改变分析场景、模型选择、
+Skill/Memory 语义、报表口径或其他业务模块。
 
 ## 2. 每次开发必须遵守的流程
 
@@ -45,7 +50,9 @@ Fixture；Handler 测试桩必须支持真实响应签名。权限、安全上�
 提交前必须执行：
 
 ```bash
-./scripts/release-gate.sh
+SMART_DATA_AGENT_RELEASE_SCOPE=candidate \
+SMART_DATA_AGENT_TARGET_PLATFORM=linux/amd64 \
+./scripts/release-gate.sh <40位SHA>
 ```
 
 CI、候选和生产证据是不同层次。HTTP 200、构建成功、本地监听或截图都不是部署和
@@ -73,7 +80,7 @@ CI、候选和生产证据是不同层次。HTTP 200、构建成功、本地监�
 
 ```bash
 SMART_DATA_AGENT_MIGRATION_BASE_REF=<发布基线SHA> \
-  python3 scripts/check_mysql_migration_history.py
+  uv run --frozen python scripts/check_mysql_migration_history.py
 ./scripts/check-mysql-closure.sh
 ```
 
@@ -124,7 +131,30 @@ SMART_DATA_AGENT_MIGRATION_BASE_REF=<发布基线SHA> \
 7. 性能测试分别记录冷缓存、热缓存、静态资源、认证 API 和业务 API；
 8. 无界列表必须分页、稳定排序和硬上限；长任务进入有界 worker。
 
-## 7. 生产拓扑与安全配置
+## 7. 双服务器拓扑与安全配置
+
+### 7.1 当前 Development 等价服务器
+
+CentOS 7 服务器允许使用直接 Docker + systemd，不要求安装 Compose。该拓扑必须
+显式保持 `SMART_DATA_AGENT_ENV=development`、development auth、local object store、
+embedded worker，并通过 `.env.server-development.example` 与
+`scripts/server-development-container.sh` 管理。简化拓扑不要求独立 Worker、Redis、
+OIDC、S3、ClamAV 或 KMS，但仍必须保留：MySQL 8.0.18 + TLS、`AUTO_MIGRATE=false`、
+备份/隔离恢复回执、一次性 migration、不可变 Image ID/digest、完整 SHA、同源 Crawler
+挂载、候选业务验证和可执行回滚。Development 模式不得直接公开绑定 `0.0.0.0`；公网
+HTTPS/WSS/ASR 若对外提供，必须另行验证代理、会话和能力 readiness。
+现网 Development MySQL 连接已确认使用 `ssl_mode=required`；此档位显式记录该模式且
+不伪装成 CA 身份校验。具备 CA 时才切换为 `verify_ca`/`verify_identity` 并只读挂载 CA。
+直连容器固定使用 `--restart no`，由 systemd 的 `Restart=always` 单独接管；禁止
+Docker restart policy 与 systemd 同时重启同一容器。systemd unit 不硬编码未确认的
+MySQL unit 名，MySQL readiness 由容器 preflight 和 migration 收据验证；交付 unit
+复用现网 `smart-data-agent-docker-mss.service` 名称，禁止另装第二个 SDA controller。
+
+当前服务器的精确 Source 只能存在于受保护环境配置和运维回执中，不能写死在业务代码
+或版本化文档。Data Crawler 对该 Source 读写，SDA 对同一个 Source 只读；不得递归
+改权限、迁移或复制目录来满足门禁。
+
+### 7.2 严格 Production Compose
 
 生产使用同一精确 SHA 镜像，顺序固定为：
 
@@ -142,14 +172,17 @@ capabilities，并仅开放必要回环端口。
 仓库必须保留并执行：
 
 ```bash
-python3 scripts/check_production_development_standard.py
-./scripts/release-gate.sh
-./scripts/check-mysql-closure.sh
-./scripts/build-image.sh <40位SHA>
-./scripts/candidate-smoke.sh <候选URL>
-./scripts/auth-e2e.sh
-./scripts/data-crawler-contract-smoke.sh
+SMART_DATA_AGENT_RELEASE_SCOPE=candidate \
+SMART_DATA_AGENT_TARGET_PLATFORM=linux/amd64 \
+DATA_CRAWLER_MOUNT_TYPE=bind \
+DATA_CRAWLER_MOUNT_SOURCE=/受保护的服务器数据目录 \
+./scripts/release-gate.sh <40位SHA>
 ```
+
+这是进入候选环境前唯一允许标记“门禁通过”的入口。开发规范、MySQL 闭包、镜像构建、
+Crawler 只读探针、候选业务 smoke、真实认证和指定 CSV 分析终态都由该入口调用；不得把
+内部脚本拆开选择性执行后拼成通过结论。`capture-pre-cutover.sh` 与
+`verify-production-release.sh` 分别属于审批后的切流前取证和切流后验收，不替代候选门禁。
 
 完整门禁至少包含：diff 检查、开发规范合同、后端测试、MySQL 8.0.18、历史 migration
 不可变、SQL/package/image/ledger 闭包、TypeScript、Vite build、组件尺寸、API 客户端、
@@ -159,12 +192,30 @@ python3 scripts/check_production_development_standard.py
 
 镜像必须使用完整 Git SHA tag，并输出 OCI revision、镜像 ID/digest、SBOM、关键文件
 SHA256SUMS 和脱敏发布回执。不得使用 `latest`、短 SHA 或未记录来源的镜像发版。
+`SMART_DATA_AGENT_TARGET_PLATFORM` 必须显式为 `linux/amd64` 或 `linux/arm64`；工具链、
+应用镜像、候选容器和生产容器的实际平台必须逐层回读一致。候选与生产平台不一致时，
+不得用相同标签或多架构索引掩盖差异，必须在切流前失败关闭。
+门禁默认止于候选环境，不得在切流前把“生产验证”伪装成已通过；完成备份和同一镜像
+digest 切流后，必须再执行 `verify-production-release.sh`，用候选身份回执比对生产身份、
+容器 ID、同一 Image ID、运行实例、完整认证会话和受保护接口。候选门禁必须显式提供
+`SMART_DATA_AGENT_CANDIDATE_CONTAINER`，生产验收必须提供切流后的
+`SMART_DATA_AGENT_PRODUCTION_CONTAINER`。`SMART_DATA_AGENT_RELEASE_CACHE_ROOT` 可挂载经
+校验的内部 uv/npm 缓存；断网执行必须显式设置 `SMART_DATA_AGENT_RELEASE_OFFLINE=true`，
+并提供本地已存在的不可变 `SMART_DATA_AGENT_TOOLCHAIN_IMAGE`。缓存根目录必须包含
+`uv/`、`npm/`、`wheelhouse/`，先运行
+`python scripts/release_cache_manifest.py create <缓存目录>` 生成全文件摘要清单，再把该
+清单自身 SHA-256 作为 `SMART_DATA_AGENT_RELEASE_CACHE_MANIFEST_SHA256` 传入门禁。门禁
+以只读方式挂载并逐文件校验缓存；缓存不完整、锁文件不一致或离线镜像仍需联网时均失败
+关闭且不能生成通过回执，应用镜像构建同时使用 `--network none`。
 
 ## 9. 候选、切换、验收和回滚
 
-候选必须使用生产等价 MySQL 8.0.18、Secret 名称/结构、独立回环端口、runtime/topic
-安全副本或只读边界、Crawler 生产只读挂载，以及相同对象存储、Worker 和语义运行时
-合同。
+候选必须与其目标服务器拓扑等价：Development 目标保持 development auth、local
+object store、embedded worker；严格 Production 目标保持 OIDC、外部对象存储和独立
+Worker。两者都必须使用 MySQL 8.0.18、独立回环端口、runtime/topic 安全副本、同一
+Crawler Type/Source 的只读挂载和相同语义运行时合同。不得用严格 Production 组件
+缺失来否定已批准的 Development 拓扑，也不得用 Development 门禁冒充严格 Production
+验收。
 
 切换前保存：
 
@@ -175,6 +226,21 @@ SHA256SUMS 和脱敏发布回执。不得使用 `latest`、短 SHA 或未记录�
 - runtime/topic 卷备份；
 - Crawler Source/mount/manifest 盘点；
 - 公网 readiness、浏览器验收和日志检查结果。
+
+以上线前恢复点和当前生产容器为前提，必须执行：
+
+```bash
+SMART_DATA_AGENT_RELEASE_TOOLCHAIN_IMAGE_ID=sha256:<门禁记录的工具链镜像ID> \
+SMART_DATA_AGENT_TARGET_PLATFORM=linux/amd64 \
+SMART_DATA_AGENT_PRODUCTION_URL=https://sda.example.com \
+SMART_DATA_AGENT_CURRENT_PRODUCTION_CONTAINER=<当前生产容器名或ID> \
+./scripts/capture-pre-cutover.sh <40位SHA>
+```
+
+该命令只读取公网 readiness 和 Docker 元数据，生成不含环境变量/Secret 的
+`pre-cutover-snapshot.json`，固定旧容器、旧 revision、旧 Image ID 和目标候选镜像。
+切流后的生产验证会再次检查旧 Image ID 仍在本机且 revision 未改变；缺少该回滚点时
+生产验收失败关闭。
 
 生产验收必须确认：精确 SHA、MySQL 8.0.18、closure、live/ready、Worker、对象存储、
 语义运行时、完整认证链、canonical tenant switching、refresh、防风暴、Crawler 对应租户

@@ -55,7 +55,7 @@ class BridgeOnboardingContractTest(unittest.TestCase):
                 self.assertIn("https://SDA_SERVER", body)
                 self.assertIn("distribution/manifest", body)
                 self.assertIn("package.sha256", body)
-                self.assertNotIn("/Users/revan", body)
+                self.assertNotRegex(body, r"/(?:Users|home)/[^/\s]+")
                 self.assertNotIn("127.0.0.1:8788", body)
                 self.assertTrue("403/404" in body or "403、404" in body)
                 self.assertIn(channel, body.lower())

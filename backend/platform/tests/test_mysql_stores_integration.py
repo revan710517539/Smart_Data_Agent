@@ -12,7 +12,13 @@ import pymysql
 
 from backend.platform.bootstrap import build_production_platform
 from backend.platform.analysis_workspace.service import MySQLAnalysisGovernanceStore
-from backend.platform.database.mysql import MySQLConnectionPool, apply_mysql_schema
+from backend.platform.analysis_profiles import load_analysis_profiles
+from backend.platform.database.identity import PostgreSQLIdentityResolver
+from backend.platform.database.mysql import (
+    MYSQL_ADDITIVE_MIGRATION_DIR,
+    MySQLConnectionPool,
+    apply_mysql_schema,
+)
 from backend.platform.database.mysql_compat import MySQLStoreConnectionPool
 from backend.platform.runtime_config import RuntimeConfig
 from backend.platform.orchestration import AgentStep, AnalysisTask
@@ -55,6 +61,19 @@ class MySQLStoresIntegrationTest(postgres_integration.PostgreSQLStoresIntegratio
     def tearDownClass(cls) -> None:
         cls.pool.close()
 
+    @classmethod
+    def _provision(cls) -> None:
+        super()._provision()
+        profiles = load_analysis_profiles()
+        with cls.pool.connection() as connection:
+            for profile in profiles["institutions"]:
+                PostgreSQLIdentityResolver.ensure_tenant(
+                    connection,
+                    str(profile["tenantId"]),
+                    str(profile["institution"]),
+                )
+            connection.commit()
+
     def test_postgresql_url_is_rejected_by_production_composition(self) -> None:
         del self
 
@@ -69,12 +88,16 @@ class MySQLStoresIntegrationTest(postgres_integration.PostgreSQLStoresIntegratio
                 cursor.execute("SELECT version, checksum FROM platform_schema_migrations ORDER BY version")
                 rows = list(cursor.fetchall())
         versions = [str(row["version"] if isinstance(row, dict) else row[0]) for row in rows]
-        self.assertEqual(versions, ["0001", "0029", "0030", "0031", "0032", "0033", "0034", "0035"])
+        expected_versions = [
+            "0001",
+            *(path.name.split("_", 1)[0] for path in sorted(MYSQL_ADDITIVE_MIGRATION_DIR.glob("*.sql"))),
+        ]
+        self.assertEqual(versions, expected_versions)
         with self.raw_pool.connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     "SELECT status FROM platform_schema_migration_attempts WHERE version=%s ORDER BY started_at DESC LIMIT 1",
-                    ("0035",),
+                    (expected_versions[-1],),
                 )
                 attempt = cursor.fetchone()
         self.assertEqual(str(attempt["status"] if isinstance(attempt, dict) else attempt[0]), "succeeded")
@@ -125,6 +148,7 @@ class MySQLStoresIntegrationTest(postgres_integration.PostgreSQLStoresIntegratio
         with (
             patch("backend.platform.bootstrap.build_rate_limiter", return_value=InMemoryRateLimiter()),
             patch("backend.platform.bootstrap.OIDCClient.validate_config", return_value=None),
+            patch.dict(os.environ, {"SMART_DATA_AGENT_CAPABILITY_MODE": "seed"}),
         ):
             services = build_production_platform(config)
         try:

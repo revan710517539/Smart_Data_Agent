@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { fetchApplicationModule, runApplicationAction } from "../services/applicationApi";
 import { DataPageSelector, useClientPagination } from "./ui/DataPageSelector";
+import { askConfirm } from "./ui/ConfirmDialog";
 
 type TodoStatus = "todo" | "in_progress" | "done" | "closed";
 type TodoPriority = "low" | "medium" | "high" | "urgent";
@@ -262,6 +263,8 @@ export function TodoWorkspace({
   };
 
   const deleteTodo = async (todoId: string) => {
+    const todo = todos.find((item) => item.id === todoId);
+    if (!(await askConfirm({ title: "删除待办", description: `确定删除「${todo?.title || "该待办"}」？`, hint: "此操作不可撤销。" }))) return;
     const previous = todos;
     setTodos((items) => items.filter((todo) => todo.id !== todoId));
     setSyncError("");

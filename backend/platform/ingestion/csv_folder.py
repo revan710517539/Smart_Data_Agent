@@ -27,17 +27,10 @@ _DELIVERY_DATE_TOKEN_RE = re.compile(
 class CSVFolderSource:
     """Read-only view of one institution's Data Crawler delivery folder."""
 
-    # Data Crawler's default DATA_CRAWLER_OUTPUT_DIR is <checkout>/data.
-    # SDA must read that same host tree.  A previous compose contract used the
-    # sibling runtime-data directory, which the crawler never wrote.
-    local_data_crawler_root = Path("/Users/revan/Documents/playwright/examples/data-crawler/data")
-    legacy_runtime_data_crawler_root = Path(
-        "/Users/revan/Documents/playwright/examples/data-crawler/runtime-data"
-    )
+    # The runtime never probes a developer checkout. Local integration must
+    # inject DATA_CRAWLER_OUTPUT_DIR; deployment mounts the governed delivery
+    # at /app/data and may override it with SMART_DATA_AGENT_DATA_CRAWLER_ROOT.
     container_data_crawler_root = Path("/app/data")
-    _crawler_operational_directory_names = frozenset(
-        {"csv", "metadata", "runs", "secrets", "sessions", "snapshots"}
-    )
 
     default_max_file_bytes = 128 * 1024 * 1024
     default_max_files = 500
@@ -78,77 +71,32 @@ class CSVFolderSource:
         self._tenant_sources: dict[str, "CSVFolderSource"] = {}
         self._contract = dict(contract or {})
         self._contract_error = str(contract_error or "")
+        self._manifest_files = {
+            str(item.get("path") or "").strip(): dict(item)
+            for item in self._contract.get("files", [])
+            if isinstance(item, dict) and str(item.get("path") or "").strip()
+        }
 
     @classmethod
     def from_environment(cls) -> "CSVFolderSource":
-        # A deployed Smart Data Agent reads the container mount directly from
-        # /app/data/<机构名>. The workstation root is only the local analogue
-        # of Data Crawler's DATA_CRAWLER_OUTPUT_DIR.  Neither path may fall
-        # back to legacy Origin_Data or another tenant.
+        # Root selection is configuration, not host discovery.  This keeps an
+        # empty Linux container, a workstation and production on the same
+        # deterministic contract and prevents accidental reads from a sibling
+        # checkout or a retired runtime-data directory.
         configured = str(os.getenv("SMART_DATA_AGENT_DATA_CRAWLER_ROOT") or "").strip()
+        crawler_output = str(os.getenv("DATA_CRAWLER_OUTPUT_DIR") or "").strip()
         if configured:
             # An explicit server setting wins even while the path is not
             # mounted.  That state must fail closed as an empty tenant catalog,
             # rather than silently reading a local or legacy directory.
             root = Path(configured).expanduser()
-        elif cls.container_data_crawler_root.is_dir() and (
-            cls._existing_host_crawler_root() is None
-            or any(cls.container_data_crawler_root.iterdir())
-        ):
-            root = cls.container_data_crawler_root
+        elif crawler_output:
+            root = Path(crawler_output).expanduser()
         else:
-            host_root = cls._existing_host_crawler_root()
-            # Preserve the deployment contract even when neither mount has
-            # arrived yet: the tenant catalog remains empty until /app/data is
-            # mounted, never silently reverts to a legacy shared directory.
-            root = host_root if host_root is not None else cls.container_data_crawler_root
+            # Preserve the deployment contract even before the mount arrives:
+            # the catalog stays empty until /app/data is mounted.
+            root = cls.container_data_crawler_root
         return cls(root)
-
-    @classmethod
-    def _host_crawler_root_candidates(cls) -> tuple[Path, ...]:
-        """Host directories that Data Crawler may actually write."""
-
-        configured_output = str(os.getenv("DATA_CRAWLER_OUTPUT_DIR") or "").strip()
-        candidates: list[Path] = []
-        if configured_output:
-            candidates.append(Path(configured_output).expanduser())
-        candidates.append(cls.local_data_crawler_root)
-        candidates.append(cls.legacy_runtime_data_crawler_root)
-        unique: list[Path] = []
-        seen: set[str] = set()
-        for path in candidates:
-            key = str(path)
-            if key in seen:
-                continue
-            seen.add(key)
-            unique.append(path)
-        return tuple(unique)
-
-    @classmethod
-    def _existing_host_crawler_root(cls) -> Path | None:
-        existing = [path for path in cls._host_crawler_root_candidates() if path.is_dir()]
-        if not existing:
-            return None
-        for path in existing:
-            if cls._contains_crawler_deliveries(path):
-                return path
-        return existing[0]
-
-    @classmethod
-    def _contains_crawler_deliveries(cls, root: Path) -> bool:
-        if (root / "metadata" / "sources.json").is_file():
-            return True
-        skip = cls._crawler_operational_directory_names
-        try:
-            return any(
-                item.is_dir()
-                and item.name not in skip
-                and not item.name.startswith(".")
-                and not item.name.startswith(".unmapped-")
-                for item in root.iterdir()
-            )
-        except OSError:
-            return False
 
     def for_tenant(self, tenant_id: str) -> "CSVFolderSource":
         """Return the sole approved raw-data directory for one tenant.
@@ -450,8 +398,10 @@ class CSVFolderSource:
         reader = csv.reader(io.StringIO(text, newline=""))
         header = next(reader, [])
         row_count = sum(1 for row in reader if row)
+        relative_path = self._relative_path(path)
+        manifest_file = self._manifest_files.get(relative_path) or {}
         metadata = {
-            "relative_path": self._relative_path(path),
+            "relative_path": relative_path,
             "file_name": path.name,
             "size_bytes": size_bytes,
             "modified_at": datetime.fromtimestamp(
@@ -461,6 +411,9 @@ class CSVFolderSource:
             "content_hash": hashlib.sha256(content).hexdigest(),
             "row_count": row_count,
             "columns": header,
+            "sql_id": str(manifest_file.get("sql_id") or ""),
+            "crawler_run_id": str(manifest_file.get("run_id") or ""),
+            "crawler_finished_at": str(manifest_file.get("finished_at") or ""),
         }
         self._metadata_cache = {
             key: value for key, value in self._metadata_cache.items() if key[0] != str(path)
@@ -529,12 +482,26 @@ class CSVFolderSource:
         # Delivery filenames change daily.  External-reference consent belongs
         # to the logical source, never to one immutable delivery file.
         source_key = hashlib.sha256(_source_identity(relative_path).encode("utf-8")).hexdigest()[:32]
+        asset_id = f"raw:{source_key}"
         schema_fingerprint = hashlib.sha256(
-            "|".join(f"{field_codes[header]}:{_infer_type(samples_by_header[header])}" for header in normalized_headers).encode("utf-8")
+            json.dumps(
+                [
+                    {
+                        "canonical_id": field_codes[header],
+                        "physical_name": header,
+                        "type": _infer_type(samples_by_header[header]),
+                    }
+                    for header in normalized_headers
+                ],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
         ).hexdigest()[:32]
         display_name = _display_table_name(relative_path)
         return {
             "id": f"csv_{identity}",
+            "assetId": asset_id,
             "tableNameEn": f"csv_{identity[:12]}",
             "tableNameCn": display_name,
             "source": "当前机构 Data Crawler 文件夹",
@@ -556,9 +523,15 @@ class CSVFolderSource:
             "rowCount": metadata["row_count"],
             "previewRows": preview_rows,
             "contentHash": metadata["content_hash"],
+            # Data Crawler owns this immutable file-to-SQL lineage. SDA uses it
+            # to configure and execute the same institution-scoped script; the
+            # user must never choose a second SQL for an already selected table.
+            "sqlId": metadata.get("sql_id") or "",
+            "crawlerRunId": metadata.get("crawler_run_id") or "",
+            "crawlerFinishedAt": metadata.get("crawler_finished_at") or "",
             "sourcePlatform": "本地CSV",
             "lifecycleStatus": "active",
-            "assetVersion": 1,
+            "assetVersion": metadata["content_hash"][:16],
             "schemaVersion": metadata["content_hash"][:16],
             "lockVersion": 1,
         }

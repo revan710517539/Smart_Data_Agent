@@ -5,13 +5,16 @@
 
   本项目所有开发、测试、候选和生产发布必须引用
   [`sda-production-development/v1`](DEVELOPMENT.md)。任何改动提交前运行
-  `./scripts/release-gate.sh`；构建通过或接口返回 200 不等于已部署或生产可用。
+  `SMART_DATA_AGENT_RELEASE_SCOPE=candidate SMART_DATA_AGENT_TARGET_PLATFORM=linux/amd64 ./scripts/release-gate.sh <40位SHA>`；
+  切流前运行 `./scripts/capture-pre-cutover.sh <40位SHA>` 固定旧 Image ID，切流后再运行
+  `./scripts/verify-production-release.sh <40位SHA>`。构建通过或接口返回
+  200 不等于已部署或生产可用。
 
   This is a code bundle for 贷款数据分析Agent设计. The original project is available at https://www.figma.com/design/Cs7QemQ1JsBLR6gXYw2wZs/%E8%B4%B7%E6%AC%BE%E6%95%B0%E6%8D%AE%E5%88%86%E6%9E%90Agent%E8%AE%BE%E8%AE%A1.
 
   ## Running the code
 
-  Run `npm i` to install the dependencies.
+  Run `npm ci` to install the exact locked dependencies.
 
   Start the local API server:
 
@@ -70,24 +73,42 @@
   prototype workflows. Strict mode requires a signed bearer token and ignores
   user or tenant values embedded in request body/query parameters.
 
-  ## Forgejo / Dokploy internal deployment
+  ## Server deployment
 
-  The Dokploy application builds the root `Dockerfile` from the private Forgejo
-  `main` branch. The checked server contract is `docker-compose.server.yml` and
-  the full operator runbook is `docs/server_mysql_deployment.md`. It keeps the
-  existing host-native MySQL and Data Crawler directory unchanged:
+  The checked server contract has two governed profiles, both documented in
+  `docs/server_mysql_deployment.md`:
 
-  - `/opt/palywright/examples/data-crawler/data` is mounted read-only at
-    `/app/data` (the same tree Data Crawler writes via `DATA_CRAWLER_OUTPUT_DIR`);
-    production requires the versioned Crawler `manifest.json`.
+  - The current CentOS 7 server uses direct Docker + systemd with
+    `.env.server-development.example`, `scripts/server-development-container.sh`
+    and `configs/deployment/smart-data-agent-docker-mss.service`. The unit name
+    deliberately matches the existing server controller so deployment replaces
+    it atomically after backup instead of installing a competing supervisor. It keeps
+    Development authentication, local object storage and the embedded worker;
+    Compose, OIDC, Redis, S3, ClamAV and a separate Worker are not prerequisites.
+  - `docker-compose.server.yml` remains the stricter Production profile for a
+    later environment that has OIDC, Redis TLS, KMS, external object storage,
+    ClamAV and an independent Worker.
+
+  Both profiles use `DATA_CRAWLER_MOUNT_TYPE` plus
+  `DATA_CRAWLER_MOUNT_SOURCE`. Data Crawler mounts that exact Source read-write
+  at `/app/data`; SDA mounts it read-only at `/app/data`. Type, Source and RW/RO
+  are read back from the real containers, so equal container paths with
+  different sources are rejected. Strict Compose additionally keeps
+  `DATA_CRAWLER_SHARED_VOLUME` equal to the volume Source for compatibility.
+  Production-equivalent validation requires the Crawler-generated versioned
+  `manifest.json`.
+
+  In both profiles:
+
   - `/app/Topic_Data` and `/app/runtime` use persistent writable volumes.
-  - `/var/lib/mysql80/ca.pem` is mounted read-only; the MySQL server key is never
-    mounted into the application container.
+  - The current Development profile matches the confirmed `ssl_mode=required`
+    transport. `verify_ca`/`verify_identity` profiles conditionally mount only
+    the CA file read-only; the MySQL server key is never mounted.
   - Local `Origin_Data/`, `Topic_Data/`, `runtime/`, `.git/` and test fixtures are
     excluded from the Docker build context. Only the two governed schema seed
     files below `Origin_Data/` may enter the image.
 
-  Dokploy must inject the real values as protected environment variables. Do
+  The deployment controller must inject the real values as protected environment variables. Do
   not store a database password, login password or signing secret in Git,
   Compose, the image or chat:
 
@@ -99,6 +120,9 @@
   SMART_DATA_AGENT_DATABASE_URL=mysql+pymysql://sda_app:<url-encoded-password>@172.17.0.1:3306/smart_data_agent?ssl_mode=verify_ca&ssl_ca=/run/secrets/mysql_ca.pem
   SMART_DATA_AGENT_DATA_WAREHOUSE=csv
   SMART_DATA_AGENT_OBJECT_STORE=s3
+  DATA_CRAWLER_SHARED_VOLUME=playwright-data-crawler-data
+  DATA_CRAWLER_MOUNT_TYPE=volume
+  DATA_CRAWLER_MOUNT_SOURCE=playwright-data-crawler-data
   SMART_DATA_AGENT_DATA_CRAWLER_ROOT=/app/data
   SMART_DATA_AGENT_DATA_CRAWLER_ENDPOINTS={"tenant:华兴银行":{"baseUrl":"http://playwright-data-crawler:8795","institutionId":"huaxing","institutionDirectory":"华兴银行","token":"<protected-per-institution-token>"}}
   SMART_DATA_AGENT_CSV_MAX_FILE_BYTES=134217728
@@ -118,6 +142,13 @@
   institution, preserving `u_super_admin` as the single global super-admin
   subject. If the approved local MySQL database has already been migrated in
   full, skip provisioning and verify its migration ledger and row counts.
+
+  The direct Development server also uses `SMART_DATA_AGENT_AUTO_MIGRATE=false`:
+  a verified MySQL backup/isolated restore receipt is required before the
+  one-time `migrate` action, and the candidate container is created stopped.
+  The operator starts only the exact named candidate after approval. Changing
+  the server CSV directory requires only updating `DATA_CRAWLER_MOUNT_SOURCE`
+  in protected configuration; business code continues to read `/app/data`.
 
   Production Compose separates one-time migration and capability-preparation
   jobs from the long-running API and Worker. It

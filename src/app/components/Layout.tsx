@@ -20,6 +20,7 @@ import {
   Sparkles,
   PanelLeftClose,
   PanelLeftOpen,
+  RefreshCw,
 } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
 import { runApplicationAction } from "../services/applicationApi";
@@ -30,6 +31,7 @@ import { AgentSupervisor } from "./agent-supervisor/AgentSupervisor";
 import { contextRailWideEvent } from "./context-rail/ContextSideRail";
 import { GlobalContextRail } from "./context-rail/GlobalContextRail";
 import { GlobalMessageBoardShortcut } from "./message-board/GlobalMessageBoardShortcut";
+import { ConfirmDialogHost } from "./ui/ConfirmDialog";
 import { fetchSystemConfig } from "../services/systemConfigApi";
 import {
   configuredTextModelOptions,
@@ -39,7 +41,7 @@ import {
 } from "../services/modelSelectionStore";
 import { trackInteraction } from "../services/interactionTelemetry";
 import { changeAccountPassword } from "../services/authApi";
-import { apiErrorMessage } from "../services/apiClient";
+import { ApiRequestError, apiErrorMessage } from "../services/apiClient";
 
 type MenuItem = {
   key: string;
@@ -48,6 +50,10 @@ type MenuItem = {
   icon: ComponentType<{ className?: string }>;
   children?: Omit<MenuItem, "icon">[];
 };
+
+type TextModelLoadStatus = "idle" | "loading" | "retrying" | "ready" | "empty" | "failed";
+
+const textModelRetryDelaysMs = [0, 1_000, 2_000, 4_000, 8_000, 12_000, 16_000, 20_000];
 
 const menuItems: MenuItem[] = [
   { key: "dashboard", path: "/dashboard", label: "多机构分析", icon: Gauge },
@@ -90,6 +96,7 @@ const menuItems: MenuItem[] = [
       { key: "task-workbench.todos", path: "/agent/todos", label: "待办任务" },
       { key: "task-workbench.tasks", path: "/agent/tasks", label: "自动化任务" },
       { key: "task-workbench.message-board", path: "/agent/message-board", label: "留言板管理" },
+      { key: "task-workbench.interaction-analytics", path: "/agent/interaction-analytics", label: "埋点分析" },
     ],
   },
   {
@@ -134,10 +141,12 @@ export function Layout() {
     currentTenantRoles,
     institutions,
     isAuthenticated,
+    isSwitchingInstitution,
     isSuperAdmin,
     logout,
     selectedInstitution,
     setSelectedInstitution,
+    tenantSwitchNotice,
     tenantId,
     userId,
     userName,
@@ -164,6 +173,8 @@ export function Layout() {
   const [todoReturnPath, setTodoReturnPath] = useState("/");
   const [textModelOptions, setTextModelOptions] = useState<TextModelOption[]>([]);
   const [selectedTextModelId, setSelectedTextModelId] = useState("");
+  const [textModelLoadStatus, setTextModelLoadStatus] = useState<TextModelLoadStatus>("idle");
+  const [textModelReloadToken, setTextModelReloadToken] = useState(0);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -232,12 +243,13 @@ export function Layout() {
   }, []);
 
   const visibleMenuItems = useMemo(
-    () => filterMenuItems(menuItems, allowedMenuKeys, institutions.length),
-    [allowedMenuKeys, institutions.length],
+    () => filterMenuItems(menuItems, allowedMenuKeys, institutions.length, isSuperAdmin),
+    [allowedMenuKeys, institutions.length, isSuperAdmin],
   );
   const currentMenuKey = menuKeyForPath(menuItems, location.pathname);
   const accessFallbackPath = firstVisibleMenuPath(visibleMenuItems) || "/";
   const isTodoPage = location.pathname === "/agent/todos";
+  const canUseTodoShortcut = visibleMenuItems.some((item) => item.key === "task-workbench");
   const isSmartAnalysisPage = location.pathname === "/self-analysis/query";
 
   useEffect(() => {
@@ -286,26 +298,40 @@ export function Layout() {
     if (!isAuthenticated || isSmartAnalysisPage) {
       setTextModelOptions([]);
       setSelectedTextModelId("");
+      setTextModelLoadStatus("idle");
       return;
     }
     let cancelled = false;
     const syncTextModels = async () => {
-      try {
-        const response = await fetchSystemConfig({ tenantId, userId });
-        if (cancelled) return;
-        const options = configuredTextModelOptions(response.models);
-        const persisted = readPersistedTextModelSelection(tenantId, userId);
-        const selected = options.find((option) => option.id === `${persisted?.integrationId || ""}::${persisted?.selectedModelName || ""}`)
-          || options[0];
-        setTextModelOptions(options);
-        setSelectedTextModelId(selected?.id || "");
-        if (selected && selected.id !== `${persisted?.integrationId || ""}::${persisted?.selectedModelName || ""}`) {
-          persistTextModelSelection(tenantId, userId, selected);
+      setTextModelOptions([]);
+      setSelectedTextModelId("");
+      setTextModelLoadStatus("loading");
+      for (let attempt = 0; attempt < textModelRetryDelaysMs.length; attempt += 1) {
+        const delayMs = textModelRetryDelaysMs[attempt];
+        if (delayMs > 0) {
+          setTextModelLoadStatus("retrying");
+          await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+          if (cancelled) return;
         }
-      } catch {
-        if (!cancelled) {
-          setTextModelOptions([]);
-          setSelectedTextModelId("");
+        try {
+          const response = await fetchSystemConfig({ tenantId, userId, forceRefresh: attempt > 0 });
+          if (cancelled) return;
+          const options = configuredTextModelOptions(response.models);
+          const persisted = readPersistedTextModelSelection(tenantId, userId);
+          const persistedId = `${persisted?.integrationId || ""}::${persisted?.selectedModelName || ""}`;
+          const selected = options.find((option) => option.id === persistedId) || options[0];
+          setTextModelOptions(options);
+          setSelectedTextModelId(selected?.id || "");
+          setTextModelLoadStatus(options.length ? "ready" : "empty");
+          if (selected && selected.id !== persistedId) {
+            persistTextModelSelection(tenantId, userId, selected);
+          }
+          return;
+        } catch (error) {
+          if (!isRetryableTextModelLoadError(error) || attempt === textModelRetryDelaysMs.length - 1) {
+            if (!cancelled) setTextModelLoadStatus("failed");
+            return;
+          }
         }
       }
     };
@@ -313,7 +339,7 @@ export function Layout() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, isSmartAnalysisPage, tenantId, userId]);
+  }, [isAuthenticated, isSmartAnalysisPage, tenantId, textModelReloadToken, userId]);
 
   useEffect(() => {
     if (!isTodoPage) {
@@ -347,6 +373,7 @@ export function Layout() {
     runApplicationAction({ tenantId, userId, moduleKey: "platform_shell", action, payload });
 
   const handleTodoShortcut = () => {
+    if (!canUseTodoShortcut) return;
     trackInteraction({ eventName: "sidebar_todo_click", resourceType: "sidebar", resourceId: "todo" });
     navigate(isTodoPage ? todoReturnPath || "/" : "/agent/todos");
   };
@@ -429,20 +456,22 @@ export function Layout() {
               </div>
             </div>
             <div className="ml-auto mt-[6.5px] flex items-center gap-1">
-              <button
-                type="button"
-                onClick={handleTodoShortcut}
-                aria-label={isTodoPage ? "返回上一页" : "打开待办任务"}
-                title={isTodoPage ? "返回上一页" : "待办任务"}
-                data-agent-todo-shortcut="true"
-                className={`flex h-[26px] w-[26px] items-center justify-center rounded-md border transition-colors ${
-                  isTodoPage
-                    ? "border-[#d1d1d6] bg-[#f2f2f7] text-[#1d1d1f]"
-                    : "border-[#e5e5ea] bg-[#fafbfc] text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f]"
-                }`}
-              >
-                <ListChecks className="h-3.5 w-3.5" />
-              </button>
+              {canUseTodoShortcut ? (
+                <button
+                  type="button"
+                  onClick={handleTodoShortcut}
+                  aria-label={isTodoPage ? "返回上一页" : "打开待办任务"}
+                  title={isTodoPage ? "返回上一页" : "待办任务"}
+                  data-agent-todo-shortcut="true"
+                  className={`flex h-[26px] w-[26px] items-center justify-center rounded-md border transition-colors ${
+                    isTodoPage
+                      ? "border-[#d1d1d6] bg-[#f2f2f7] text-[#1d1d1f]"
+                      : "border-[#e5e5ea] bg-[#fafbfc] text-[#8a8a8e] hover:bg-[#f2f2f7] hover:text-[#1d1d1f]"
+                  }`}
+                >
+                  <ListChecks className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
               <button type="button" onClick={() => { trackInteraction({ eventName: "sidebar_collapse_click", resourceType: "sidebar" }); setSidebarCollapsed(true); }} aria-label="收起左侧菜单" title="收起菜单" data-agent-sidebar-collapse="true" className="flex h-[26px] w-[26px] items-center justify-center rounded-md border border-[#e5e5ea] bg-[#fafbfc] text-[#8a8a8e] transition-colors hover:bg-[#f2f2f7] hover:text-[#1d1d1f]"><PanelLeftClose className="h-3.5 w-3.5" /></button>
             </div>
           </div>
@@ -450,11 +479,12 @@ export function Layout() {
             <button
               type="button"
               onClick={() => { trackInteraction({ eventName: "institution_selector_click", resourceType: "institution", resourceId: selectedInstitution }); setInstitutionOpen((open) => !open); }}
+              disabled={isSwitchingInstitution}
               className="flex h-8 w-full items-center gap-2 rounded-lg border border-[#e5e5ea] bg-white px-2.5 text-[12px] text-[#3a3a3c] transition-colors hover:bg-[#f2f2f7]"
               aria-expanded={institutionOpen}
             >
               <Landmark className="h-3.5 w-3.5 text-[#8a8a8e]" />
-              <span className="min-w-0 flex-1 truncate text-left">{selectedInstitution}</span>
+              <span className="min-w-0 flex-1 truncate text-left">{isSwitchingInstitution ? "正在切换机构…" : selectedInstitution}</span>
               <ChevronDown className={`h-3 w-3 text-[#aeaeb2] transition-transform ${institutionOpen ? "rotate-180" : ""}`} />
             </button>
             {institutionOpen && (
@@ -463,11 +493,11 @@ export function Layout() {
                   <button
                     key={institution}
                     type="button"
-                    onClick={() => {
-                      setSelectedInstitution(institution);
-                      trackInteraction({ eventName: "institution_select", resourceType: "institution", resourceId: institution, extension: { institution } });
+                    onClick={async () => {
                       setInstitutionOpen(false);
-                      void runShellAction("select_institution", { selectedInstitution: institution });
+                      const switched = await setSelectedInstitution(institution);
+                      trackInteraction({ eventName: "institution_select", resourceType: "institution", resourceId: institution, extension: { institution, outcome: switched ? "success" : "rejected" } });
+                      if (switched) void runShellAction("select_institution", { selectedInstitution: institution });
                     }}
                     className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] ${
                       selectedInstitution === institution
@@ -479,6 +509,11 @@ export function Layout() {
                     {institution}
                   </button>
                 ))}
+              </div>
+            )}
+            {tenantSwitchNotice && (
+              <div className="mt-1.5 text-[10px] leading-4 text-[#d93025]" role="status" data-institution-switch-notice="true">
+                {tenantSwitchNotice}
               </div>
             )}
           </div>
@@ -519,7 +554,7 @@ export function Layout() {
                             prepareMenuRoute(child.path || "");
                           }}
                           onClick={(event) => {
-                            trackInteraction({ eventName: "secondary_menu_click", resourceType: "menu", resourceId: child.key, extension: { label: child.label } });
+                            trackInteraction({ eventName: "secondary_menu_click", resourceType: "menu", resourceId: child.key, extension: { label: child.label, target_path: child.path } });
                             void navigatePreparedMenuRoute(event, child.path || "");
                           }}
                           aria-busy={pendingRoutePath === child.path}
@@ -556,7 +591,7 @@ export function Layout() {
                   prepareMenuRoute(item.path || "");
                 }}
                 onClick={(event) => {
-                  trackInteraction({ eventName: "primary_menu_click", resourceType: "menu", resourceId: item.key, extension: { label: item.label } });
+                  trackInteraction({ eventName: "primary_menu_click", resourceType: "menu", resourceId: item.key, extension: { label: item.label, target_path: item.path } });
                   void navigatePreparedMenuRoute(event, item.path || "");
                 }}
                 aria-busy={pendingRoutePath === item.path}
@@ -577,14 +612,31 @@ export function Layout() {
         </nav>
 
         {!isSmartAnalysisPage && (
-          <div className="px-4 pb-3">
-            <label className="mb-1.5 block text-[10px] font-medium text-[#8a8a8e]" htmlFor="shared-text-model-selector">当前模型</label>
+          <div className="px-4 pb-[0.2cm]">
+            {(textModelStatusHint(textModelLoadStatus) || textModelLoadStatus === "failed") && (
+              <div id="shared-text-model-status" className="mb-1 flex items-center justify-between gap-2 text-[10px] leading-4 text-[#8a8a8e]" role="status">
+                <span>{textModelStatusHint(textModelLoadStatus)}</span>
+                {textModelLoadStatus === "failed" && (
+                  <button
+                    type="button"
+                    onClick={() => setTextModelReloadToken((value) => value + 1)}
+                    className="inline-flex shrink-0 items-center gap-1 text-[#178a53] hover:text-[#116b40]"
+                    aria-label="重新加载文本模型"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    重试
+                  </button>
+                )}
+              </div>
+            )}
             <div className="relative">
               <select
                 id="shared-text-model-selector"
                 aria-label="选择全局文本模型"
+                aria-busy={textModelLoadStatus === "loading" || textModelLoadStatus === "retrying"}
+                aria-describedby={textModelStatusHint(textModelLoadStatus) || textModelLoadStatus === "failed" ? "shared-text-model-status" : undefined}
                 value={selectedTextModelId}
-                disabled={!textModelOptions.length}
+                disabled={textModelLoadStatus !== "ready"}
                 onChange={(event) => {
                   const next = textModelOptions.find((option) => option.id === event.target.value);
                   if (!next) return;
@@ -596,7 +648,7 @@ export function Layout() {
               >
                 {textModelOptions.length ? textModelOptions.map((option) => (
                   <option key={option.id} value={option.id}>{option.label}</option>
-                )) : <option value="">未配置文本模型</option>}
+                )) : <option value="">{textModelEmptyLabel(textModelLoadStatus)}</option>}
               </select>
               <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#8a8a8e]" />
             </div>
@@ -718,6 +770,7 @@ export function Layout() {
         )}
       </main>
 
+      <ConfirmDialogHost />
       <GlobalMessageBoardShortcut />
       <GlobalContextRail />
 
@@ -756,9 +809,12 @@ function writeCachedNavigation(userId: string, tenantId: string, keys: string[])
   }
 }
 
-function filterMenuItems(items: MenuItem[], allowedKeys: Set<string> | null, institutionCount: number): MenuItem[] {
-  if (!allowedKeys) return items;
-  const filtered = items
+const superAdminOnlyMenuKeys = new Set(["task-workbench.message-board", "task-workbench.interaction-analytics"]);
+
+function filterMenuItems(items: MenuItem[], allowedKeys: Set<string> | null, institutionCount: number, isSuperAdmin: boolean): MenuItem[] {
+  const scoped = isSuperAdmin ? items : items.map((item) => item.children ? { ...item, children: item.children.filter((child) => !superAdminOnlyMenuKeys.has(child.key)) } : item);
+  if (!allowedKeys) return scoped;
+  const filtered = scoped
     .map((item) => {
       const children = item.children?.filter((child) => allowedKeys.has(child.key));
       if (!allowedKeys.has(item.key) && !children?.length) return null;
@@ -792,4 +848,25 @@ function menuKeyForPath(items: MenuItem[], pathname: string): string | null {
     if (child) return child.key;
   }
   return null;
+}
+
+function isRetryableTextModelLoadError(error: unknown) {
+  if (!(error instanceof ApiRequestError)) return false;
+  return error.status === 0
+    || [408, 429, 502, 503, 504].includes(error.status)
+    || ["api_starting", "api_unavailable", "network_error", "request_timeout"].includes(error.code);
+}
+
+function textModelEmptyLabel(status: TextModelLoadStatus) {
+  if (status === "loading") return "正在读取模型…";
+  if (status === "retrying") return "模型服务启动中…";
+  if (status === "failed") return "模型加载失败";
+  return "未接入可用文本模型";
+}
+
+function textModelStatusHint(status: TextModelLoadStatus) {
+  if (status === "retrying") return "服务尚未就绪，正在自动重试";
+  if (status === "failed") return "模型目录暂时不可用";
+  if (status === "empty") return "请在系统配置中接入并测试模型";
+  return "";
 }

@@ -39,6 +39,9 @@ class SessionStore(Protocol):
     def rotate_refresh(self, refresh_token: str, **kwargs) -> SessionGrant:
         ...
 
+    def resolve_refresh(self, refresh_token: str, **kwargs) -> SessionGrant:
+        ...
+
     def revoke(self, *, access_jti: str = "", refresh_token: str = "", reason: str = "logout", now: int | None = None) -> bool:
         ...
 
@@ -107,13 +110,28 @@ class InMemorySessionStore:
         *,
         access_ttl_seconds: int = 900,
         now: int | None = None,
+        primary_tenant_id: str | None = None,
+        tenant_ids: tuple[str, ...] | None = None,
     ) -> SessionGrant:
         current = int(time.time() if now is None else now)
         refresh_hash = _token_hash(refresh_token)
         with self._lock:
             record = next((item for item in self._sessions.values() if item["refresh_token_hash"] == refresh_hash), None)
             _validate_refresh_record(record, current)
+            _replace_record_scope(
+                record,
+                primary_tenant_id=primary_tenant_id,
+                tenant_ids=tenant_ids,
+            )
             return _rotate_record(record, access_ttl_seconds, current)
+
+    def resolve_refresh(self, refresh_token: str, *, now: int | None = None) -> SessionGrant:
+        current = int(time.time() if now is None else now)
+        refresh_hash = _token_hash(refresh_token)
+        with self._lock:
+            record = next((item for item in self._sessions.values() if item["refresh_token_hash"] == refresh_hash), None)
+            _validate_refresh_record(record, current)
+            return _grant(record, refresh_token)
 
     def revoke(
         self,
@@ -216,16 +234,23 @@ class SQLiteSessionStore:
         ).fetchone()
         record = _record_from_row(row) if row else None
         _validate_refresh_record(record, current)
+        _replace_record_scope(
+            record,
+            primary_tenant_id=kwargs.get("primary_tenant_id"),
+            tenant_ids=kwargs.get("tenant_ids"),
+        )
         grant = _rotate_record(record, int(kwargs.get("access_ttl_seconds", 900)), current)
         with self._conn:
             cursor = self._conn.execute(
                 """
                 UPDATE platform_auth_sessions
-                SET access_jti = ?, refresh_token_hash = ?, access_expires_at = ?,
+                SET primary_tenant_id = ?, tenant_ids = ?,
+                    access_jti = ?, refresh_token_hash = ?, access_expires_at = ?,
                     last_seen_at = ?, idle_expires_at = ?, rotated_at = ?
                 WHERE device_session_id = ? AND refresh_token_hash = ? AND revoked_at IS NULL
                 """,
                 (
+                    record["primary_tenant_id"], json.dumps(record["tenant_ids"]),
                     record["access_jti"], record["refresh_token_hash"], record["access_expires_at"],
                     record["last_seen_at"], record["idle_expires_at"], current,
                     record["device_session_id"], _token_hash(refresh_token),
@@ -234,6 +259,16 @@ class SQLiteSessionStore:
             if cursor.rowcount != 1:
                 raise AuthenticationError("refresh_token_already_rotated")
         return grant
+
+    def resolve_refresh(self, refresh_token: str, **kwargs) -> SessionGrant:
+        current = int(time.time() if kwargs.get("now") is None else kwargs["now"])
+        row = self._conn.execute(
+            "SELECT * FROM platform_auth_sessions WHERE refresh_token_hash = ?",
+            (_token_hash(refresh_token),),
+        ).fetchone()
+        record = _record_from_row(row) if row else None
+        _validate_refresh_record(record, current)
+        return _grant(record, refresh_token)
 
     def revoke(self, *, access_jti: str = "", refresh_token: str = "", reason: str = "logout", now: int | None = None) -> bool:
         current = int(time.time() if now is None else now)
@@ -314,6 +349,31 @@ def _rotate_record(record: dict, access_ttl_seconds: int, current: int) -> Sessi
     record["idle_expires_at"] = min(current + int(record["idle_timeout_seconds"]), int(record["absolute_expires_at"]))
     record["rotated_at"] = current
     return _grant(record, refresh_token)
+
+
+def _replace_record_scope(
+    record: dict,
+    *,
+    primary_tenant_id: object = None,
+    tenant_ids: object = None,
+) -> None:
+    if primary_tenant_id is None and tenant_ids is None:
+        return
+    primary = str(primary_tenant_id or record.get("primary_tenant_id") or "").strip()
+    if not primary or primary == "*":
+        raise ValueError("invalid_primary_session_tenant")
+    raw_tenants = (record.get("tenant_ids") or []) if tenant_ids is None else tenant_ids
+    if isinstance(raw_tenants, str):
+        raw_tenants = (raw_tenants,)
+    normalized = tuple(
+        dict.fromkeys(
+            item
+            for item in (primary, *(str(value or "").strip() for value in raw_tenants))
+            if item
+        )
+    )
+    record["primary_tenant_id"] = primary
+    record["tenant_ids"] = list(normalized)
 
 
 def _grant(record: dict, refresh_token: str) -> SessionGrant:

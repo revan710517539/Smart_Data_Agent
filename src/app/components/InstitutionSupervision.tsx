@@ -99,8 +99,17 @@ export function InstitutionSupervision() {
   const runSupervisionAction = (action: string, payload: Record<string, unknown> = {}) =>
     runApplicationAction({ tenantId, userId, moduleKey: "institution_supervision", action, payload }).catch(() => undefined);
 
-  if (pageData.loading && !pageData.assets.length) return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} stickyNote={stickyNote} /><SupervisionState message="正在读取机构督导页面数据…" embedded /></div>;
-  return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} stickyNote={stickyNote} /><StandardAnalysisPageStickyNote stickyNote={stickyNote} />{pageData.visibleAssets.length > 0 && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} showAssetPicker />}{!pageData.loading && pageData.visibleAssets.length === 0 && <SupervisionState message={notice || "请先在站内数据的「单机构页面」中把数据集放到机构督导。"} embedded />}</div>;
+  if (pageData.loading && !pageData.assets.length) {
+    return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}><SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} stickyNote={stickyNote} /><SupervisionState message="正在读取机构督导页面数据…" embedded /></div>;
+  }
+
+  return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}>
+    <SupervisionHeader controller={pageData} canEditLayout={isSuperAdmin} stickyNote={stickyNote} />
+    <StandardAnalysisPageStickyNote stickyNote={stickyNote} />
+    {(pageData.hasSelectedPageData || pageData.mode === "edit") && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} showAssetPicker />}
+    {pageData.waitingForPageDataRows && !pageData.hasSelectedPageData ? <SupervisionState message="正在读取机构督导页面数据…" embedded /> : null}
+    {!pageData.loading && !pageData.waitingForPageDataRows && !pageData.hasSelectedPageData && <SupervisionState message={pageData.notice || notice || "请先在站内数据的「单机构页面」中把数据集放到机构督导。"} embedded />}
+  </div>;
 }
 
 

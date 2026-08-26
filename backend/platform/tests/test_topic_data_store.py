@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from backend.platform.ingestion.topic_data import TopicDataStore
+from backend.platform.bootstrap import build_local_platform
 
 
 def _task(task_id: str, amount: int) -> dict:
@@ -19,6 +20,24 @@ def _task(task_id: str, amount: int) -> dict:
 
 
 class TopicDataStoreTest(unittest.TestCase):
+    def test_sqlite_platform_keeps_topic_snapshots_beside_the_temporary_database(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            services = build_local_platform(root / "platform.sqlite")
+            try:
+                expected_root = (root / "topic-data").resolve()
+                self.assertEqual(services.topic_data_store.root, expected_root)
+                reference = services.topic_data_store.record_saved_report_snapshot(
+                    tenant_id="tenant_a",
+                    user_id="user_a",
+                    report_id="isolated_report",
+                    report={"title": "隔离报告", "rows": [{"amount": 1}]},
+                )
+                self.assertEqual(reference["folder"], "reports/tenant_a/isolated_report/current")
+                self.assertTrue((expected_root / reference["folder"] / "manifest.json").is_file())
+            finally:
+                services.close()
+
     def test_history_shortcut_and_topic_use_current_snapshot_only(self) -> None:
         with TemporaryDirectory() as tmpdir:
             store = TopicDataStore(Path(tmpdir) / "Topic_Data")

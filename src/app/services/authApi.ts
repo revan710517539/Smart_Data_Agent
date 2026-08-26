@@ -100,6 +100,13 @@ export async function fetchCurrentSession() {
   return apiRequest<AuthSession>("/api/auth/me", { method: "GET" });
 }
 
+export async function switchTenantSession(tenantId: string) {
+  return apiRequest<AuthSession>("/api/auth/switch-tenant", {
+    method: "POST",
+    body: { tenant_id: tenantId },
+  });
+}
+
 export async function beginEnterpriseLogin() {
   return apiRequest<{ authorization_url: string; expires_at: number }>("/api/auth/oidc/start", { method: "GET" });
 }

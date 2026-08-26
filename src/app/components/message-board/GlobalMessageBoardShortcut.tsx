@@ -34,6 +34,7 @@ const pageTitles: Record<string, string> = {
   "/agent/todos": "待办任务",
   "/agent/tasks": "自动化任务",
   "/agent/message-board": "留言板管理",
+  "/agent/interaction-analytics": "埋点分析",
   "/agent/skills": "skill/插件",
   "/data-assets/metrics": "指标字典",
   "/data-assets/knowledge": "知识记忆",

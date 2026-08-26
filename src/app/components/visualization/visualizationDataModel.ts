@@ -29,6 +29,8 @@ export type VisualizationCardConfig = {
   metricFields: string[];
   dimensionFields: string[];
   mergedDimensionFields?: string[];
+  frozenColumnFields?: string[];
+  frozenRowKeys?: string[];
   filters: VisualizationFilters;
   filterGroups: VisualizationFilterGroup[];
   sumFilteredRows: boolean;
@@ -171,8 +173,14 @@ export function selectedTableFields(dimensionFields: string[], metricFields: str
   return [...unique(dimensionFields), ...unique(metricFields.filter((field) => !dimensionFields.includes(field)))];
 }
 
+export function orderedTableFields(dimensionFields: string[], metricFields: string[], frozenColumnFields: string[] = []) {
+  const all = selectedTableFields(dimensionFields, metricFields);
+  const frozen = unique(frozenColumnFields.filter((field) => all.includes(field)));
+  return [...frozen, ...all.filter((field) => !frozen.includes(field))];
+}
+
 export function groupRowsForMergedDimensions(rows: AnalysisRow[], dimensionFields: string[], mergedDimensionFields: string[]) {
-  const activeFields = dimensionFields.filter((field) => mergedDimensionFields.includes(field));
+  const activeFields = unique(mergedDimensionFields.filter(Boolean));
   if (!activeFields.length) return rows;
   return rows
     .map((row, index) => ({ row, index }))
@@ -187,7 +195,7 @@ export function groupRowsForMergedDimensions(rows: AnalysisRow[], dimensionField
 }
 
 export function mergedDimensionCellSpan(rows: AnalysisRow[], rowIndex: number, field: string, dimensionFields: string[], mergedDimensionFields: string[]) {
-  const activeFields = dimensionFields.filter((candidate) => mergedDimensionFields.includes(candidate));
+  const activeFields = unique(mergedDimensionFields.filter(Boolean));
   const activeIndex = activeFields.indexOf(field);
   if (activeIndex < 0 || rowIndex < 0 || rowIndex >= rows.length) return 1;
   const groupFields = activeFields.slice(0, activeIndex + 1);

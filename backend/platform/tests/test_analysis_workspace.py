@@ -280,6 +280,7 @@ class AnalysisWorkspaceTest(unittest.TestCase):
         services = build_local_platform()
         table = {
             "id": "table-1",
+            "assetId": "raw:table-1",
             "relativePath": "tenant_demo/topic/data.csv",
             "contentHash": "a" * 64,
             "schemaFingerprint": "schema-v1",

@@ -44,6 +44,7 @@ import { fetchSystemConfig, type ModelIntegration } from "../services/systemConf
 import { fetchPlatformCapabilities, type PlatformCapabilityResponse } from "../services/capabilitiesApi";
 import { TodoWorkspace } from "./TodoWorkspace";
 import { DataPageSelector, useClientPagination } from "./ui/DataPageSelector";
+import { ConfirmDialog } from "./ui/ConfirmDialog";
 
 type AgentTaskStatus = "ready" | "running" | "completed" | "alert" | "paused" | "terminated";
 type AutomationKind = "memory" | "automatic_analysis";
@@ -707,38 +708,20 @@ function TaskDeleteConfirm({
   onConfirm: () => void;
 }) {
   return (
-    <div
-      className="fixed inset-0 z-[180] flex items-center justify-center bg-black/20 px-4"
-      role="presentation"
+    <ConfirmDialog
+      open
+      title="终止并删除这条自动化任务？"
+      description={task.name}
+      hint="确认后任务将停止调度，历史运行记录仍保留备查。"
+      busy={deleting}
+      busyLabel="处理中…"
+      zIndexClass="z-[180]"
       data-agent-task-delete-overlay="true"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !deleting) onCancel();
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="agent-task-delete-title"
-        data-agent-task-delete-dialog="true"
-        className="w-full max-w-[420px] rounded-xl border border-[#e5e5ea] bg-white p-5 shadow-2xl shadow-black/20"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <div className="flex items-start gap-3">
-          <div className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#fff0f0] text-[#d93025]">
-            <Trash2 className="h-4 w-4" />
-          </div>
-          <div>
-            <h3 id="agent-task-delete-title" className="text-[14px] text-[#1d1d1f]">终止并删除这条自动化任务？</h3>
-            <p className="mt-1.5 text-[12px] leading-[1.7] text-[#636366]">{task.name}</p>
-            <p className="mt-1 text-[11px] leading-[1.6] text-[#aeaeb2]">确认后任务将停止调度，历史运行记录仍保留备查。</p>
-          </div>
-        </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <button type="button" onClick={onCancel} disabled={deleting} className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-4 text-[12px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-40">取消</button>
-          <button type="button" onClick={onConfirm} disabled={deleting} className="h-9 rounded-lg bg-[#d93025] px-4 text-[12px] text-white hover:bg-[#c5221f] disabled:opacity-40">{deleting ? "处理中…" : "确认删除"}</button>
-        </div>
-      </div>
-    </div>
+      data-agent-task-delete-dialog="true"
+      titleId="agent-task-delete-title"
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    />
   );
 }
 

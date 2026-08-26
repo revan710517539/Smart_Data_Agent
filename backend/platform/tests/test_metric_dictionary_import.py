@@ -244,6 +244,42 @@ class MetricDictionaryImportTest(unittest.TestCase):
         finally:
             store.close()
 
+    def test_metric_alignment_defaults_persists_and_rejects_unknown_status(self) -> None:
+        from backend.platform.metrics.store import InMemoryMetricDictionaryStore, SQLiteMetricDictionaryStore
+
+        memory = InMemoryMetricDictionaryStore()
+        defaulted = memory.upsert("tenant:test", {"metricId": "M00020", "metricName": "默认未对齐"}, updated_by="u_admin")
+        self.assertEqual(defaulted["alignmentStatus"], "unaligned")
+        aligned = memory.upsert("tenant:test", {**defaulted, "alignmentStatus": "aligned"}, updated_by="u_admin")
+        self.assertEqual(aligned["alignmentStatus"], "aligned")
+        with self.assertRaisesRegex(ValueError, "metric_alignment_status_invalid"):
+            memory.upsert("tenant:test", {"metricId": "M00021", "metricName": "非法状态", "alignmentStatus": "unknown"}, updated_by="u_admin")
+
+        sqlite = SQLiteMetricDictionaryStore(":memory:")
+        try:
+            sqlite.upsert("tenant:test", {"metricId": "M00022", "metricName": "持久化对齐", "alignmentStatus": "aligned"}, updated_by="u_admin")
+            self.assertEqual(sqlite.get("tenant:test", "M00022")["alignmentStatus"], "aligned")
+        finally:
+            sqlite.close()
+
+    def test_documentation_metric_with_legacy_code_can_update_alignment(self) -> None:
+        from backend.platform.metrics.store import InMemoryMetricDictionaryStore
+
+        store = InMemoryMetricDictionaryStore()
+        saved = store.upsert(
+            "tenant:test",
+            {
+                "metricId": "M00023",
+                "metricName": "历史展示指标",
+                "metricCode": "M00023",
+                "semanticStatus": "documentation",
+                "alignmentStatus": "aligned",
+            },
+            updated_by="u_admin",
+        )
+
+        self.assertEqual(saved["alignmentStatus"], "aligned")
+
 
 if __name__ == "__main__":
     unittest.main()

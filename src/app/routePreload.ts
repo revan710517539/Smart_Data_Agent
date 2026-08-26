@@ -23,6 +23,7 @@ export const routeLoaders = {
   tools: () => import("./components/ExternalToolManager"),
   analysisConfig: () => import("./components/AnalysisConfigManager"),
   messageBoard: () => import("./components/MessageBoardManagement"),
+  interactionAnalytics: () => import("./components/InteractionAnalytics"),
   bridge: () => import("./components/BridgeAuthorization"),
 };
 
@@ -35,6 +36,7 @@ export const routePreloaders: Array<{ test: (path: string) => boolean; loader: R
   { test: (path) => path.startsWith("/self-analysis/config"), loader: routeLoaders.analysisConfig },
   { test: (path) => path.startsWith("/agent/tasks") || path.startsWith("/agent/todos"), loader: routeLoaders.workspace },
   { test: (path) => path.startsWith("/agent/message-board"), loader: routeLoaders.messageBoard },
+  { test: (path) => path.startsWith("/agent/interaction-analytics"), loader: routeLoaders.interactionAnalytics },
   { test: (path) => path.startsWith("/agent/skills"), loader: routeLoaders.skills },
   { test: (path) => path.startsWith("/data-assets/tools"), loader: routeLoaders.tools },
   { test: (path) => path.startsWith("/data-assets/"), loader: routeLoaders.assets },

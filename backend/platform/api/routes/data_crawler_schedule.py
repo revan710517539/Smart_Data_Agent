@@ -15,8 +15,58 @@ from backend.platform.api.support import first_query_value, send_route_exception
 from backend.platform.integrations.data_crawler import client_for_tenant, endpoint_for_tenant
 
 
-def _task_code(source_key: str) -> str:
+def _task_code(institution_id: str, sql_id: str) -> str:
+    identity = f"{institution_id.strip()}:{sql_id.strip()}"
+    return f"data-crawler:{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:32]}"
+
+
+def _legacy_task_code(source_key: str) -> str:
     return f"data-crawler:{hashlib.sha256(source_key.encode('utf-8')).hexdigest()[:32]}"
+
+
+def _existing_task_for_binding(
+    store: Any,
+    tenant_id: str,
+    binding: dict[str, Any],
+    source_key: str = "",
+) -> dict[str, Any] | None:
+    """Find the one SQL-owned task, including source-key tasks saved by older builds."""
+
+    sql_id = str(binding.get("sqlId") or "").strip()
+    institution_id = str(binding.get("institutionId") or "").strip()
+    if not sql_id or not institution_id:
+        return None
+    stable = store.get_task_by_code(tenant_id, _task_code(institution_id, sql_id))
+    if stable:
+        return stable
+    if source_key:
+        legacy = store.get_task_by_code(tenant_id, _legacy_task_code(source_key))
+        legacy_config = legacy.get("task_config") if isinstance((legacy or {}).get("task_config"), dict) else {}
+        if (
+            legacy
+            and str(legacy.get("handler_ref") or "") == "data_crawler.dispatch"
+            and str(legacy_config.get("sql_id") or "") == sql_id
+            and str(legacy_config.get("institution_id") or "") == institution_id
+        ):
+            return legacy
+    matches = []
+    for task in store.list_tasks(tenant_id):
+        config = task.get("task_config") if isinstance(task.get("task_config"), dict) else {}
+        if (
+            str(task.get("handler_ref") or "") == "data_crawler.dispatch"
+            and str(config.get("sql_id") or "") == sql_id
+            and str(config.get("institution_id") or "") == institution_id
+        ):
+            matches.append(task)
+    scheduled = [
+        task for task in matches
+        if str(task.get("status") or "") == "active" and str(task.get("trigger_type") or "") == "schedule"
+    ]
+    if len(scheduled) > 1:
+        raise ValueError("data_crawler_schedule_task_ambiguous")
+    if scheduled:
+        return scheduled[0]
+    return matches[0] if matches else None
 
 
 def _optional_status_endpoint(tenant_id: str) -> Any | None:
@@ -30,19 +80,19 @@ def _optional_status_endpoint(tenant_id: str) -> Any | None:
 
 def _schedule_statuses(
     tasks: list[dict[str, Any]],
-    valid_source_keys: set[str],
+    source_keys_by_sql_id: dict[str, str],
     institution_id: str,
 ) -> dict[str, dict[str, Any]]:
     statuses: dict[str, dict[str, Any]] = {}
     for task in tasks:
         config = task.get("task_config") if isinstance(task.get("task_config"), dict) else {}
-        source_key = str(config.get("source_key") or "")
+        source_key = str(source_keys_by_sql_id.get(str(config.get("sql_id") or "")) or "")
         if (
             str(task.get("handler_ref") or "") != "data_crawler.dispatch"
             or str(task.get("status") or "") != "active"
             or str(task.get("trigger_type") or "") != "schedule"
             or str(config.get("institution_id") or "") != institution_id
-            or source_key not in valid_source_keys
+            or not source_key
         ):
             continue
         statuses[source_key] = {
@@ -95,21 +145,11 @@ def _binding_matches_table(binding: dict[str, Any], table: dict[str, Any], insti
     )
 
 
-def _configuration_binding_for_table(client: Any, table: dict[str, Any], sql_id: str = "") -> dict[str, Any]:
-    """Read a display binding without treating a changing CSV digest as a validation failure."""
-    if sql_id:
-        return dict(client.binding(sql_id))
-    institution_directory = str(client.endpoint.institution_directory or "")
-    table_path = _delivery_relative_path(table.get("relativePath"), institution_directory)
-    bindings = client.list_bindings().get("items") or []
-    matches = []
-    for item in bindings:
-        if not isinstance(item, dict):
-            continue
-        delivery = item.get("latestDelivery") if isinstance(item.get("latestDelivery"), dict) else {}
-        if _delivery_relative_path(delivery.get("path"), institution_directory) == table_path:
-            matches.append(item)
-    return dict(matches[0]) if len(matches) == 1 else {}
+def _binding_in_institution(client: Any, binding: Any) -> dict[str, Any]:
+    item = dict(binding) if isinstance(binding, dict) else {}
+    if not item or str(item.get("institutionId") or "") != str(client.endpoint.institution_id or ""):
+        raise PermissionError("data_crawler_sql_binding_institution_mismatch")
+    return item
 
 
 _DELIVERY_DATE_SUFFIX_RE = re.compile(
@@ -124,28 +164,61 @@ def _sql_title_key(value: str) -> str:
     return re.sub(r"[\s_\-]+", "", text).casefold()
 
 
-def _select_refresh_binding(client: Any, table: dict[str, Any], sql_id: str = "") -> dict[str, Any]:
-    """Choose the SQL that 刷新 should run, including before a CSV receipt exists."""
+def _automatic_binding_for_table(
+    client: Any,
+    table: dict[str, Any],
+    expected_sql_id: str = "",
+) -> dict[str, Any]:
+    """Resolve one table to one SQL without allowing a user-selected override."""
 
-    if sql_id:
-        return dict(client.binding(sql_id))
-    configured = _configuration_binding_for_table(client, table)
-    if configured:
-        return configured
-    items = [item for item in (client.list_bindings().get("items") or []) if isinstance(item, dict)]
+    lineage_sql_id = str(table.get("sqlId") or "").strip()
+    expected_sql_id = str(expected_sql_id or "").strip()
+    if lineage_sql_id:
+        if expected_sql_id and expected_sql_id != lineage_sql_id:
+            raise PermissionError("data_crawler_sql_binding_override_forbidden")
+        return _binding_in_institution(client, client.binding(lineage_sql_id))
+
+    items = [
+        _binding_in_institution(client, item)
+        for item in (client.list_bindings().get("items") or [])
+        if isinstance(item, dict)
+    ]
+    institution_directory = str(client.endpoint.institution_directory or "")
+    receipt_matches = [
+        item for item in items
+        if _binding_matches_table(item, table, institution_directory)
+    ]
+    if len(receipt_matches) > 1:
+        raise ValueError("data_crawler_sql_binding_ambiguous")
+    selected = receipt_matches[0] if receipt_matches else None
+
     table_key = _sql_title_key(str(table.get("tableNameCn") or table.get("fileName") or ""))
     name_matches = [
         item
         for item in items
         if _sql_title_key(str(item.get("sqlName") or "")) == table_key and table_key
     ]
-    if len(name_matches) == 1:
-        return dict(name_matches[0])
-    if len(items) == 1:
-        return dict(items[0])
-    if len(name_matches) > 1 or len(items) > 1:
+    if selected is None and len(name_matches) == 1:
+        selected = name_matches[0]
+    elif selected is None and len(name_matches) > 1:
         raise ValueError("data_crawler_sql_binding_ambiguous")
-    return {}
+    if selected is None:
+        return {}
+    if expected_sql_id and str(selected.get("sqlId") or "") != expected_sql_id:
+        raise PermissionError("data_crawler_sql_binding_override_forbidden")
+    return dict(selected)
+
+
+def _configuration_binding_for_table(client: Any, table: dict[str, Any], sql_id: str = "") -> dict[str, Any]:
+    """Read the table-owned binding without executing or accepting a new SQL choice."""
+
+    return _automatic_binding_for_table(client, table, sql_id)
+
+
+def _select_refresh_binding(client: Any, table: dict[str, Any], sql_id: str = "") -> dict[str, Any]:
+    """Compatibility name for the read-only automatic association contract."""
+
+    return _automatic_binding_for_table(client, table, sql_id)
 
 
 def _refresh_execution_parameters(binding: dict[str, Any]) -> dict[str, str]:
@@ -166,22 +239,7 @@ def _refresh_execution_parameters(binding: dict[str, Any]) -> dict[str, str]:
 
 
 def _binding_for_table(client: Any, table: dict[str, Any], sql_id: str = "") -> dict[str, Any]:
-    institution_directory = str(client.endpoint.institution_directory or "")
-    if sql_id:
-        binding = client.binding(sql_id)
-        if not _binding_matches_table(binding, table, institution_directory):
-            raise PermissionError("data_crawler_csv_receipt_mismatch")
-    else:
-        bindings = client.list_bindings().get("items") or []
-        matches = [
-            item
-            for item in bindings
-            if isinstance(item, dict) and _binding_matches_table(item, table, institution_directory)
-        ]
-        if len(matches) > 1:
-            raise PermissionError("data_crawler_csv_receipt_ambiguous")
-        binding = matches[0] if matches else {}
-    return dict(binding)
+    return _automatic_binding_for_table(client, table, sql_id)
 
 
 def _cron(recurrence: str, time_value: str, weekday: int, month_day: int) -> tuple[str, str]:
@@ -342,7 +400,7 @@ def _task_definition(source_key: str, table: dict[str, Any], binding: dict[str, 
         except ValueError as exc:
             raise ValueError("schedule_biweekly_anchor_invalid") from exc
     return {
-        "task_code": _task_code(source_key),
+        "task_code": _task_code(str(binding["institutionId"]), str(binding["sqlId"])),
         "task_name": f"{table.get('tableNameCn') or source_key} 数据采集",
         "task_type": "acquisition",
         "trigger_type": trigger_type,
@@ -383,7 +441,7 @@ def _save(handler: Any, context: Any, source_key: str, payload: dict[str, Any]) 
         datetime.now(zone),
     )
     store = handler.services.automation_store
-    existing = store.get_task_by_code(context.tenant_id, definition["task_code"])
+    existing = _existing_task_for_binding(store, context.tenant_id, binding, source_key)
     if existing:
         task = handler.services.automation_runtime.update_task(
             context.tenant_id,
@@ -417,11 +475,9 @@ def handle_data_crawler_schedule_get(handler: Any, query: str) -> None:
         handler._require_asset_permission(context, "read")
         source_key = str(first_query_value(params, "source_key") or "").strip()
         _catalog, table = _raw_table(handler, context.tenant_id, source_key)
-        existing = handler.services.automation_store.get_task_by_code(context.tenant_id, _task_code(source_key))
-        sql_id = str((existing or {}).get("task_config", {}).get("sql_id") or "")
         client = client_for_tenant(context.tenant_id)
-        binding = _configuration_binding_for_table(client, table, sql_id)
-        available = [] if binding else client.list_bindings().get("items") or []
+        binding = _configuration_binding_for_table(client, table)
+        existing = _existing_task_for_binding(handler.services.automation_store, context.tenant_id, binding, source_key) if binding else None
         handler._send_json({
             "tenant_id": context.tenant_id,
             "source_key": source_key,
@@ -429,10 +485,7 @@ def handle_data_crawler_schedule_get(handler: Any, query: str) -> None:
             "institution_directory": endpoint_for_tenant(context.tenant_id).institution_directory,
             "binding": binding or None,
             "validation_required": True,
-            "available_bindings": [
-                {"sqlId": item.get("sqlId"), "sqlName": item.get("sqlName"), "parameters": item.get("parameters") or []}
-                for item in available
-            ],
+            "available_bindings": [],
             "task": existing,
         })
     except Exception as exc:
@@ -458,14 +511,14 @@ def handle_data_crawler_schedule_statuses_get(handler: Any, query: str) -> None:
             return
         if catalog.root.name != endpoint.institution_directory:
             raise PermissionError("data_crawler_csv_institution_mismatch")
-        valid_source_keys = {
-            str(item.get("sourceKey") or "")
+        source_keys_by_sql_id = {
+            str(item.get("sqlId") or ""): str(item.get("sourceKey") or "")
             for item in catalog.table_assets()
-            if str(item.get("sourceKey") or "")
+            if str(item.get("sqlId") or "") and str(item.get("sourceKey") or "")
         }
         items = _schedule_statuses(
             handler.services.automation_store.list_tasks(context.tenant_id),
-            valid_source_keys,
+            source_keys_by_sql_id,
             endpoint.institution_id,
         )
         handler._send_json({
@@ -498,7 +551,7 @@ def handle_data_crawler_schedule_test(handler: Any) -> None:
     try:
         payload = handler._read_json()
         context = handler._request_context(payload=payload)
-        handler._require_asset_permission(context, "read")
+        handler._require_asset_permission(context, "create")
         source_key = str(payload.get("source_key") or "").strip()
         _catalog, table = _raw_table(handler, context.tenant_id, source_key)
         client = client_for_tenant(context.tenant_id)
@@ -513,6 +566,15 @@ def handle_data_crawler_schedule_test(handler: Any) -> None:
             dict(definition["task_config"]["parameter_bindings"]),
             datetime.now(zone),
         )
+        execution = client.execute(
+            str(binding.get("sqlId") or ""),
+            {
+                "executionId": f"sda-test-{uuid4().hex}",
+                "parameters": resolved,
+                "parameterBindings": {},
+                "timezone": str(definition["task_config"].get("timezone") or "Asia/Shanghai"),
+            },
+        )
         handler._send_json({
             "tenant_id": context.tenant_id,
             "connected": True,
@@ -520,6 +582,7 @@ def handle_data_crawler_schedule_test(handler: Any) -> None:
             "sql_id": str(binding.get("sqlId") or ""),
             "parameter_count": len(resolved),
             "receipt_sha256": str(table.get("contentHash") or ""),
+            "run": execution,
         })
     except Exception as exc:
         send_route_exception(handler, exc)
@@ -529,42 +592,19 @@ def handle_data_crawler_schedule_refresh(handler: Any) -> None:
     try:
         payload = handler._read_json()
         context = handler._request_context(payload=payload)
-        handler._require_asset_permission(context, "create")
-        handler._require_automation_permission(context, "create")
+        handler._require_asset_permission(context, "read")
         source_key = str(payload.get("source_key") or "").strip()
         _catalog, table = _raw_table(handler, context.tenant_id, source_key)
         client = client_for_tenant(context.tenant_id)
         binding = _select_refresh_binding(client, table, str(payload.get("sqlId") or ""))
         if not binding:
             raise ValueError("data_crawler_sql_binding_not_found")
-        resolved = _refresh_execution_parameters(binding)
-        execution = client.execute(
-            str(binding["sqlId"]),
-            {
-                "executionId": f"sda-refresh-{uuid4().hex}",
-                "parameters": resolved,
-                "parameterBindings": {},
-                "timezone": "Asia/Shanghai",
-            },
-        )
-        handler._write_audit(
-            context,
-            "data_crawler.schedule.refresh",
-            "raw_table",
-            source_key,
-            {"sql_id": str(binding.get("sqlId") or ""), "run_id": str(execution.get("runId") or "")},
-        )
         handler._send_json(
             {
                 "tenant_id": context.tenant_id,
                 "source_key": source_key,
                 "binding": binding,
-                "resolved_parameters": resolved,
-                "run": {
-                    "run_id": str(execution.get("runId") or ""),
-                    "status": str(execution.get("status") or ""),
-                    "sql_id": str(execution.get("sqlId") or binding.get("sqlId") or ""),
-                },
+                "refreshed": True,
             }
         )
     except Exception as exc:
@@ -611,7 +651,10 @@ def handle_data_crawler_schedule_delete(handler: Any) -> None:
         context = handler._request_context(payload=payload)
         handler._require_automation_permission(context, "create")
         source_key = str(payload.get("source_key") or "").strip()
-        task = handler.services.automation_store.get_task_by_code(context.tenant_id, _task_code(source_key))
+        _catalog, table = _raw_table(handler, context.tenant_id, source_key)
+        client = client_for_tenant(context.tenant_id)
+        binding = _binding_for_table(client, table)
+        task = _existing_task_for_binding(handler.services.automation_store, context.tenant_id, binding, source_key)
         if not task:
             handler._send_json({"tenant_id": context.tenant_id, "cleared": False})
             return
@@ -622,7 +665,7 @@ def handle_data_crawler_schedule_delete(handler: Any) -> None:
             context.user_id,
             int(task.get("lock_version") or 0),
         )
-        client_for_tenant(context.tenant_id).release(str(task["task_config"]["sql_id"]))
+        client.release(str(task["task_config"]["sql_id"]))
         handler._send_json({"tenant_id": context.tenant_id, "cleared": True, "task": task})
     except Exception as exc:
         send_route_exception(handler, exc)

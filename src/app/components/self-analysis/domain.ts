@@ -135,6 +135,7 @@ export type KnowledgeFileAttachment = {
 };
 export type AnalysisDataTableSelection = {
   id: string;
+  assetId?: string;
   kind: "raw" | "topic" | "page_data";
   name: string;
   code: string;
@@ -163,40 +164,146 @@ export function singleAnalysisDataTableSelection(tables: AnalysisDataTableSelect
 }
 
 export function rematchAnalysisDataTableSelection(
+    selected: AnalysisDataTableSelection[] | null | undefined,
+    catalog: AnalysisDataTableSelection[],
+): AnalysisDataTableSelection[] {
+  return rematchAnalysisDataTableSelectionResult(selected, catalog).tables;
+}
+
+export type AnalysisDataTableRematchResult = {
+  tables: AnalysisDataTableSelection[];
+  incompatible: Array<{
+    selected: AnalysisDataTableSelection;
+    current: AnalysisDataTableSelection;
+    missingFields: string[];
+    fieldDifferences: Array<{
+      field: string;
+      change: "missing" | "type_changed" | "label_changed" | "semantic_role_changed" | "schema_contract_changed";
+      previous?: string;
+      current?: string;
+    }>;
+  }>;
+};
+
+export function formatAnalysisTableFieldDifferences(
+  differences: AnalysisDataTableRematchResult["incompatible"][number]["fieldDifferences"],
+  labels: Record<string, string> = {},
+) {
+  const changeLabels = {
+    missing: () => "已缺失",
+    type_changed: (previous?: string, current?: string) => `类型 ${previous || "未知"} → ${current || "未知"}`,
+    label_changed: (previous?: string, current?: string) => `表头 ${previous || "未知"} → ${current || "未知"}`,
+    semantic_role_changed: (previous?: string, current?: string) => `语义角色 ${previous || "未知"} → ${current || "未知"}`,
+    schema_contract_changed: () => "结构已变化",
+  } satisfies Record<string, (previous?: string, current?: string) => string>;
+  return differences.map((difference) => {
+    const label = labels[difference.field] || difference.field;
+    return `${label}（${changeLabels[difference.change](difference.previous, difference.current)}）`;
+  }).join("、");
+}
+
+export function rematchAnalysisDataTableSelectionResult(
   selected: AnalysisDataTableSelection[] | null | undefined,
   catalog: AnalysisDataTableSelection[],
-): AnalysisDataTableSelection[] {
+): AnalysisDataTableRematchResult {
   const latest = singleAnalysisDataTableSelection(selected);
   const table = latest[0];
-  if (!table) return [];
-  if (!catalog.length) return latest;
-  const byId = catalog.find((item) => Boolean(item.id) && item.id === table.id);
-  if (byId) return [byId];
-  if (table.code) {
-    const byCode = catalog.find((item) => item.code === table.code);
-    if (byCode) return [byCode];
-  }
+  if (!table) return { tables: [], incompatible: [] };
+  if (!catalog.length) return { tables: [], incompatible: [] };
+  let matched = table.assetId
+    ? uniqueAnalysisTableMatch(catalog, (item) => item.kind === table.kind && item.assetId === table.assetId)
+    : undefined;
+  matched ||= uniqueAnalysisTableMatch(catalog, (item) => item.kind === table.kind && Boolean(item.id) && item.id === table.id);
   if (table.sourceKey) {
-    const sameKind = catalog.find((item) => item.kind === table.kind && item.sourceKey === table.sourceKey);
-    if (sameKind) return [sameKind];
-    const bySourceKey = catalog.find((item) => item.sourceKey === table.sourceKey);
-    if (bySourceKey) return [bySourceKey];
+    matched ||= uniqueAnalysisTableMatch(catalog, (item) => item.kind === table.kind && item.sourceKey === table.sourceKey);
   }
-  if (table.relativePath) {
-    const byPath = catalog.find((item) => item.relativePath === table.relativePath);
-    if (byPath) return [byPath];
+  if (!matched && table.relativePath && (table.contentHash || table.schemaFingerprint)) {
+    matched = uniqueAnalysisTableMatch(catalog, (item) =>
+      item.kind === table.kind &&
+      item.relativePath === table.relativePath &&
+      (Boolean(table.contentHash) && item.contentHash === table.contentHash ||
+        Boolean(table.schemaFingerprint) && item.schemaFingerprint === table.schemaFingerprint),
+    );
   }
-  const requestedTitles = analysisTableTitleKeys(table);
-  const byTitle = catalog.filter((item) =>
-    Array.from(analysisTableTitleKeys(item)).some((title) => requestedTitles.has(title)),
-  );
-  if (byTitle.length === 1) return [byTitle[0]];
-  const requestedLogical = analysisTableLogicalKeys(table);
-  const byLogical = catalog.filter((item) =>
-    Array.from(analysisTableLogicalKeys(item)).some((title) => requestedLogical.has(title)),
-  );
-  if (byLogical.length === 1) return [byLogical[0]];
-  return [];
+  if (!matched && table.kind !== "raw" && table.code) {
+    matched = uniqueAnalysisTableMatch(catalog, (item) => item.kind === table.kind && item.code === table.code);
+  }
+  if (!matched && table.kind !== "raw" && (table.contentHash || table.schemaFingerprint)) {
+    const requestedTitles = analysisTableTitleKeys(table);
+    const requestedLogical = analysisTableLogicalKeys(table);
+    matched = uniqueAnalysisTableMatch(catalog, (item) =>
+      item.kind === table.kind &&
+      (item.contentHash === table.contentHash || item.schemaFingerprint === table.schemaFingerprint) &&
+      (Array.from(analysisTableTitleKeys(item)).some((title) => requestedTitles.has(title)) ||
+        Array.from(analysisTableLogicalKeys(item)).some((title) => requestedLogical.has(title))),
+    );
+  }
+  if (!matched) return { tables: [], incompatible: [] };
+  const fieldDifferences = analysisSelectionFieldDifferences(table, matched);
+  if (fieldDifferences.length) {
+    return {
+      tables: [],
+      incompatible: [{
+        selected: table,
+        current: matched,
+        missingFields: fieldDifferences.map((item) => item.field),
+        fieldDifferences,
+      }],
+    };
+  }
+  return { tables: [matched], incompatible: [] };
+}
+
+function uniqueAnalysisTableMatch(
+  catalog: AnalysisDataTableSelection[],
+  predicate: (item: AnalysisDataTableSelection) => boolean,
+) {
+  const matches = catalog.filter(predicate);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function analysisSelectionFieldDifferences(
+  selected: AnalysisDataTableSelection,
+  current: AnalysisDataTableSelection,
+) {
+  if (!selected.schemaFingerprint || !current.schemaFingerprint || selected.schemaFingerprint === current.schemaFingerprint) return [];
+  const selectedFields = new Set(Object.keys(selected.fieldLabels || selected.fieldMetadata || {}));
+  const currentFields = new Set(Object.keys(current.fieldLabels || current.fieldMetadata || {}));
+  if (!selectedFields.size) {
+    return [{
+      field: "字段结构",
+      change: "schema_contract_changed" as const,
+      previous: selected.schemaFingerprint,
+      current: current.schemaFingerprint,
+    }];
+  }
+  const differences: AnalysisDataTableRematchResult["incompatible"][number]["fieldDifferences"] = [];
+  for (const field of Array.from(selectedFields).sort()) {
+    if (!currentFields.has(field)) {
+      differences.push({ field, change: "missing" });
+      continue;
+    }
+    const selectedMetadata = selected.fieldMetadata?.[field];
+    const currentMetadata = current.fieldMetadata?.[field];
+    const selectedType = String(selectedMetadata?.type || "").toLocaleLowerCase();
+    const currentType = String(currentMetadata?.type || "").toLocaleLowerCase();
+    if (selectedType && currentType && selectedType !== currentType) {
+      differences.push({ field, change: "type_changed", previous: selectedType, current: currentType });
+      continue;
+    }
+    const selectedLabel = String(selected.fieldLabels?.[field] || "").trim();
+    const currentLabel = String(current.fieldLabels?.[field] || "").trim();
+    if (selectedLabel && currentLabel && selectedLabel !== currentLabel) {
+      differences.push({ field, change: "label_changed", previous: selectedLabel, current: currentLabel });
+      continue;
+    }
+    const selectedRole = String(selectedMetadata?.semanticRole || "");
+    const currentRole = String(currentMetadata?.semanticRole || "");
+    if (selectedRole && currentRole && selectedRole !== currentRole) {
+      differences.push({ field, change: "semantic_role_changed", previous: selectedRole, current: currentRole });
+    }
+  }
+  return differences;
 }
 
 function analysisTableTitleKeys(table: AnalysisDataTableSelection) {
@@ -448,6 +555,7 @@ export function rawTableToSelection(table: RawTableAsset): AnalysisDataTableSele
   const sql = table.exampleSql?.trim() || `SELECT *\nFROM ${table.tableNameEn}\nLIMIT 100;`;
   return {
     id: table.id,
+    assetId: table.assetId,
     kind: "raw",
     name: table.tableNameCn,
     code: table.tableNameEn,
@@ -469,6 +577,7 @@ export function topicTableToSelection(topic: TopicTableAsset): AnalysisDataTable
   const topicFields = Array.isArray(topic.fields) ? topic.fields : [];
   return {
     id: topic.id,
+    assetId: `topic:${topic.id}`,
     kind: "topic",
     name: topic.name,
     code: topic.code,
@@ -494,6 +603,7 @@ export function pageDataToSelection(pageData: PageDataAsset): AnalysisDataTableS
   const code = `page_data_${pageData.id}`;
   return {
     id: pageData.id,
+    assetId: `page_data:${pageData.id}`,
     kind: "page_data",
     name: pageData.name || pageData.sourceTableName || "多机构页面数据",
     code,
@@ -545,6 +655,7 @@ export function backendTableToSelection(value: unknown): AnalysisDataTableSelect
   }));
   return {
     id,
+    assetId: String(table.assetId || table.asset_id || "").trim() || `${isPageData ? "page_data" : isRaw ? "raw" : "topic"}:${id}`,
     kind: isPageData ? "page_data" : isRaw ? "raw" : "topic",
     name: String(table.name || table.tableNameCn || code).trim() || code,
     code,

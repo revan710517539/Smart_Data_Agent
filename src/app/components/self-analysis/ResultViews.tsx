@@ -1,7 +1,7 @@
-import { useEffect, useId, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { createPortal } from "react-dom";
 import { trackInteraction } from "../../services/interactionTelemetry";
-import { ArrowDown, ArrowUp, ArrowUpDown, AudioLines, Check, ChevronDown, Copy, Download, Ellipsis, Filter, MessageSquareText, Plus, SlidersHorizontal, Trash2, Type, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, AudioLines, Check, ChevronDown, Copy, Download, Ellipsis, Filter, MessageSquareText, Pin, Plus, SlidersHorizontal, Trash2, Type, X } from "lucide-react";
 import {
   Area,
   AreaChart,
@@ -41,6 +41,7 @@ import {
   type ResultVisualKey,
   type VisualizationType,
 } from "./domain";
+import { selectVisibleVisualPoints } from "../visualization/visualPointWindow";
 import { useVisualizationVoiceCommand } from "../visualization/useVisualizationVoiceCommand";
 import { insertVisualVoiceText, resolveVisualizationVoiceCommand } from "../visualization/visualizationCommand";
 import { formatFieldValue, type FieldDisplayMetadata } from "../../data/fieldSemantics";
@@ -60,6 +61,7 @@ import {
   normalizeVisualizationFilterGroups,
   normalizeVisualizationSelections,
   numericValue,
+  orderedTableFields,
   selectedTableFields,
   toggleVisualizationField,
   visualizationRoleFields,
@@ -78,11 +80,51 @@ import { nextTableSortState, sortTableRows, type TableSortState } from "../visua
 export type { VisualizationCardConfig } from "../visualization/visualizationDataModel";
 
 export function RawDataTable({ rows, onDownload }: { rows: AnalysisRow[]; onDownload: () => void }) {
-  const fields = analysisRawFields(rows);
+  const [mergedDimensionFields, setMergedDimensionFields] = useState<string[]>([]);
+  const [frozenColumnFields, setFrozenColumnFields] = useState<string[]>([]);
+  const [frozenRowKeys, setFrozenRowKeys] = useState<string[]>([]);
+  const [headerMenu, setHeaderMenu] = useState<{ field: string; left: number; top: number } | null>(null);
+  const [rowMenu, setRowMenu] = useState<{ rowKey: string; left: number; top: number } | null>(null);
+  const [tableNotice, setTableNotice] = useState("");
+  useEffect(() => {
+    if (!tableNotice) return;
+    const timer = window.setTimeout(() => setTableNotice(""), 4_000);
+    return () => window.clearTimeout(timer);
+  }, [tableNotice]);
+  useEffect(() => {
+    const dismiss = (event: PointerEvent) => {
+      if (!(event.target instanceof Element)) return;
+      if (!event.target.closest("[data-visual-table-header-menu], [data-visual-table-row-menu]")) {
+        setHeaderMenu(null);
+        setRowMenu(null);
+      }
+    };
+    document.addEventListener("pointerdown", dismiss, true);
+    return () => document.removeEventListener("pointerdown", dismiss, true);
+  }, []);
+  const freezeBlockedMessage = "有合并单元格的情况下，无法冻结，如需冻结请取消合并单元格";
+  const clampMenu = (clientX: number, clientY: number, width: number) => ({ left: Math.max(8, Math.min(clientX, window.innerWidth - width - 8)), top: Math.max(8, Math.min(clientY, window.innerHeight - 160)) });
   return (
     <div className="rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-4">
       <div className="mb-3 flex items-center justify-between gap-3"><div><div className="text-[12px] text-[#1d1d1f]">可视化原始数据</div><div className="mt-0.5 text-[11px] text-[#aeaeb2]">当前图形对应的 SQL 返回数据，默认显示 20 条</div></div><button type="button" onClick={onDownload} disabled={!rows.length} className="inline-flex items-center gap-1 rounded-lg border border-[#e5e5ea] bg-white px-3 py-1.5 text-[11px] text-[#636366] hover:bg-[#f2f2f7] disabled:cursor-not-allowed disabled:opacity-40"><Download className="h-3 w-3" />下载数据</button></div>
-      <ResultTable rows={rows.slice(0, 20)} emptyLabel="暂无 SQL 返回数据" />
+      {tableNotice ? <div className="mb-2 rounded-lg border border-[#ead7b8] bg-[#fff8ee] px-3 py-2 text-[11px] leading-5 text-[#8a6a2b]" role="alert" data-visual-table-freeze-notice="true">{tableNotice}</div> : null}
+      <ResultTable
+        rows={rows.slice(0, 20)}
+        emptyLabel="暂无 SQL 返回数据"
+        mergedDimensionFields={mergedDimensionFields}
+        frozenColumnFields={frozenColumnFields}
+        frozenRowKeys={frozenRowKeys}
+        onDimensionHeaderContextMenu={(field, event) => { event.preventDefault(); event.stopPropagation(); setRowMenu(null); setHeaderMenu({ field, ...clampMenu(event.clientX, event.clientY, 210) }); }}
+        onRowContextMenu={(rowKey, event) => { event.preventDefault(); event.stopPropagation(); setHeaderMenu(null); setRowMenu({ rowKey, ...clampMenu(event.clientX, event.clientY, 188) }); }}
+      />
+      {headerMenu && createPortal(<div className="fixed z-[200] w-[210px] rounded-xl border border-[#dce7df] bg-white p-1.5 shadow-xl shadow-black/10" style={{ left: headerMenu.left, top: headerMenu.top }} data-visual-table-header-menu={headerMenu.field} data-visual-interactive="true">
+        <button type="button" onClick={() => setHeaderMenu(null)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-table-header-comment="true"><MessageSquareText className="h-3.5 w-3.5 text-[#178a53]" />评论</button>
+        <button type="button" aria-pressed={mergedDimensionFields.includes(headerMenu.field)} onClick={() => { setMergedDimensionFields((current) => { const next = current.includes(headerMenu.field) ? current.filter((field) => field !== headerMenu.field) : [...current, headerMenu.field]; if (next.length) { setFrozenColumnFields([]); setFrozenRowKeys([]); } return next; }); setHeaderMenu(null); }} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-merge-dimension={headerMenu.field}><span>{mergedDimensionFields.includes(headerMenu.field) ? "取消合并重复单元格" : "合并重复单元格"}</span>{mergedDimensionFields.includes(headerMenu.field) && <Check className="h-3.5 w-3.5 text-[#178a53]" />}</button>
+        <button type="button" aria-pressed={frozenColumnFields.includes(headerMenu.field)} onClick={() => { if (mergedDimensionFields.length) { setTableNotice(freezeBlockedMessage); setHeaderMenu(null); return; } setFrozenColumnFields((current) => current.includes(headerMenu.field) ? current.filter((field) => field !== headerMenu.field) : [...current, headerMenu.field]); setHeaderMenu(null); }} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-freeze-column={headerMenu.field}><span>{frozenColumnFields.includes(headerMenu.field) ? "取消冻结到首列" : "冻结到首列"}</span>{frozenColumnFields.includes(headerMenu.field) ? <Check className="h-3.5 w-3.5 text-[#178a53]" /> : <Pin className="h-3.5 w-3.5 text-[#8aa396]" />}</button>
+      </div>, document.body)}
+      {rowMenu && createPortal(<div className="fixed z-[200] w-[188px] rounded-xl border border-[#dce7df] bg-white p-1.5 shadow-xl shadow-black/10" style={{ left: rowMenu.left, top: rowMenu.top }} data-visual-table-row-menu={rowMenu.rowKey} data-visual-interactive="true">
+        <button type="button" aria-pressed={frozenRowKeys.includes(rowMenu.rowKey)} onClick={() => { if (mergedDimensionFields.length) { setTableNotice(freezeBlockedMessage); setRowMenu(null); return; } setFrozenRowKeys((current) => current.includes(rowMenu.rowKey) ? current.filter((key) => key !== rowMenu.rowKey) : [...current, rowMenu.rowKey]); setRowMenu(null); }} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-freeze-row={rowMenu.rowKey}><span>{frozenRowKeys.includes(rowMenu.rowKey) ? "取消冻结到首行" : "冻结到首行"}</span>{frozenRowKeys.includes(rowMenu.rowKey) ? <Check className="h-3.5 w-3.5 text-[#178a53]" /> : <Pin className="h-3.5 w-3.5 text-[#8aa396]" />}</button>
+      </div>, document.body)}
     </div>
   );
 }
@@ -132,6 +174,8 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   const [metricFields, setMetricFields] = useState<string[]>(initialConfig?.metricFields || []);
   const [dimensionFields, setDimensionFields] = useState<string[]>(initialConfig?.dimensionFields || []);
   const [mergedDimensionFields, setMergedDimensionFields] = useState<string[]>(initialConfig?.mergedDimensionFields || []);
+  const [frozenColumnFields, setFrozenColumnFields] = useState<string[]>(initialConfig?.frozenColumnFields || []);
+  const [frozenRowKeys, setFrozenRowKeys] = useState<string[]>(initialConfig?.frozenRowKeys || []);
   const [filters, setFilters] = useState<VisualizationFilters>(initialConfig?.filters || {});
   const [filterGroups, setFilterGroups] = useState<VisualizationFilterGroup[]>(() => initialConfig?.filterGroups?.length ? normalizeVisualizationFilterGroups(initialConfig.filterGroups) : legacyFiltersToFilterGroups(initialConfig?.filters || {}));
   const [sumFilteredRows, setSumFilteredRows] = useState(Boolean(initialConfig?.sumFilteredRows));
@@ -146,7 +190,9 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   const [activePanel, setActivePanel] = useState<"style" | "metric" | "dimension" | null>(null);
   const [commentPoint, setCommentPoint] = useState<{ left: number; top: number } | null>(null);
   const [tableHeaderMenu, setTableHeaderMenu] = useState<{ field: string; left: number; top: number } | null>(null);
+  const [tableRowMenu, setTableRowMenu] = useState<{ rowKey: string; left: number; top: number } | null>(null);
   const [commandNotice, setCommandNotice] = useState("");
+  const [tableNotice, setTableNotice] = useState("");
   const [voiceNoticeVisible, setVoiceNoticeVisible] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState(title);
@@ -195,6 +241,8 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     metricFields,
     dimensionFields,
     mergedDimensionFields,
+    frozenColumnFields,
+    frozenRowKeys,
     filters,
     filterGroups,
     sumFilteredRows,
@@ -207,7 +255,7 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     layoutHeight: visualGridHeight,
     maxLayoutSpan: visualGridMaxSpan,
     maxLayoutHeight: visualGridMaxHeight,
-  }), [comboLineFields, dimensionFields, filterGroups, filters, mergedDimensionFields, metricFields, noteBody, noteItems, noteTitle, noteTitleHidden, sumFilteredRows, visualGridHeight, visualGridMaxHeight, visualGridMaxSpan, visualGridSpan]);
+  }), [comboLineFields, dimensionFields, filterGroups, filters, frozenColumnFields, frozenRowKeys, mergedDimensionFields, metricFields, noteBody, noteItems, noteTitle, noteTitleHidden, sumFilteredRows, visualGridHeight, visualGridMaxHeight, visualGridMaxSpan, visualGridSpan]);
 
   useEffect(() => { if (!editingTitle) setDraftTitle(title); }, [editingTitle, title]);
 
@@ -228,6 +276,8 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
         if (Array.isArray(source.metricFields)) setMetricFields(source.metricFields);
         if (Array.isArray(source.dimensionFields)) setDimensionFields(source.dimensionFields);
         if (Array.isArray(source.mergedDimensionFields)) setMergedDimensionFields(source.mergedDimensionFields);
+        if (Array.isArray(source.frozenColumnFields)) setFrozenColumnFields(source.frozenColumnFields);
+        if (Array.isArray(source.frozenRowKeys)) setFrozenRowKeys(source.frozenRowKeys);
         if (source.filters) setFilters(source.filters);
         setFilterGroups(source.filterGroups?.length ? normalizeVisualizationFilterGroups(source.filterGroups) : legacyFiltersToFilterGroups(source.filters || {}));
         setSumFilteredRows(Boolean(source.sumFilteredRows));
@@ -255,9 +305,11 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   }, [cardType, dimensionCandidates.join("\u0000"), dimensionFields, fieldLabels, metricFields, numericFields.join("\u0000")]);
 
   useEffect(() => {
-    setMergedDimensionFields((current) => { const next = current.filter((field) => dimensionFields.includes(field)); return sameFields(current, next) ? current : next; });
-    setTableHeaderMenu((current) => current && cardType === "table" && dimensionFields.includes(current.field) ? current : null);
-  }, [cardType, dimensionFields]);
+    const allowed = new Set([...dimensionFields, ...metricFields]);
+    setMergedDimensionFields((current) => { const next = current.filter((field) => allowed.has(field)); return sameFields(current, next) ? current : next; });
+    setFrozenColumnFields((current) => { const next = current.filter((field) => allowed.has(field)); return sameFields(current, next) ? current : next; });
+    setTableHeaderMenu((current) => current && cardType === "table" && allowed.has(current.field) ? current : null);
+  }, [cardType, dimensionFields, metricFields]);
 
   useEffect(() => {
     const next = defaultComboLineFields(metricFields, comboLineFields);
@@ -288,6 +340,14 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     if (resolution.metricField) setMetricFields((current) => toggleVisualizationField("metric", resolution.visualizationType || cardType, current.filter((field) => field !== resolution.metricField), resolution.metricField!));
     if (resolution.dimensionField) setDimensionFields((current) => toggleVisualizationField("dimension", resolution.visualizationType || cardType, current.filter((field) => field !== resolution.dimensionField), resolution.dimensionField!));
     if (resolution.dataVisibility) setShowData(resolution.dataVisibility === "shown");
+    if (resolution.visualizationType || resolution.metricField || resolution.dimensionField) {
+      trackVisual("visualization_result", {
+        action: "voice",
+        chart_type: resolution.visualizationType || cardType,
+        metric_fields: resolution.metricField ? [resolution.metricField] : [],
+        dimension_fields: resolution.dimensionField ? [resolution.dimensionField] : [],
+      });
+    }
     const parts = [resolution.visualizationType ? visualizationLabel(resolution.visualizationType) : "", resolution.metricField ? `指标 ${fieldLabels[resolution.metricField] || resolution.metricField}` : "", resolution.dimensionField ? `维度 ${fieldLabels[resolution.dimensionField] || resolution.dimensionField}` : ""].filter(Boolean);
     setCommandNotice(parts.length ? `已应用：${parts.join(" · ")}` : `已听到“${command}”，但没有匹配到样式、指标或维度，请换一种说法。`);
   };
@@ -322,6 +382,12 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   }, [commandNotice, voice.error, voice.listening, voice.transcript]);
 
   useEffect(() => {
+    if (!tableNotice) return;
+    const timer = window.setTimeout(() => setTableNotice(""), 4_000);
+    return () => window.clearTimeout(timer);
+  }, [tableNotice]);
+
+  useEffect(() => {
     const dismissTransientControls = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
@@ -334,9 +400,10 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
         && !target.closest("[data-visual-field-panel]")
         && !target.closest("[data-visual-panel-trigger]")
       ) setActivePanel(null);
-      if (!target.closest('[data-visual-comment-action="true"], [data-visual-table-header-menu]')) {
+      if (!target.closest('[data-visual-comment-action="true"], [data-visual-table-header-menu], [data-visual-table-row-menu]')) {
         setCommentPoint(null);
         setTableHeaderMenu(null);
+        setTableRowMenu(null);
       }
     };
     document.addEventListener("pointerdown", dismissTransientControls, true);
@@ -394,22 +461,42 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   const activeFilterCount = filterGroups.reduce((count, group) => count + group.rules.filter((rule) => rule.field && rule.values.length).length, 0);
 
   const pointWithinCard = (clientX: number, clientY: number, width = 44) => { const rect = cardRef.current?.getBoundingClientRect(); return rect ? { left: Math.max(8, Math.min(clientX - rect.left, rect.width - width - 8)), top: Math.max(8, clientY - rect.top) } : null; };
-  const revealCommentAt = (clientX: number, clientY: number) => { const point = pointWithinCard(clientX, clientY); if (point) { setTableHeaderMenu(null); setCommentPoint(point); } };
-  const revealDimensionHeaderMenu = (field: string, event: ReactMouseEvent<HTMLElement>) => {
-    if (cardType !== "table" || !dimensionFields.includes(field)) return;
+  const eventInsideVisualTable = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest("[data-visual-table-scroll]"));
+  const revealCommentAt = (clientX: number, clientY: number) => { const point = pointWithinCard(clientX, clientY); if (point) { setTableHeaderMenu(null); setTableRowMenu(null); setCommentPoint(point); } };
+  const revealTableHeaderMenu = (field: string, event: ReactMouseEvent<HTMLElement>) => {
+    if (cardType !== "table") return;
     event.preventDefault();
     event.stopPropagation();
-    const point = pointWithinCard(event.clientX, event.clientY, 196);
-    if (!point) return;
     setCommentPoint(null);
-    setTableHeaderMenu({ field, ...point });
+    setTableRowMenu(null);
+    setTableHeaderMenu({ field, left: Math.max(8, Math.min(event.clientX, window.innerWidth - 218)), top: Math.max(8, Math.min(event.clientY, window.innerHeight - 180)) });
+  };
+  const revealTableRowMenu = (rowKey: string, event: ReactMouseEvent<HTMLElement>) => {
+    if (cardType !== "table") return;
+    event.preventDefault();
+    event.stopPropagation();
+    setCommentPoint(null);
+    setTableHeaderMenu(null);
+    setTableRowMenu({ rowKey, left: Math.max(8, Math.min(event.clientX, window.innerWidth - 196)), top: Math.max(8, Math.min(event.clientY, window.innerHeight - 120)) });
+  };
+  const hasMergedCells = mergedDimensionFields.length > 0;
+  const freezeBlockedMessage = "有合并单元格的情况下，无法冻结，如需冻结请取消合并单元格";
+  const toggleFrozenColumn = (field: string) => {
+    if (hasMergedCells) { setTableNotice(freezeBlockedMessage); setTableHeaderMenu(null); return; }
+    setFrozenColumnFields((current) => current.includes(field) ? current.filter((item) => item !== field) : [...current, field]);
+    setTableHeaderMenu(null);
+  };
+  const toggleFrozenRow = (rowKey: string) => {
+    if (hasMergedCells) { setTableNotice(freezeBlockedMessage); setTableRowMenu(null); return; }
+    setFrozenRowKeys((current) => current.includes(rowKey) ? current.filter((item) => item !== rowKey) : [...current, rowKey]);
+    setTableRowMenu(null);
   };
   const isTextCard = cardType === "text";
   const isTableCard = cardType === "table" || cardType === "pivot";
   const chartAreaRef = useRef<HTMLDivElement>(null);
   useVisualTableRegionWheelLock(chartAreaRef, isTableCard);
   const primaryToolsOpen = !isTextCard || operationsOpen;
-  return <div ref={cardRef} data-visual-card={id} data-visual-text-card={isTextCard ? "true" : "false"} data-visual-values={showData ? "shown" : "hidden"} data-visual-grid-span={visualGridSpan} data-visual-grid-height={visualGridHeight} data-visual-grid-max-span={visualGridMaxSpan} data-visual-grid-max-height={visualGridMaxHeight} className={`relative rounded-xl border border-[#dce9e0] bg-[#fbfdfc] p-4 ${fillHeight ? "flex h-full min-h-0 flex-col" : ""}`} onClick={(event) => { if (!(event.target instanceof Element) || event.target.closest('[data-visual-interactive="true"]')) return; revealCommentAt(event.clientX, event.clientY); }} onContextMenu={(event) => { if (event.target instanceof Element && event.target.closest("[data-rich-note-editor], [data-visual-note-selection], [data-visual-note-title-row]")) return; event.preventDefault(); revealCommentAt(event.clientX, event.clientY); }}>
+  return <div ref={cardRef} data-visual-card={id} data-visual-text-card={isTextCard ? "true" : "false"} data-visual-values={showData ? "shown" : "hidden"} data-visual-grid-span={visualGridSpan} data-visual-grid-height={visualGridHeight} data-visual-grid-max-span={visualGridMaxSpan} data-visual-grid-max-height={visualGridMaxHeight} className={`relative rounded-xl border border-[#dce9e0] bg-[#fbfdfc] p-4 ${activePanel === "style" ? "overflow-hidden" : ""} ${fillHeight ? "flex h-full min-h-0 flex-col" : ""}`} onClick={(event) => { if (!(event.target instanceof Element) || event.target.closest('[data-visual-interactive="true"]') || eventInsideVisualTable(event.target)) return; trackVisual("visualization_click", { chart_type: cardType, metric_fields: metricFields, dimension_fields: dimensionFields }); revealCommentAt(event.clientX, event.clientY); }} onContextMenu={(event) => { if (event.target instanceof Element && event.target.closest("[data-rich-note-editor], [data-visual-note-selection], [data-visual-note-title-row]")) return; event.preventDefault(); if (eventInsideVisualTable(event.target)) return; revealCommentAt(event.clientX, event.clientY); }}>
     <div className={isTextCard ? "mb-3 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-1" : "mb-3 flex items-start justify-between gap-2.5"}>
       {!isTextCard && <div className="min-w-0 flex-1 pr-1" data-visual-interactive="true">{editingTitle ? <input autoFocus value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} onBlur={commitTitle} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setDraftTitle(title); setEditingTitle(false); } }} className="h-7 w-full rounded-md border border-[#b7ddc3] bg-white px-2 text-[12px] text-[#1d1d1f] outline-none ring-2 ring-[#2ca66f]/15" aria-label="可视化标题" data-visual-title-input="true" /> : <button type="button" onDoubleClick={(event) => { event.stopPropagation(); if (onTitleChange) setEditingTitle(true); }} className={`max-w-full truncate text-left text-[12px] text-[#1d1d1f] ${onTitleChange ? "cursor-text rounded px-1 py-1 hover:bg-[#f5faf7]" : ""}`} title={onTitleChange ? "双击修改标题" : title} data-visual-title="true">{title}</button>}</div>}
       <div className={isTextCard ? `${operationsOpen ? "col-span-2 row-start-1 flex justify-end" : "hidden"}` : "ml-auto flex shrink-0 flex-nowrap items-center justify-end gap-0 rounded-full bg-[#f0f6f2] p-0.5"} data-visual-toolbar="true" data-visual-interactive="true" data-visual-text-ops-above={isTextCard && operationsOpen ? "true" : undefined}>
@@ -440,14 +527,22 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
       {isTextCard ? <div className={`col-start-2 flex justify-end ${operationsOpen ? "row-start-2" : "row-start-1"}`}><div className="flex h-8 shrink-0 items-center rounded-full bg-[#f0f6f2] p-0.5" data-visual-toolbar="true" data-visual-interactive="true">{!operationsOpen && <button type="button" onClick={() => { trackVisual("visual_voice_click"); focusTextVoiceTarget(); voice.toggle(); }} className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full outline-none focus-visible:outline-none ${voice.listening ? "bg-white text-[#178a53] shadow-sm" : "text-[#4f685b] hover:bg-white/80"}`} aria-label={voice.listening ? "停止文本框实时语音" : "文本框实时语音"} title="实时语音" data-visual-text-voice="true"><AudioLines className={`h-3.5 w-3.5 ${voice.listening ? "animate-pulse" : ""}`} /></button>}<button type="button" onClick={toggleOperations} className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full outline-none focus-visible:outline-none ${operationsOpen ? "bg-white text-[#178a53] shadow-sm" : "text-[#4f685b] hover:bg-white/80"}`} aria-expanded={operationsOpen} aria-label={operationsOpen ? "收起可视化操作" : "展开可视化操作"} title="操作" data-visual-operation-toggle="true"><SlidersHorizontal className="h-3.5 w-3.5" /></button></div></div> : null}
     </div>
 
-    {filterOpen && <VisualizationFilterPanel rows={rows} dimensions={dimensionCandidates} labels={fieldLabels} value={draftFilterGroups} sumRows={draftSumRows} onChange={(next) => { setDraftFilterGroups(next); applyFilterState(next, draftSumRows); }} onSumRowsChange={(next) => { setDraftSumRows(next); applyFilterState(draftFilterGroups, next); }} onCancel={() => { const snapshot = filterSnapshotRef.current; if (snapshot) { setFilterGroups(snapshot.filterGroups); setFilters(snapshot.filters); setSumFilteredRows(snapshot.sumFilteredRows); } setFilterOpen(false); }} onSave={() => { applyFilterState(draftFilterGroups, draftSumRows); setFilterOpen(false); }} />}
-    {operationsOpen && activePanel === "style" && <div className={`absolute right-4 z-30 w-36 rounded-lg border border-[#dce7df] bg-white p-1 shadow-lg shadow-black/[0.08] ${isTextCard ? "top-11" : "top-12"}`} data-visual-style-menu="true" data-visual-interactive="true">{visualizationOptions.map((option) => <button key={option.type} type="button" onClick={() => { applyType(option.type); setActivePanel(null); }} className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] ${option.type === cardType ? "bg-[#eaf7ef] text-[#178a53]" : "text-[#636366] hover:bg-[#f5faf7]"}`}><option.icon className="h-3.5 w-3.5" />{option.label}</button>)}</div>}
-    {operationsOpen && activePanel === "metric" && <FieldPanel title="指标" fields={metricFields} candidates={numericFields} labels={fieldLabels} reorder={metricReorder} onToggle={(field) => setMetricFields((current) => toggleVisualizationField("metric", cardType, current, field))} />}
-    {operationsOpen && activePanel === "dimension" && <FieldPanel title="维度" fields={dimensionFields} candidates={dimensionCandidates} labels={fieldLabels} reorder={dimensionReorder} onToggle={(field) => setDimensionFields((current) => toggleVisualizationField("dimension", cardType, current, field))} />}
+    {filterOpen && <VisualizationFilterPanel rows={rows} dimensions={dimensionCandidates} labels={fieldLabels} value={draftFilterGroups} sumRows={draftSumRows} onChange={(next) => { setDraftFilterGroups(next); applyFilterState(next, draftSumRows); }} onSumRowsChange={(next) => { setDraftSumRows(next); applyFilterState(draftFilterGroups, next); }} onCancel={() => { const snapshot = filterSnapshotRef.current; if (snapshot) { setFilterGroups(snapshot.filterGroups); setFilters(snapshot.filters); setSumFilteredRows(snapshot.sumFilteredRows); } setFilterOpen(false); }} onSave={() => { applyFilterState(draftFilterGroups, draftSumRows); trackVisual("visualization_result", { action: "condition", filter_count: draftFilterGroups.reduce((count, group) => count + group.rules.filter((rule) => rule.field && rule.values.length).length, 0), dimension_fields: Array.from(new Set(draftFilterGroups.flatMap((group) => group.rules.map((rule) => rule.field).filter(Boolean)))) }); setFilterOpen(false); }} />}
+    {operationsOpen && activePanel === "style" && <div className={`absolute right-4 z-30 grid max-h-[calc(100%-4rem)] w-[min(17.5rem,calc(100%-2rem))] grid-cols-2 gap-0.5 overflow-y-auto overflow-x-hidden rounded-lg border border-[#dce7df] bg-white p-1 shadow-lg shadow-black/[0.08] ${isTextCard ? "top-11" : "top-12"}`} data-visual-style-menu="true" data-visual-style-layout="two-column" data-visual-interactive="true">{visualizationOptions.map((option) => <button key={option.type} type="button" onClick={() => { applyType(option.type); trackVisual("visualization_result", { action: "style", chart_type: option.type }); setActivePanel(null); }} className={`flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12px] ${option.type === cardType ? "bg-[#eaf7ef] text-[#178a53]" : "text-[#636366] hover:bg-[#f5faf7]"}`}><option.icon className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{option.label}</span></button>)}</div>}
+    {operationsOpen && activePanel === "metric" && <FieldPanel title="指标" fields={metricFields} candidates={numericFields} labels={fieldLabels} reorder={metricReorder} onToggle={(field) => { const next = toggleVisualizationField("metric", cardType, metricFields, field); setMetricFields(next); trackVisual("visualization_result", { action: "metric", metric_fields: next, changed_field: field }); }} />}
+    {operationsOpen && activePanel === "dimension" && <FieldPanel title="维度" fields={dimensionFields} candidates={dimensionCandidates} labels={fieldLabels} reorder={dimensionReorder} onToggle={(field) => { const next = toggleVisualizationField("dimension", cardType, dimensionFields, field); setDimensionFields(next); trackVisual("visualization_result", { action: "dimension", dimension_fields: next, changed_field: field }); }} />}
     {voiceNoticeVisible && (voice.listening || voice.error || commandNotice || voice.transcript) && <div className="absolute right-4 top-12 z-40 max-w-[280px] rounded-lg border border-[#dce7df] bg-white px-3 py-2 text-[10px] leading-4 text-[#53615a] shadow-lg" role="status" data-visual-voice-notice="true" data-visual-interactive="true">{voice.listening ? (isTextCard ? "正在将语音转写到文本框…" : "正在听取样式、指标或维度指令…") : voice.error || commandNotice || voice.transcript}</div>}
+    {tableNotice ? <div className="mb-2 rounded-lg border border-[#ead7b8] bg-[#fff8ee] px-3 py-2 text-[11px] leading-5 text-[#8a6a2b]" role="alert" data-visual-table-freeze-notice="true">{tableNotice}</div> : null}
     {commentPoint && <button type="button" aria-label="评论可视化" onClick={() => { onComment(); setCommentPoint(null); }} className="absolute z-40 flex h-8 w-8 items-center justify-center rounded-full bg-[#178a53] text-white shadow-lg shadow-black/20 outline-none hover:bg-[#117847] focus-visible:outline-none" style={commentPoint} data-visual-comment-action="true" data-visual-interactive="true"><MessageSquareText className="h-4 w-4" /></button>}
-    {tableHeaderMenu && <div className="absolute z-50 w-[188px] rounded-xl border border-[#dce7df] bg-white p-1.5 shadow-xl shadow-black/10" style={{ left: tableHeaderMenu.left, top: tableHeaderMenu.top }} data-visual-table-header-menu={tableHeaderMenu.field} data-visual-interactive="true"><button type="button" onClick={() => { onComment({ selectedText: fieldLabels[tableHeaderMenu.field] || tableHeaderMenu.field }); setTableHeaderMenu(null); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-table-header-comment="true"><MessageSquareText className="h-3.5 w-3.5 text-[#178a53]" />评论</button><button type="button" aria-pressed={mergedDimensionFields.includes(tableHeaderMenu.field)} onClick={() => { setMergedDimensionFields((current) => current.includes(tableHeaderMenu.field) ? current.filter((field) => field !== tableHeaderMenu.field) : [...current, tableHeaderMenu.field]); setTableHeaderMenu(null); }} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-merge-dimension={tableHeaderMenu.field}><span>{mergedDimensionFields.includes(tableHeaderMenu.field) ? "取消合并重复单元格" : "合并重复单元格"}</span>{mergedDimensionFields.includes(tableHeaderMenu.field) && <Check className="h-3.5 w-3.5 text-[#178a53]" />}</button></div>}
-    <div ref={chartAreaRef} className={fillHeight ? `flex min-h-0 flex-1 flex-col ${isTableCard ? "overflow-hidden" : "overflow-auto"}` : ""} onWheelCapture={isTextCard || isTableCard ? undefined : passWheelToPage} data-chart-wheel-passthrough={isTextCard || isTableCard ? undefined : "true"} data-visual-table-region={isTableCard ? "true" : undefined}>{isTextCard ? <VisualNoteFields title={noteTitle} body={noteBody} items={noteItems} titleHidden={true} fields={fields} metricFields={metricFields} dimensionFields={dimensionFields} labels={fieldLabels} uploadContext={{ tenantId, userId, reportId: `visual-note-${stateKey}`, blockId: String(id) }} onTitleChange={(value) => { setNoteTitle(value); onTitleChange?.(value || title); }} onBodyChange={setNoteBody} onItemsChange={setNoteItems} onHideTitle={() => setNoteTitleHidden(true)} onOpenComment={(selectedText) => onComment({ selectedText })} onOpenAnalysis={(selectedText) => onFollowUp({ selectedText, dataTables: analysisSource })} /> : <VisualizationRenderer type={cardType} rows={rows} metricFields={metricFields} dimensionFields={dimensionFields} mergedDimensionFields={mergedDimensionFields} filters={filters} filterGroups={filterGroups} sumFilteredRows={sumFilteredRows} comboLineFields={comboLineFields} onComboLineFieldsChange={setComboLineFields} onMetricFieldsChange={setMetricFields} onDimensionFieldsChange={setDimensionFields} onDimensionHeaderContextMenu={revealDimensionHeaderMenu} metricReorder={metricReorder} compact={compact} showData={showData} fillHeight={fillHeight} />}</div>
+    {tableHeaderMenu && createPortal(<div className="fixed z-[200] w-[210px] rounded-xl border border-[#dce7df] bg-white p-1.5 shadow-xl shadow-black/10" style={{ left: tableHeaderMenu.left, top: tableHeaderMenu.top }} data-visual-table-header-menu={tableHeaderMenu.field} data-visual-interactive="true">
+      <button type="button" onClick={() => { onComment({ selectedText: fieldLabels[tableHeaderMenu.field] || tableHeaderMenu.field }); setTableHeaderMenu(null); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-table-header-comment="true"><MessageSquareText className="h-3.5 w-3.5 text-[#178a53]" />评论</button>
+      <button type="button" aria-pressed={mergedDimensionFields.includes(tableHeaderMenu.field)} onClick={() => { setMergedDimensionFields((current) => { const next = current.includes(tableHeaderMenu.field) ? current.filter((field) => field !== tableHeaderMenu.field) : [...current, tableHeaderMenu.field]; if (next.length) { setFrozenColumnFields([]); setFrozenRowKeys([]); } return next; }); setTableHeaderMenu(null); }} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-merge-dimension={tableHeaderMenu.field}><span>{mergedDimensionFields.includes(tableHeaderMenu.field) ? "取消合并重复单元格" : "合并重复单元格"}</span>{mergedDimensionFields.includes(tableHeaderMenu.field) && <Check className="h-3.5 w-3.5 text-[#178a53]" />}</button>
+      <button type="button" aria-pressed={frozenColumnFields.includes(tableHeaderMenu.field)} onClick={() => toggleFrozenColumn(tableHeaderMenu.field)} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-freeze-column={tableHeaderMenu.field}><span>{frozenColumnFields.includes(tableHeaderMenu.field) ? "取消冻结到首列" : "冻结到首列"}</span>{frozenColumnFields.includes(tableHeaderMenu.field) ? <Check className="h-3.5 w-3.5 text-[#178a53]" /> : <Pin className="h-3.5 w-3.5 text-[#8aa396]" />}</button>
+    </div>, document.body)}
+    {tableRowMenu && createPortal(<div className="fixed z-[200] w-[188px] rounded-xl border border-[#dce7df] bg-white p-1.5 shadow-xl shadow-black/10" style={{ left: tableRowMenu.left, top: tableRowMenu.top }} data-visual-table-row-menu={tableRowMenu.rowKey} data-visual-interactive="true">
+      <button type="button" aria-pressed={frozenRowKeys.includes(tableRowMenu.rowKey)} onClick={() => toggleFrozenRow(tableRowMenu.rowKey)} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-freeze-row={tableRowMenu.rowKey}><span>{frozenRowKeys.includes(tableRowMenu.rowKey) ? "取消冻结到首行" : "冻结到首行"}</span>{frozenRowKeys.includes(tableRowMenu.rowKey) ? <Check className="h-3.5 w-3.5 text-[#178a53]" /> : <Pin className="h-3.5 w-3.5 text-[#8aa396]" />}</button>
+    </div>, document.body)}
+    <div ref={chartAreaRef} className={fillHeight ? `flex min-h-0 flex-1 flex-col ${isTableCard ? "overflow-hidden" : "overflow-auto"}` : ""} onWheelCapture={isTextCard || isTableCard ? undefined : passWheelToPage} data-chart-wheel-passthrough={isTextCard || isTableCard ? undefined : "true"} data-visual-table-region={isTableCard ? "true" : undefined}>{isTextCard ? <VisualNoteFields title={noteTitle} body={noteBody} items={noteItems} titleHidden={true} fields={fields} metricFields={metricFields} dimensionFields={dimensionFields} labels={fieldLabels} uploadContext={{ tenantId, userId, reportId: `visual-note-${stateKey}`, blockId: String(id) }} onTitleChange={(value) => { setNoteTitle(value); onTitleChange?.(value || title); }} onBodyChange={setNoteBody} onItemsChange={setNoteItems} onHideTitle={() => setNoteTitleHidden(true)} onOpenComment={(selectedText) => onComment({ selectedText })} onOpenAnalysis={(selectedText) => onFollowUp({ selectedText, dataTables: analysisSource })} /> : <VisualizationRenderer type={cardType} rows={rows} metricFields={metricFields} dimensionFields={dimensionFields} mergedDimensionFields={mergedDimensionFields} frozenColumnFields={frozenColumnFields} frozenRowKeys={frozenRowKeys} filters={filters} filterGroups={filterGroups} sumFilteredRows={sumFilteredRows} comboLineFields={comboLineFields} onComboLineFieldsChange={setComboLineFields} onMetricFieldsChange={setMetricFields} onDimensionFieldsChange={setDimensionFields} onDimensionHeaderContextMenu={revealTableHeaderMenu} onRowContextMenu={revealTableRowMenu} metricReorder={metricReorder} compact={compact} showData={showData} fillHeight={fillHeight} />}</div>
     <ReorderPreview reorder={metricReorder} /><ReorderPreview reorder={dimensionReorder} />
   </div>;
 }
@@ -685,14 +780,17 @@ type ResultTableProps = {
   dimensionFields?: string[];
   metricFields?: string[];
   mergedDimensionFields?: string[];
+  frozenColumnFields?: string[];
+  frozenRowKeys?: string[];
   onDimensionFieldsChange?: (fields: string[]) => void;
   onMetricFieldsChange?: (fields: string[]) => void;
   onDimensionHeaderContextMenu?: (field: string, event: ReactMouseEvent<HTMLTableCellElement>) => void;
+  onRowContextMenu?: (rowKey: string, event: ReactMouseEvent<HTMLTableCellElement>) => void;
   fillHeight?: boolean;
   compact?: boolean;
 };
 
-function ResultTable({ rows, emptyLabel, dimensionFields, metricFields, mergedDimensionFields = [], onDimensionFieldsChange, onMetricFieldsChange, onDimensionHeaderContextMenu, fillHeight, compact }: ResultTableProps) {
+function ResultTable({ rows, emptyLabel, dimensionFields, metricFields, mergedDimensionFields = [], frozenColumnFields = [], frozenRowKeys = [], onDimensionFieldsChange, onMetricFieldsChange, onDimensionHeaderContextMenu, onRowContextMenu, fillHeight, compact }: ResultTableProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   useVisualTableScrollLock(scrollerRef);
   const instance = useId();
@@ -700,16 +798,22 @@ function ResultTable({ rows, emptyLabel, dimensionFields, metricFields, mergedDi
   const controlled = Boolean(dimensionFields && metricFields);
   const [localFields, setLocalFields] = useState(availableFields);
   const [sortState, setSortState] = useState<TableSortState>(null);
-  const fields = controlled ? selectedTableFields(dimensionFields || [], metricFields || []) : localFields;
+  const fields = controlled ? orderedTableFields(dimensionFields || [], metricFields || [], frozenColumnFields) : [...frozenColumnFields.filter((field) => localFields.includes(field)), ...localFields.filter((field) => !frozenColumnFields.includes(field))];
   const rowEntries = useMemo(() => rows.map((row, index) => ({ key: tableRowKey(row, index), row, index })), [rows]);
   const availableRowKeys = useMemo(() => rowEntries.map((entry) => entry.key), [rowEntries]);
   const rowByKey = useMemo(() => new Map(rowEntries.map((entry) => [entry.key, entry.row])), [rowEntries]);
   const originalIndexByRow = useMemo(() => new Map(rowEntries.map((entry) => [entry.row, entry.index])), [rowEntries]);
   const [rowKeys, setRowKeys] = useState(availableRowKeys);
+  const [columnLefts, setColumnLefts] = useState<number[]>([]);
+  const [rowTops, setRowTops] = useState<number[]>([]);
   useEffect(() => setLocalFields((current) => reconcileFields(current, availableFields, availableFields)), [availableFields.join("\u0000")]);
   useEffect(() => setRowKeys((current) => reconcileFields(current, availableRowKeys, availableRowKeys)), [availableRowKeys.join("\u0000")]);
   useEffect(() => setSortState((current) => current && fields.includes(current.field) ? current : null), [fields.join("\u0000")]);
-  const orderedRows = useMemo(() => rowKeys.map((key) => rowByKey.get(key)).filter((row): row is AnalysisRow => Boolean(row)), [rowByKey, rowKeys]);
+  const pinnedRowKeys = frozenRowKeys.filter((key) => rowByKey.has(key));
+  const orderedRows = useMemo(() => {
+    const rest = rowKeys.filter((key) => !pinnedRowKeys.includes(key));
+    return [...pinnedRowKeys, ...rest].map((key) => rowByKey.get(key)).filter((row): row is AnalysisRow => Boolean(row));
+  }, [pinnedRowKeys.join("\u0000"), rowByKey, rowKeys]);
   const localReorder = useRightPressReorder(localFields, setLocalFields, `${instance}-columns`);
   const dimensionReorder = useRightPressReorder(dimensionFields || [], (updater) => onDimensionFieldsChange?.(updater(dimensionFields || [])), `${instance}-dimensions`, (field) => rows[0]?.fieldLabels[field] || field);
   const metricReorder = useRightPressReorder(metricFields || [], (updater) => onMetricFieldsChange?.(updater(metricFields || [])), `${instance}-metrics`, (field) => rows[0]?.fieldLabels[field] || field);
@@ -717,29 +821,63 @@ function ResultTable({ rows, emptyLabel, dimensionFields, metricFields, mergedDi
   const fieldLabels = rows[0]?.fieldLabels || {};
   const fieldMetadata = rows[0]?.fieldMetadata || {};
   const controllerFor = (field: string) => !controlled ? localReorder : dimensionFields?.includes(field) ? dimensionReorder : metricReorder;
-  const displayedRows = useMemo(() => sortTableRows(
+  const sortedRows = useMemo(() => sortTableRows(
     groupRowsForMergedDimensions(orderedRows, dimensionFields || [], mergedDimensionFields),
     sortState,
   ), [dimensionFields, mergedDimensionFields, orderedRows, sortState]);
+  const displayedRows = useMemo(() => {
+    if (!pinnedRowKeys.length) return sortedRows;
+    const pinned = pinnedRowKeys.map((key) => rowByKey.get(key)).filter((row): row is AnalysisRow => Boolean(row));
+    const pinnedSet = new Set(pinned);
+    return [...pinned, ...sortedRows.filter((row) => !pinnedSet.has(row))];
+  }, [pinnedRowKeys, rowByKey, sortedRows]);
+  useLayoutEffect(() => {
+    const root = scrollerRef.current;
+    if (!root) return;
+    const lefts: number[] = [];
+    let left = 0;
+    frozenColumnFields.forEach((field) => {
+      lefts.push(left);
+      const cell = root.querySelector(`[data-visual-table-field="${cssEscape(field)}"]`);
+      left += cell instanceof HTMLElement ? cell.getBoundingClientRect().width : 0;
+    });
+    setColumnLefts(lefts);
+    const header = root.querySelector("thead tr");
+    const headerHeight = header instanceof HTMLElement ? header.getBoundingClientRect().height : 0;
+    const tops: number[] = [];
+    let top = headerHeight;
+    pinnedRowKeys.forEach((key) => {
+      tops.push(top);
+      const row = root.querySelector(`[data-visual-table-row="${cssEscape(key)}"]`);
+      top += row instanceof HTMLElement ? row.getBoundingClientRect().height : 0;
+    });
+    setRowTops(tops);
+  }, [displayedRows.length, fields.join("\u0000"), frozenColumnFields.join("\u0000"), pinnedRowKeys.join("\u0000")]);
   return <div ref={scrollerRef} className={`min-h-0 overflow-auto overscroll-contain rounded-lg border border-[#edf1ee] bg-white ${fillHeight ? "min-h-0 flex-1" : compact ? "max-h-[220px]" : "max-h-[300px]"}`} style={{ overscrollBehavior: "none" }} data-visual-table-scroll="true" data-table-long-press-reorder="true">
     <table className="w-full border-separate border-spacing-0 text-[12px]">
-      <thead className="sticky top-0 z-20 bg-[#f5faf7]" data-visual-table-frozen-header="true"><tr className="text-[#6f8177]">{fields.map((field) => {
+      <thead className="sticky top-0 z-20 bg-[#f5faf7]" data-visual-table-frozen-header="true"><tr className="text-[#6f8177]">{fields.map((field, fieldIndex) => {
         const reorder = controllerFor(field);
         const dimension = Boolean(controlled && dimensionFields?.includes(field));
+        const frozen = frozenColumnFields.includes(field);
+        const frozenIndex = frozenColumnFields.indexOf(field);
         const direction = sortState?.field === field ? sortState.direction : null;
         const SortIcon = direction === "asc" ? ArrowUp : direction === "desc" ? ArrowDown : ArrowUpDown;
         const nextLabel = direction === "asc" ? "切换为倒排" : direction === "desc" ? "恢复原始顺序" : "切换为正排";
-        return <th key={field} data-reorder-field={field} data-reorder-group={reorder.group} data-reorder-floating={reorder.floating === field ? "true" : "false"} data-reorder-target={reorder.target === field ? "true" : "false"} data-visual-table-dimension-header={dimension ? field : undefined} data-visual-table-metric-header={!dimension && controlled ? field : undefined} onContextMenu={dimension && onDimensionHeaderContextMenu ? (event) => onDimensionHeaderContextMenu(field, event) : undefined} onClick={(event) => { if (reorder.consumeClick()) event.stopPropagation(); }} onPointerDown={(event) => reorder.start(field, event)} onPointerUp={() => reorder.end(true)} onPointerCancel={() => reorder.end(false)} className={`sticky top-0 z-20 cursor-grab whitespace-nowrap border-b border-[#edf1ee] px-3 py-2.5 text-left font-medium active:cursor-grabbing ${reorder.floating === field ? "bg-[#eaf7ef] text-[#178a53] shadow-[inset_0_0_0_1px_#b7ddc3]" : reorder.target === field ? "bg-[#f6fbf8] text-[#178a53] shadow-[inset_2px_0_0_#2ca66f]" : "bg-[#f5faf7] shadow-[0_1px_0_0_#edf1ee]"}`}><span className="inline-flex items-center gap-1.5"><span>{fieldLabels[field] || field}</span><button type="button" onPointerDown={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setSortState((current) => nextTableSortState(current, field)); }} aria-label={`${fieldLabels[field] || field}：${nextLabel}`} title={nextLabel} data-visual-table-sort={field} data-visual-table-sort-direction={direction || "original"} className={`rounded p-0.5 transition-colors hover:bg-white ${direction ? "text-[#178a53]" : "text-[#9aa7a0]"}`}><SortIcon className="h-3 w-3" /></button></span></th>;
+        return <th key={field} data-visual-table-field={field} data-reorder-field={field} data-reorder-group={reorder.group} data-reorder-floating={reorder.floating === field ? "true" : "false"} data-reorder-target={reorder.target === field ? "true" : "false"} data-visual-table-dimension-header={dimension ? field : undefined} data-visual-table-metric-header={!dimension && controlled ? field : undefined} data-visual-table-frozen-column={frozen ? field : undefined} onContextMenu={onDimensionHeaderContextMenu ? (event) => onDimensionHeaderContextMenu(field, event) : undefined} onClick={(event) => { if (reorder.consumeClick()) event.stopPropagation(); }} onPointerDown={(event) => reorder.start(field, event)} onPointerUp={() => reorder.end(true)} onPointerCancel={() => reorder.end(false)} className={`sticky top-0 cursor-grab whitespace-nowrap border-b border-[#edf1ee] px-3 py-2.5 text-left font-medium active:cursor-grabbing ${frozen ? "z-30 bg-[#eef6f1] shadow-[1px_0_0_#dce7df]" : "z-20 bg-[#f5faf7] shadow-[0_1px_0_0_#edf1ee]"} ${reorder.floating === field ? "bg-[#eaf7ef] text-[#178a53] shadow-[inset_0_0_0_1px_#b7ddc3]" : reorder.target === field ? "bg-[#f6fbf8] text-[#178a53] shadow-[inset_2px_0_0_#2ca66f]" : ""}`} style={frozen ? { left: columnLefts[frozenIndex] || 0 } : undefined}><span className="inline-flex items-center gap-1.5"><span>{fieldLabels[field] || field}</span>{frozen ? <Pin className="h-3 w-3 text-[#178a53]" /> : null}<button type="button" onPointerDown={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setSortState((current) => nextTableSortState(current, field)); }} aria-label={`${fieldLabels[field] || field}：${nextLabel}`} title={nextLabel} data-visual-table-sort={field} data-visual-table-sort-direction={direction || "original"} className={`rounded p-0.5 transition-colors hover:bg-white ${direction ? "text-[#178a53]" : "text-[#9aa7a0]"}`}><SortIcon className="h-3 w-3" /></button></span></th>;
       })}</tr></thead>
       <tbody>{displayedRows.length ? displayedRows.map((row, index) => {
         const originalIndex = originalIndexByRow.get(row) ?? index;
         const rowKey = tableRowKey(row, originalIndex);
+        const frozenRow = pinnedRowKeys.includes(rowKey);
+        const frozenRowIndex = pinnedRowKeys.indexOf(rowKey);
         const cellSpans = fields.map((field) => mergedDimensionCellSpan(displayedRows, index, field, dimensionFields || [], mergedDimensionFields));
         const firstVisibleFieldIndex = Math.max(0, cellSpans.findIndex((span) => span > 0));
-        return <tr key={rowKey} data-reorder-floating={rowReorder.floating === rowKey ? "true" : "false"} data-reorder-target={rowReorder.target === rowKey ? "true" : "false"} className={`${rowReorder.floating === rowKey ? "bg-[#eaf7ef] shadow-[inset_0_0_0_1px_#b7ddc3]" : rowReorder.target === rowKey ? "bg-[#f6fbf8] shadow-[inset_0_2px_0_#2ca66f]" : ""}`}>{fields.map((field, fieldIndex) => {
+        return <tr key={rowKey} data-visual-table-row={rowKey} data-visual-table-frozen-row={frozenRow ? rowKey : undefined} data-reorder-floating={rowReorder.floating === rowKey ? "true" : "false"} data-reorder-target={rowReorder.target === rowKey ? "true" : "false"} className={`${rowReorder.floating === rowKey ? "bg-[#eaf7ef] shadow-[inset_0_0_0_1px_#b7ddc3]" : rowReorder.target === rowKey ? "bg-[#f6fbf8] shadow-[inset_0_2px_0_#2ca66f]" : frozenRow ? "bg-[#f7fbf9]" : ""}`} style={frozenRow ? { position: "sticky", top: rowTops[frozenRowIndex] || 0, zIndex: 15 } : undefined}>{fields.map((field, fieldIndex) => {
           const span = cellSpans[fieldIndex];
           if (span === 0) return null;
-          return <td key={field} rowSpan={span > 1 ? span : undefined} data-table-merged-dimension={span > 1 ? field : undefined} {...(fieldIndex === firstVisibleFieldIndex ? { "data-reorder-field": rowKey, "data-reorder-group": rowReorder.group, onClick: (event: ReactMouseEvent<HTMLTableCellElement>) => { if (rowReorder.consumeClick()) event.stopPropagation(); }, onPointerDown: (event: ReactPointerEvent<HTMLTableCellElement>) => rowReorder.start(rowKey, event), onPointerUp: () => rowReorder.end(true), onPointerCancel: () => rowReorder.end(false) } : {})} className={`whitespace-nowrap border-b border-[#f2f4f3] px-3 py-2.5 align-middle text-[#3a3a3c] ${span > 1 ? "bg-[#f8fbf9] font-medium text-[#265d43]" : ""} ${fieldIndex === firstVisibleFieldIndex ? "cursor-grab active:cursor-grabbing" : ""}`}>{displayRawCell(row.raw[field], fieldMetadata[field])}</td>;
+          const frozen = frozenColumnFields.includes(field);
+          const frozenIndex = frozenColumnFields.indexOf(field);
+          return <td key={field} rowSpan={span > 1 ? span : undefined} data-table-merged-dimension={span > 1 ? field : undefined} onContextMenu={onRowContextMenu ? (event) => onRowContextMenu(rowKey, event) : undefined} {...(fieldIndex === firstVisibleFieldIndex ? { "data-reorder-field": rowKey, "data-reorder-group": rowReorder.group, onClick: (event: ReactMouseEvent<HTMLTableCellElement>) => { if (rowReorder.consumeClick()) event.stopPropagation(); }, onPointerDown: (event: ReactPointerEvent<HTMLTableCellElement>) => rowReorder.start(rowKey, event), onPointerUp: () => rowReorder.end(true), onPointerCancel: () => rowReorder.end(false) } : {})} className={`whitespace-nowrap border-b border-[#f2f4f3] px-3 py-2.5 align-middle text-[#3a3a3c] ${span > 1 ? "bg-[#f8fbf9] font-medium text-[#265d43]" : frozen || frozenRow ? "bg-[#f7fbf9]" : ""} ${frozen ? "sticky z-[16] shadow-[1px_0_0_#edf1ee]" : ""} ${fieldIndex === firstVisibleFieldIndex ? "cursor-grab active:cursor-grabbing" : ""}`} style={frozen ? { left: columnLefts[frozenIndex] || 0 } : undefined}>{displayRawCell(row.raw[field], fieldMetadata[field])}</td>;
         })}</tr>;
       }) : <tr><td className="px-3 py-8 text-center text-[#8a8a8e]" colSpan={Math.max(1, fields.length)}>{emptyLabel}</td></tr>}</tbody>
     </table>
@@ -747,11 +885,15 @@ function ResultTable({ rows, emptyLabel, dimensionFields, metricFields, mergedDi
   </div>;
 }
 
+function cssEscape(value: string) {
+  return typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(value) : value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 function tableRowKey(row: AnalysisRow, index: number) { return `${row.branch}\u0000${JSON.stringify(row.raw)}\u0000${index}`; }
 
-type VisualizationRendererProps = { type: VisualizationType; rows: AnalysisRow[]; metricFields: string[]; dimensionFields: string[]; mergedDimensionFields: string[]; filters: VisualizationFilters; filterGroups: VisualizationFilterGroup[]; sumFilteredRows: boolean; comboLineFields: string[]; onComboLineFieldsChange: (fields: string[]) => void; onMetricFieldsChange: (fields: string[]) => void; onDimensionFieldsChange: (fields: string[]) => void; onDimensionHeaderContextMenu: (field: string, event: ReactMouseEvent<HTMLTableCellElement>) => void; metricReorder: ReorderController; compact?: boolean; showData: boolean; fillHeight?: boolean };
+type VisualizationRendererProps = { type: VisualizationType; rows: AnalysisRow[]; metricFields: string[]; dimensionFields: string[]; mergedDimensionFields: string[]; frozenColumnFields: string[]; frozenRowKeys: string[]; filters: VisualizationFilters; filterGroups: VisualizationFilterGroup[]; sumFilteredRows: boolean; comboLineFields: string[]; onComboLineFieldsChange: (fields: string[]) => void; onMetricFieldsChange: (fields: string[]) => void; onDimensionFieldsChange: (fields: string[]) => void; onDimensionHeaderContextMenu: (field: string, event: ReactMouseEvent<HTMLTableCellElement>) => void; onRowContextMenu: (rowKey: string, event: ReactMouseEvent<HTMLTableCellElement>) => void; metricReorder: ReorderController; compact?: boolean; showData: boolean; fillHeight?: boolean };
 
-function VisualizationRenderer({ type, rows, metricFields, dimensionFields, mergedDimensionFields, filters, filterGroups, sumFilteredRows, comboLineFields, onComboLineFieldsChange, onMetricFieldsChange, onDimensionFieldsChange, onDimensionHeaderContextMenu, metricReorder, compact, showData, fillHeight }: VisualizationRendererProps) {
+function VisualizationRenderer({ type, rows, metricFields, dimensionFields, mergedDimensionFields, frozenColumnFields, frozenRowKeys, filters, filterGroups, sumFilteredRows, comboLineFields, onComboLineFieldsChange, onMetricFieldsChange, onDimensionFieldsChange, onDimensionHeaderContextMenu, onRowContextMenu, metricReorder, compact, showData, fillHeight }: VisualizationRendererProps) {
   const height = fillHeight ? "100%" : compact ? 220 : 300;
   const [seriesMenu, setSeriesMenu] = useState<string | null>(null);
   const [scatterAxis, setScatterAxis] = useState<"x" | "y" | null>(null);
@@ -759,7 +901,7 @@ function VisualizationRenderer({ type, rows, metricFields, dimensionFields, merg
   const fieldMetadata = rows[0]?.fieldMetadata || {};
   const metricDefinition = rows[0]?.metricDefinition || "当前图表使用已选指标与维度组合生成，口径以原始数据字段为准。";
   const points = useMemo(() => buildVisualDataPoints(rows, metricFields, dimensionFields, filters, sumFilteredRows, filterGroups), [dimensionFields, filterGroups, filters, metricFields, rows, sumFilteredRows]);
-  const visiblePoints = points.slice(0, compact ? 12 : 40);
+  const visiblePoints = selectVisibleVisualPoints(points, type, compact);
   const chartData = visiblePoints.map((point) => ({ category: point.label, ...point.values }));
   const filteredRows = filterVisualizationRows(rows, filters, filterGroups);
   const tick = { fontSize: 10, fill: "#8a9690" };
@@ -767,13 +909,13 @@ function VisualizationRenderer({ type, rows, metricFields, dimensionFields, merg
   const format = (field: string, value: unknown) => formatFieldValue(value, fieldMetadata[field]);
   const common = <><CartesianGrid stroke="#edf1ee" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="category" tick={tick} tickLine={false} axisLine={false} interval="preserveStartEnd" /><YAxis tick={tick} tickLine={false} axisLine={false} /><Tooltip content={<MetricTooltip definition={metricDefinition} fieldMetadata={fieldMetadata} />} /><Legend wrapperStyle={{ fontSize: 10, color: "#53615a" }} /></>;
   if (type === "text") return null;
-  if (!rows.length || !metricFields.length) return <div className={`flex items-center justify-center rounded-lg border border-dashed border-[#e5e5ea] bg-[#fafbfc] text-[12px] text-[#8a8a8e] ${fillHeight ? "h-full" : "h-[220px]"}`}>暂无可视化数据</div>;
+  if (!rows.length || !metricFields.length) return null;
 
   if (type === "kpi") {
     const cards = dimensionFields.length ? visiblePoints.flatMap((point) => metricFields.map((field) => ({ key: `${point.key}-${field}`, field, name: `${label(field)} · ${point.label}`, value: point.values[field] || 0 }))) : metricFields.map((field) => ({ key: field, field, name: label(field), value: metricTotal(rows, field, filters, filterGroups) }));
     return <div className={`overflow-y-auto rounded-lg border border-[#edf1ee] bg-white p-3 ${fillHeight ? "h-full" : "max-h-[300px] min-h-[220px]"}`} data-kpi-scroll="true"><div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2.5">{cards.map((card, index) => <div key={card.key} className="flex h-[112px] min-w-0 flex-col justify-between rounded-xl border border-[#e2ece5] bg-gradient-to-br from-white to-[#f5faf7] p-3 shadow-sm shadow-black/[0.02]"><div className="line-clamp-2 text-[10px] leading-4 text-[#6f8177]">{card.name}</div><div className="text-[25px] font-light tabular-nums text-[#1d1d1f]">{format(card.field, card.value)}</div><div className="h-0.5 w-8 rounded-full" style={{ backgroundColor: chartColor(index) }} /></div>)}</div></div>;
   }
-  if (type === "table") return <ResultTable rows={filteredRows.slice(0, 50)} emptyLabel="暂无可视化数据" dimensionFields={dimensionFields} metricFields={metricFields} mergedDimensionFields={mergedDimensionFields} onDimensionFieldsChange={onDimensionFieldsChange} onMetricFieldsChange={onMetricFieldsChange} onDimensionHeaderContextMenu={onDimensionHeaderContextMenu} fillHeight={fillHeight} compact={compact} />;
+  if (type === "table") return <ResultTable rows={filteredRows.slice(0, 50)} emptyLabel="暂无可视化数据" dimensionFields={dimensionFields} metricFields={metricFields} mergedDimensionFields={mergedDimensionFields} frozenColumnFields={frozenColumnFields} frozenRowKeys={frozenRowKeys} onDimensionFieldsChange={onDimensionFieldsChange} onMetricFieldsChange={onMetricFieldsChange} onDimensionHeaderContextMenu={onDimensionHeaderContextMenu} onRowContextMenu={onRowContextMenu} fillHeight={fillHeight} compact={compact} />;
   if (type === "pivot") return <PivotTable rows={filteredRows} dimensionFields={dimensionFields} metricFields={metricFields} labels={fieldLabels} fieldMetadata={fieldMetadata} fillHeight={fillHeight} />;
   if (type === "line" || type === "area") {
     const Chart = type === "line" ? LineChart : AreaChart;

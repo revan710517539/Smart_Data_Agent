@@ -54,7 +54,6 @@ export type DataCrawlerScheduleListStatus = {
 };
 
 export type DataCrawlerScheduleDraft = {
-  sqlId: string;
   recurrence: "none" | "daily" | "weekly" | "biweekly" | "monthly";
   executionAt: string;
   parameters: Record<string, string>;
@@ -92,7 +91,7 @@ export function saveDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(),
 }
 
 export function testDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey, draft }: Context & { sourceKey: string; draft: DataCrawlerScheduleDraft }) {
-  return apiRequest<{ connected: true; institution_id: string; sql_id: string; parameter_count: number }>("/api/data-crawler-schedule/test", {
+  return apiRequest<{ connected: true; institution_id: string; sql_id: string; parameter_count: number; run: { runId: string; status: string; message?: string; sqlId?: string } }>("/api/data-crawler-schedule/test", {
     method: "POST",
     context: { tenantId, userId },
     body: mutationBody(sourceKey, draft),
@@ -104,18 +103,6 @@ export function executeDataCrawlerSchedule({ tenantId, userId = getDefaultUserId
     method: "POST",
     context: { tenantId, userId },
     body: mutationBody(sourceKey, draft),
-  });
-}
-
-export function refreshDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey, sqlId }: Context & { sourceKey: string; sqlId?: string }) {
-  return apiRequest<{
-    binding: DataCrawlerBinding | null;
-    resolved_parameters: Record<string, string>;
-    run: { run_id: string; status: string; sql_id: string };
-  }>("/api/data-crawler-schedule/refresh", {
-    method: "POST",
-    context: { tenantId, userId },
-    body: { source_key: sourceKey, sqlId: sqlId || "" },
   });
 }
 

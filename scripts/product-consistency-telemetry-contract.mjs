@@ -41,6 +41,7 @@ assert.ok(!relationships.includes("系统血缘证据"), "系统血缘证据块�
 assert.match(relationships, /const canvasExtent = useMemo/);
 assert.match(relationships, /data-relationship-canvas="true"/);
 assert.match(relationships, /saving \? "正在保存中……"/);
+assert.match(relationships, /关联字段必须至少一端是主键/, "表关系保存前必须明确提示主键校验，不能只回通用请求未通过校验");
 assert.match(relationships, /onChanged\(saved\)/, "表关系保存后必须用返回值更新列表，不能强制全量重载");
 assert.match(dataAssets, /upsertTableRelationship/);
 
@@ -78,6 +79,8 @@ assert.match(
 );
 assert.match(systemSettings, /createTenant\(name\)/, "新增租户必须调用租户目录写入接口");
 assert.match(systemSettings, /deleteTenant\(tenantIdForInstitution\(name\)\)/, "删除租户必须按权威 ID 调用目录接口");
+assert.ok(!systemSettings.includes("window.confirm"), "租户删除必须使用应用内弹窗，不得调用浏览器原生确认框");
+assert.match(systemSettings, /data-tenant-delete-dialog="true"/, "租户删除必须提供应用内确认弹窗");
 assert.match(systemSettings, /refreshTenantCatalog/, "租户变更后必须刷新权威目录");
 assert.match(systemSettings, /tenantId: tenantIdForInstitution\(nextTenant\)/, "新增用户必须把稳定 tenant ID 与显示名分开提交");
 assert.ok(!systemSettings.includes("institutionOptions={isSuperAdmin ? operatingTenantNames"), "超级管理员也不得向未登记静态机构授权");

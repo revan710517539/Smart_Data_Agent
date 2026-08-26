@@ -522,9 +522,26 @@ def _table_from_rows(
     ]
     metric_codes = [str(field["fieldNameEn"]) for field in fields if field["isMetric"]]
     dimension_codes = [str(field["fieldNameEn"]) for field in fields if not field["isMetric"]]
+    schema_fingerprint = hashlib.sha256(
+        json.dumps(
+            [
+                {
+                    "canonical_id": field["fieldNameEn"],
+                    "physical_name": field["fieldNameCn"],
+                    "type": field["type"],
+                }
+                for field in fields
+            ],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     display_name = f"{Path(file_name).stem}_{sheet_name}" if sheet_name and sheet_name != Path(file_name).stem else Path(file_name).stem
     return {
         "id": f"upload_{identity}",
+        "assetId": f"upload:{content_hash}",
+        "assetVersion": content_hash[:16],
         "kind": "uploaded_file",
         "tableNameEn": f"upload_{identity[:16]}",
         "tableNameCn": display_name[:160],
@@ -536,7 +553,7 @@ def _table_from_rows(
         "exampleSql": f"-- 上传文件：{file_name}\nSELECT * FROM upload_{identity[:16]} LIMIT 100;",
         "fields": fields,
         "relativePath": f"upload://{identity}",
-        "schemaFingerprint": content_hash[:32],
+        "schemaFingerprint": schema_fingerprint,
         "contentHash": content_hash,
         "rowCount": len(coded_rows),
         "previewRows": coded_rows,

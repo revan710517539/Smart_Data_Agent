@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent as
 import { ArrowDown, ArrowUp, Bold, MessageSquareText, Sparkles } from "lucide-react";
 import { fetchReportImageObjectUrl, uploadReportImage } from "../../services/reportAttachmentApi";
 import { type NoteFieldTerm } from "../visualization/noteHighlights";
+import { askConfirm } from "../ui/ConfirmDialog";
 import {
   NOTE_EDITOR_SURFACE_CLASS,
   NOTE_PARAGRAPH_STACK_CLASS,
@@ -269,7 +270,7 @@ export function NoteParagraphField({
     if (!item.text && !item.html) {
       return (
         <div className={`min-h-[26px] ${NOTE_TEXT_CLASS}`} style={NOTE_TEXT_STYLE} data-rich-note-view-paragraph={item.id}>
-          {placeholder ? <span className="text-[#c4c4c8]">{placeholder}</span> : null}
+          {placeholder ? <span className="text-[12px] leading-[20px] text-[#aeaeb2]" style={{ color: "#aeaeb2", WebkitTextFillColor: "#aeaeb2" }}>{placeholder}</span> : null}
         </div>
       );
     }
@@ -286,7 +287,7 @@ export function NoteParagraphField({
   return (
     <div className={fillHeight ? "relative flex min-h-[26px] flex-1 flex-col" : "relative"}>
       {!item.text && placeholder ? (
-        <span className="pointer-events-none absolute left-0 top-0 text-[16px] leading-[26px] tracking-[-0.31px] text-[#c4c4c8]">{placeholder}</span>
+        <span className="pointer-events-none absolute left-0 top-0 text-[12px] leading-[20px] text-[#aeaeb2]" style={{ color: "#aeaeb2", WebkitTextFillColor: "#aeaeb2" }}>{placeholder}</span>
       ) : null}
       <div
         ref={editorRef}
@@ -445,7 +446,7 @@ function NoteImage({
         )}
         {deleteMenu && (
           <div className="absolute z-30 w-20 rounded-lg border border-[#e5e5ea] bg-white p-1 shadow-lg" style={{ left: deleteMenu.x, top: deleteMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
-            <button type="button" onClick={() => { setDeleteMenu(null); onDelete(); }} className="w-full rounded-md px-2 py-1.5 text-left text-[12px] text-[#d92d20] hover:bg-[#fff1f0]">删除</button>
+            <button type="button" onClick={() => { setDeleteMenu(null); void askConfirm({ title: "删除图片", description: "确定删除这张图片？", hint: "此操作不可撤销。" }).then((ok) => { if (ok) onDelete(); }); }} className="w-full rounded-md px-2 py-1.5 text-left text-[12px] text-[#d92d20] hover:bg-[#fff1f0]">删除</button>
           </div>
         )}
       </div>

@@ -128,6 +128,7 @@ from .auth import (
     handle_auth_oidc_start,
     handle_auth_refresh,
     handle_auth_register,
+    handle_auth_switch_tenant,
 )
 from .automation import (
     handle_automation_get,
@@ -164,7 +165,7 @@ from .knowledge import (
     handle_knowledge_search_get,
 )
 from .lineage import handle_lineage_get
-from .interaction_events import handle_interaction_event_create
+from .interaction_events import handle_interaction_analytics_get, handle_interaction_event_create
 from .metrics import (
     handle_metric_dictionary_delete,
     handle_metric_dictionary_get,
@@ -231,6 +232,11 @@ from .settings import (
     handle_system_speech_integration_upsert,
 )
 from .tenants import handle_tenants_create, handle_tenants_delete, handle_tenants_get, handle_tenants_update
+from .tenant_governance import (
+    handle_tenant_governance_create,
+    handle_tenant_governance_delete,
+    handle_tenant_governance_get,
+)
 from .traces import handle_trace_spans_get
 
 GET_ROUTE_HANDLERS = {
@@ -242,7 +248,9 @@ GET_ROUTE_HANDLERS = {
     "/api/auth/oidc/start": handle_auth_oidc_start,
     "/api/auth/oidc/callback": handle_auth_oidc_callback,
     "/api/tenants": handle_tenants_get,
+    "/api/tenant-governance": handle_tenant_governance_get,
     "/api/navigation": handle_navigation_get,
+    "/api/interaction-events/analytics": handle_interaction_analytics_get,
     "/api/platform/capabilities": handle_platform_capabilities_get,
     FUN_ASR_REALTIME_PATH: handle_fun_asr_realtime_websocket,
     FUN_ASR_RUNTIME_CONFIG_PATH: handle_fun_asr_runtime_config_get,
@@ -319,6 +327,7 @@ POST_ROUTE_HANDLERS = {
     "/api/auth/password": handle_auth_password_change,
     "/api/auth/logout": handle_auth_logout,
     "/api/auth/refresh": handle_auth_refresh,
+    "/api/auth/switch-tenant": handle_auth_switch_tenant,
     "/api/provider-callbacks/notification": handle_notification_provider_callback,
     "/api/analysis/run": handle_analysis_run,
     "/api/customer-segment/list/preview": handle_customer_segment_list_preview,
@@ -413,6 +422,7 @@ POST_ROUTE_HANDLERS = {
     "/api/capability-approval": handle_capability_approval_request,
     "/api/capability-approval/review": handle_capability_approval_review,
     "/api/tenants": handle_tenants_create,
+    "/api/tenant-governance": handle_tenant_governance_create,
 }
 
 PUT_ROUTE_HANDLERS = {
@@ -442,6 +452,7 @@ DELETE_ROUTE_HANDLERS = {
     "/api/metric-dictionary": handle_metric_dictionary_delete,
     "/api/data-assets/item": handle_data_asset_item_delete,
     "/api/tenants": handle_tenants_delete,
+    "/api/tenant-governance": handle_tenant_governance_delete,
 }
 
 

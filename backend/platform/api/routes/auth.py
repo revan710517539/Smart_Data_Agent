@@ -262,24 +262,80 @@ def handle_auth_refresh(handler: Any) -> None:
         refresh_token = _request_cookies(handler).get("sda_refresh", "")
         if not refresh_token:
             raise AuthenticationError("refresh_token_required")
+        current_grant = handler.services.session_store.resolve_refresh(refresh_token)
+        session = _authoritative_session_for_user(
+            handler,
+            current_grant.user_id,
+            tenant_hint=current_grant.primary_tenant_id,
+            allow_fallback=True,
+        )
         grant = handler.services.session_store.rotate_refresh(
             refresh_token,
             access_ttl_seconds=_access_ttl_seconds(),
-        )
-        session = _session_with_tenant_directory(
-            handler,
-            handler.services.access_service.session_for_user(
-                grant.user_id,
-                tenant_hint=grant.primary_tenant_id,
-            ),
+            primary_tenant_id=str(session.get("tenant_id") or ""),
+            tenant_ids=_session_grant_tenant_ids(session),
         )
         token = _token_for_grant(grant, is_super_admin=bool(session.get("is_super_admin")))
         handler._send_json(
             {
                 "status": "refreshed",
                 "expires_at": grant.access_expires_at,
-                "session": session,
+                "session": _session_with_expiry(session, grant),
             },
+            headers={"Set-Cookie": _session_cookies(token, grant.refresh_token, handler.services.runtime_config.is_production)},
+        )
+    except Exception as exc:  # pragma: no cover - HTTP boundary.
+        send_route_exception(handler, exc)
+
+
+def handle_auth_switch_tenant(handler: Any) -> None:
+    try:
+        payload = handler._read_json()
+        context = handler._request_context()
+        target_tenant_id = _active_tenant_id(
+            handler,
+            str(payload.get("tenant_id") or payload.get("institution") or ""),
+        )
+        refresh_token = _request_cookies(handler).get("sda_refresh", "")
+        if not refresh_token:
+            raise AuthenticationError("refresh_token_required")
+        current_grant = handler.services.session_store.resolve_refresh(refresh_token)
+        if current_grant.user_id != context.user_id:
+            raise AuthenticationError("session_identity_mismatch")
+        try:
+            session = _authoritative_session_for_user(
+                handler,
+                context.user_id,
+                tenant_hint=target_tenant_id,
+                allow_fallback=False,
+            )
+        except PermissionError as exc:
+            raise AuthenticationError(
+                "tenant is not authorized for this session.",
+                error_code="tenant_context_conflict",
+                status_code=403,
+            ) from exc
+        grant = handler.services.session_store.rotate_refresh(
+            refresh_token,
+            access_ttl_seconds=_access_ttl_seconds(),
+            primary_tenant_id=target_tenant_id,
+            tenant_ids=_session_grant_tenant_ids(session),
+        )
+        token = _token_for_grant(grant, is_super_admin=bool(session.get("is_super_admin")))
+        try:
+            handler._write_audit(
+                context,
+                "auth.tenant.switch",
+                "tenant",
+                target_tenant_id,
+                {"from_tenant_id": context.tenant_id},
+            )
+        except Exception:
+            # The stateful session has already rotated. An independent audit
+            # sink outage must not strand the browser without the new cookies.
+            pass
+        handler._send_json(
+            _session_with_expiry(session, grant),
             headers={"Set-Cookie": _session_cookies(token, grant.refresh_token, handler.services.runtime_config.is_production)},
         )
     except Exception as exc:  # pragma: no cover - HTTP boundary.
@@ -344,11 +400,7 @@ def handle_auth_oidc_callback(handler: Any, query: str = "") -> None:
 def _issue_session(handler: Any, session: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     session = _session_with_tenant_directory(handler, session)
     user = session.get("user") if isinstance(session.get("user"), dict) else {}
-    tenant_ids = tuple(
-        str(item.get("id") or "").strip()
-        for item in session.get("tenant_directory", [])
-        if isinstance(item, dict) and str(item.get("id") or "").strip()
-    )
+    tenant_ids = _session_grant_tenant_ids(session)
     grant = handler.services.session_store.issue(
         str(user.get("id") or ""),
         str(session.get("tenant_id") or ""),
@@ -365,6 +417,56 @@ def _issue_session(handler: Any, session: dict[str, Any]) -> tuple[dict[str, Any
     response["session_idle_expires_at"] = grant.idle_expires_at
     response["session_absolute_expires_at"] = grant.absolute_expires_at
     return response, _session_cookies(token, grant.refresh_token, handler.services.runtime_config.is_production)
+
+
+def _session_with_expiry(session: dict[str, Any], grant: Any) -> dict[str, Any]:
+    return {
+        **session,
+        "session_expires_at": grant.access_expires_at,
+        "session_idle_expires_at": grant.idle_expires_at,
+        "session_absolute_expires_at": grant.absolute_expires_at,
+    }
+
+
+def _session_grant_tenant_ids(session: dict[str, Any]) -> tuple[str, ...]:
+    tenant_ids = tuple(
+        str(item.get("id") or "").strip()
+        for item in session.get("tenant_directory", [])
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    )
+    return tenant_ids or (str(session.get("tenant_id") or ""),)
+
+
+def _active_tenant_id(handler: Any, target: str) -> str:
+    from backend.platform.api.routes.tenants import _active_tenants
+
+    requested = str(target or "").strip()
+    for item in _active_tenants(handler):
+        tenant_id = str(item.get("id") or "").strip()
+        tenant_name = str(item.get("name") or "").strip()
+        if requested in {tenant_id, tenant_name}:
+            return tenant_id
+    raise AuthenticationError(
+        "tenant is not authorized for this session.",
+        error_code="tenant_context_conflict",
+        status_code=403,
+    )
+
+
+def _authoritative_session_for_user(
+    handler: Any,
+    user_id: str,
+    *,
+    tenant_hint: str,
+    allow_fallback: bool,
+) -> dict[str, Any]:
+    try:
+        session = handler.services.access_service.session_for_user(user_id, tenant_hint=tenant_hint)
+    except PermissionError:
+        if not allow_fallback:
+            raise
+        session = handler.services.access_service.session_for_user(user_id)
+    return _session_with_tenant_directory(handler, session)
 
 
 def _session_with_tenant_directory(handler: Any, session: dict[str, Any]) -> dict[str, Any]:
@@ -420,7 +522,7 @@ def _session_with_tenant_directory(handler: Any, session: dict[str, Any]) -> dic
 
 def _token_for_grant(grant: Any, *, is_super_admin: bool = False) -> str:
     tenant_ids = grant.tenant_ids
-    if is_super_admin:
+    if is_super_admin and "*" not in tenant_ids:
         tenant_ids = ("*", *tuple(tenant_ids or ()))
     return make_session_token(
         user_id=grant.user_id,

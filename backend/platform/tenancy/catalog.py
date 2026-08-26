@@ -49,12 +49,16 @@ def catalog_tenant_names(services: Any) -> tuple[str, ...]:
     return tuple(item["name"] for item in list_active_tenants(services))
 
 
-def create_tenant(services: Any, name: str) -> dict[str, str]:
+def create_tenant(services: Any, name: str, *, actor_user_id: str = SUPER_ADMIN_USER_ID) -> dict[str, str]:
     tenant_name = normalize_tenant_name(name)
     tenant_id = normalize_tenant_id(tenant_name)
     existing = _find_catalog_record(services, tenant_id, tenant_name)
     if existing and str(existing.get("status") or "active") == "active":
         raise ValueError("tenant_name_duplicate")
+    if existing:
+        scope_service = getattr(services, "tenant_scope_service", None)
+        if scope_service is not None:
+            scope_service.revoke_tenant_scope(tenant_id, actor_user_id, "tenant_reactivated_scope_reset")
     saved = _upsert_catalog_record(services, tenant_id, tenant_name, reactivate=bool(existing))
     _seed_tenant_default_roles(services, tenant_name)
     _seed_tenant_runtime_defaults(services, tenant_id)
@@ -72,11 +76,14 @@ def update_tenant(services: Any, tenant_id: str, name: str) -> dict[str, str]:
     return _rename_catalog_record(services, current_id, tenant_name)
 
 
-def delete_tenant(services: Any, tenant_id: str) -> dict[str, str]:
+def delete_tenant(services: Any, tenant_id: str, *, actor_user_id: str = SUPER_ADMIN_USER_ID) -> dict[str, str]:
     current_id = _require_tenant_id(tenant_id)
     current = _require_active_record(services, current_id)
     closed = _close_catalog_record(services, current_id)
     _unseed_tenant_roles(services, current_id)
+    scope_service = getattr(services, "tenant_scope_service", None)
+    if scope_service is not None:
+        scope_service.revoke_tenant_scope(current_id, actor_user_id, "tenant_closed")
     return closed or {**current, "status": "closed"}
 
 

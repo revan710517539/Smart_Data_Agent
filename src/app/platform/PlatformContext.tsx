@@ -8,8 +8,8 @@ import { getAccessManagerUserId, getDefaultUserId } from "../services/apiContext
 import { fetchTenants } from "../services/tenantApi";
 import type { AccessTenantRole, AccessUser } from "../services/accessControlApi";
 import type { AuthSession } from "../services/authApi";
-import { fetchCurrentSession, logoutSession } from "../services/authApi";
-import { sessionRevalidationEvent } from "../services/apiClient";
+import { fetchCurrentSession, logoutSession, switchTenantSession } from "../services/authApi";
+import { apiErrorMessage, sessionRevalidationEvent } from "../services/apiClient";
 import { runBeforeLogout } from "./beforeLogout";
 import { resetTransientUiStateForNewAuthSession } from "./sessionUiState";
 
@@ -25,12 +25,14 @@ type PlatformContextValue = {
   institutions: string[];
   isAuthenticated: boolean;
   isInstitutionAdmin: boolean;
+  isSwitchingInstitution: boolean;
   isSuperAdmin: boolean;
   login: (session: AuthSession) => void;
   logout: () => void;
   refreshTenantCatalog: () => Promise<void>;
   selectedInstitution: string;
-  setSelectedInstitution: (institution: string) => void;
+  setSelectedInstitution: (institution: string) => Promise<boolean>;
+  tenantSwitchNotice: string;
   tenantId: string;
   tenantIdForInstitution: (institution: string) => string;
   userId: string;
@@ -53,6 +55,9 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
   const [selectedInstitution, setSelectedInstitutionState] = useState(() => resolveInitialInstitution(authSession));
   const sessionMutationVersion = useRef(0);
   const sessionSyncPromise = useRef<Promise<void> | null>(null);
+  const tenantSwitchVersion = useRef(0);
+  const [isSwitchingInstitution, setIsSwitchingInstitution] = useState(false);
+  const [tenantSwitchNotice, setTenantSwitchNotice] = useState("");
   const hasGlobalTenantAccess = Boolean(
     authSession && sessionHasGlobalTenantAccess(authSession),
   );
@@ -159,31 +164,50 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
   }, [syncCurrentSession]);
 
   const setSelectedInstitution = useCallback(
-    (institution: string) => {
+    async (institution: string) => {
       const target = normalizeSelectableInstitution(institution) || institutions[0] || operatingTenantNames[0];
-      if (institutions.length && !institutions.includes(target)) return;
-      setSelectedInstitutionState(target);
-      window.localStorage.setItem(selectedInstitutionStorageKey, target);
-      if (!authSession) return;
-      const nextInstitutions = hasGlobalTenantAccess
-        ? Array.from(new Set([...authSession.institutions, ...tenantCatalog, target]))
-        : authSession.institutions;
-      const nextSession: AuthSession = {
-        ...authSession,
-        institutions: nextInstitutions,
-        institution: target,
-        tenant_id: resolveTenantIdForInstitution(target, authSession, tenantIdByInstitution),
-      };
-      setAuthSession(nextSession);
-      window.localStorage.setItem(authSessionStorageKey, JSON.stringify(nextSession));
+      if (institutions.length && !institutions.includes(target)) return false;
+      if (!authSession) {
+        setSelectedInstitutionState(target);
+        window.localStorage.setItem(selectedInstitutionStorageKey, target);
+        return true;
+      }
+      if (target === selectedInstitution) return true;
+      const targetTenantId = resolveTenantIdForInstitution(target, authSession, tenantIdByInstitution);
+      const switchVersion = ++tenantSwitchVersion.current;
+      setIsSwitchingInstitution(true);
+      setTenantSwitchNotice("");
+      try {
+        const current = await switchTenantSession(targetTenantId);
+        if (switchVersion !== tenantSwitchVersion.current) return false;
+        const normalized = normalizeAuthSession(current);
+        const selected = resolveSessionInstitution(normalized);
+        if (normalized.tenant_id !== targetTenantId || selected !== target) {
+          throw new Error("服务端返回的当前机构与所选机构不一致，请刷新后重试。");
+        }
+        sessionMutationVersion.current += 1;
+        resetTransientUiStateForNewAuthSession();
+        setAuthSession(normalized);
+        setSelectedInstitutionState(selected);
+        window.localStorage.setItem(selectedInstitutionStorageKey, selected);
+        window.localStorage.setItem(authSessionStorageKey, JSON.stringify(normalized));
+        return true;
+      } catch (error) {
+        if (switchVersion === tenantSwitchVersion.current) {
+          setTenantSwitchNotice(apiErrorMessage(error, `切换到${target}失败，请稍后重试。`));
+        }
+        return false;
+      } finally {
+        if (switchVersion === tenantSwitchVersion.current) setIsSwitchingInstitution(false);
+      }
     },
-    [authSession, hasGlobalTenantAccess, institutions, tenantCatalog, tenantIdByInstitution],
+    [authSession, institutions, selectedInstitution, tenantIdByInstitution],
   );
 
   useEffect(() => {
     if (!authSession) return;
     if (!institutions.includes(selectedInstitution)) {
-      setSelectedInstitution(institutions[0] || operatingTenantNames[0]);
+      void setSelectedInstitution(institutions[0] || operatingTenantNames[0]);
     }
   }, [authSession, institutions, selectedInstitution, setSelectedInstitution]);
 
@@ -235,18 +259,20 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       institutions,
       isAuthenticated: Boolean(authSession),
       isInstitutionAdmin,
+      isSwitchingInstitution,
       isSuperAdmin,
       login,
       logout,
       refreshTenantCatalog,
       selectedInstitution,
       setSelectedInstitution,
+      tenantSwitchNotice,
       tenantId: resolveTenantIdForInstitution(selectedInstitution, authSession, tenantIdByInstitution),
       tenantIdForInstitution,
       userId: authSession?.user.id || getDefaultUserId(),
       userName: authSession?.user.name || "未登录",
     }),
-    [authSession, currentTenantRoles, institutions, isInstitutionAdmin, isSuperAdmin, refreshTenantCatalog, selectedInstitution, setSelectedInstitution, tenantIdByInstitution, tenantIdForInstitution],
+    [authSession, currentTenantRoles, institutions, isInstitutionAdmin, isSwitchingInstitution, isSuperAdmin, refreshTenantCatalog, selectedInstitution, setSelectedInstitution, tenantIdByInstitution, tenantIdForInstitution, tenantSwitchNotice],
   );
 
   return (

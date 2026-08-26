@@ -93,6 +93,21 @@ class ConfiguredConnectionSupersonicClient:
         semantic_info = result.get("semantic_info", result.get("semanticInfo", {}))
         if not isinstance(semantic_info, dict):
             raise RuntimeError("configured_data_source_semantic_info_invalid")
+        provider_schema_mapping = (
+            dict(semantic_info.get("schema_mapping") or {})
+            if isinstance(semantic_info.get("schema_mapping"), dict)
+            else {}
+        )
+        provider_field_aliases = (
+            dict(provider_schema_mapping.get("field_aliases") or provider_schema_mapping.get("fieldAliases") or {})
+            if isinstance(provider_schema_mapping.get("field_aliases") or provider_schema_mapping.get("fieldAliases"), dict)
+            else {}
+        )
+        provider_output_fields = (
+            list(provider_schema_mapping.get("output_fields") or provider_schema_mapping.get("outputFields") or [])
+            if isinstance(provider_schema_mapping.get("output_fields") or provider_schema_mapping.get("outputFields"), (list, tuple))
+            else []
+        )
         required_filters = {
             key: value
             for key, value in request.filters.items()
@@ -168,6 +183,8 @@ class ConfiguredConnectionSupersonicClient:
                     "dimension": dimension,
                     "metrics": list(request.metrics),
                     "dimensions": list(request.dimensions),
+                    "field_aliases": provider_field_aliases,
+                    "output_fields": provider_output_fields,
                 },
                 "row_count": len(rows),
             }

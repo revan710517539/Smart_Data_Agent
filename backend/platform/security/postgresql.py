@@ -15,6 +15,7 @@ from .session import AuthenticationError
 from .session_store import (
     SessionGrant,
     _new_session_record,
+    _replace_record_scope,
     _rotate_record,
     _token_hash,
     _validate_record,
@@ -49,6 +50,8 @@ class PostgreSQLSessionStore:
             user_key = PostgreSQLIdentityResolver.user_id(connection, user_id)
             tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, primary_tenant_id)
             for tenant_code in record["tenant_ids"]:
+                if tenant_code == "*":
+                    continue
                 PostgreSQLIdentityResolver.tenant_id(connection, str(tenant_code))
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -108,18 +111,30 @@ class PostgreSQLSessionStore:
         with self._transaction() as connection:
             record = self._load_record(connection, "s.refresh_token_hash = %s", (old_hash,), for_update=True)
             _validate_refresh_record(record, current)
+            _replace_record_scope(
+                record,
+                primary_tenant_id=kwargs.get("primary_tenant_id"),
+                tenant_ids=kwargs.get("tenant_ids"),
+            )
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, record["primary_tenant_id"])
+            for tenant_code in record["tenant_ids"]:
+                if tenant_code == "*":
+                    continue
+                PostgreSQLIdentityResolver.tenant_id(connection, str(tenant_code))
             grant = _rotate_record(record, int(kwargs.get("access_ttl_seconds", 900)), current)
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
                     UPDATE platform_user_sessions
-                    SET access_jti = %s, refresh_token_hash = %s,
+                    SET tenant_id = %s, tenant_codes = %s::jsonb,
+                        access_jti = %s, refresh_token_hash = %s,
                         access_expires_at = to_timestamp(%s), last_seen_at = to_timestamp(%s),
                         idle_expires_at = to_timestamp(%s), rotated_at = to_timestamp(%s),
                         updated_at = now(), lock_version = lock_version + 1
                     WHERE device_session_key = %s AND refresh_token_hash = %s AND revoked_at IS NULL
                     """,
                     (
+                        tenant_key, json.dumps(record["tenant_ids"], ensure_ascii=False),
                         record["access_jti"], record["refresh_token_hash"], record["access_expires_at"],
                         record["last_seen_at"], record["idle_expires_at"], current,
                         record["device_session_id"], old_hash,
@@ -128,6 +143,29 @@ class PostgreSQLSessionStore:
                 if cursor.rowcount != 1:
                     raise AuthenticationError("refresh_token_already_rotated")
         return grant
+
+    def resolve_refresh(self, refresh_token: str, **kwargs: Any) -> SessionGrant:
+        current = int(time.time() if kwargs.get("now") is None else kwargs["now"])
+        with self._transaction() as connection:
+            record = self._load_record(
+                connection,
+                "s.refresh_token_hash = %s",
+                (_token_hash(refresh_token),),
+                for_update=False,
+            )
+            _validate_refresh_record(record, current)
+            return SessionGrant(
+                device_session_id=str(record["device_session_id"]),
+                access_jti=str(record["access_jti"]),
+                refresh_token=refresh_token,
+                user_id=str(record["user_id"]),
+                primary_tenant_id=str(record["primary_tenant_id"]),
+                tenant_ids=tuple(record["tenant_ids"]),
+                issued_at=int(record["issued_at"]),
+                access_expires_at=int(record["access_expires_at"]),
+                idle_expires_at=int(record["idle_expires_at"]),
+                absolute_expires_at=int(record["absolute_expires_at"]),
+            )
 
     def revoke(
         self,

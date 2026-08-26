@@ -72,11 +72,14 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
   pending = executeApiRequest<T>(path, { ...options, readCache: false })
     .then((payload) => {
       if (generation === apiReadCacheGeneration) {
-        apiReadCache.set(cacheKey, {
-          expiresAt: Date.now() + Math.max(0, policy.ttlMs),
-          payload: cloneApiPayload(payload),
-          tags: [...(policy.tags || [])],
-        });
+        const record = payload && typeof payload === "object" ? payload as { status?: unknown } : null;
+        if (record?.status !== "loading") {
+          apiReadCache.set(cacheKey, {
+            expiresAt: Date.now() + Math.max(0, policy.ttlMs),
+            payload: cloneApiPayload(payload),
+            tags: [...(policy.tags || [])],
+          });
+        }
       }
       return payload;
     })
@@ -274,9 +277,22 @@ export function apiErrorMessage(error: unknown, fallback: string) {
       request_timeout: "Data Agent API 请求超时，请稍后重试。",
       invalid_json_response: "Data Agent API 返回了无效响应，请稍后重试。",
       analysis_single_data_table_required: "一次分析只能使用一张数据表，请重新选择后重试。",
+      analysis_table_reference_invalid: "所选数据表引用不完整，请刷新站内数据后重新选择。",
+      analysis_table_unavailable: "所选数据表当前不可用，请刷新站内数据并确认当前机构后重新选择。",
+      analysis_table_retired: "所选数据表已下线，请刷新站内数据后重新选择。",
+      analysis_table_tenant_mismatch: "所选数据表当前不可用，请确认当前机构后重新选择。",
+      analysis_table_schema_changed: "所选数据表的字段结构已经变化，请确认字段差异后重新生成分析方案。",
+      analysis_table_version_outdated: "数据表在任务执行期间发生变化，请刷新后重新提交。",
+      analysis_required_field_missing: "分析结果缺少必要字段，请按错误提示重新生成分析方案。",
       customer_segment_detail_table_required: "该数据源不是客户号唯一主键的明细表，不能用于分客群分析。",
       page_data_source_unavailable: "页面数据源已不可用。请检查当前机构的数据目录和页面数据绑定。",
       global_super_admin_required_for_page_data: "仅超级管理员可以新增或修改页面数据。",
+      tenant_context_conflict: "当前账号无权访问该机构，或该机构已停用。",
+      table_relationship_edge_primary_key_required: "关联字段必须至少一端是主键。当前连接的字段都不是主键；请先在「原始表」中标记主键，再连接主键字段。",
+      table_relationship_common_fields_required: "跨机构表关系要求各机构数据表具有相同字段结构，才能用于多机构页面。当前两侧表没有同名字段，请选择结构一致的数据表。",
+      table_relationship_edge_type_mismatch: "关联字段类型必须一致。",
+      table_relationship_edge_field_invalid: "关联字段已不在当前表结构中，请删除连线后重新连接。",
+      table_relationship_cross_institution_edge_required: "跨机构表关系必须有一条连接不同机构的字段关联。",
     };
     return knownMessages[error.code] || fallback;
   }

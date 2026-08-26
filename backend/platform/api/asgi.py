@@ -20,7 +20,7 @@ from websocket import ABNF, WebSocketConnectionClosedException, WebSocketTimeout
 
 from backend.platform.automation import AutomationWorker
 from backend.platform.bootstrap import PlatformServices, build_local_platform, build_production_platform
-from backend.platform.runtime_config import load_runtime_config
+from backend.platform.runtime_config import emit_runtime_capability_summary, load_runtime_config
 from backend.platform.security import create_governed_websocket_connection
 
 from .routes.asr import (
@@ -159,9 +159,11 @@ class SmartDataAgentASGI:
     ) -> None:
         self.services = services
         self.owns_services = owns_services
-        embedded_default = not services.runtime_config.is_production
-        embedded_enabled = os.getenv("SMART_DATA_AGENT_EMBEDDED_WORKER", "true" if embedded_default else "false").strip().lower() in {"1", "true", "yes"}
-        self.worker = AutomationWorker(services.automation_runtime) if embedded_enabled else None
+        self.worker = (
+            AutomationWorker(services.automation_runtime)
+            if services.runtime_config.embedded_worker_enabled
+            else None
+        )
         self._started = False
         self.static_root = Path(static_root).resolve() if static_root else None
 
@@ -578,6 +580,7 @@ def main() -> None:
     import uvicorn
 
     runtime_config = load_runtime_config()
+    emit_runtime_capability_summary(runtime_config)
     if args.test_sqlite_db is None:
         os.environ["SMART_DATA_AGENT_STATIC_ROOT"] = args.static_root
         uvicorn.run(

@@ -149,6 +149,19 @@ class MySQLConnectionPool:
         finally:
             if connection is not None and not self._closed:
                 try:
+                    # MySQL starts a REPEATABLE READ transaction for ordinary
+                    # SELECT statements when autocommit is disabled. Always
+                    # clear that snapshot before the raw connection returns to
+                    # the pool; otherwise later requests can observe stale
+                    # migration, tenant, or task state from an earlier borrow.
+                    connection.rollback()
+                except Exception:
+                    connection.close()
+                    with self._guard:
+                        self._created = max(0, self._created - 1)
+                    connection = None
+            if connection is not None and not self._closed:
+                try:
                     self._connections.put_nowait(connection)
                 except queue.Full:
                     connection.close()

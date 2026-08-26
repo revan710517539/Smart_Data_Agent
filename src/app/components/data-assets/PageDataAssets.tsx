@@ -10,6 +10,7 @@ import type {
 } from "../../services/dataAssetApi";
 import { normalizeFieldSemantics } from "../../data/fieldSemantics";
 import { apiErrorMessage } from "../../services/apiClient";
+import { askConfirm } from "../ui/ConfirmDialog";
 import { visualizationOptions, type VisualizationType } from "../self-analysis/domain";
 import { singleInstitutionAssignedPage } from "../page-data/assignment";
 
@@ -72,7 +73,7 @@ export function PageDataAssetList({
             </select>
           </label> : <span className="shrink-0 rounded-lg border border-[#dfe5e1] bg-white px-2.5 py-2 text-[11px] text-[#536159]">{scope === "customer_segment" ? "分客群分析" : "多机构分析"}</span>}
           {canManage && <button type="button" aria-label={`编辑页面数据${asset.name}`} title="编辑页面数据" onClick={() => onEdit(asset)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8a918d] hover:bg-white hover:text-[#178a53]"><Pencil className="h-3.5 w-3.5" /></button>}
-          {canManage && <button type="button" aria-label={`删除页面数据${asset.name}`} title="删除页面数据" onClick={() => void onDelete(asset).catch(() => undefined)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#a1a1a6] hover:bg-[#fff1f1] hover:text-[#d93025]"><Trash2 className="h-3.5 w-3.5" /></button>}
+          {canManage && <button type="button" aria-label={`删除页面数据${asset.name}`} title="删除页面数据" onClick={() => void askConfirm({ title: "删除页面数据", description: `确定删除「${asset.name}」？`, hint: "此操作不可撤销。" }).then((ok) => ok ? onDelete(asset) : undefined).catch(() => undefined)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#a1a1a6] hover:bg-[#fff1f1] hover:text-[#d93025]"><Trash2 className="h-3.5 w-3.5" /></button>}
         </article>
       ))}
       {!visibleAssets.length && <div className="rounded-xl border border-dashed border-[#dfe7e2] px-4 py-10 text-center text-[11px] text-[#9baba1]">暂无匹配的页面数据配置</div>}

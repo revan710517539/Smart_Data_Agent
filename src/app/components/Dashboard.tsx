@@ -256,8 +256,9 @@ export function Dashboard() {
   return <div className={PAGE_DATA_PAGE_GUTTER_CLASS}>
     <DashboardPageHeader controller={pageData} canEditLayout={isSuperAdmin} stickyNote={stickyNote} />
     <StandardAnalysisPageStickyNote stickyNote={stickyNote} />
-    {pageData.visibleAssets.length > 0 && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} showAssetPicker />}
-    {!pageData.loading && pageData.visibleAssets.length === 0 && <DashboardState message={pageData.notice || "请先在站内数据的「多机构页面」中配置要展示的数据。"} embedded />}
+    {(pageData.hasSelectedPageData || pageData.mode === "edit") && <PageDataVisualizationModules controller={pageData} showEditorControls={isSuperAdmin} layoutEditable={isSuperAdmin} showAssetPicker />}
+    {pageData.waitingForPageDataRows && !pageData.hasSelectedPageData ? <DashboardState message="正在读取多机构页面数据…" embedded /> : null}
+    {!pageData.loading && !pageData.waitingForPageDataRows && !pageData.hasSelectedPageData && <DashboardState message={pageData.notice || "请先在站内数据的「多机构页面」中配置要展示的数据。"} embedded />}
   </div>;
 }
 

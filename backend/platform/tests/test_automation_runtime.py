@@ -15,6 +15,7 @@ from backend.platform.api.routes.analysis import (
 from backend.platform.api.support import APIRequestContext
 from backend.platform.automation.runtime import _public_handler_failure
 from backend.platform.data_access.factory import UnconfiguredDataWarehouse
+from backend.platform.intelligent_analysis.contracts import AnalysisContractError
 from backend.platform.semantic import InMemorySupersonicClient
 from backend.platform.tests.governed_warehouse import attach_governed_test_warehouse
 
@@ -123,6 +124,21 @@ class AutomationRuntimeTest(unittest.TestCase):
         )
         self.assertEqual(code, "analysis_single_data_table_required")
         self.assertIn("只能使用一张数据表", message)
+        self.assertFalse(retryable)
+
+    def test_analysis_contract_failure_keeps_stage_specific_error_code(self) -> None:
+        failure = AnalysisContractError(
+            "analysis_required_field_missing",
+            "query_output",
+            missing_fields=[{"canonicalId": "balance", "displayName": "当日在贷余额"}],
+            available_fields=["total_balance"],
+        )
+
+        code, message, retryable = _public_handler_failure(failure)
+
+        self.assertEqual(code, "analysis_required_field_missing")
+        self.assertIn("查询结果", message)
+        self.assertIn("当日在贷余额", message)
         self.assertFalse(retryable)
 
     def test_self_analysis_page_requires_explicit_production_table_when_semantic_source_is_unconfigured(self) -> None:

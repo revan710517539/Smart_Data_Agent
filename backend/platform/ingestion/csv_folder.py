@@ -69,6 +69,7 @@ class CSVFolderSource:
         self._catalog_lock = threading.RLock()
         self._catalog_ready = threading.Event()
         self._tenant_sources: dict[str, "CSVFolderSource"] = {}
+        self._tenant_source_contract_revisions: dict[str, str] = {}
         self._contract = dict(contract or {})
         self._contract_error = str(contract_error or "")
         self._manifest_files = {
@@ -123,7 +124,22 @@ class CSVFolderSource:
         with self._catalog_lock:
             cache_key = f"{tenant_id}:{directory}:{contract_error}"
             source = self._tenant_sources.get(cache_key)
-            if source is None:
+            contract_revision = (
+                hashlib.sha256(
+                    json.dumps(
+                        contract,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                if contract
+                else ""
+            )
+            if (
+                source is None
+                or self._tenant_source_contract_revisions.get(cache_key) != contract_revision
+            ):
                 source = CSVFolderSource(
                     self.root / directory,
                     max_file_bytes=self.max_file_bytes,
@@ -137,6 +153,7 @@ class CSVFolderSource:
                     contract_error=contract_error,
                 )
                 self._tenant_sources[cache_key] = source
+                self._tenant_source_contract_revisions[cache_key] = contract_revision
                 threading.Thread(target=source.prime_catalog, name=f"csv-catalog-{directory}", daemon=True).start()
             return source
 

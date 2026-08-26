@@ -73,8 +73,6 @@ import {
   type AnalysisDataTableSelection,
   singleAnalysisDataTableSelection,
   rematchAnalysisDataTableSelection,
-  rematchAnalysisDataTableSelectionResult,
-  formatAnalysisTableFieldDifferences,
   type AnalysisRow,
   type AudioContextConstructorLike,
   type FunAsrContextMessage,
@@ -164,6 +162,8 @@ import type { VisualReport } from "../services/visualReportApi";
 import { clearPendingAnalysisRun, isAnalysisNavigationAbort, loadPendingAnalysisRun, savePendingAnalysisRun } from "./self-analysis/pendingAnalysisRun";
 import { clearSelfAnalysisWorkbenchPersistence, useSelfAnalysisWorkbenchPersistence } from "./self-analysis/useSelfAnalysisWorkbenchPersistence";
 
+type AnalysisSubmissionPhase = "idle" | "submitting" | "queued" | "running";
+
 export function SelfAnalysis() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -223,6 +223,7 @@ export function SelfAnalysis() {
   const [analysisError, setAnalysisError] = useState("");
   const [analysisProgressSteps, setAnalysisProgressSteps] = useState<AnalysisProgressStep[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisSubmissionPhase, setAnalysisSubmissionPhase] = useState<AnalysisSubmissionPhase>("idle");
   const [analysisTaskId, setAnalysisTaskId] = useState("");
   const analysisSticky = useStickyNote("self_analysis", `self_analysis:${analysisTaskId || "current"}`);
   const [resultMode, setResultMode] = useState<ResultMode>("visual");
@@ -946,9 +947,10 @@ export function SelfAnalysis() {
   const removeSelectedDataTable = (tableId: string) => {
     setSelectedDataTables((current) => current.filter((table) => table.id !== tableId));
   };
-  const handleAnalysisRunProgress = (run: { automation_run_id: string; progress_steps?: AnalysisProgressStep[] }, generation = analysisGenerationRef.current) => {
+  const handleAnalysisRunProgress = (run: { automation_run_id: string; status?: string; progress_steps?: AnalysisProgressStep[] }, generation = analysisGenerationRef.current) => {
     if (generation !== analysisGenerationRef.current) return;
     activeAnalysisRunIdRef.current = run.automation_run_id;
+    setAnalysisSubmissionPhase(run.status === "queued" ? "queued" : "running");
     const steps = (run.progress_steps || []).filter((step) => step.step_code !== "execute_handler");
     if (steps.length) setAnalysisProgressSteps(steps);
     const partialTaskId = [...steps]
@@ -989,6 +991,7 @@ export function SelfAnalysis() {
     activeAnalysisRunIdRef.current = pending.runId;
     isAnalyzingRef.current = true;
     setIsAnalyzing(true);
+    setAnalysisSubmissionPhase("running");
     setQuery(pending.question);
     const pendingTables = singleAnalysisDataTableSelection(pending.selectedDataTables);
     setSelectedDataTables(pendingTables);
@@ -1048,6 +1051,7 @@ export function SelfAnalysis() {
       activeAnalysisRunIdRef.current = "";
       isAnalyzingRef.current = false;
       setIsAnalyzing(false);
+      setAnalysisSubmissionPhase("idle");
     });
     return () => controller.abort();
   }, [activeView, tenantId, userId]);
@@ -1061,6 +1065,7 @@ export function SelfAnalysis() {
     topicDataSource?: { type: "shortcut"; id: string },
   ) => {
     const nextQuery = (q || query).trim();
+    if (isAnalyzingRef.current) return;
     if (!nextQuery) {
       setAnalysisError("请输入明确的分析问题后再执行");
       return;
@@ -1089,39 +1094,7 @@ export function SelfAnalysis() {
       ...nextQuerySkillReferences.map((reference) => reference.skill),
     ]);
     let effectiveDataTables = singleAnalysisDataTableSelection(forcedDataTables ?? selectedDataTables);
-    let submissionCatalog = availableAnalysisTables;
-    try {
-      const [latestAssets, latestRuntimeAssets] = await Promise.all([fetchDataAssets({ tenantId, userId, forceRefresh: true }),
-        fetchDataAssets({ tenantId, userId, scope: "runtime", forceRefresh: true })]);
-      const latestRawTables = latestAssets.raw_tables.filter((table) => table.lifecycleStatus === "active");
-      const latestTopicTables = (latestRuntimeAssets.topic_tables || []).filter((table) => table.lifecycleStatus === "active");
-      const latestPageDataTables = (latestAssets.page_data || []).filter(
-        (table) => table.lifecycleStatus === "active" && table.institutionScope === "multi_institution");
-      submissionCatalog = [...latestRawTables.map(rawTableToSelection), ...latestTopicTables.map(topicTableToSelection),
-        ...latestPageDataTables.map(pageDataToSelection)];
-      setAvailableRawTables(latestRawTables);
-      setAvailableTopicTables(latestTopicTables);
-      setAvailablePageDataTables(latestPageDataTables);
-      analysisCatalogRef.current = submissionCatalog;
-    } catch (error) {
-      setAnalysisError(apiErrorMessage(error, "提交前无法刷新当前机构的数据目录，请稍后重试。"));
-      return;
-    }
-    if (effectiveDataTables.length) {
-      const rematch = rematchAnalysisDataTableSelectionResult(effectiveDataTables, submissionCatalog);
-      if (rematch.incompatible.length) {
-        const fields = formatAnalysisTableFieldDifferences(rematch.incompatible[0].fieldDifferences, effectiveDataTables[0]?.fieldLabels);
-        setAnalysisError(`数据表“${effectiveDataTables[0]?.name || "已选数据表"}”的字段结构已变化，涉及：${fields}。请重新选择数据表或调整分析方案。`);
-        return;
-      }
-      if (!rematch.tables.length) {
-        setSelectedDataTables([]);
-        setAnalysisError("所选数据表当前不可用；系统没有按名称或其他机构的数据自动替代。请刷新站内数据后重新选择。");
-        return;
-      }
-      if (rematch.tables[0]?.id !== effectiveDataTables[0]?.id) setSelectedDataTables(rematch.tables);
-      effectiveDataTables = rematch.tables;
-    }
+    const submissionCatalog = availableAnalysisTables;
     let resolvedViaMetricPreset = false;
     const uploadGate = uploadedAnalysisGate(knowledgeFiles);
     if (uploadGate.mediaOnly) {
@@ -1227,6 +1200,7 @@ export function SelfAnalysis() {
     setResultMode("thinking");
     setSaveMessage("");
     setShowResult(true);
+    setAnalysisSubmissionPhase("submitting");
     setIsAnalyzing(true);
     isAnalyzingRef.current = true;
     setAnalysisError("");
@@ -1364,6 +1338,7 @@ export function SelfAnalysis() {
       if (analysisWaitAbortRef.current === waitController) analysisWaitAbortRef.current = null;
       activeAnalysisRunIdRef.current = "";
       setIsAnalyzing(false);
+      setAnalysisSubmissionPhase("idle");
       isAnalyzingRef.current = false;
       window.setTimeout(() => realtimeVoiceDrainQueueRef.current(), 0);
     }
@@ -1501,6 +1476,7 @@ export function SelfAnalysis() {
       nextQuery,
       analysisContextSkills.some((skill) => skill.id === "context-compression"),
     );
+    setAnalysisSubmissionPhase("submitting");
     setIsAnalyzing(true);
     isAnalyzingRef.current = true;
     setAnalysisError("");
@@ -1652,6 +1628,7 @@ export function SelfAnalysis() {
       if (analysisWaitAbortRef.current === waitController) analysisWaitAbortRef.current = null;
       activeAnalysisRunIdRef.current = "";
       setIsAnalyzing(false);
+      setAnalysisSubmissionPhase("idle");
       isAnalyzingRef.current = false;
       window.setTimeout(() => realtimeVoiceDrainQueueRef.current(), 0);
     }
@@ -1677,6 +1654,7 @@ export function SelfAnalysis() {
     partialAnalysisTaskIdRef.current = "";
     partialAnalysisResponseRef.current = null;
     isAnalyzingRef.current = false;
+    setAnalysisSubmissionPhase("idle");
     clearPendingAnalysisRun(tenantId, userId);
     clearSelfAnalysisWorkbenchPersistence(tenantId, userId);
     if (runId) void cancelAsyncAnalysisRun({ runId, tenantId, userId }).catch(() => undefined);
@@ -2355,6 +2333,16 @@ export function SelfAnalysis() {
       setAnalysisError(apiErrorMessage(error, "执行记录删除失败"));
     }
   };
+  const activeSubmissionPhase: AnalysisSubmissionPhase = isAnalyzing
+    ? analysisSubmissionPhase === "idle" ? "running" : analysisSubmissionPhase
+    : "idle";
+  const analysisSubmissionStatus = activeSubmissionPhase === "submitting"
+    ? "已提交，正在启动"
+    : activeSubmissionPhase === "queued"
+      ? "已进入分析队列"
+      : activeSubmissionPhase === "running"
+        ? "大模型正在执行"
+        : "";
   return (
     <div className="p-7">
       <div className="mb-7 flex items-start justify-between gap-4">
@@ -2541,13 +2529,29 @@ export function SelfAnalysis() {
                           )}
                           <AudioLines className="relative z-10 h-4 w-4" />
                         </button>
+                        {analysisSubmissionStatus && (
+                          <span
+                            role="status"
+                            aria-live="polite"
+                            className="whitespace-nowrap text-[11px] font-medium leading-5 text-[#258a3f]"
+                            data-analysis-submit-feedback={activeSubmissionPhase}
+                          >
+                            {analysisSubmissionStatus}
+                          </span>
+                        )}
                         <button
                           type="button"
-                          onClick={() => isAnalyzing ? void cancelActiveAnalysis() : void handleQuery()}
-                          className="flex h-8 w-8 items-center justify-center rounded-full bg-[#8e8e93] text-white transition-colors hover:bg-[#636366]"
-                          aria-label={isAnalyzing ? "取消分析" : "开始分析"}
+                          onClick={() => activeSubmissionPhase === "submitting" ? undefined : isAnalyzing ? void cancelActiveAnalysis() : void handleQuery()}
+                          disabled={activeSubmissionPhase === "submitting"}
+                          className={`flex h-8 w-8 items-center justify-center rounded-full text-white transition-all duration-150 ${
+                            isAnalyzing
+                              ? "bg-[#258a3f] shadow-[0_0_0_4px_rgba(37,138,63,0.14)] hover:bg-[#1f7a36]"
+                              : "bg-[#8e8e93] hover:bg-[#636366]"
+                          }`}
+                          aria-label={activeSubmissionPhase === "submitting" ? "分析请求已提交" : isAnalyzing ? "取消分析" : "开始分析"}
+                          data-analysis-submit-phase={activeSubmissionPhase}
                         >
-                          {isAnalyzing ? <X className="h-4 w-4" /> : <ArrowUp className="h-4 w-4" />}
+                          {activeSubmissionPhase === "submitting" ? <Check className="h-4 w-4" /> : isAnalyzing ? <X className="h-4 w-4" /> : <ArrowUp className="h-4 w-4" />}
                         </button>
                       </div>
                     </div>

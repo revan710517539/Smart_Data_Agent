@@ -220,6 +220,10 @@ def _query_selected_csv(csv_source: Any | None, request: SkillRequest) -> SkillR
             definition = definitions.get(metric) or {}
             if str(definition.get("aggregation") or "").lower() == "avg" and metric in output:
                 output[metric] = float(output[metric]) / max(1, metric_counts[group_key].get(metric, 0))
+            # A blank cell is still part of the selected table's schema.  Keep
+            # the required key with a null value so downstream contract checks
+            # can distinguish sparse data from a query that dropped a column.
+            output.setdefault(metric, None)
 
     rows = list(grouped.values())
     sort_metric = str(((plan.get("sort") or {}).get("metric")) or metrics[0])

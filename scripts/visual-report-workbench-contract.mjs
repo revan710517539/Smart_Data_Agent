@@ -148,8 +148,17 @@ assert.doesNotMatch(domain, /if \(!matched && table\.contentHash\) \{[\s\S]*?ite
 assert.match(domain, /if \(!matched && table\.kind !== "raw" && table\.code\)/, "原始表不得按代码或标题跨路径替换，主题与页面数据仍保留稳定代码兼容");
 assert.match(domain, /analysisTableLogicalTitle/, "已选数据表必须能按交付题目对齐当前文件，找不到时不得继续使用下线表");
 assert.match(selfAnalysis, /singleAnalysisDataTableSelection\(forcedDataTables \?\? selectedDataTables\)/, "每次分析提交前必须再次收敛单表契约");
-assert.match(selfAnalysis, /fetchDataAssets\(\{ tenantId, userId, forceRefresh: true \}\)/, "提交分析前必须强制刷新当前机构目录");
-assert.match(selfAnalysis, /rematchAnalysisDataTableSelectionResult\(effectiveDataTables, submissionCatalog\)/, "提交分析前必须重匹配并拦截不兼容字段");
+const handleQuerySource = selfAnalysis.match(/const handleQuery = async \([\s\S]*?\n  realtimeVoiceAutoAnalyzeRef\.current/)?.[0] || "";
+assert.ok(handleQuerySource, "必须能定位智能分析提交函数");
+assert.doesNotMatch(handleQuerySource, /forceRefresh: true/, "点击提交的关键路径不得等待数据目录强制刷新");
+assert.match(handleQuerySource, /if \(isAnalyzingRef\.current\) return;/, "同步双击和程序化重复提交必须被执行态引用拦截");
+assert.ok(
+  handleQuerySource.indexOf('setAnalysisSubmissionPhase("submitting")') < handleQuerySource.indexOf("waitForSelfAnalysis({"),
+  "点击反馈与重复提交锁必须先于分析入队请求",
+);
+assert.match(selfAnalysis, /data-analysis-submit-feedback=\{activeSubmissionPhase\}/, "提交按钮必须提供可见且可访问的即时状态反馈");
+assert.match(selfAnalysis, /data-analysis-submit-phase=\{activeSubmissionPhase\}/, "提交按钮必须暴露提交、排队和执行状态");
+assert.match(analysisRoute, /page_context = _preflight_analysis_page_context\([\s\S]*?automation_runtime\.trigger\(/, "服务端必须在分析入队前权威解析租户、权限和数据表引用");
 assert.match(selfAnalysis, /rematchAnalysisDataTableSelection\(snapshot.selectedDataTables, analysisCatalogRef.current\)/, "恢复工作台时必须把缓存数据表对齐到当前目录");
 assert.match(selfAnalysis, /runtimeAssetResponse\.topic_tables/, "智能分析主题表必须使用已发布 runtime 目录");
 assert.match(selfAnalysis, /rematchAnalysisDataTableSelection\(current/, "恢复或刷新目录后必须把已选表对齐到当前交付");

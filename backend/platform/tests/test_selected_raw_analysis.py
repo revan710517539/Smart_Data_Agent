@@ -9,6 +9,7 @@ from unittest.mock import patch
 from backend.platform.api.routes.analysis import run_analysis
 from backend.platform.bootstrap import build_local_platform
 from backend.platform.ingestion.csv_folder import CSVFolderSource
+from backend.platform.intelligent_analysis.contracts import normalize_query_output_contract
 from backend.platform.orchestration.workflow import _build_temporary_raw_table_plan
 from backend.platform.skills.builtin.supersonic_query import build_supersonic_query_skill
 from backend.platform.skills.models import SkillRequest
@@ -146,6 +147,50 @@ class SelectedRawAnalysisTest(unittest.TestCase):
                         },
                     },
                 ))
+
+    def test_selected_csv_sparse_metrics_preserve_null_field_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tenant_dir = Path(temp_dir) / "华兴银行"
+            tenant_dir.mkdir()
+            (tenant_dir / "稀疏经营数据.csv").write_text(
+                "日期,总完件,通过率\n2026-05-01,10,50%\n2026-05-02,,\n",
+                encoding="utf-8",
+            )
+            csv_source = CSVFolderSource(temp_dir)
+            table = csv_source.for_tenant("tenant:华兴银行").table_assets()[0]
+            plan = _build_temporary_raw_table_plan({}, table, "分析一下这个数据")
+
+            class UnexpectedSemanticService:
+                def query(self, _request):  # pragma: no cover - must not be called.
+                    raise AssertionError("selected CSV must not fall back to semantic service")
+
+            _, handler = build_supersonic_query_skill(UnexpectedSemanticService(), csv_source)
+            result = handler(SkillRequest(
+                skill_id="supersonic.query",
+                context=ExecutionContext(user_id="u_super_admin", tenant_id="tenant:华兴银行"),
+                inputs={
+                    "question": "分析一下这个数据",
+                    "dataset_id": plan["dataset_id"],
+                    "metrics": plan["metrics"],
+                    "dimensions": plan["dimensions"],
+                    "filters": plan["filters"],
+                    "limit": 50,
+                    "sort_direction": "desc",
+                    "context": {
+                        "analysis_plan": plan,
+                        "selected_raw_table": table,
+                    },
+                },
+            ))
+
+            normalized = normalize_query_output_contract(plan, result.output)
+            sparse_row = next(row for row in normalized["data"] if row["field_1"] == "2026-05-02")
+            self.assertIn("field_2", sparse_row)
+            self.assertIn("field_3", sparse_row)
+            self.assertIsNone(sparse_row["field_2"])
+            self.assertIsNone(sparse_row["field_3"])
+            self.assertEqual(normalized["semantic_info"]["totals"]["field_2"], 10)
+            self.assertEqual(normalized["semantic_info"]["totals"]["field_3"], 0.5)
 
     def test_selected_csv_query_uses_latest_delivery_for_stale_source_key(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

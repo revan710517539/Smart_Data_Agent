@@ -432,6 +432,39 @@ class CSVFolderSourceTest(unittest.TestCase):
             with self.assertRaisesRegex(CrawlerManifestError, "crawler_manifest_file_checksum_mismatch"):
                 crawler_manifest_health(root)
 
+    def test_tenant_source_refreshes_when_manifest_delivery_changes(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            first = root / "华兴银行" / "经营日报.csv"
+            first.parent.mkdir()
+            first.write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            self._write_manifest(root, "tenant:华兴银行", "华兴银行", first)
+
+            catalog = CSVFolderSource(root)
+            with patch.dict(os.environ, {"SMART_DATA_AGENT_ENV": "production"}, clear=False):
+                first_source = catalog.for_tenant("tenant:华兴银行")
+                self.assertEqual(len(first_source.table_assets(force=True)), 1)
+
+                second = first.parent / "新增资产.csv"
+                second.write_text("机构,金额\n华兴银行,2\n", encoding="utf-8")
+                manifest_path = root / "manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["generated_at"] = "2026-08-27T00:00:00+00:00"
+                manifest["tenants"][0]["files"].append(
+                    {
+                        "path": second.name,
+                        "sha256": hashlib.sha256(second.read_bytes()).hexdigest(),
+                    }
+                )
+                manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+                refreshed_source = catalog.for_tenant("tenant:华兴银行")
+                refreshed_assets = refreshed_source.table_assets(force=True)
+
+            self.assertIsNot(refreshed_source, first_source)
+            self.assertEqual(len(refreshed_assets), 2)
+            self.assertIn("新增资产.csv", {item["fileName"] for item in refreshed_assets})
+
     def test_production_manifest_rejects_an_alias_shared_by_two_institutions(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

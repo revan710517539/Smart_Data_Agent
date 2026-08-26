@@ -5,6 +5,7 @@ import hashlib
 import io
 import os
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -27,19 +28,22 @@ class UnifiedRawTableSource:
         self.data_asset_store = data_asset_store
         self.object_store = object_store
         self._tenant_sources: dict[str, UnifiedTenantRawTableSource] = {}
+        self._tenant_sources_lock = threading.RLock()
 
     def for_tenant(self, tenant_id: str) -> "UnifiedTenantRawTableSource":
         normalized = str(tenant_id or "").strip()
-        source = self._tenant_sources.get(normalized)
-        if source is None:
-            source = UnifiedTenantRawTableSource(
-                normalized,
-                self.crawler_source.for_tenant(normalized),
-                self.data_asset_store,
-                self.object_store,
-            )
-            self._tenant_sources[normalized] = source
-        return source
+        crawler_source = self.crawler_source.for_tenant(normalized)
+        with self._tenant_sources_lock:
+            source = self._tenant_sources.get(normalized)
+            if source is None or source.crawler_source is not crawler_source:
+                source = UnifiedTenantRawTableSource(
+                    normalized,
+                    crawler_source,
+                    self.data_asset_store,
+                    self.object_store,
+                )
+                self._tenant_sources[normalized] = source
+            return source
 
     def prime_catalog(self) -> None:
         self.crawler_source.prime_catalog()

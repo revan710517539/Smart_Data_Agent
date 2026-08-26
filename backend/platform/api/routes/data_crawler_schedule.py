@@ -390,8 +390,6 @@ def _task_definition(source_key: str, table: dict[str, Any], binding: dict[str, 
         raise ValueError("sql_parameter_not_in_binding")
     if any(kind not in {"date", "month", "datetime"} for kind in allowed.values()):
         raise ValueError("non_temporal_sql_parameters_not_supported")
-    if not allowed and trigger_type == "schedule":
-        raise ValueError("parameterless_sql_must_be_one_shot")
     _resolve_temporal_parameters(binding, parameters, parameter_bindings, execution_at)
     biweekly_anchor = execution_at.date().isoformat()
     if not has_explicit_execution_at and str(payload.get("biweeklyAnchor") or "").strip():

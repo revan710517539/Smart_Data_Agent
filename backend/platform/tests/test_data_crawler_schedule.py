@@ -4,6 +4,7 @@ import json
 import os
 import unittest
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 from zoneinfo import ZoneInfo
@@ -26,6 +27,9 @@ from backend.platform.api.routes.data_crawler_schedule import (
 )
 from backend.platform.integrations.data_crawler import endpoint_for_tenant
 from backend.platform.api.support import send_route_exception
+
+
+ROOT = Path(__file__).resolve().parents[3]
 
 
 class DataCrawlerScheduleContractTest(unittest.TestCase):
@@ -277,6 +281,32 @@ class DataCrawlerScheduleContractTest(unittest.TestCase):
         self.assertEqual(first["task_code"], second["task_code"])
         self.assertEqual(first["task_code"], _task_code("huaxing", "sql_daily"))
         self.assertNotEqual(first["task_config"]["source_key"], second["task_config"]["source_key"])
+
+    def test_parameterless_sql_can_run_on_a_daily_schedule(self) -> None:
+        definition = _task_definition(
+            "source-key",
+            {"tableNameCn": "底表日维度", "contentHash": "a" * 64},
+            {
+                "institutionId": "huaxing",
+                "sqlId": "sql_bottom_daily",
+                "sqlName": "底表日维度",
+                "parameters": [],
+            },
+            {"recurrence": "daily", "time": "08:30"},
+        )
+
+        self.assertEqual(definition["trigger_type"], "schedule")
+        self.assertEqual(definition["schedule_expression"], "30 8 * * *")
+        self.assertEqual(definition["task_config"]["parameters"], {})
+        self.assertEqual(definition["task_config"]["parameter_bindings"], {})
+
+    def test_parameterless_sql_schedule_options_remain_enabled_in_ui(self) -> None:
+        body = (ROOT / "src/app/components/DataAssets.tsx").read_text(encoding="utf-8")
+
+        self.assertNotIn("disabled: !binding.parameters.length", body)
+        self.assertNotIn("无参数 SQL 仅支持手动执行一次", body)
+        self.assertIn("该 SQL 无需参数，可直接设置循环运行", body)
+        self.assertIn("配置已保存；点击执行可立即拉取一次", body)
 
     def test_existing_sql_task_survives_delivery_source_key_change(self) -> None:
         existing = {

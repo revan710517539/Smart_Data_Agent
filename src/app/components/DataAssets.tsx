@@ -3093,7 +3093,7 @@ function DataCrawlerSchedulePanel({
         const result = await saveDataCrawlerSchedule({ tenantId, userId, sourceKey: table.sourceKey!, draft });
         onScheduleStatusChange(table.sourceKey!, dataCrawlerScheduleListStatus(result.task, draft));
         await reload();
-        setNotice(draft.recurrence === "none" ? "参数已保存；点击执行可立即拉取一次。" : "定时任务已保存，将按设置自动执行。");
+        setNotice(draft.recurrence === "none" ? "配置已保存；点击执行可立即拉取一次。" : "定时任务已保存，将按设置自动执行。");
       }
     } catch (error) {
       setNotice(apiErrorMessage(error, execute ? "数据拉取失败" : "定时任务保存失败"));
@@ -3146,8 +3146,8 @@ function DataCrawlerSchedulePanel({
                 </div>
                 <div>
                   <span className="mb-1.5 block text-[11px] font-medium text-[#626b66]">循环方式</span>
-                  <ScheduleSelect label="循环方式" value={draft.recurrence} onValueChange={(value) => setDraft({ ...draft, recurrence: value as DataCrawlerScheduleDraft["recurrence"] })} options={[{ value: "none", label: "不循环（仅手动执行）" }, { value: "daily", label: "每日", disabled: !binding.parameters.length }, { value: "weekly", label: "每周", disabled: !binding.parameters.length }, { value: "biweekly", label: "每双周", disabled: !binding.parameters.length }, { value: "monthly", label: "每月", disabled: !binding.parameters.length }]} />
-                  {!binding.parameters.length && <span className="mt-1.5 block text-[10px] text-[#8a928d]">无参数 SQL 仅支持手动执行一次。</span>}
+                  <ScheduleSelect label="循环方式" value={draft.recurrence} onValueChange={(value) => setDraft({ ...draft, recurrence: value as DataCrawlerScheduleDraft["recurrence"] })} options={[{ value: "none", label: "不循环（仅手动执行）" }, { value: "daily", label: "每日" }, { value: "weekly", label: "每周" }, { value: "biweekly", label: "每双周" }, { value: "monthly", label: "每月" }]} />
+                  {!binding.parameters.length && <span className="mt-1.5 block text-[10px] text-[#8a928d]">该 SQL 无需参数，可直接设置循环运行。</span>}
                 </div>
                 {draft.recurrence !== "none" && <div><span className="mb-1.5 block text-[11px] font-medium text-[#626b66]">执行日期与时间</span><ScheduleDateControl label="执行日期与时间" value={draft.executionAt} includeTime onChange={(value) => setDraft({ ...draft, executionAt: value })} /></div>}
               </div>
@@ -3161,7 +3161,7 @@ function DataCrawlerSchedulePanel({
                 <div className="flex items-center gap-2"><GitBranch className="h-3.5 w-3.5 text-[#7d8781]" /><div className="text-[12px] font-medium text-[#424b46]">SQL 时间参数</div></div>
                 <span className="shrink-0 text-[10px] text-[#929a96]">{binding.parameters.length} 个</span>
               </div>
-              {!binding.parameters.length && <div className="mt-3 flex items-center gap-2 text-[10px] text-[#7a837e]"><CheckCircle2 className="h-3.5 w-3.5 text-[#0f8f58]" />该 SQL 无参数，保持“不循环”后可直接执行一次。</div>}
+              {!binding.parameters.length && <div className="mt-3 flex items-center gap-2 text-[10px] text-[#7a837e]"><CheckCircle2 className="h-3.5 w-3.5 text-[#0f8f58]" />该 SQL 无需参数，可手动执行，也可按所选周期自动运行。</div>}
               {Boolean(binding.parameters.length) && <div className="mt-1">{binding.parameters.map((parameter) => {
                 const rule = draft.parameterBindings[parameter.name] || "fixed";
                 const mode = scheduleParameterMode(rule);

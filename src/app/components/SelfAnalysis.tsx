@@ -158,7 +158,6 @@ import {
 } from "./self-analysis/featuredReports";
 import { useVisualReportCollection, VisualReportLibrary, VisualReportRow } from "./visual-report/VisualReportLibrary";
 import type { VisualReport } from "../services/visualReportApi";
-
 import { clearPendingAnalysisRun, isAnalysisNavigationAbort, loadPendingAnalysisRun, savePendingAnalysisRun } from "./self-analysis/pendingAnalysisRun";
 import { clearSelfAnalysisWorkbenchPersistence, useSelfAnalysisWorkbenchPersistence } from "./self-analysis/useSelfAnalysisWorkbenchPersistence";
 

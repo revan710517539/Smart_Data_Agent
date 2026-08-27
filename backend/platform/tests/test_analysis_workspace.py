@@ -278,6 +278,7 @@ class AnalysisWorkspaceTest(unittest.TestCase):
 
     def test_analysis_cache_requires_versioned_code_and_verified_csv_snapshot(self) -> None:
         services = build_local_platform()
+        self.addCleanup(services.close)
         table = {
             "id": "table-1",
             "assetId": "raw:table-1",

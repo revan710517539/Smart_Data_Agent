@@ -175,7 +175,7 @@ class PlatformServices:
     memory_store: InMemoryMemoryStore | SQLiteMemoryStore
     memory_service: MemoryService
     learning_service: SkillLearningService
-    metric_dictionary_store: InMemoryMetricDictionaryStore | SQLiteMetricDictionaryStore
+    metric_dictionary_store: InMemoryMetricDictionaryStore | SQLiteMetricDictionaryStore | PostgreSQLMetricDictionaryStore
     metric_version_service: MetricVersionService
     lineage_store: InMemoryLineageStore | SQLiteLineageStore
     system_config_store: InMemorySystemConfigStore | SQLiteSystemConfigStore
@@ -839,6 +839,20 @@ def _build_mysql_production_platform(runtime_config: RuntimeConfig) -> PlatformS
         )
         _bind_runtime_kernel(services, relational_pool=raw_pool)
         automation_runtime.platform_services = services
+        # Seed the governed dictionary for a genuinely empty installation even
+        # when RBAC already exists. Production uses the same immutable defaults
+        # as local runtimes; existing tenant dictionaries are never replaced.
+        active_tenant_ids = [
+            str(row["tenant_id"])
+            for row in list_active_tenants(services)
+            if str(row.get("tenant_id", "")).strip()
+        ]
+        _seed_metric_dictionary_if_empty(
+            metric_dictionary_store,
+            None,
+            tenant_ids=active_tenant_ids,
+            force=True,
+        )
         if runtime_config.environment in {"development", "test"}:
             for tenant_id in [normalize_tenant_id(tenant) for tenant in OPERATING_TENANTS] + [LEGACY_TENANT_ID]:
                 try:
@@ -1201,27 +1215,31 @@ def _ensure_topic_data_batch_task(runtime: AutomationRuntime, tenant_id: str, ow
             int(existing.get("lock_version", 0)),
         )
 def _seed_metric_dictionary_if_empty(
-    metric_dictionary_store: InMemoryMetricDictionaryStore | SQLiteMetricDictionaryStore,
+    metric_dictionary_store: InMemoryMetricDictionaryStore | SQLiteMetricDictionaryStore | PostgreSQLMetricDictionaryStore,
     db_path: str | Path | None,
+    *,
+    tenant_ids: list[str] | None = None,
+    force: bool = False,
 ) -> None:
-    if not _should_seed_default_metric_dictionary(db_path):
+    if not force and not _should_seed_default_metric_dictionary(db_path):
         return
     metrics = load_default_metric_dictionary()
     if not metrics:
         return
-    tenant_id = normalize_tenant_id(OPERATING_TENANTS[0])
-    try:
+    normalized_tenant_ids = [
+        raw_tenant_id if raw_tenant_id.startswith("tenant:") else normalize_tenant_id(raw_tenant_id)
+        for tenant_id in (tenant_ids or [OPERATING_TENANTS[0]])
+        if (raw_tenant_id := str(tenant_id).strip())
+    ]
+    for tenant_id in dict.fromkeys(normalized_tenant_ids):
+        if isinstance(metric_dictionary_store, PostgreSQLMetricDictionaryStore):
+            metric_dictionary_store.seed_if_empty(tenant_id, metrics, updated_by=SUPER_ADMIN_USER_ID)
+            continue
         existing = metric_dictionary_store.list(tenant_id)
-    except Exception:
-        existing = []
-    if not existing:
-        metric_dictionary_store.replace_all(
-            tenant_id,
-            metrics,
-            updated_by=SUPER_ADMIN_USER_ID,
-        )
-    if isinstance(metric_dictionary_store, SQLiteMetricDictionaryStore):
-        _dedupe_seed_metric_dictionary(metric_dictionary_store, tenant_id, {str(metric["metricId"]) for metric in metrics})
+        if not existing:
+            metric_dictionary_store.replace_all(tenant_id, metrics, updated_by=SUPER_ADMIN_USER_ID)
+        if isinstance(metric_dictionary_store, SQLiteMetricDictionaryStore):
+            _dedupe_seed_metric_dictionary(metric_dictionary_store, tenant_id, {str(metric["metricId"]) for metric in metrics})
 
 
 def _should_seed_default_metric_dictionary(db_path: str | Path | None) -> bool:

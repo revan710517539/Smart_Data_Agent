@@ -68,6 +68,28 @@ class PostgreSQLMetricDictionaryStore:
                 self._upsert(connection, tenant_id, tenant_key, metric, updated_by)
         return self.list(tenant_id)
 
+    def seed_if_empty(self, tenant_id: str, metrics: list[dict[str, Any]], updated_by: str | None = None) -> bool:
+        """Atomically seed one tenant without replacing governed content."""
+
+        normalized = [_normalize_metric(metric) for metric in metrics]
+        _assert_unique_metric_names(normalized)
+        with self._transaction() as connection:
+            tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, tenant_id)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"metric-dictionary-seed:{tenant_key}",),
+                )
+                cursor.execute(
+                    "SELECT 1 FROM platform_metric_dictionary WHERE tenant_id = %s AND status <> 'disabled' LIMIT 1",
+                    (tenant_key,),
+                )
+                if cursor.fetchone():
+                    return False
+            for metric in normalized:
+                self._upsert(connection, tenant_id, tenant_key, metric, updated_by)
+        return True
+
     def upsert(self, tenant_id: str, metric: dict[str, Any], updated_by: str | None = None) -> dict[str, Any]:
         normalized = _normalize_metric(metric)
         with self._transaction() as connection:

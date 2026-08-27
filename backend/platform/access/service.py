@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
-from backend.authz import SUPER_ADMIN_ROLE_ID, SUPER_ADMIN_USER_ID, normalize_tenant_id, tenant_role_id
+from backend.authz import OPERATING_TENANTS, SUPER_ADMIN_ROLE_ID, SUPER_ADMIN_USER_ID, normalize_tenant_id, tenant_role_id
 from backend.authz.models import PermissionPolicy, Role, RoleAssignment, RoleLevel
 from backend.authz.repository import PolicyRepository
 from backend.platform.governance import PermissionBroker
@@ -921,7 +921,7 @@ class AccessControlService:
     def _select_session_tenant(selectable_tenants: list[str], tenant_hint: str | None) -> str:
         hinted = str(tenant_hint or "").strip()
         if hinted:
-            hinted_label = _tenant_label(_tenant_id_from_label(hinted))
+            hinted_label = _canonical_tenant_label(hinted)
             if hinted_label in selectable_tenants:
                 return _tenant_id_from_label(hinted_label)
             raise PermissionError("session_tenant_not_authorized")
@@ -937,6 +937,27 @@ def _tenant_id_from_label(value: str) -> str:
 
 def _tenant_label(tenant_id: str) -> str:
     return tenant_id.removeprefix("tenant:")
+
+
+_TENANT_SLUGS = {
+    "华兴银行": "huaxing",
+    "广州银行": "guangzhou",
+    "兰州银行": "lanzhou",
+    "汉口银行": "hankou",
+    "石嘴山银行": "shizuishan",
+    "郑州银行": "zhengzhou",
+    "临商银行": "linshang",
+    "瑞丰银行": "ruifeng",
+    "南京银行": "nanjing",
+    "兴业消金": "xingye-consumer-finance",
+    "三峡银行": "sanxia",
+}
+_TENANT_LABELS_BY_SLUG = {slug: label for label, slug in _TENANT_SLUGS.items() if label in OPERATING_TENANTS}
+
+
+def _canonical_tenant_label(value: str) -> str:
+    label = _tenant_label(str(value or "").strip())
+    return _TENANT_LABELS_BY_SLUG.get(label, label)
 
 
 def _known_tenant_labels(roles: list[Role]) -> list[str]:

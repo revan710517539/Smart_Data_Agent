@@ -78,6 +78,18 @@ class TenantScopeGovernanceTest(unittest.TestCase):
             AccessControlService._select_session_tenant(["华兴银行"], "广州银行")
         self.assertEqual(AccessControlService._select_session_tenant(["华兴银行"], None), "tenant:华兴银行")
 
+    def test_explicit_session_tenant_accepts_internal_slug_for_authorized_chinese_label(self) -> None:
+        from backend.platform.access.service import AccessControlService
+
+        self.assertEqual(
+            AccessControlService._select_session_tenant(["广州银行"], "guangzhou"),
+            "tenant:广州银行",
+        )
+        self.assertEqual(
+            AccessControlService._select_session_tenant(["广州银行"], "tenant:guangzhou"),
+            "tenant:广州银行",
+        )
+
     def test_topic_assignment_filters_runtime_and_revocation_does_not_restore_defaults(self) -> None:
         service = self._service()
         active = {"tenant:a", "tenant:b"}

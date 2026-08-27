@@ -3,13 +3,14 @@ from __future__ import annotations
 import http.client
 import json
 import threading
+from datetime import datetime
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from backend.platform.api.router import API_ROUTE_REGISTRY
 from backend.platform.api.routes.interaction_events import _bounded_days, _require_explicit_session, _require_interaction_analytics_admin
 from backend.platform.api.server import create_server
-from backend.platform.interaction_events import InMemoryInteractionEventStore, build_interaction_analytics, sanitize_interaction_extension
+from backend.platform.interaction_events import InMemoryInteractionEventStore, MySQLInteractionEventStore, build_interaction_analytics, sanitize_interaction_extension
 from backend.platform.security import AuthenticationError
 
 
@@ -61,6 +62,23 @@ def test_interaction_event_contract_rejects_unknown_type() -> None:
 def test_interaction_event_route_and_mysql_migration_are_registered() -> None:
     assert API_ROUTE_REGISTRY.has_route("POST", "/api/interaction-events")
     assert API_ROUTE_REGISTRY.has_route("GET", "/api/interaction-events/analytics")
+
+
+def test_mysql_interaction_write_binds_occurred_at_as_utc_naive_datetime() -> None:
+    connection = _RecordingConnection()
+    store = MySQLInteractionEventStore(_RecordingPool(connection))
+
+    store.write(
+        tenant_id="tenant_test",
+        actor_user_id="user_test",
+        actor_account="operator@example.com",
+        event_name="page_view",
+        event_type="view",
+    )
+
+    inserted = next(params for sql, params in connection.executions if "INSERT INTO platform_user_interaction_events" in sql)
+    assert isinstance(inserted[13], datetime)
+    assert inserted[13].tzinfo is None
 
 
 def test_interaction_event_route_requires_an_explicit_session() -> None:
@@ -215,3 +233,54 @@ def _request(port: int, path: str, user_id: str, tenant_id: str) -> tuple[int, d
     raw = response.read().decode("utf-8")
     connection.close()
     return response.status, json.loads(raw) if raw else {}
+
+
+class _RecordingCursor:
+    def __init__(self, connection: "_RecordingConnection") -> None:
+        self.connection = connection
+        self.row = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, sql, params=()):
+        self.connection.executions.append((sql, params))
+        if "FROM platform_tenants" in sql:
+            self.row = {"tenant_id": "tenant-uuid"}
+        elif "FROM platform_user_profiles" in sql:
+            self.row = {"user_id": "user-uuid"}
+        else:
+            self.row = None
+
+    def fetchone(self):
+        return self.row
+
+
+class _RecordingConnection:
+    def __init__(self) -> None:
+        self.executions = []
+
+    def cursor(self):
+        return _RecordingCursor(self)
+
+
+class _RecordingTransaction:
+    def __init__(self, connection: _RecordingConnection) -> None:
+        self.connection = connection
+
+    def __enter__(self):
+        return self.connection
+
+    def __exit__(self, *_args):
+        return False
+
+
+class _RecordingPool:
+    def __init__(self, connection: _RecordingConnection) -> None:
+        self.connection = connection
+
+    def transaction(self):
+        return _RecordingTransaction(self.connection)

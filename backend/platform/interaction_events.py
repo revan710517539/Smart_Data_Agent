@@ -145,6 +145,7 @@ class MySQLInteractionEventStore:
 
     def write(self, **values: Any) -> dict[str, Any]:
         event = normalize_interaction_event(**values)
+        occurred_at = _mysql_datetime(event["occurred_at"])
         with self.pool.transaction() as connection:
             tenant_key = PostgreSQLIdentityResolver.tenant_id(connection, event["tenant_id"])
             actor_key = PostgreSQLIdentityResolver.user_id(connection, event["actor_user_id"], required=False)
@@ -163,7 +164,7 @@ class MySQLInteractionEventStore:
                         event["chart_id"] or None, event["chart_name"] or None,
                         event["resource_type"] or None, event["resource_id"] or None,
                         json.dumps(event["extension"], ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-                        event["occurred_at"], actor_key,
+                        occurred_at, actor_key,
                     ),
                 )
         return event
@@ -576,6 +577,11 @@ def _parse_datetime(value: Any) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _mysql_datetime(value: Any) -> datetime:
+    """Return a UTC-naive value accepted by MySQL DATETIME columns."""
+    return _parse_datetime(value).replace(tzinfo=None)
 
 
 def _bounded_limit(value: int) -> int:

@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+!.env.production.example
+!.env.server-development.example
 
 node_modules/
 dist/

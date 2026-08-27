@@ -843,9 +843,9 @@ def _build_mysql_production_platform(runtime_config: RuntimeConfig) -> PlatformS
         # when RBAC already exists. Production uses the same immutable defaults
         # as local runtimes; existing tenant dictionaries are never replaced.
         active_tenant_ids = [
-            str(row["tenant_id"])
+            str(row["id"])
             for row in list_active_tenants(services)
-            if str(row.get("tenant_id", "")).strip()
+            if str(row.get("id", "")).strip()
         ]
         _seed_metric_dictionary_if_empty(
             metric_dictionary_store,
@@ -1226,9 +1226,10 @@ def _seed_metric_dictionary_if_empty(
     metrics = load_default_metric_dictionary()
     if not metrics:
         return
+    requested_tenant_ids = [OPERATING_TENANTS[0]] if tenant_ids is None else tenant_ids
     normalized_tenant_ids = [
         raw_tenant_id if raw_tenant_id.startswith("tenant:") else normalize_tenant_id(raw_tenant_id)
-        for tenant_id in (tenant_ids or [OPERATING_TENANTS[0]])
+        for tenant_id in requested_tenant_ids
         if (raw_tenant_id := str(tenant_id).strip())
     ]
     for tenant_id in dict.fromkeys(normalized_tenant_ids):

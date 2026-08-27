@@ -50,6 +50,14 @@ class ProductionMetricDictionarySeedTests(unittest.TestCase):
 
         store.replace_all.assert_not_called()
 
+    def test_explicit_empty_catalog_does_not_fall_back_to_operating_tenant(self) -> None:
+        store = Mock(spec=PostgreSQLMetricDictionaryStore)
+
+        with patch("backend.platform.bootstrap.load_default_metric_dictionary", return_value=[{"metricId": "m1"}]):
+            _seed_metric_dictionary_if_empty(store, None, tenant_ids=[], force=True)
+
+        store.seed_if_empty.assert_not_called()
+
     def test_local_seed_remains_disabled_without_opt_in(self) -> None:
         store = Mock()
         with patch.dict(os.environ, {"SMART_DATA_AGENT_SEED_METRIC_DICTIONARY": "0"}):

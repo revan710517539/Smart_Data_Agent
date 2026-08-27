@@ -81,7 +81,7 @@ class PostgreSQLMetricDictionaryStore:
                     (f"metric-dictionary-seed:{tenant_key}",),
                 )
                 cursor.execute(
-                    "SELECT 1 FROM platform_metric_dictionary WHERE tenant_id = %s AND status <> 'disabled' LIMIT 1",
+                    "SELECT 1 FROM platform_metric_dictionary WHERE tenant_id = %s LIMIT 1",
                     (tenant_key,),
                 )
                 if cursor.fetchone():

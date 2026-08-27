@@ -569,6 +569,9 @@ def build_local_platform(
         non_structured_store=non_structured_store,
         primary_database_pool=mysql_pool,
     )
+    # The catalog adapter selects the assembled runtime's SQLite, in-memory,
+    # or relational backend, so bind it after PlatformServices exists.
+    access_service._tenant_catalog = lambda: list_active_tenants(services)
     _bind_runtime_kernel(services)
     automation_runtime.platform_services = services
     if runtime_config.environment in {"development", "test"} and db_path is not None:

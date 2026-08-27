@@ -6,7 +6,7 @@ import threading
 import unittest
 from tempfile import TemporaryDirectory
 
-from backend.authz import normalize_tenant_id
+from backend.authz import SUPER_ADMIN_USER_ID, normalize_tenant_id
 from backend.platform.access.passwords import DEFAULT_ACCOUNT_PASSWORD
 from backend.platform.api.server import create_server
 from backend.platform.bootstrap import build_local_platform
@@ -213,6 +213,57 @@ class RegistrationApprovalTest(unittest.TestCase):
                     pending["request_id"],
                     approved=True,
                 )
+
+    def test_registration_rejects_empty_active_catalog_cleanly(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            try:
+                server.services.access_service._tenant_catalog = lambda: []
+                with self.assertRaisesRegex(ValueError, "registration_institution_unknown"):
+                    server.services.access_service.submit_registration_request(
+                        {"name": "无目录", "email": "empty-catalog@example.com", "institution": "华兴银行"}
+                    )
+            finally:
+                server.server_close()
+                server.services.close()
+
+    def test_inactive_catalog_tenant_is_never_super_admin_default(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            try:
+                server.services.access_service._tenant_catalog = lambda: [
+                    {"id": "tenant:closed", "name": "停用机构", "status": "closed"},
+                    {"id": "tenant:active", "name": "有效机构", "status": "active"},
+                ]
+                profile = server.services.access_service.find_profile_by_contact("xujingbo-jk@qifu.com")
+                payload = server.services.access_service._session_payload_for_profile(profile)
+                self.assertEqual(payload["tenant_id"], "tenant:active")
+                self.assertEqual(payload["institutions"], ["有效机构"])
+            finally:
+                server.server_close()
+                server.services.close()
+
+    def test_pending_registration_preserves_tenant_id_across_catalog_rename(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            try:
+                tenant_id = normalize_tenant_id("华兴银行")
+                catalog = [{"id": tenant_id, "name": "旧机构名", "status": "active"}]
+                server.services.access_service._tenant_catalog = lambda: catalog
+                pending = server.services.access_service.submit_registration_request(
+                    {"name": "重命名申请", "email": "rename@example.com", "institution": "旧机构名"}
+                )
+                catalog[0] = {"id": tenant_id, "name": "新机构名", "status": "active"}
+                approved = server.services.access_service.review_registration(
+                    ExecutionContext(SUPER_ADMIN_USER_ID, tenant_id),
+                    pending["request_id"],
+                    approved=True,
+                )
+                self.assertEqual(approved["user"]["tenant_id"], tenant_id)
+                self.assertEqual(approved["user"]["institution"], "新机构名")
+            finally:
+                server.server_close()
+                server.services.close()
 
     @staticmethod
     def _json(port: int, method: str, path: str, body=None, cookie: str = "", want_cookie: bool = False):

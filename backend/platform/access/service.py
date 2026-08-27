@@ -114,19 +114,24 @@ class AccessControlService:
         self._tenant_catalog = tenant_catalog
 
     def _active_tenant_catalog(self) -> list[dict[str, str]]:
-        if self._tenant_catalog is not None:
-            return self._tenant_catalog()
-        return [
+        records = self._tenant_catalog() if self._tenant_catalog is not None else [
             {"id": normalize_tenant_id(label), "name": label, "status": "active"}
             for label in _known_tenant_labels(self.policy_repository.list_roles())
         ]
+        active: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for item in records:
+            tenant_id = str(item.get("id") or "").strip()
+            tenant_name = str(item.get("name") or "").strip()
+            status = str(item.get("status") or "").strip()
+            if status != "active" or not tenant_id or not tenant_name or tenant_id in seen:
+                continue
+            active.append({"id": tenant_id, "name": tenant_name, "status": "active"})
+            seen.add(tenant_id)
+        return active
 
     def _active_tenant_names(self) -> list[str]:
-        return [
-            str(item.get("name") or "").strip()
-            for item in self._active_tenant_catalog()
-            if str(item.get("status") or "active") == "active" and str(item.get("name") or "").strip()
-        ]
+        return [item["name"] for item in self._active_tenant_catalog()]
 
     def _canonical_catalog_tenant(self, value: str) -> dict[str, str] | None:
         hinted = str(value or "").strip()
@@ -134,11 +139,10 @@ class AccessControlService:
             return None
         canonical_label = _canonical_tenant_label(hinted)
         for item in self._active_tenant_catalog():
-            tenant_id = str(item.get("id") or "").strip()
-            tenant_name = str(item.get("name") or "").strip()
-            status = str(item.get("status") or "active").strip()
-            if status == "active" and (hinted in {tenant_id, tenant_name} or canonical_label == tenant_name):
-                return {"id": tenant_id or normalize_tenant_id(tenant_name), "name": tenant_name, "status": "active"}
+            tenant_id = item["id"]
+            tenant_name = item["name"]
+            if hinted in {tenant_id, tenant_name} or canonical_label == tenant_name:
+                return item
         return None
 
     def close(self) -> None:
@@ -220,7 +224,12 @@ class AccessControlService:
         if self.user_store.get_profile_by_email(email):
             raise ValueError("用户邮箱已存在，请直接登录或由管理员授权。")
 
-        tenant_label = institution or self._active_tenant_names()[0]
+        tenant_label = institution
+        if not tenant_label:
+            active_tenants = self._active_tenant_catalog()
+            if not active_tenants:
+                raise ValueError("registration_institution_unknown")
+            tenant_label = active_tenants[0]["id"]
         catalog_tenant = self._canonical_catalog_tenant(tenant_label)
         if catalog_tenant is None:
             raise ValueError("registration_institution_unknown")
@@ -261,11 +270,8 @@ class AccessControlService:
         if not email and not phone:
             raise ValueError("registration_contact_required")
         institution = str(payload.get("institution") or payload.get("tenant") or "").strip()
-        known = self._active_tenant_names()
         if not institution:
             raise ValueError("registration_institution_required")
-        if institution not in known:
-            raise ValueError("registration_institution_unknown")
         catalog_tenant = self._canonical_catalog_tenant(institution)
         if catalog_tenant is None:
             raise ValueError("registration_institution_unknown")
@@ -285,7 +291,9 @@ class AccessControlService:
         profile = UserProfile(
             user_id=existing.user_id if existing is not None else _allocate_user_id(self.user_store, contact_email),
             name=name,
-            department=institution,
+            # Preserve the immutable catalog ID while approval is pending.
+            # Listing and approval resolve the current display name from it.
+            department=tenant_id,
             email=contact_email,
             status="invited",
             last_login="未登录",
@@ -320,11 +328,12 @@ class AccessControlService:
         profile = self.user_store.get_profile(user_id)
         if profile is None or profile.status != "invited":
             raise ValueError("registration_not_pending")
-        institution = str(profile.department or "").strip()
-        catalog_tenant = self._canonical_catalog_tenant(institution)
+        pending_tenant = str(profile.department or "").strip()
+        catalog_tenant = self._canonical_catalog_tenant(pending_tenant)
         if catalog_tenant is None:
             raise ValueError("registration_institution_unknown")
         tenant_id = catalog_tenant["id"]
+        institution = catalog_tenant["name"]
         if approved:
             operator_role = self._find_role_by_name(tenant_id, "操作员")
             if operator_role is None:
@@ -333,7 +342,7 @@ class AccessControlService:
                 UserProfile(
                     user_id=profile.user_id,
                     name=profile.name,
-                    department=profile.department,
+                    department=institution,
                     email=profile.email,
                     status="active",
                     last_login="未登录",
@@ -383,7 +392,10 @@ class AccessControlService:
         return [self._registration_todo(item) for item in self.list_pending_registrations()]
 
     def _registration_record(self, profile: UserProfile) -> dict[str, Any]:
-        institution = str(profile.department or "").strip()
+        pending_tenant = str(profile.department or "").strip()
+        catalog_tenant = self._canonical_catalog_tenant(pending_tenant)
+        institution = catalog_tenant["name"] if catalog_tenant is not None else pending_tenant
+        tenant_id = catalog_tenant["id"] if catalog_tenant is not None else pending_tenant
         contact = profile.email
         if contact.endswith("@users.sda.invalid"):
             contact = contact.split("@", 1)[0].removeprefix("phone.")
@@ -393,7 +405,7 @@ class AccessControlService:
             "email": profile.email,
             "contact": contact,
             "institution": institution,
-            "tenant_id": _tenant_id_from_label(institution),
+            "tenant_id": tenant_id,
             "role": "操作员",
             "status": "invited",
         }

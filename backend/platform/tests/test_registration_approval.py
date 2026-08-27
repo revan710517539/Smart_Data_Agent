@@ -9,12 +9,59 @@ from tempfile import TemporaryDirectory
 from backend.authz import normalize_tenant_id
 from backend.platform.access.passwords import DEFAULT_ACCOUNT_PASSWORD
 from backend.platform.api.server import create_server
+from backend.platform.bootstrap import build_local_platform
 from backend.platform.tenancy import ExecutionContext
 
 REGISTERED_PASSWORD = "op-own-password-123"
 
 
 class RegistrationApprovalTest(unittest.TestCase):
+    def test_registration_uses_active_tenant_catalog_instead_of_role_names(self) -> None:
+        services = build_local_platform()
+        try:
+            catalog = [{"id": "tenant:catalog-only", "name": "目录专属银行", "status": "active"}]
+            services.access_service._tenant_catalog = lambda: catalog
+            with self.assertRaisesRegex(ValueError, "机构默认操作员角色不存在"):
+                services.access_service.submit_registration_request(
+                    {
+                        "name": "目录用户",
+                        "email": "catalog-only@example.com",
+                        "password": "CatalogOnly!123",
+                        "institution": "目录专属银行",
+                    }
+                )
+        finally:
+            services.close()
+
+    def test_super_admin_session_preserves_catalog_tenant_id(self) -> None:
+        services = build_local_platform()
+        try:
+            services.access_service._tenant_catalog = lambda: [
+                {"id": "tenant:石嘴山银行", "name": "石嘴山银行", "status": "active"}
+            ]
+            session = services.access_service.login_by_email(
+                "Xujingbo-jk@qifu.com",
+                tenant_hint="tenant:石嘴山银行",
+            )
+        finally:
+            services.close()
+        self.assertEqual(session["tenant_id"], "tenant:石嘴山银行")
+        self.assertEqual(session["institution"], "石嘴山银行")
+
+    def test_super_admin_cannot_enter_inactive_or_unknown_catalog_tenant(self) -> None:
+        services = build_local_platform()
+        try:
+            services.access_service._tenant_catalog = lambda: [
+                {"id": "tenant:active", "name": "有效银行", "status": "active"}
+            ]
+            with self.assertRaisesRegex(PermissionError, "session_tenant_not_authorized"):
+                services.access_service.login_by_email(
+                    "Xujingbo-jk@qifu.com",
+                    tenant_hint="tenant:missing",
+                )
+        finally:
+            services.close()
+
     def test_registration_stays_pending_until_super_admin_approves(self) -> None:
         with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")

@@ -107,6 +107,7 @@ from backend.platform.settings import (
 from backend.platform.skills import SkillConfigCatalog, SkillExecutor, SkillRegistry
 from backend.platform.skills.builtin import build_data_product_skills, build_supersonic_query_skill
 from backend.platform.tenancy import TenantScopeService, build_tenant_scope_service
+from backend.platform.tenancy.catalog import list_active_tenants
 
 
 # The local development fallback must use the same human account as the
@@ -650,7 +651,13 @@ def _build_mysql_production_platform(runtime_config: RuntimeConfig) -> PlatformS
             agent_catalog=agent_catalog,
             approval_store=approval_store,
         )
-        access_service = AccessControlService(user_directory_store, policy_repository, permission_broker)
+        tenant_catalog_services = type("TenantCatalogServices", (), {"primary_database_pool": pool})()
+        access_service = AccessControlService(
+            user_directory_store,
+            policy_repository,
+            permission_broker,
+            tenant_catalog=lambda: list_active_tenants(tenant_catalog_services),
+        )
         oidc_client = OIDCClient(oidc_transaction_store)
         if runtime_config.auth_mode == "strict":
             oidc_client.validate_config()

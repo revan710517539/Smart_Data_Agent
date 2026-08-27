@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from backend.authz import OPERATING_TENANTS, SUPER_ADMIN_ROLE_ID, SUPER_ADMIN_USER_ID, normalize_tenant_id, tenant_role_id
 from backend.authz.models import PermissionPolicy, Role, RoleAssignment, RoleLevel
@@ -106,10 +106,40 @@ class AccessControlService:
         user_store: UserDirectoryStore,
         policy_repository: PolicyRepository,
         permission_broker: PermissionBroker,
+        tenant_catalog: Callable[[], list[dict[str, str]]] | None = None,
     ) -> None:
         self.user_store = user_store
         self.policy_repository = policy_repository
         self.permission_broker = permission_broker
+        self._tenant_catalog = tenant_catalog
+
+    def _active_tenant_catalog(self) -> list[dict[str, str]]:
+        if self._tenant_catalog is not None:
+            return self._tenant_catalog()
+        return [
+            {"id": normalize_tenant_id(label), "name": label, "status": "active"}
+            for label in _known_tenant_labels(self.policy_repository.list_roles())
+        ]
+
+    def _active_tenant_names(self) -> list[str]:
+        return [
+            str(item.get("name") or "").strip()
+            for item in self._active_tenant_catalog()
+            if str(item.get("status") or "active") == "active" and str(item.get("name") or "").strip()
+        ]
+
+    def _canonical_catalog_tenant(self, value: str) -> dict[str, str] | None:
+        hinted = str(value or "").strip()
+        if not hinted:
+            return None
+        canonical_label = _canonical_tenant_label(hinted)
+        for item in self._active_tenant_catalog():
+            tenant_id = str(item.get("id") or "").strip()
+            tenant_name = str(item.get("name") or "").strip()
+            status = str(item.get("status") or "active").strip()
+            if status == "active" and (hinted in {tenant_id, tenant_name} or canonical_label == tenant_name):
+                return {"id": tenant_id or normalize_tenant_id(tenant_name), "name": tenant_name, "status": "active"}
+        return None
 
     def close(self) -> None:
         close = getattr(self.user_store, "close", None)
@@ -190,8 +220,12 @@ class AccessControlService:
         if self.user_store.get_profile_by_email(email):
             raise ValueError("用户邮箱已存在，请直接登录或由管理员授权。")
 
-        tenant_label = institution or _known_tenant_labels(self.policy_repository.list_roles())[0]
-        tenant_id = _tenant_id_from_label(tenant_label)
+        tenant_label = institution or self._active_tenant_names()[0]
+        catalog_tenant = self._canonical_catalog_tenant(tenant_label)
+        if catalog_tenant is None:
+            raise ValueError("registration_institution_unknown")
+        tenant_label = catalog_tenant["name"]
+        tenant_id = catalog_tenant["id"]
         operator_role = self._find_role_by_name(tenant_id, "操作员")
         if operator_role is None:
             raise ValueError(f"机构默认操作员角色不存在，请检查：{tenant_label}")
@@ -227,12 +261,16 @@ class AccessControlService:
         if not email and not phone:
             raise ValueError("registration_contact_required")
         institution = str(payload.get("institution") or payload.get("tenant") or "").strip()
-        known = _known_tenant_labels(self.policy_repository.list_roles())
+        known = self._active_tenant_names()
         if not institution:
             raise ValueError("registration_institution_required")
         if institution not in known:
             raise ValueError("registration_institution_unknown")
-        tenant_id = _tenant_id_from_label(institution)
+        catalog_tenant = self._canonical_catalog_tenant(institution)
+        if catalog_tenant is None:
+            raise ValueError("registration_institution_unknown")
+        institution = catalog_tenant["name"]
+        tenant_id = catalog_tenant["id"]
         operator_role = self._find_role_by_name(tenant_id, "操作员")
         if operator_role is None:
             raise ValueError(f"机构默认操作员角色不存在，请检查：{institution}")
@@ -283,7 +321,10 @@ class AccessControlService:
         if profile is None or profile.status != "invited":
             raise ValueError("registration_not_pending")
         institution = str(profile.department or "").strip()
-        tenant_id = _tenant_id_from_label(institution)
+        catalog_tenant = self._canonical_catalog_tenant(institution)
+        if catalog_tenant is None:
+            raise ValueError("registration_institution_unknown")
+        tenant_id = catalog_tenant["id"]
         if approved:
             operator_role = self._find_role_by_name(tenant_id, "操作员")
             if operator_role is None:
@@ -887,35 +928,33 @@ class AccessControlService:
         roles_by_id = {role.role_id: role for role in self.policy_repository.list_roles()}
         assignments = self.policy_repository.list_user_assignments(profile.user_id)
         user = self._serialize_user(profile, assignments, roles_by_id)
-        selectable_tenants = self._selectable_tenant_labels(profile.user_id, assignments, roles_by_id)
+        selectable_tenants = self._selectable_catalog_tenants(profile.user_id, assignments, roles_by_id)
         if not selectable_tenants:
             raise PermissionError("当前用户没有可访问机构。")
-        selected_tenant_id = self._select_session_tenant(selectable_tenants, tenant_hint)
+        selected_tenant = self._select_catalog_session_tenant(selectable_tenants, tenant_hint)
         return {
             "user": user,
-            "tenant_id": selected_tenant_id,
-            "institution": _tenant_label(selected_tenant_id),
-            "institutions": selectable_tenants,
+            "tenant_id": selected_tenant["id"],
+            "institution": selected_tenant["name"],
+            "institutions": [item["name"] for item in selectable_tenants],
             "is_super_admin": any(role.get("role") == "超级管理员" for role in user["tenantRoles"]),
         }
 
-    def _selectable_tenant_labels(
+    def _selectable_catalog_tenants(
         self,
         user_id: str,
         assignments: list[RoleAssignment],
         roles_by_id: dict[str, Role],
-    ) -> list[str]:
+    ) -> list[dict[str, str]]:
+        active = self._active_tenant_catalog()
         if self._is_super_admin(user_id):
-            return _known_tenant_labels(self.policy_repository.list_roles())
-        labels: list[str] = []
-        for assignment in assignments:
-            role = roles_by_id.get(assignment.role_id)
-            if not role or role.level == RoleLevel.SUPER_ADMIN:
-                continue
-            label = _tenant_label(assignment.tenant_id)
-            if label and label not in labels:
-                labels.append(label)
-        return labels
+            return active
+        authorized_ids = {
+            assignment.tenant_id
+            for assignment in assignments
+            if (role := roles_by_id.get(assignment.role_id)) is not None and role.level != RoleLevel.SUPER_ADMIN
+        }
+        return [item for item in active if item["id"] in authorized_ids]
 
     @staticmethod
     def _select_session_tenant(selectable_tenants: list[str], tenant_hint: str | None) -> str:
@@ -926,6 +965,19 @@ class AccessControlService:
                 return _tenant_id_from_label(hinted_label)
             raise PermissionError("session_tenant_not_authorized")
         return _tenant_id_from_label(selectable_tenants[0])
+
+    def _select_catalog_session_tenant(
+        self,
+        selectable_tenants: list[dict[str, str]],
+        tenant_hint: str | None,
+    ) -> dict[str, str]:
+        if tenant_hint:
+            selected = self._canonical_catalog_tenant(tenant_hint)
+            selectable_ids = {item["id"] for item in selectable_tenants}
+            if selected is None or selected["id"] not in selectable_ids:
+                raise PermissionError("session_tenant_not_authorized")
+            return selected
+        return selectable_tenants[0]
 
 
 def _tenant_id_from_label(value: str) -> str:

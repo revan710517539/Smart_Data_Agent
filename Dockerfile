@@ -55,6 +55,7 @@ RUN groupadd --system app && useradd --system --gid app --home /app app
 COPY pyproject.toml requirements.runtime.lock README.md ./
 COPY backend ./backend
 COPY configs ./configs
+COPY docs/database_tables ./docs/database_tables
 COPY integrations ./integrations
 # Only bundle governed schema seeds. Delivered business CSV files may contain
 # customer data and are mounted read-only at runtime.

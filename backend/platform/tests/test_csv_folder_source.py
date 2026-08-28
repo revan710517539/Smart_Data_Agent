@@ -82,7 +82,9 @@ class CSVFolderSourceTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             output_root = Path(tmpdir) / "crawler-output"
             (output_root / "华兴银行").mkdir(parents=True)
-            (output_root / "华兴银行" / "loan.csv").write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            approved = output_root / "华兴银行" / "loan.csv"
+            approved.write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            self._write_manifest(output_root, "tenant:华兴银行", "华兴银行", approved)
             with patch.dict(
                 os.environ,
                 {
@@ -124,7 +126,9 @@ class CSVFolderSourceTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             app_data = Path(tmpdir) / "app-data"
             (app_data / "华兴银行").mkdir(parents=True)
-            (app_data / "华兴银行" / "loan.csv").write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            approved = app_data / "华兴银行" / "loan.csv"
+            approved.write_text("机构,金额\n华兴银行,1\n", encoding="utf-8")
+            self._write_manifest(app_data, "tenant:华兴银行", "华兴银行", approved)
             with patch.dict(
                 os.environ,
                 {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": "", "DATA_CRAWLER_OUTPUT_DIR": ""},
@@ -241,6 +245,25 @@ class CSVFolderSourceTest(unittest.TestCase):
                 [item["tableNameCn"] for item in tables],
                 ["双周报业务进度查询_2026-08-14", "标品双周会周度sql_2026-05-06"],
             )
+
+    def test_sql_hash_and_run_suffix_are_hidden_but_keep_same_name_sqls_distinct(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "经营日报__0123456789_2026-08-28__ra1b2c3d4.csv").write_text(
+                "机构,金额\nA,1\n", encoding="utf-8"
+            )
+            (root / "经营日报__abcdef0123_2026-08-28__re5f6a7b8.csv").write_text(
+                "机构,金额\nA,2\n", encoding="utf-8"
+            )
+
+            tables = CSVFolderSource(root).table_assets()
+
+            self.assertEqual(len(tables), 2)
+            self.assertEqual(
+                {item["tableNameCn"] for item in tables},
+                {"经营日报_2026-08-28"},
+            )
+            self.assertEqual(len({item["sourceKey"] for item in tables}), 2)
 
     def test_source_key_stays_stable_across_timestamped_delivery_dates(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -558,7 +581,37 @@ class CSVFolderSourceTest(unittest.TestCase):
             self.assertEqual(wrong["contract_error"], "crawler_tenant_directory_mapping_missing")
             self.assertEqual(wrong["files"], [])
 
-    def test_slug_directory_manifest_fails_closed_instead_of_overriding_chinese_crawler_directory(self) -> None:
+    def test_empty_manifest_file_list_does_not_expose_leftover_csv(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            institution = root / "华兴银行"
+            institution.mkdir()
+            leftover = institution / "历史遗留.csv"
+            leftover.write_text("机构,金额\n华兴银行,999\n", encoding="utf-8")
+            (root / "manifest.json").write_text(
+                json.dumps({
+                    "schema_version": "smart-data-crawler-manifest/v1",
+                    "generated_at": "2026-08-28T00:00:00+08:00",
+                    "tenants": [{
+                        "tenant_id": "tenant:华兴银行",
+                        "tenant_ids": ["tenant:华兴银行", "tenant:huaxing"],
+                        "institution_id": "huaxing",
+                        "institution_directory": "华兴银行",
+                        "schema_version": "data-crawler-csv/v1",
+                        "files": [],
+                    }],
+                }, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            source = CSVFolderSource(root, require_manifest=True).for_tenant("tenant:华兴银行")
+            snapshot = source.snapshot(force=True)
+            self.assertEqual(snapshot["contract_status"], "validated")
+            self.assertEqual(snapshot["files"], [])
+            with self.assertRaisesRegex(FileNotFoundError, "not_in_manifest"):
+                source.read("历史遗留.csv")
+
+    def test_manifest_directory_is_authoritative_across_host_layouts(self) -> None:
         with TemporaryDirectory() as tmpdir, patch.dict(
             os.environ, {"SMART_DATA_AGENT_ENV": "production"}, clear=False
         ):
@@ -574,10 +627,11 @@ class CSVFolderSourceTest(unittest.TestCase):
             source = CSVFolderSource(root).for_tenant("tenant:华兴银行")
             snapshot = source.snapshot(force=True)
 
-            self.assertEqual(snapshot["contract_status"], "invalid")
-            self.assertEqual(snapshot["contract_error"], "crawler_tenant_directory_mismatch")
-            self.assertEqual(snapshot["files"], [])
-            self.assertNotEqual(source.root, legacy.parent.resolve())
+            self.assertEqual(snapshot["contract_status"], "validated")
+            self.assertEqual(snapshot["contract_error"], "")
+            self.assertEqual([item["file_name"] for item in snapshot["files"]], ["经营日报.csv"])
+            self.assertEqual(source.root, legacy.parent.resolve())
+            self.assertEqual(source.table_assets()[0]["previewRows"][0]["机构"], "错误目录")
 
     def test_production_manifest_checksum_mismatch_fails_closed(self) -> None:
         with TemporaryDirectory() as tmpdir:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import tempfile
 import unittest
 from os import environ
@@ -14,6 +16,27 @@ from backend.platform.orchestration.workflow import _build_temporary_raw_table_p
 from backend.platform.skills.builtin.supersonic_query import build_supersonic_query_skill
 from backend.platform.skills.models import SkillRequest
 from backend.platform.tenancy import ExecutionContext
+
+
+def _write_manifest(root: Path, tenant_id: str, directory: str, files: list[Path]) -> None:
+    (root / "manifest.json").write_text(
+        json.dumps({
+            "schema_version": "smart-data-crawler-manifest/v1",
+            "generated_at": "2026-08-28T00:00:00+08:00",
+            "tenants": [{
+                "tenant_id": tenant_id,
+                "tenant_ids": [tenant_id],
+                "institution_id": tenant_id.removeprefix("tenant:"),
+                "institution_directory": directory,
+                "schema_version": "data-crawler-csv/v1",
+                "files": [{
+                    "path": path.relative_to(root / directory).as_posix(),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                } for path in files],
+            }],
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 class SelectedRawAnalysisTest(unittest.TestCase):
@@ -70,10 +93,12 @@ class SelectedRawAnalysisTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             tenant_dir = Path(temp_dir) / "华兴银行"
             tenant_dir.mkdir()
-            (tenant_dir / "经营数据.csv").write_text(
+            csv_path = tenant_dir / "经营数据.csv"
+            csv_path.write_text(
                 "日期,总完件,通过率,户均\n2026-05-01,10,50%,10\n2026-05-02,20,75%,20\n",
                 encoding="utf-8",
             )
+            _write_manifest(Path(temp_dir), "tenant:华兴银行", "华兴银行", [csv_path])
             csv_source = CSVFolderSource(temp_dir)
             table = csv_source.for_tenant("tenant:华兴银行").table_assets()[0]
             plan = _build_temporary_raw_table_plan({}, table, "分析一下这个数据")
@@ -203,10 +228,12 @@ class SelectedRawAnalysisTest(unittest.TestCase):
                 "日期,总完件\n2026-08-14,10\n",
                 encoding="utf-8",
             )
-            (newest / "20260825_094222_经营数据.csv").write_text(
+            latest_path = newest / "20260825_094222_经营数据.csv"
+            latest_path.write_text(
                 "日期,总完件\n2026-08-25,99\n",
                 encoding="utf-8",
             )
+            _write_manifest(Path(temp_dir), "tenant:华兴银行", "华兴银行", [latest_path])
             csv_source = CSVFolderSource(temp_dir)
             latest = csv_source.for_tenant("tenant:华兴银行").table_assets()[0]
             self.assertEqual(latest["relativePath"], "csv/yushu/2026-08-25/20260825_094222_经营数据.csv")
@@ -250,10 +277,12 @@ class SelectedRawAnalysisTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             tenant_dir = Path(temp_dir) / "华兴银行"
             tenant_dir.mkdir()
-            (tenant_dir / "经营数据.csv").write_text(
+            csv_path = tenant_dir / "经营数据.csv"
+            csv_path.write_text(
                 "日期,总完件,通过率,户均\n2026-05-01,10,50%,10\n2026-05-02,20,75%,20\n",
                 encoding="utf-8",
             )
+            _write_manifest(Path(temp_dir), "tenant:华兴银行", "华兴银行", [csv_path])
             with patch.dict(environ, {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": temp_dir}):
                 services = build_local_platform()
             try:
@@ -299,10 +328,12 @@ class SelectedRawAnalysisTest(unittest.TestCase):
                 "日期,总完件\n2026-08-14,10\n",
                 encoding="utf-8",
             )
-            (newest / "20260825_094222_经营数据.csv").write_text(
+            latest_path = newest / "20260825_094222_经营数据.csv"
+            latest_path.write_text(
                 "日期,总完件\n2026-08-25,99\n",
                 encoding="utf-8",
             )
+            _write_manifest(Path(temp_dir), "tenant:华兴银行", "华兴银行", [latest_path])
             with patch.dict(environ, {"SMART_DATA_AGENT_DATA_CRAWLER_ROOT": temp_dir}):
                 services = build_local_platform()
             try:

@@ -328,7 +328,7 @@ async function main() {
   await waitForEval(cdp, `[...document.querySelectorAll("button")].some((button) => button.textContent.trim().startsWith("智能分析主查询"))`);
   await assertEval(cdp, `![...document.querySelectorAll("button")].some((button) => button.textContent.trim().startsWith("描述性分析"))`, "hidden topic Skill must leave the 智能分析 + menu without disabling scene Skills");
   await navigate(cdp, `${appUrl}/self-analysis/config`);
-  await waitForEval(cdp, `document.body.innerText.includes("分析配置") && [...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增分析配置"))`);
+  await waitForEval(cdp, `document.body.innerText.includes("分析配置") && [...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增分析配置") && !button.disabled)`);
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.includes("新增分析配置"))?.click()`);
   await waitForEval(cdp, `Boolean(document.querySelector('[role="dialog"][aria-label="新增分析配置"]'))`);
   await assertEval(cdp, `!document.querySelector('[role="dialog"][aria-label="新增分析配置"]')?.innerText.includes("描述性分析")`, "hidden topic Skill must also stay out of the analysis-configuration dialog");
@@ -462,7 +462,8 @@ async function main() {
 
   await navigate(cdp, `${appUrl}/data-assets/tools`);
   await waitForEval(cdp, `document.body.innerText.includes("工具调用") && [...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增工具"))`);
-  await assertEval(cdp, `(() => { const text = document.body.innerText; return ["Confluence知识检索","Outlook邮箱调用","Teams-云文档工具","Teams-T5T工具","财务分析师"].every((name) => text.includes(name)) && !text.includes("华兴银行经营沙盘数据获取"); })()`, "an operating institution must receive the governed platform tool catalog without inheriting another institution's tool entries");
+  await waitForEval(cdp, `(() => { const text = document.body.innerText; return ["Confluence知识检索","Outlook邮箱调用","Teams-云文档工具","Teams-T5T工具","财务分析师"].every((name) => text.includes(name)); })()`);
+  await assertEval(cdp, `!document.body.innerText.includes("华兴银行经营沙盘数据获取")`, "an operating institution must receive the governed platform tool catalog without inheriting another institution's tool entries");
   await waitForEval(cdp, `[...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增工具"))`);
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.includes("新增工具"))?.click()`);
   await waitForEval(cdp, `Boolean(document.querySelector('[role="dialog"][aria-label="新增工具"]'))`);
@@ -476,7 +477,7 @@ async function main() {
   await assertEval(cdp, `!["华兴银行","广州银行","兰州银行","汉口银行","石嘴山银行","郑州银行","临商银行","瑞丰银行","南京银行","三峡银行","兴业消金"].some((institution) => ["描述性分析","归因分析","预测分析"].some((method) => document.body.innerText.includes(institution + method)))`, "institution context must live in Memory instead of duplicate topic Skills");
 
   await navigate(cdp, `${appUrl}/self-analysis/config`);
-  await waitForEval(cdp, `[...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增分析配置"))`);
+  await waitForEval(cdp, `[...document.querySelectorAll("button")].some((button) => button.textContent.includes("新增分析配置") && !button.disabled)`);
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.textContent.includes("新增分析配置"))?.click()`);
   await waitForEval(cdp, `Boolean(document.querySelector('[role="dialog"][aria-label="新增分析配置"]'))`);
   await assertEval(cdp, `(() => { const dialog = document.querySelector('[role="dialog"][aria-label="新增分析配置"]'); const rect = dialog.getBoundingClientRect(); return Math.abs(rect.left + rect.width / 2 - innerWidth / 2) < 12 && rect.top > 20 && rect.bottom < innerHeight - 20 && Boolean(dialog.querySelector('summary[aria-label="选择分析记忆"]')) && dialog.innerText.includes("只保存记忆 ID") && !dialog.innerText.includes("华兴银行描述性分析") && Boolean(dialog.querySelector('button[aria-label="关闭编辑分析配置"]')); })()`, "analysis configuration must use the centered modal and exclude institution Skills before review approval");

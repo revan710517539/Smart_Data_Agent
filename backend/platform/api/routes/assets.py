@@ -4,6 +4,7 @@ import base64
 import binascii
 import hashlib
 import re
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from time import monotonic
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from uuid import uuid4
 from backend.authz import normalize_tenant_id
 from backend.platform.api.support import first_query_value, send_route_exception
 from backend.platform.customer_segment import MAX_CUSTOMER_IDS, customer_ids_for_user
+from backend.platform.integrations.data_crawler import client_for_tenant
 from backend.platform.tenancy.catalog import list_active_tenants
 
 
@@ -42,6 +44,120 @@ _PAGE_DATA_WORKSPACE_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] 
 _PAGE_DATA_WORKSPACE_CACHE_TTL_SECONDS = 20.0
 _RELATIONSHIP_CATALOG_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 _RELATIONSHIP_CATALOG_CACHE_TTL_SECONDS = 20.0
+_CRAWLER_CATALOG_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="crawler-catalog")
+
+
+def _crawler_catalog_key(institution_id: str, sql_id: str) -> str:
+    identity = f"{str(institution_id).strip()}:{str(sql_id).strip()}"
+    return f"crawler_sql_{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:32]}"
+
+
+def _load_crawler_bindings(tenant_id: str) -> tuple[Any, dict[str, Any]]:
+    client = client_for_tenant(tenant_id)
+    return client, client.list_bindings()
+
+
+def _merge_crawler_sql_catalog(
+    tables: list[dict[str, Any]],
+    bindings: list[dict[str, Any]],
+    *,
+    institution_id: str,
+    institution_name: str,
+) -> list[dict[str, Any]]:
+    """Project every SQL script and attach only its manifest-backed CSV.
+
+    SQL catalog presence and CSV delivery presence are deliberately separate.
+    A script-only entry is visible in 原始表 for scheduling, but has no
+    ``sourceKey`` and therefore cannot enter any data consumer.
+    """
+
+    data_by_sql_id: dict[str, dict[str, Any]] = {}
+    unbound_tables: list[dict[str, Any]] = []
+    for source in tables:
+        table = {**source, "dataAvailable": True, "deliveryStatus": "available"}
+        sql_id = str(table.get("sqlId") or "").strip()
+        if sql_id:
+            current = data_by_sql_id.get(sql_id)
+            current_time = str((current or {}).get("crawlerFinishedAt") or (current or {}).get("updatedAt") or "")
+            candidate_time = str(table.get("crawlerFinishedAt") or table.get("updatedAt") or "")
+            if current is None or candidate_time > current_time:
+                data_by_sql_id[sql_id] = table
+        else:
+            unbound_tables.append(table)
+
+    projected: list[dict[str, Any]] = []
+    seen_sql_ids: set[str] = set()
+    for source_binding in bindings:
+        binding = dict(source_binding) if isinstance(source_binding, dict) else {}
+        sql_id = str(binding.get("sqlId") or "").strip()
+        if (
+            not sql_id
+            or sql_id in seen_sql_ids
+            or str(binding.get("institutionId") or "").strip() != institution_id
+        ):
+            continue
+        seen_sql_ids.add(sql_id)
+        catalog_key = _crawler_catalog_key(institution_id, sql_id)
+        delivered = data_by_sql_id.pop(sql_id, None)
+        if delivered is not None:
+            projected.append({
+                **delivered,
+                "catalogKey": catalog_key,
+                "sqlId": sql_id,
+                "sqlName": str(binding.get("sqlName") or delivered.get("tableNameCn") or sql_id),
+                "sqlParameters": [dict(item) for item in binding.get("parameters") or [] if isinstance(item, dict)],
+                "dataAvailable": True,
+                "deliveryStatus": "available",
+            })
+            continue
+        sql_name = str(binding.get("sqlName") or sql_id)
+        projected.append({
+            "id": catalog_key,
+            "assetId": f"raw-script:{catalog_key}",
+            "catalogKey": catalog_key,
+            "tableNameEn": sql_id,
+            "tableNameCn": sql_name,
+            "sqlName": sql_name,
+            "source": "Data Crawler SQL 目录",
+            "tableType": "sql_script",
+            "primaryKey": "",
+            "primaryKeys": [],
+            "dateField": "",
+            "orgField": "",
+            "customerField": "",
+            "description": "SQL 脚本已同步，尚未执行并交付 CSV。",
+            "updateFrequency": "按手动刷新或定时任务执行",
+            "restrictions": "仅可配置和执行；生成有效 CSV 前不会进入分析、页面数据、表关系、周报或可视化。",
+            "exampleSql": "",
+            "fields": [],
+            "updatedAt": str((binding.get("latestDelivery") or {}).get("finishedAt") or ""),
+            "rowCount": 0,
+            "previewRows": [],
+            "sqlId": sql_id,
+            "sqlParameters": [dict(item) for item in binding.get("parameters") or [] if isinstance(item, dict)],
+            "institutionId": institution_id,
+            "institutionName": institution_name,
+            "sourcePlatform": "毓数",
+            "dataAvailable": False,
+            "deliveryStatus": "not_executed",
+            "lifecycleStatus": "active",
+            "assetVersion": str(binding.get("sqlTemplateSha256") or "")[:16],
+            "schemaVersion": "crawler_sql_catalog_v1",
+            "lockVersion": 1,
+        })
+
+    # A manifest-backed CSV remains usable if its SQL was later removed from
+    # the live catalog.  It stays data-backed, but cannot be refreshed or
+    # scheduled until the producer restores the binding.
+    for sql_id, table in data_by_sql_id.items():
+        projected.append({
+            **table,
+            "catalogKey": _crawler_catalog_key(institution_id, sql_id),
+            "dataAvailable": True,
+            "deliveryStatus": "binding_missing",
+        })
+    projected.extend(unbound_tables)
+    return projected
 
 
 def _csv_table_assets(catalog: Any, *, wait_for_catalog: bool) -> list[dict[str, Any]]:
@@ -1282,6 +1398,13 @@ def handle_data_assets_get(handler: Any, query: str) -> None:
                 "count": {key: len(value) for key, value in bundle.items()},
             })
             return
+        # The SQL directory is remote while the governed asset bundle is local.
+        # Start both read-only branches together; serializing them pushed the
+        # data-management page beyond the frontend request timeout in production.
+        crawler_catalog_future = _CRAWLER_CATALOG_EXECUTOR.submit(
+            _load_crawler_bindings,
+            context.tenant_id,
+        )
         csv_catalog = handler.services.data_acquisition_service.csv_source.for_tenant(context.tenant_id)
         if not csv_catalog.catalog_ready:
             handler._send_json(
@@ -1312,13 +1435,41 @@ def handle_data_assets_get(handler: Any, query: str) -> None:
         # deleted upload or retired external source and would make the data
         # management page disagree with the analysis picker.
         references = handler.services.data_asset_store.list_raw_table_external_references(context.tenant_id)
-        bundle["raw_tables"] = [
+        csv_raw_tables = [
             _raw_table_with_metadata_overlay(
                 _raw_table_with_external_reference(item, references.get(str(item.get("sourceKey") or ""))),
                 raw_metadata_overlays.get(str(item.get("sourceKey") or "")),
             )
             for item in csv_catalog.table_assets()
         ]
+        crawler_sql_catalog: dict[str, Any]
+        try:
+            crawler_client, binding_payload = crawler_catalog_future.result()
+            binding_items = [
+                dict(item)
+                for item in binding_payload.get("items") or []
+                if isinstance(item, dict)
+            ]
+            bundle["raw_tables"] = _merge_crawler_sql_catalog(
+                csv_raw_tables,
+                binding_items,
+                institution_id=crawler_client.endpoint.institution_id,
+                institution_name=crawler_client.endpoint.institution_directory,
+            )
+            crawler_sql_catalog = {
+                "status": "ready",
+                "institution_id": crawler_client.endpoint.institution_id,
+                "script_count": len({str(item.get("sqlId") or "") for item in binding_items if item.get("sqlId")}),
+            }
+        except Exception as exc:
+            # A transient catalog/API outage must not revoke a previously
+            # delivered manifest-backed CSV.  The UI receives an explicit
+            # degraded state and keeps only verified data files available.
+            bundle["raw_tables"] = [
+                {**item, "dataAvailable": True, "deliveryStatus": "catalog_unavailable"}
+                for item in csv_raw_tables
+            ]
+            crawler_sql_catalog = {"status": "unavailable", "error": str(exc)}
         # Page data and table relationships are overlays on the live raw catalog.
         # Keep them as subsets of the current institution's 原始表, never leftover
         # configs whose CSV/upload has already left the directory.
@@ -1369,6 +1520,7 @@ def handle_data_assets_get(handler: Any, query: str) -> None:
                 "source_mode": "csv_folder",
                 "source_read_only": True,
                 "csv_source": csv_source,
+                "crawler_sql_catalog": crawler_sql_catalog,
                 "count": {key: len(value) for key, value in bundle.items()},
             }
         )

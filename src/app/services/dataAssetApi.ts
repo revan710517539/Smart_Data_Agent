@@ -88,6 +88,18 @@ export type RawTableAsset = DataAssetGovernanceFields & {
   metadataConfigId?: string;
   metadataConfigLockVersion?: number;
   metadataConfigSchemaChanged?: boolean;
+  /** Stable SQL-catalog identity, present before and after CSV delivery. */
+  catalogKey?: string;
+  /** True only when a manifest-backed CSV can be read by data consumers. */
+  dataAvailable?: boolean;
+  deliveryStatus?: "available" | "not_executed" | "binding_missing" | "catalog_unavailable";
+  sqlName?: string;
+  sqlParameters?: Array<{
+    name: string;
+    label?: string;
+    type: "date" | "month" | "datetime" | "text" | "enum" | "boolean" | "integer" | "number";
+    occurrenceCount?: number;
+  }>;
 };
 
 export type TopicTableAsset = DataAssetGovernanceFields & {
@@ -395,6 +407,12 @@ export type DataAssetBundle = {
       row_count: number;
       columns: string[];
     }>;
+  };
+  crawler_sql_catalog?: {
+    status: "ready" | "unavailable";
+    institution_id?: string;
+    script_count?: number;
+    error?: string;
   };
   raw_tables: RawTableAsset[];
   topic_tables: TopicTableAsset[];

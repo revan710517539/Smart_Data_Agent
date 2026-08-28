@@ -55,6 +55,7 @@ class CSVFolderSource:
         catalog_root: str | Path | None = None,
         contract: dict[str, Any] | None = None,
         contract_error: str = "",
+        require_manifest: bool = False,
     ) -> None:
         self.root = Path(root).expanduser().resolve()
         self._catalog_root = Path(catalog_root).expanduser().resolve() if catalog_root else self.root
@@ -72,6 +73,9 @@ class CSVFolderSource:
         self._tenant_source_contract_revisions: dict[str, str] = {}
         self._contract = dict(contract or {})
         self._contract_error = str(contract_error or "")
+        self._require_manifest = bool(require_manifest) or (
+            os.getenv("SMART_DATA_AGENT_ENV", "development").strip().lower() == "production"
+        )
         self._manifest_files = {
             str(item.get("path") or "").strip(): dict(item)
             for item in self._contract.get("files", [])
@@ -97,7 +101,10 @@ class CSVFolderSource:
             # Preserve the deployment contract even before the mount arrives:
             # the catalog stays empty until /app/data is mounted.
             root = cls.container_data_crawler_root
-        return cls(root)
+        # Application runtime uses the same manifest contract in development,
+        # test deployments and production.  Direct CSVFolderSource instances
+        # remain available to bounded unit tests and offline migration tools.
+        return cls(root, require_manifest=True)
 
     def for_tenant(self, tenant_id: str) -> "CSVFolderSource":
         """Return the sole approved raw-data directory for one tenant.
@@ -106,7 +113,7 @@ class CSVFolderSource:
         is absent, the caller receives an empty catalog rather than another
         institution's files.
         """
-        required_manifest = os.getenv("SMART_DATA_AGENT_ENV", "development").strip().lower() == "production"
+        required_manifest = self._require_manifest
         contract: dict[str, Any] | None = None
         contract_error = ""
         try:
@@ -116,9 +123,11 @@ class CSVFolderSource:
         # Data Crawler publishes business CSVs below the Chinese institution
         # name.  Its opaque English institution ID is only an API/catalog
         # identifier and must never become an SDA filesystem path.
-        directory = tenant_directory_name(tenant_id)
-        if contract and str(contract.get("institution_directory") or "").strip() != directory:
-            contract_error = "crawler_tenant_directory_mismatch"
+        directory = (
+            str(contract.get("institution_directory") or "").strip()
+            if contract
+            else tenant_directory_name(tenant_id)
+        )
         if contract_error:
             directory = f".unmapped-{hashlib.sha256(str(tenant_id).encode('utf-8')).hexdigest()[:16]}"
         with self._catalog_lock:
@@ -147,10 +156,15 @@ class CSVFolderSource:
                     # A versioned production manifest is the complete delivery
                     # boundary. Legacy source-id folders remain a development
                     # compatibility path only and cannot widen that boundary.
-                    additional_roots=() if contract else self._crawler_source_roots(directory),
+                    additional_roots=(
+                        ()
+                        if contract or required_manifest
+                        else self._crawler_source_roots(directory)
+                    ),
                     catalog_root=self.root,
                     contract=contract,
                     contract_error=contract_error,
+                    require_manifest=required_manifest,
                 )
                 self._tenant_sources[cache_key] = source
                 self._tenant_source_contract_revisions[cache_key] = contract_revision
@@ -246,7 +260,10 @@ class CSVFolderSource:
                     resolved = path.resolve()
                     if not any(resolved == root or root in resolved.parents for root in self._roots):
                         continue
-                    if manifest_files and self._relative_path(resolved) not in manifest_files:
+                    # A present contract is an exact allow-list even when the
+                    # list is empty.  Treating an empty list as "no filter"
+                    # leaked leftover CSVs into script-only institutions.
+                    if self._contract and self._relative_path(resolved) not in manifest_files:
                         continue
                     if self._is_auxiliary_artifact(resolved):
                         continue
@@ -335,6 +352,8 @@ class CSVFolderSource:
         """Resolve one catalog path within this tenant's approved roots."""
 
         requested = str(relative_path)
+        if self._contract and requested not in self._manifest_files:
+            raise FileNotFoundError("csv_source_file_not_in_manifest")
         candidates = tuple(dict.fromkeys(((self.root / requested).resolve(), (self._catalog_root / requested).resolve())))
         allowed_candidate_seen = False
         for candidate in candidates:
@@ -673,6 +692,8 @@ def _delivery_name_parts(relative_path: str) -> tuple[str, str]:
 
 def _clean_delivery_title(value: str) -> str:
     title = str(value or "").strip().strip("_-. ")
+    title = re.sub(r"__+r[0-9a-f]{8}$", "", title, flags=re.I).strip("_-. ")
+    title = re.sub(r"__[0-9a-f]{10}$", "", title, flags=re.I)
     return re.sub(r"[_\-.\s]{2,}", "_", title).strip("_")
 
 
@@ -686,6 +707,11 @@ def _source_identity(relative_path: str) -> str:
     # or `题目_YYYY-MM-DD.csv`. The run timestamp and calendar date are delivery
     # versions, not part of the logical source identity.
     stem, _delivery_version = _delivery_name_parts(relative_path)
+    sql_identity_match = re.search(r"__([0-9a-f]{10})_\d{4}-\d{2}-\d{2}", path.stem, re.I)
+    if sql_identity_match:
+        # The hash is hidden from the display title but retained in identity,
+        # so two distinct SQLs with the same name never share a sourceKey.
+        stem = f"{stem}__sql_{sql_identity_match.group(1).lower()}"
     stem = re.sub(r"[_\-.\s]+", "_", stem).strip("_").casefold()
     parent = path.parent
     if len(path.parts) >= 4 and path.parts[0].casefold() == "csv" and re.fullmatch(r"\d{4}-\d{2}-\d{2}", path.parts[-2]):

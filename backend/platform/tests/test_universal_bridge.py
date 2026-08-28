@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+import hashlib
 import json
 import os
 import subprocess
@@ -15,6 +16,27 @@ from unittest.mock import patch
 from backend.platform.api.server import create_server
 from backend.platform.ingestion.topic_data import TopicDataStore
 from backend.platform.integrations.bridge_connectors import BridgeConnectorRegistry
+
+
+def _write_manifest(root: Path, tenant_id: str, directory: str, files: list[Path]) -> None:
+    (root / "manifest.json").write_text(
+        json.dumps({
+            "schema_version": "smart-data-crawler-manifest/v1",
+            "generated_at": "2026-08-28T00:00:00+08:00",
+            "tenants": [{
+                "tenant_id": tenant_id,
+                "tenant_ids": [tenant_id],
+                "institution_id": tenant_id.removeprefix("tenant:"),
+                "institution_directory": directory,
+                "schema_version": "data-crawler-csv/v1",
+                "files": [{
+                    "path": path.relative_to(root / directory).as_posix(),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                } for path in files],
+            }],
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def _connector(connector_id: str, base_url: str) -> dict:
@@ -245,7 +267,9 @@ class UniversalBridgeHTTPTest(unittest.TestCase):
             root = Path(tmpdir) / "csv"
             tenant_dir = root / "tenant_demo"
             tenant_dir.mkdir(parents=True)
-            (tenant_dir / "authorized.csv").write_text("机构,金额\nA,10\n", encoding="utf-8")
+            authorized = tenant_dir / "authorized.csv"
+            authorized.write_text("机构,金额\nA,10\n", encoding="utf-8")
+            _write_manifest(root, "tenant_demo", "tenant_demo", [authorized])
             environment = {
                 "SMART_DATA_AGENT_REPORT_INGRESS_BINDINGS_JSON": bindings,
                 "SMART_DATA_AGENT_DATA_CRAWLER_ROOT": str(root),

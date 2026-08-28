@@ -73,6 +73,7 @@ import {
   fetchDataCrawlerSchedule,
   fetchDataCrawlerScheduleExecution,
   fetchDataCrawlerScheduleStatuses,
+  refreshDataCrawlerSchedule,
   saveDataCrawlerSchedule,
   testDataCrawlerSchedule,
   type DataCrawlerScheduleDraft,
@@ -1278,7 +1279,12 @@ function catalogTenantId(value: string) {
 }
 
 function currentRawSourceKeys(tables: RawTableAsset[]) {
-  return new Set(tables.map((item) => String(item.sourceKey || "").trim()).filter(Boolean));
+  return new Set(
+    tables
+      .filter((item) => item.dataAvailable !== false)
+      .map((item) => String(item.sourceKey || "").trim())
+      .filter(Boolean),
+  );
 }
 
 function localSourceKeys(entries: Array<{ tenantId?: string; sourceKey?: string }>, tenantId: string) {
@@ -1315,7 +1321,12 @@ function useDataAssetBundle(tenantId: string, userId: string, scope?: "knowledge
     const syncAssets = async () => {
       setNotice("资产配置同步中...");
       try {
-        const response = await fetchDataAssets({ tenantId, userId, scope });
+        const response = await fetchDataAssets({
+          tenantId,
+          userId,
+          scope,
+          forceRefresh: refreshToken > 0,
+        });
         if (response.status === "loading") {
           if (!cancelled) {
             setNotice(response.message || "当前机构 Data Crawler 原始数据正在准备中，请稍候...");
@@ -1325,7 +1336,9 @@ function useDataAssetBundle(tenantId: string, userId: string, scope?: "knowledge
         }
         if (!cancelled) {
           setBundle(response);
-          setNotice("");
+          setNotice(response.crawler_sql_catalog?.status === "unavailable"
+            ? "Data Crawler SQL 目录暂不可用；已交付 CSV 仍可使用，但暂不显示尚未执行的脚本。"
+            : "");
         }
       } catch (error) {
         if (!cancelled) {
@@ -1427,7 +1440,8 @@ function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { search
   const singlePageDataAssets = catalogPageData.filter((item) => pageDataScope(item) === "single_institution" && assetMatches(item, keyword)).sort(sortAssetNewestFirst);
   const multiPageDataAssets = catalogPageData.filter((item) => pageDataScope(item) === "multi_institution" && assetMatches(item, keyword)).sort(sortAssetNewestFirst);
   const customerSegmentPageDataAssets = catalogPageData.filter((item) => pageDataScope(item) === "customer_segment" && assetMatches(item, keyword)).sort(sortAssetNewestFirst);
-  const customerDetailTables = bundle.raw_tables.filter((item) => Boolean(customerDetailTableKey(item)));
+  const dataBackedRawTables = rawTables.filter((item) => item.dataAvailable !== false);
+  const customerDetailTables = dataBackedRawTables.filter((item) => Boolean(customerDetailTableKey(item)));
   const rawPageCount = Math.max(1, Math.ceil(rawTables.length / dataTablePageSize));
   const topicPageCount = Math.max(1, Math.ceil(topicTables.length / dataTablePageSize));
   const singlePageDataPageCount = Math.max(1, Math.ceil(singlePageDataAssets.length / dataTablePageSize));
@@ -1674,7 +1688,7 @@ function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { search
                 table={table}
                 tenantId={tenantId}
                 userId={userId}
-                scheduleStatus={table.sourceKey ? dataCrawlerScheduleStatuses[table.sourceKey] : undefined}
+                scheduleStatus={dataCrawlerScheduleStatuses[table.catalogKey || table.sourceKey || ""]}
                 onScheduleStatusChange={(sourceKey, status) => setDataCrawlerScheduleStatuses((current) => {
                   const next = { ...current };
                   if (status) next[sourceKey] = status;
@@ -1771,7 +1785,7 @@ function DataManagement({ searchTerm, tenantId, userId, isSuperAdmin }: { search
       )}
       {pageDataEditor && <PageDataCreateModal
         scope={pageDataEditor.scope}
-        rawTables={pageDataEditor.scope === "customer_segment" ? customerDetailTables : rawTables}
+        rawTables={pageDataEditor.scope === "customer_segment" ? customerDetailTables : dataBackedRawTables}
         multiInstitutionCandidates={multiInstitutionCandidates}
         candidatesLoading={multiCandidatesLoading}
         candidatesError={multiCandidatesError}
@@ -2943,12 +2957,14 @@ function DataCrawlerSchedulePanel({
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState("");
   const [configurationUnavailable, setConfigurationUnavailable] = useState(false);
+  const scheduleKey = table.catalogKey || table.sourceKey || "";
+  const sqlId = table.sqlId || "";
 
   const reload = async () => {
-    if (!table.sourceKey) return null;
+    if (!sqlId) return null;
     setLoading(true);
     try {
-      const response = await fetchDataCrawlerSchedule({ tenantId, userId, sourceKey: table.sourceKey });
+      const response = await fetchDataCrawlerSchedule({ tenantId, userId, sourceKey: scheduleKey, sqlId });
       const nextDraft = defaultDataCrawlerDraft(response);
       setState(response);
       setDraft(nextDraft);
@@ -2963,32 +2979,28 @@ function DataCrawlerSchedulePanel({
     }
   };
 
-  useEffect(() => { void reload(); }, [table.sourceKey, table.contentHash, tenantId, userId]);
+  useEffect(() => { void reload(); }, [table.sourceKey, table.contentHash, sqlId, tenantId, userId]);
 
   const runRefresh = async () => {
-    if (!table.sourceKey) return;
+    if (!sqlId || !draft) return;
     setRefreshing(true);
-    setNotice("正在根据当前数据表重新关联 Data Crawler SQL 并读取参数…");
+    setNotice("正在执行当前机构的唯一 SQL，并等待最新 CSV 交付…");
     try {
-      const refreshed = await reload();
-      if (!refreshed?.binding) throw new Error("当前数据表未携带唯一 SQL 血缘，请先在 Data Crawler 重新运行对应脚本生成文件。");
-      const nextState = {
-        ...(refreshed || state || {}),
-        tenant_id: refreshed?.tenant_id || state?.tenant_id || tenantId,
-        source_key: table.sourceKey,
-        institution_id: refreshed?.institution_id || state?.institution_id || "",
-        institution_directory: refreshed?.institution_directory || state?.institution_directory || "",
-        validation_required: true,
-        available_bindings: refreshed?.available_bindings || state?.available_bindings || [],
-        task: refreshed?.task || state?.task || null,
-        binding: refreshed.binding,
-      };
-      const nextDraft = defaultDataCrawlerDraft(nextState);
-      setState(nextState);
-      setDraft(nextDraft);
-      setNotice("已按当前数据表自动关联唯一 SQL，并读取参数配置；未执行脚本。");
+      const started = await refreshDataCrawlerSchedule({ tenantId, userId, sourceKey: scheduleKey, sqlId, draft });
+      const deadline = Date.now() + 30 * 60 * 1000;
+      let current = started.run;
+      while (!["succeeded", "failed"].includes(current.status) && Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1_500));
+        current = (await fetchDataCrawlerScheduleExecution({ tenantId, userId, runId: started.run.runId })).run;
+      }
+      if (current.status !== "succeeded") {
+        if (current.status === "failed") throw new Error(current.message || "刷新执行失败");
+        throw new Error("刷新执行等待超时");
+      }
+      setNotice("刷新完成：最新成功 CSV 已覆盖该 SQL 的历史版本，数据表与表结构正在更新。");
+      onDataDelivered();
     } catch (error) {
-      setNotice(apiErrorMessage(error, "刷新失败，请确认 Data Crawler 可连通后重试。"));
+      setNotice(apiErrorMessage(error, "刷新失败，请检查 SQL、参数、毓数会话和 Data Crawler 交付链路。"));
     } finally {
       setRefreshing(false);
     }
@@ -2997,7 +3009,7 @@ function DataCrawlerSchedulePanel({
   const refreshButton = (
     <button
       type="button"
-      disabled={refreshing || loading || !table.sourceKey}
+      disabled={refreshing || loading || !sqlId || !draft}
       onClick={() => void runRefresh()}
       className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-[#d9dedb] bg-white px-3.5 text-[12px] font-medium text-[#3f4843] transition-colors hover:bg-[#f4f6f5] focus:outline-none focus:ring-2 focus:ring-[#dceee4] disabled:cursor-not-allowed disabled:opacity-50"
     >
@@ -3006,14 +3018,14 @@ function DataCrawlerSchedulePanel({
     </button>
   );
 
-  if (!table.sourceKey) return <div className="p-4"><div className="flex items-start gap-3 rounded-lg border border-[#f3d5d0] bg-[#fff8f7] px-4 py-3 text-[11px] leading-5 text-[#a83c32]"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><div className="font-medium">暂时无法设置定时任务</div><div className="mt-0.5 text-[#8d5b55]">当前 CSV 缺少稳定来源标识，请先重新同步数据资产。</div></div></div></div>;
+  if (!sqlId) return <div className="p-4"><div className="flex items-start gap-3 rounded-lg border border-[#f3d5d0] bg-[#fff8f7] px-4 py-3 text-[11px] leading-5 text-[#a83c32]"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><div className="font-medium">暂时无法设置定时任务</div><div className="mt-0.5 text-[#8d5b55]">当前 CSV 缺少 Data Crawler SQL 血缘，请先修复交付清单。</div></div></div></div>;
   if (loading && !state && !refreshing) return <div className="flex min-h-[140px] items-center justify-center gap-2 p-4 text-[11px] text-[#8a8a8e]"><RefreshCw className="h-3.5 w-3.5 animate-spin" />正在读取定时任务配置…</div>;
   if (!state || !draft) {
     return (
       <div className="flex items-start justify-between gap-4 px-5 py-5">
         <div className="min-w-0 text-[11px] leading-5 text-[#7a837e]">
           <div className="font-medium text-[#4e5752]">暂未读取到定时任务配置</div>
-          <div className="mt-1">打开 Tab 或点击刷新只会按当前数据表自动关联唯一 SQL，并读取参数信息；只有点击测试或执行时才会进入执行链路。{configurationUnavailable ? "若连接失败，请确认 Data Crawler 可用后重试。" : ""}</div>
+          <div className="mt-1">打开 Tab 只读取 SQL 参数与定时配置；点击刷新会立即执行 SQL 并交付最新 CSV。{configurationUnavailable ? "若连接失败，请确认 Data Crawler 可用后重试。" : ""}</div>
           {notice ? <div className={`mt-2 ${notice.includes("失败") ? "text-[#a83c32]" : "text-[#087647]"}`}>{notice}</div> : null}
         </div>
         {refreshButton}
@@ -3022,7 +3034,6 @@ function DataCrawlerSchedulePanel({
   }
 
   const binding = state.binding;
-  const unsupported = (binding?.parameters || []).filter((item) => !["date", "month", "datetime"].includes(item.type));
   const mutateParameter = (name: string, mode: string) => {
     setDraft((current) => {
       if (!current) return current;
@@ -3045,11 +3056,11 @@ function DataCrawlerSchedulePanel({
   };
 
   const testConnection = async () => {
-    if (!binding || unsupported.length) return;
+    if (!binding) return;
     setTesting(true);
     setNotice("正在按当前机构与唯一 SQL 执行一次测试，并等待 CSV 交付…");
     try {
-      const result = await testDataCrawlerSchedule({ tenantId, userId, sourceKey: table.sourceKey!, draft });
+      const result = await testDataCrawlerSchedule({ tenantId, userId, sourceKey: scheduleKey, sqlId, draft });
       const deadline = Date.now() + 30 * 60 * 1000;
       let current: { runId?: string; status: string; message?: string; sqlId?: string } = result.run;
       while (!["succeeded", "failed"].includes(current.status) && Date.now() < deadline) {
@@ -3070,13 +3081,13 @@ function DataCrawlerSchedulePanel({
   };
 
   const save = async (execute: boolean) => {
-    if (!binding || unsupported.length) return;
+    if (!binding) return;
     setLoading(true);
     setNotice(execute ? "正在校验连接与交付回执，验证通过后立即执行…" : "正在校验连接与交付回执，验证通过后保存配置…");
     try {
       if (execute) {
-        const result = await executeDataCrawlerSchedule({ tenantId, userId, sourceKey: table.sourceKey!, draft });
-        onScheduleStatusChange(table.sourceKey!, dataCrawlerScheduleListStatus(result.task, draft));
+        const result = await executeDataCrawlerSchedule({ tenantId, userId, sourceKey: scheduleKey, sqlId, draft });
+        onScheduleStatusChange(scheduleKey, dataCrawlerScheduleListStatus(result.task, draft));
         const deadline = Date.now() + 30 * 60 * 1000;
         while (Date.now() < deadline) {
           await new Promise((resolve) => window.setTimeout(resolve, 1_500));
@@ -3090,8 +3101,8 @@ function DataCrawlerSchedulePanel({
         }
         throw new Error("数据拉取等待超时");
       } else {
-        const result = await saveDataCrawlerSchedule({ tenantId, userId, sourceKey: table.sourceKey!, draft });
-        onScheduleStatusChange(table.sourceKey!, dataCrawlerScheduleListStatus(result.task, draft));
+        const result = await saveDataCrawlerSchedule({ tenantId, userId, sourceKey: scheduleKey, sqlId, draft });
+        onScheduleStatusChange(scheduleKey, dataCrawlerScheduleListStatus(result.task, draft));
         await reload();
         setNotice(draft.recurrence === "none" ? "配置已保存；点击执行可立即拉取一次。" : "定时任务已保存，将按设置自动执行。");
       }
@@ -3105,11 +3116,11 @@ function DataCrawlerSchedulePanel({
   const clear = async () => {
     setLoading(true);
     try {
-      await clearDataCrawlerSchedule({ tenantId, userId, sourceKey: table.sourceKey! });
-      const refreshed = await fetchDataCrawlerSchedule({ tenantId, userId, sourceKey: table.sourceKey! });
+      await clearDataCrawlerSchedule({ tenantId, userId, sourceKey: scheduleKey, sqlId });
+      const refreshed = await fetchDataCrawlerSchedule({ tenantId, userId, sourceKey: scheduleKey, sqlId });
       setState(refreshed);
       setDraft(defaultDataCrawlerDraft({ ...refreshed, task: null }));
-      onScheduleStatusChange(table.sourceKey!, null);
+      onScheduleStatusChange(scheduleKey, null);
       setNotice("设置已清空，Data Crawler 本地任务不再受 SDA 控制。");
     } catch (error) {
       setNotice(apiErrorMessage(error, "取消定时任务失败"));
@@ -3127,7 +3138,7 @@ function DataCrawlerSchedulePanel({
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 leading-5 text-[#7a837e]">
             <div className="font-medium text-[#4e5752]">当前数据表缺少唯一的 SQL 血缘</div>
-            <p className="mt-1 text-[10px]">系统只会按当前表的任务 ID 或同机构唯一名称自动关联，不允许手动切换到其他 SQL。点击刷新只重新读取关联与参数，不会执行脚本。</p>
+            <p className="mt-1 text-[10px]">系统只允许执行当前机构、当前条目绑定的唯一 SQL；点击刷新会立即执行并生成最新 CSV。</p>
             {notice ? <div className={`mt-2 text-[11px] ${notice.includes("失败") ? "text-[#a83c32]" : "text-[#087647]"}`}>{notice}</div> : null}
           </div>
           {refreshButton}
@@ -3158,7 +3169,7 @@ function DataCrawlerSchedulePanel({
           </div>
           <div className="mt-5 border-t border-[#e8ece9] pt-3.5">
               <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2"><GitBranch className="h-3.5 w-3.5 text-[#7d8781]" /><div className="text-[12px] font-medium text-[#424b46]">SQL 时间参数</div></div>
+                <div className="flex items-center gap-2"><GitBranch className="h-3.5 w-3.5 text-[#7d8781]" /><div className="text-[12px] font-medium text-[#424b46]">SQL 参数</div></div>
                 <span className="shrink-0 text-[10px] text-[#929a96]">{binding.parameters.length} 个</span>
               </div>
               {!binding.parameters.length && <div className="mt-3 flex items-center gap-2 text-[10px] text-[#7a837e]"><CheckCircle2 className="h-3.5 w-3.5 text-[#0f8f58]" />该 SQL 无需参数，可手动执行，也可按所选周期自动运行。</div>}
@@ -3197,7 +3208,28 @@ function DataCrawlerSchedulePanel({
                           )}
                         </div>
                       </>
-                    ) : <div className="flex min-h-9 items-center text-[11px] text-[#a83c32] md:col-span-2">非时间参数当前仅展示，暂不允许在 SDA 中改写。</div>}
+                    ) : (
+                      <div className="md:col-span-2">
+                        <span className="mb-1.5 block text-[11px] font-medium text-[#626b66]">固定值</span>
+                        {parameter.type === "boolean" ? (
+                          <ScheduleSelect
+                            label={`${parameter.name} 固定值`}
+                            value={fixedValue || "true"}
+                            onValueChange={(value) => setDraft({ ...draft, parameters: { ...draft.parameters, [parameter.name]: value } })}
+                            options={[{ value: "true", label: "是" }, { value: "false", label: "否" }]}
+                          />
+                        ) : (
+                          <input
+                            aria-label={`${parameter.name} 固定值`}
+                            type={parameter.type === "integer" || parameter.type === "number" ? "number" : "text"}
+                            className={scheduleControlClass}
+                            value={fixedValue}
+                            placeholder={`请输入 ${parameter.label || parameter.name}`}
+                            onChange={(event) => setDraft({ ...draft, parameters: { ...draft.parameters, [parameter.name]: event.target.value } })}
+                          />
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}</div>}
@@ -3208,9 +3240,9 @@ function DataCrawlerSchedulePanel({
       <div className="mt-4 flex items-center justify-end">
         <div className="flex shrink-0 items-center justify-end gap-2">
           <button type="button" title="清空 SDA 中的全部设置并释放控制权" disabled={loading || testing} onClick={() => void clear()} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-transparent px-3 text-[12px] text-[#707873] transition-colors hover:border-[#dfe3e1] hover:bg-[#fafbfa] disabled:cursor-not-allowed disabled:opacity-50"><RotateCcw className="h-3.5 w-3.5" />取消</button>
-          <button type="button" disabled={loading || testing || !binding || Boolean(unsupported.length)} onClick={() => void testConnection()} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#d9dedb] bg-white px-3.5 text-[12px] font-medium text-[#3f4843] transition-colors hover:bg-[#f4f6f5] focus:outline-none focus:ring-2 focus:ring-[#dceee4] disabled:cursor-not-allowed disabled:opacity-50">{testing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}{testing ? "测试中…" : "测试"}</button>
-          <button type="button" disabled={loading || testing || !binding || Boolean(unsupported.length)} onClick={() => void save(false)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#d9dedb] bg-white px-3.5 text-[12px] font-medium text-[#3f4843] transition-colors hover:bg-[#f4f6f5] focus:outline-none focus:ring-2 focus:ring-[#dceee4] disabled:cursor-not-allowed disabled:opacity-50"><Save className="h-3.5 w-3.5" />确定</button>
-          <button type="button" disabled={loading || testing || !binding || Boolean(unsupported.length)} onClick={() => void save(true)} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#0f8f58] px-4 text-[12px] font-medium text-white shadow-sm shadow-[#0f8f58]/15 transition-colors hover:bg-[#0b7d4c] focus:outline-none focus:ring-2 focus:ring-[#b9dfca] disabled:cursor-not-allowed disabled:opacity-50">{loading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}{loading ? "处理中…" : "执行"}</button>
+          <button type="button" disabled={loading || testing || !binding} onClick={() => void testConnection()} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#d9dedb] bg-white px-3.5 text-[12px] font-medium text-[#3f4843] transition-colors hover:bg-[#f4f6f5] focus:outline-none focus:ring-2 focus:ring-[#dceee4] disabled:cursor-not-allowed disabled:opacity-50">{testing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}{testing ? "测试中…" : "测试"}</button>
+          <button type="button" disabled={loading || testing || !binding} onClick={() => void save(false)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#d9dedb] bg-white px-3.5 text-[12px] font-medium text-[#3f4843] transition-colors hover:bg-[#f4f6f5] focus:outline-none focus:ring-2 focus:ring-[#dceee4] disabled:cursor-not-allowed disabled:opacity-50"><Save className="h-3.5 w-3.5" />确定</button>
+          <button type="button" disabled={loading || testing || !binding} onClick={() => void save(true)} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#0f8f58] px-4 text-[12px] font-medium text-white shadow-sm shadow-[#0f8f58]/15 transition-colors hover:bg-[#0b7d4c] focus:outline-none focus:ring-2 focus:ring-[#b9dfca] disabled:cursor-not-allowed disabled:opacity-50">{loading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}{loading ? "处理中…" : "执行"}</button>
         </div>
       </div>
     </div>
@@ -3240,7 +3272,8 @@ function RawTableCard({
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draftFields, setDraftFields] = useState(() => normalizeFieldSemantics(table.fields, [table.primaryKey]));
-  const [activeDetailTab, setActiveDetailTab] = useState<"preview" | "metadata" | "schedule">("preview");
+  const dataAvailable = table.dataAvailable !== false;
+  const [activeDetailTab, setActiveDetailTab] = useState<"preview" | "metadata" | "schedule">(dataAvailable ? "preview" : "schedule");
   const previewHeaders = Object.keys(table.previewRows?.[0] || {}).length
     ? Object.keys(table.previewRows?.[0] || {})
     : table.fields.map((field) => field.fieldNameCn || field.fieldNameEn);
@@ -3248,6 +3281,10 @@ function RawTableCard({
   useEffect(() => {
     if (!editing) setDraftFields(normalizeFieldSemantics(table.fields, [table.primaryKey]));
   }, [editing, table]);
+
+  useEffect(() => {
+    if (!dataAvailable) setActiveDetailTab("schedule");
+  }, [dataAvailable]);
 
   const save = async () => {
     setSaving(true);
@@ -3269,13 +3306,14 @@ function RawTableCard({
             <Database className="h-4 w-4 shrink-0 text-[#8a8a8e]" />
             <h4 className="min-w-0 max-w-[320px] truncate text-[13px] text-[#1d1d1f]" title={table.tableNameCn}>{table.tableNameCn}</h4>
             {scheduleStatus?.scheduled && <span className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-[#e5f5ec] px-2 text-[10px] font-medium text-[#087647]" title={`已启用${scheduleStatus.recurrence || "循环"}定时任务${scheduleStatus.next_run_at ? `；下次执行 ${scheduleStatus.next_run_at}` : ""}`}><CalendarClock className="h-3 w-3" />已定时</span>}
+            {!dataAvailable && <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-[#fff4df] px-2 text-[10px] font-medium text-[#9a6700]">仅 SQL · 待刷新</span>}
             <span className="shrink-0 font-mono text-[11px] text-[#8a8a8e]">{table.tableNameEn}</span>
             {table.fileName && <span className="min-w-0 max-w-[280px] truncate rounded-full border border-[#e5e5ea] bg-white px-2 py-0.5 text-[10px] text-[#636366]" title={table.fileName} data-raw-table-file-name="true">文件：{table.fileName}</span>}
           </div>
-          <p className="mt-1 text-[11px] leading-[1.6] text-[#636366]">更新时间：{formatAssetTime(table.updatedAt)}</p>
+          <p className="mt-1 text-[11px] leading-[1.6] text-[#636366]">{dataAvailable ? `数据更新时间：${formatAssetTime(table.crawlerFinishedAt || table.updatedAt)}` : "尚未生成 CSV；可在定时任务中手动刷新或设置周期。"}</p>
         </div>
         <div className="flex shrink-0 flex-nowrap items-center gap-2 self-end whitespace-nowrap lg:self-start" data-raw-table-actions="true">
-          <label className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] text-[#636366]">
+          {dataAvailable && <label className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] text-[#636366]">
             <span>外部引用</span>
             <select
               aria-label={`${table.tableNameCn} 外部引用`}
@@ -3288,29 +3326,32 @@ function RawTableCard({
               <option value="private">单独使用</option>
               <option value="shared">可分享</option>
             </select>
-          </label>
-          <span className="h-7 shrink-0 whitespace-nowrap rounded-md border border-[#e5e5ea] bg-white px-2 py-1 text-[11px] text-[#636366]">
+          </label>}
+          {dataAvailable && <span className="h-7 shrink-0 whitespace-nowrap rounded-md border border-[#e5e5ea] bg-white px-2 py-1 text-[11px] text-[#636366]">
             CSV 文件 · {table.rowCount ?? 0} 行
-          </span>
-          <AssetEditActions
+          </span>}
+          {dataAvailable && <AssetEditActions
             editing={editing}
             saving={saving}
             onEdit={() => { setExpanded(true); setActiveDetailTab("metadata"); setEditing(true); }}
             onCancel={() => { setDraftFields(normalizeFieldSemantics(table.fields, [table.primaryKey])); setEditing(false); }}
             onSave={save}
-          />
+          />}
           <AssetCollapseButton
             expanded={expanded}
             label={expanded ? `折叠${table.tableNameCn}` : `展开${table.tableNameCn}`}
-            onClick={() => setExpanded((open) => !open)}
+            onClick={() => setExpanded((open) => {
+              if (!open && !dataAvailable) setActiveDetailTab("schedule");
+              return !open;
+            })}
           />
         </div>
       </div>
       {expanded && (
         <div className="overflow-hidden rounded-lg border border-[#f0f0f2] bg-white">
           <div className="flex items-center gap-1 border-b border-[#f0f0f2] bg-[#fafbfc] px-3 pt-2">
-            <button type="button" onClick={() => setActiveDetailTab("preview")} className={`rounded-t-md px-3 py-2 text-[11px] ${activeDetailTab === "preview" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:text-[#3a3a3c]"}`}>原始数据（前 10 行）</button>
-            <button type="button" onClick={() => setActiveDetailTab("metadata")} className={`rounded-t-md px-3 py-2 text-[11px] ${activeDetailTab === "metadata" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:text-[#3a3a3c]"}`}>字段元数据及解读</button>
+            <button type="button" disabled={!dataAvailable} onClick={() => setActiveDetailTab("preview")} className={`rounded-t-md px-3 py-2 text-[11px] disabled:cursor-not-allowed disabled:text-[#c7c7cc] ${activeDetailTab === "preview" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:text-[#3a3a3c]"}`}>数据表（前 10 行）</button>
+            <button type="button" disabled={!dataAvailable} onClick={() => setActiveDetailTab("metadata")} className={`rounded-t-md px-3 py-2 text-[11px] disabled:cursor-not-allowed disabled:text-[#c7c7cc] ${activeDetailTab === "metadata" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:text-[#3a3a3c]"}`}>表结构</button>
             <button type="button" onClick={() => setActiveDetailTab("schedule")} className={`rounded-t-md px-3 py-2 text-[11px] ${activeDetailTab === "schedule" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#8a8a8e] hover:text-[#3a3a3c]"}`}>定时任务</button>
           </div>
           {activeDetailTab === "preview" ? (

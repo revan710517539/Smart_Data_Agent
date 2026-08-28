@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
-from backend.platform.ingestion.csv_folder import tenant_directory_name
+from backend.platform.ingestion.crawler_manifest import resolve_crawler_tenant
+from backend.platform.ingestion.csv_folder import CSVFolderSource, tenant_directory_name
 
 
 @dataclass(frozen=True)
@@ -38,10 +40,21 @@ def endpoint_for_tenant(tenant_id: str) -> DataCrawlerEndpoint:
     institution_id = str(item.get("institutionId") or "").strip()
     institution_directory = str(item.get("institutionDirectory") or "").strip()
     token = str(item.get("token") or "").strip()
-    if not institution_id or not institution_directory or len(token) < 16:
+    if not institution_id or len(token) < 16:
         raise ValueError("data_crawler_tenant_binding_incomplete")
-    if institution_directory != tenant_directory_name(tenant_id):
+    configured_root = str(os.getenv("SMART_DATA_AGENT_DATA_CRAWLER_ROOT") or "").strip()
+    crawler_output = str(os.getenv("DATA_CRAWLER_OUTPUT_DIR") or "").strip()
+    root = Path(configured_root or crawler_output or CSVFolderSource.container_data_crawler_root).expanduser()
+    contract = resolve_crawler_tenant(root, tenant_id, required=False)
+    if contract:
+        manifest_institution_id = str(contract.get("institution_id") or "").strip()
+        if manifest_institution_id and manifest_institution_id != institution_id:
+            raise ValueError("data_crawler_manifest_institution_mismatch")
+        institution_directory = str(contract.get("institution_directory") or "").strip()
+    elif institution_directory != tenant_directory_name(tenant_id):
         raise ValueError("data_crawler_tenant_directory_mismatch")
+    if not institution_directory:
+        raise ValueError("data_crawler_tenant_binding_incomplete")
     return DataCrawlerEndpoint(tenant_id, base_url, institution_id, institution_directory, token)
 
 

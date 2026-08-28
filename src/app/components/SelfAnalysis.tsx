@@ -697,7 +697,7 @@ export function SelfAnalysis() {
           setAvailableMetrics(metricResponse.metrics);
           // raw_tables is the same CSV catalog rendered in 数据管理 → 原始表.
           // It is intentionally not a separately stored configuration list.
-          const nextRawTables = assetResponse.raw_tables.filter((table) => table.lifecycleStatus === "active");
+          const nextRawTables = assetResponse.raw_tables.filter((table) => table.lifecycleStatus === "active" && table.dataAvailable !== false);
           const nextTopicTables = (runtimeAssetResponse.topic_tables || []).filter(
             (item) => item.lifecycleStatus === "active",
           );

@@ -20,6 +20,11 @@ def _task_code(institution_id: str, sql_id: str) -> str:
     return f"data-crawler:{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:32]}"
 
 
+def _catalog_source_key(institution_id: str, sql_id: str) -> str:
+    identity = f"{institution_id.strip()}:{sql_id.strip()}"
+    return f"crawler_sql_{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:32]}"
+
+
 def _legacy_task_code(source_key: str) -> str:
     return f"data-crawler:{hashlib.sha256(source_key.encode('utf-8')).hexdigest()[:32]}"
 
@@ -116,6 +121,42 @@ def _raw_table(handler: Any, tenant_id: str, source_key: str) -> tuple[Any, dict
     if not isinstance(table, dict):
         raise KeyError("raw_table_not_found")
     return catalog, dict(table)
+
+
+def _table_and_binding(
+    handler: Any,
+    tenant_id: str,
+    source_key: str,
+    sql_id: str = "",
+) -> tuple[Any, dict[str, Any], Any, dict[str, Any]]:
+    """Resolve a CSV-backed or script-only catalog entry to one exact SQL."""
+
+    client = client_for_tenant(tenant_id)
+    table: dict[str, Any] = {}
+    catalog: Any = None
+    if source_key:
+        try:
+            catalog, table = _raw_table(handler, tenant_id, source_key)
+        except KeyError:
+            if not sql_id:
+                raise
+    if table:
+        binding = _binding_for_table(client, table, sql_id)
+    else:
+        if not sql_id:
+            raise ValueError("data_crawler_sql_id_required")
+        binding = _binding_in_institution(client, client.binding(sql_id))
+        table = {
+            "id": f"crawler-sql:{sql_id}",
+            "catalogKey": source_key,
+            "tableNameCn": str(binding.get("sqlName") or sql_id),
+            "sqlId": sql_id,
+            "contentHash": "",
+            "dataAvailable": False,
+        }
+    if not binding:
+        raise ValueError("data_crawler_sql_binding_not_found")
+    return catalog, table, client, binding
 
 
 def _delivery_relative_path(value: Any, institution_directory: str) -> str:
@@ -314,6 +355,41 @@ def _normalize_fixed_temporal_value(parameter_type: str, raw: Any) -> str:
         raise ValueError("sql_parameter_fixed_value_invalid") from exc
 
 
+def _normalize_fixed_parameter_value(parameter: dict[str, Any], raw: Any) -> str:
+    parameter_type = str(parameter.get("type") or "text")
+    if parameter_type in {"date", "month", "datetime"}:
+        return _normalize_fixed_temporal_value(parameter_type, raw)
+    value = str(raw or "").strip()
+    if not value:
+        raise ValueError("sql_parameter_fixed_value_required")
+    if parameter_type == "boolean":
+        normalized = value.casefold()
+        if normalized not in {"true", "false", "1", "0"}:
+            raise ValueError("sql_parameter_fixed_value_invalid")
+        return "true" if normalized in {"true", "1"} else "false"
+    if parameter_type == "integer":
+        try:
+            return str(int(value))
+        except ValueError as exc:
+            raise ValueError("sql_parameter_fixed_value_invalid") from exc
+    if parameter_type == "number":
+        try:
+            number = float(value)
+        except ValueError as exc:
+            raise ValueError("sql_parameter_fixed_value_invalid") from exc
+        if number != number or number in {float("inf"), float("-inf")}:
+            raise ValueError("sql_parameter_fixed_value_invalid")
+        return value
+    allowed = {
+        str(item.get("value") or "")
+        for item in parameter.get("scheduleRules") or []
+        if isinstance(item, dict) and str(item.get("value") or "")
+    }
+    if parameter_type == "enum" and allowed and value not in allowed:
+        raise ValueError("sql_parameter_fixed_value_invalid")
+    return value
+
+
 def _resolve_temporal_parameters(
     binding: dict[str, Any],
     parameters: dict[str, Any],
@@ -321,14 +397,12 @@ def _resolve_temporal_parameters(
     reference: datetime,
 ) -> dict[str, str]:
     specs = {
-        str(item.get("name") or ""): str(item.get("type") or "")
+        str(item.get("name") or ""): dict(item)
         for item in binding.get("parameters") or []
         if isinstance(item, dict) and str(item.get("name") or "")
     }
     if set(parameters) - set(specs) or set(parameter_bindings) - set(specs):
         raise ValueError("sql_parameter_not_in_binding")
-    if any(kind not in {"date", "month", "datetime"} for kind in specs.values()):
-        raise ValueError("non_temporal_sql_parameters_not_supported")
     next_month = (reference.replace(day=28) + timedelta(days=4)).replace(day=1)
     previous_month_end = reference.replace(day=1) - timedelta(days=1)
     legacy_values = {
@@ -346,11 +420,14 @@ def _resolve_temporal_parameters(
         "day_end": reference.replace(hour=23, minute=59, second=59).strftime("%Y-%m-%d %H:%M:%S"),
     }
     resolved: dict[str, str] = {}
-    for name, parameter_type in specs.items():
+    for name, parameter in specs.items():
+        parameter_type = str(parameter.get("type") or "text")
         rule = str(parameter_bindings.get(name) or "").strip()
         if not rule:
-            resolved[name] = _normalize_fixed_temporal_value(parameter_type, parameters.get(name))
+            resolved[name] = _normalize_fixed_parameter_value(parameter, parameters.get(name))
             continue
+        if parameter_type not in {"date", "month", "datetime"}:
+            raise ValueError("sql_parameter_binding_invalid")
         if rule == "reference":
             resolved[name] = _format_temporal_value(parameter_type, reference)
             continue
@@ -388,8 +465,6 @@ def _task_definition(source_key: str, table: dict[str, Any], binding: dict[str, 
     allowed = {str(item.get("name") or ""): str(item.get("type") or "") for item in binding.get("parameters") or []}
     if set(parameters) - set(allowed) or set(parameter_bindings) - set(allowed):
         raise ValueError("sql_parameter_not_in_binding")
-    if any(kind not in {"date", "month", "datetime"} for kind in allowed.values()):
-        raise ValueError("non_temporal_sql_parameters_not_supported")
     _resolve_temporal_parameters(binding, parameters, parameter_bindings, execution_at)
     biweekly_anchor = execution_at.date().isoformat()
     if not has_explicit_execution_at and str(payload.get("biweeklyAnchor") or "").strip():
@@ -425,11 +500,12 @@ def _task_definition(source_key: str, table: dict[str, Any], binding: dict[str, 
 
 
 def _save(handler: Any, context: Any, source_key: str, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    _catalog, table = _raw_table(handler, context.tenant_id, source_key)
-    client = client_for_tenant(context.tenant_id)
-    binding = _binding_for_table(client, table, str(payload.get("sqlId") or ""))
-    if not binding:
-        raise ValueError("data_crawler_sql_binding_not_found")
+    _catalog, table, client, binding = _table_and_binding(
+        handler,
+        context.tenant_id,
+        source_key,
+        str(payload.get("sql_id") or payload.get("sqlId") or ""),
+    )
     definition = _task_definition(source_key, table, binding, payload)
     zone = ZoneInfo(str(definition["task_config"].get("timezone") or "Asia/Shanghai"))
     resolved_parameters = _resolve_temporal_parameters(
@@ -472,9 +548,10 @@ def handle_data_crawler_schedule_get(handler: Any, query: str) -> None:
         context = handler._request_context(params=params)
         handler._require_asset_permission(context, "read")
         source_key = str(first_query_value(params, "source_key") or "").strip()
-        _catalog, table = _raw_table(handler, context.tenant_id, source_key)
-        client = client_for_tenant(context.tenant_id)
-        binding = _configuration_binding_for_table(client, table)
+        sql_id = str(first_query_value(params, "sql_id") or "").strip()
+        _catalog, table, client, binding = _table_and_binding(
+            handler, context.tenant_id, source_key, sql_id
+        )
         existing = _existing_task_for_binding(handler.services.automation_store, context.tenant_id, binding, source_key) if binding else None
         handler._send_json({
             "tenant_id": context.tenant_id,
@@ -482,7 +559,7 @@ def handle_data_crawler_schedule_get(handler: Any, query: str) -> None:
             "institution_id": endpoint_for_tenant(context.tenant_id).institution_id,
             "institution_directory": endpoint_for_tenant(context.tenant_id).institution_directory,
             "binding": binding or None,
-            "validation_required": True,
+            "validation_required": not bool(table.get("dataAvailable")),
             "available_bindings": [],
             "task": existing,
         })
@@ -509,10 +586,16 @@ def handle_data_crawler_schedule_statuses_get(handler: Any, query: str) -> None:
             return
         if catalog.root.name != endpoint.institution_directory:
             raise PermissionError("data_crawler_csv_institution_mismatch")
+        binding_items = client_for_tenant(context.tenant_id).list_bindings().get("items") or []
         source_keys_by_sql_id = {
-            str(item.get("sqlId") or ""): str(item.get("sourceKey") or "")
-            for item in catalog.table_assets()
-            if str(item.get("sqlId") or "") and str(item.get("sourceKey") or "")
+            str(item.get("sqlId") or ""): _catalog_source_key(
+                endpoint.institution_id,
+                str(item.get("sqlId") or ""),
+            )
+            for item in binding_items
+            if isinstance(item, dict)
+            and str(item.get("institutionId") or "") == endpoint.institution_id
+            and str(item.get("sqlId") or "")
         }
         items = _schedule_statuses(
             handler.services.automation_store.list_tasks(context.tenant_id),
@@ -551,11 +634,12 @@ def handle_data_crawler_schedule_test(handler: Any) -> None:
         context = handler._request_context(payload=payload)
         handler._require_asset_permission(context, "create")
         source_key = str(payload.get("source_key") or "").strip()
-        _catalog, table = _raw_table(handler, context.tenant_id, source_key)
-        client = client_for_tenant(context.tenant_id)
-        binding = _binding_for_table(client, table, str(payload.get("sqlId") or ""))
-        if not binding:
-            raise ValueError("data_crawler_sql_binding_not_found")
+        _catalog, table, client, binding = _table_and_binding(
+            handler,
+            context.tenant_id,
+            source_key,
+            str(payload.get("sql_id") or payload.get("sqlId") or ""),
+        )
         definition = _task_definition(source_key, table, binding, payload)
         zone = ZoneInfo(str(definition["task_config"].get("timezone") or "Asia/Shanghai"))
         resolved = _resolve_temporal_parameters(
@@ -590,19 +674,47 @@ def handle_data_crawler_schedule_refresh(handler: Any) -> None:
     try:
         payload = handler._read_json()
         context = handler._request_context(payload=payload)
-        handler._require_asset_permission(context, "read")
+        handler._require_asset_permission(context, "create")
         source_key = str(payload.get("source_key") or "").strip()
-        _catalog, table = _raw_table(handler, context.tenant_id, source_key)
-        client = client_for_tenant(context.tenant_id)
-        binding = _select_refresh_binding(client, table, str(payload.get("sqlId") or ""))
-        if not binding:
-            raise ValueError("data_crawler_sql_binding_not_found")
+        _catalog, table, client, binding = _table_and_binding(
+            handler,
+            context.tenant_id,
+            source_key,
+            str(payload.get("sql_id") or payload.get("sqlId") or ""),
+        )
+        zone = ZoneInfo("Asia/Shanghai")
+        parameters = payload.get("parameters") if isinstance(payload.get("parameters"), dict) else {}
+        parameter_bindings = payload.get("parameterBindings") if isinstance(payload.get("parameterBindings"), dict) else {}
+        if not parameters and not parameter_bindings:
+            parameter_bindings = {
+                str(item.get("name") or ""): "reference"
+                for item in binding.get("parameters") or []
+                if isinstance(item, dict)
+                and str(item.get("type") or "") in {"date", "month", "datetime"}
+                and str(item.get("name") or "")
+            }
+        resolved = _resolve_temporal_parameters(
+            binding,
+            parameters,
+            parameter_bindings,
+            datetime.now(zone),
+        )
+        execution = client.execute(
+            str(binding.get("sqlId") or ""),
+            {
+                "executionId": f"sda-refresh-{uuid4().hex}",
+                "parameters": resolved,
+                "parameterBindings": {},
+                "timezone": "Asia/Shanghai",
+            },
+        )
         handler._send_json(
             {
                 "tenant_id": context.tenant_id,
                 "source_key": source_key,
                 "binding": binding,
                 "refreshed": True,
+                "run": execution,
             }
         )
     except Exception as exc:
@@ -649,9 +761,12 @@ def handle_data_crawler_schedule_delete(handler: Any) -> None:
         context = handler._request_context(payload=payload)
         handler._require_automation_permission(context, "create")
         source_key = str(payload.get("source_key") or "").strip()
-        _catalog, table = _raw_table(handler, context.tenant_id, source_key)
-        client = client_for_tenant(context.tenant_id)
-        binding = _binding_for_table(client, table)
+        _catalog, table, client, binding = _table_and_binding(
+            handler,
+            context.tenant_id,
+            source_key,
+            str(payload.get("sql_id") or payload.get("sqlId") or ""),
+        )
         task = _existing_task_for_binding(handler.services.automation_store, context.tenant_id, binding, source_key)
         if not task:
             handler._send_json({"tenant_id": context.tenant_id, "cleared": False})

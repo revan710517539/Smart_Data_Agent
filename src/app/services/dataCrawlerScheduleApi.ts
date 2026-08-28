@@ -61,9 +61,10 @@ export type DataCrawlerScheduleDraft = {
 };
 
 type Context = { tenantId: string; userId?: string };
+type ScriptContext = { sourceKey?: string; sqlId: string };
 
-export function fetchDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey }: Context & { sourceKey: string }) {
-  const query = new URLSearchParams({ source_key: sourceKey, view: "configuration" });
+export function fetchDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey = "", sqlId }: Context & ScriptContext) {
+  const query = new URLSearchParams({ source_key: sourceKey, sql_id: sqlId, view: "configuration" });
   return apiRequest<DataCrawlerScheduleState>(`/api/data-crawler-schedule?${query.toString()}`, {
     method: "GET",
     context: { tenantId, userId },
@@ -78,47 +79,55 @@ export function fetchDataCrawlerScheduleStatuses({ tenantId, userId = getDefault
   });
 }
 
-function mutationBody(sourceKey: string, draft: DataCrawlerScheduleDraft) {
-  return { source_key: sourceKey, ...draft };
+function mutationBody(sourceKey: string | undefined, sqlId: string, draft: DataCrawlerScheduleDraft) {
+  return { source_key: sourceKey || "", sql_id: sqlId, ...draft };
 }
 
-export function saveDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey, draft }: Context & { sourceKey: string; draft: DataCrawlerScheduleDraft }) {
+export function saveDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey, sqlId, draft }: Context & ScriptContext & { draft: DataCrawlerScheduleDraft }) {
   return apiRequest<{ task: DataCrawlerScheduleState["task"] }>("/api/data-crawler-schedule", {
     method: "PUT",
     context: { tenantId, userId },
-    body: mutationBody(sourceKey, draft),
+    body: mutationBody(sourceKey, sqlId, draft),
   });
 }
 
-export function testDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey, draft }: Context & { sourceKey: string; draft: DataCrawlerScheduleDraft }) {
+export function testDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey, sqlId, draft }: Context & ScriptContext & { draft: DataCrawlerScheduleDraft }) {
   return apiRequest<{ connected: true; institution_id: string; sql_id: string; parameter_count: number; run: { runId: string; status: string; message?: string; sqlId?: string } }>("/api/data-crawler-schedule/test", {
     method: "POST",
     context: { tenantId, userId },
-    body: mutationBody(sourceKey, draft),
+    body: mutationBody(sourceKey, sqlId, draft),
   });
 }
 
-export function executeDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey, draft }: Context & { sourceKey: string; draft: DataCrawlerScheduleDraft }) {
+export function refreshDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey, sqlId, draft }: Context & ScriptContext & { draft: DataCrawlerScheduleDraft }) {
+  return apiRequest<{ binding: DataCrawlerBinding; refreshed: true; run: { runId: string; status: string; message?: string; sqlId?: string } }>("/api/data-crawler-schedule/refresh", {
+    method: "POST",
+    context: { tenantId, userId },
+    body: mutationBody(sourceKey, sqlId, draft),
+  });
+}
+
+export function executeDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey, sqlId, draft }: Context & ScriptContext & { draft: DataCrawlerScheduleDraft }) {
   return apiRequest<{ task: DataCrawlerScheduleState["task"]; run: { automation_run_id: string; status: string } }>("/api/data-crawler-schedule/execute", {
     method: "POST",
     context: { tenantId, userId },
-    body: mutationBody(sourceKey, draft),
+    body: mutationBody(sourceKey, sqlId, draft),
   });
 }
 
 export function fetchDataCrawlerScheduleExecution({ tenantId, userId = getDefaultUserId(), runId }: Context & { runId: string }) {
   const query = new URLSearchParams({ run_id: runId });
-  return apiRequest<{ run: { runId?: string; status: string; message?: string; sqlId?: string } }>(`/api/data-crawler-schedule/execution?${query.toString()}`, {
+  return apiRequest<{ run: { runId: string; status: string; message?: string; sqlId?: string } }>(`/api/data-crawler-schedule/execution?${query.toString()}`, {
     method: "GET",
     context: { tenantId, userId },
   });
 }
 
-export function clearDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey }: Context & { sourceKey: string }) {
+export function clearDataCrawlerSchedule({ tenantId, userId = getDefaultUserId(), sourceKey, sqlId }: Context & ScriptContext) {
   return apiRequest<{ cleared: boolean }>("/api/data-crawler-schedule", {
     method: "DELETE",
     context: { tenantId, userId },
-    body: { source_key: sourceKey },
+    body: { source_key: sourceKey || "", sql_id: sqlId },
   });
 }
 

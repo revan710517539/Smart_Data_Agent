@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ from backend.platform.api.routes.data_crawler_schedule import (
     _schedule_statuses,
     _select_refresh_binding,
     _sql_title_key,
+    _table_and_binding,
     _task_code,
     _task_definition,
     handle_data_crawler_schedule_refresh,
@@ -81,6 +83,41 @@ class DataCrawlerScheduleContractTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"SMART_DATA_AGENT_DATA_CRAWLER_ENDPOINTS": json.dumps(bindings, ensure_ascii=False)}):
             with self.assertRaisesRegex(ValueError, "tenant_directory_mismatch"):
                 endpoint_for_tenant("tenant:华兴银行")
+
+    def test_manifest_directory_is_authoritative_across_host_layouts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "server-huaxing-volume").mkdir()
+            (root / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "smart-data-crawler-manifest/v1",
+                        "generated_at": "2026-08-28T00:00:00+08:00",
+                        "tenants": [
+                            {
+                                "tenant_id": "tenant:华兴银行",
+                                "tenant_ids": ["tenant:华兴银行", "tenant:huaxing"],
+                                "institution_id": "huaxing",
+                                "institution_directory": "server-huaxing-volume",
+                                "schema_version": "data-crawler-csv/v1",
+                                "files": [],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "SMART_DATA_AGENT_DATA_CRAWLER_ENDPOINTS": json.dumps(self.endpoints, ensure_ascii=False),
+                    "SMART_DATA_AGENT_DATA_CRAWLER_ROOT": str(root),
+                },
+            ):
+                endpoint = endpoint_for_tenant("tenant:华兴银行")
+            self.assertEqual(endpoint.institution_id, "huaxing")
+            self.assertEqual(endpoint.institution_directory, "server-huaxing-volume")
 
     def test_status_projection_is_unavailable_when_endpoint_is_not_configured(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -457,7 +494,7 @@ class DataCrawlerScheduleContractTest(unittest.TestCase):
             },
         )
 
-    def test_refresh_only_reloads_the_table_binding_and_never_executes_sql(self) -> None:
+    def test_refresh_executes_the_exact_sql_and_returns_a_pollable_run(self) -> None:
         permissions: list[str] = []
 
         class Handler:
@@ -465,7 +502,11 @@ class DataCrawlerScheduleContractTest(unittest.TestCase):
 
             @staticmethod
             def _read_json() -> dict[str, object]:
-                return {"source_key": "source-key"}
+                return {
+                    "source_key": "source-key",
+                    "sql_id": "sql_daily",
+                    "parameterBindings": {"today": "reference"},
+                }
 
             @staticmethod
             def _request_context(**_kwargs: object) -> SimpleNamespace:
@@ -488,37 +529,50 @@ class DataCrawlerScheduleContractTest(unittest.TestCase):
         }
         client = SimpleNamespace(
             endpoint=SimpleNamespace(institution_id="huaxing", institution_directory="华兴银行"),
-            execute=mock.Mock(side_effect=AssertionError("refresh must not execute SQL")),
+            binding=mock.Mock(return_value=binding),
+            execute=mock.Mock(return_value={
+                "runId": "run_refresh",
+                "status": "running",
+                "sqlId": "sql_daily",
+                "institutionId": "huaxing",
+            }),
         )
         with (
             mock.patch("backend.platform.api.routes.data_crawler_schedule._raw_table", return_value=(object(), table)),
             mock.patch("backend.platform.api.routes.data_crawler_schedule.client_for_tenant", return_value=client),
-            mock.patch("backend.platform.api.routes.data_crawler_schedule._select_refresh_binding", return_value=binding),
         ):
             handle_data_crawler_schedule_refresh(handler)
 
-        self.assertEqual(permissions, ["read"])
-        client.execute.assert_not_called()
+        self.assertEqual(permissions, ["create"])
+        client.execute.assert_called_once()
+        self.assertEqual(client.execute.call_args.args[0], "sql_daily")
+        self.assertEqual(set(client.execute.call_args.args[1]["parameters"]), {"today"})
         self.assertEqual(handler.response, {
             "tenant_id": "tenant:华兴银行",
             "source_key": "source-key",
             "binding": binding,
             "refreshed": True,
+            "run": {
+                "runId": "run_refresh",
+                "status": "running",
+                "sqlId": "sql_daily",
+                "institutionId": "huaxing",
+            },
         })
 
-    def test_non_time_parameter_fails_closed_in_current_phase(self) -> None:
-        with self.assertRaisesRegex(ValueError, "non_temporal"):
-            _task_definition(
-                "source-key",
-                {"tableNameCn": "客户表", "contentHash": "b" * 64},
-                {
-                    "institutionId": "huaxing",
-                    "sqlId": "sql_customer",
-                    "sqlName": "客户查询",
-                    "parameters": [{"name": "user_no", "type": "text"}],
-                },
-                {"recurrence": "none"},
-            )
+    def test_non_time_parameter_uses_an_explicit_fixed_value(self) -> None:
+        definition = _task_definition(
+            "source-key",
+            {"tableNameCn": "客户表", "contentHash": "b" * 64},
+            {
+                "institutionId": "huaxing",
+                "sqlId": "sql_customer",
+                "sqlName": "客户查询",
+                "parameters": [{"name": "user_no", "type": "text"}],
+            },
+            {"recurrence": "none", "parameters": {"user_no": "A001"}},
+        )
+        self.assertEqual(definition["task_config"]["parameters"], {"user_no": "A001"})
 
     def test_schedule_statuses_only_expose_active_same_institution_schedules(self) -> None:
         def task(sql_id: str, *, institution_id: str = "huaxing", status: str = "active", trigger_type: str = "schedule") -> dict[str, object]:
@@ -659,6 +713,33 @@ class DataCrawlerScheduleContractTest(unittest.TestCase):
 
         with self.assertRaisesRegex(PermissionError, "institution_mismatch"):
             _binding_for_table(Client(), {"sqlId": "sql_foreign"})
+
+    def test_script_only_catalog_entry_resolves_without_a_csv(self) -> None:
+        binding = {
+            "institutionId": "huaxing",
+            "sqlId": "sql_pending",
+            "sqlName": "待执行日报",
+            "parameters": [],
+        }
+        client = SimpleNamespace(
+            endpoint=SimpleNamespace(institution_id="huaxing", institution_directory="华兴银行"),
+            binding=mock.Mock(return_value=binding),
+        )
+        with (
+            mock.patch("backend.platform.api.routes.data_crawler_schedule._raw_table", side_effect=KeyError("raw_table_not_found")),
+            mock.patch("backend.platform.api.routes.data_crawler_schedule.client_for_tenant", return_value=client),
+        ):
+            _catalog, table, resolved_client, resolved = _table_and_binding(
+                SimpleNamespace(),
+                "tenant:华兴银行",
+                "crawler_sql_stable",
+                "sql_pending",
+            )
+
+        self.assertIs(resolved_client, client)
+        self.assertEqual(resolved, binding)
+        self.assertFalse(table["dataAvailable"])
+        self.assertEqual(table["catalogKey"], "crawler_sql_stable")
 
     def test_refresh_execution_uses_reference_day_for_today(self) -> None:
         binding = {

@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+python_cmd=${PYTHON:-python3}
+status=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/feature/*|refs/heads/fix/*|refs/heads/integration/*)
+      "$python_cmd" "$repo_root/scripts/production_source_guard.py" check \
+        --repo "$repo_root" \
+        --remote-ref "$remote_sha" \
+        --local-ref "$local_sha" || status=$?
+      ;;
+  esac
+  [ "$status" -eq 0 ] || exit "$status"
+done
+
+exit 0

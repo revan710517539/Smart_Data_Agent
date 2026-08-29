@@ -112,7 +112,6 @@ class MemoryFusionTest(unittest.TestCase):
 
     def test_runtime_memory_supersedes_older_candidate_and_fuses_occurrences(self) -> None:
         store = InMemoryMemoryStore()
-        self.addCleanup(store.close)
         first = MemoryRecord(
             memory_id="mem_old",
             memory_type="analysis_case",

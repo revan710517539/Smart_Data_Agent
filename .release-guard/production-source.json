@@ -1,0 +1,12 @@
+{
+  "schema_version": "smart-data-agent-production-source-guard/v1",
+  "baseline_sha": "2c423c0d8ca505d503c7fb6286d7f54357c9b22b",
+  "production_release_sha": "2138fd0df1534d76fadb51a63909b03c1c0c0e01",
+  "policy": "prompt-on-push",
+  "protected_files": [
+    "backend/platform/bootstrap.py",
+    "backend/platform/metrics/postgresql_store.py",
+    "backend/platform/tests/test_bootstrap_metric_seed.py"
+  ],
+  "reason": "首批保护最近一次生产上线修复：租户 catalog ID、指标 tombstone 与对应回归测试。"
+}

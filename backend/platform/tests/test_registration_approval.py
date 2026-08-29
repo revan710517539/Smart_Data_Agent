@@ -200,22 +200,19 @@ class RegistrationApprovalTest(unittest.TestCase):
                 thread.join(timeout=5)
 
     def test_operator_cannot_review_registration(self) -> None:
+        services = None
         with TemporaryDirectory() as tmpdir:
             server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
-            try:
-                services = server.services
-                pending = services.access_service.submit_registration_request(
-                    {"name": "越权", "email": "blocked@example.com", "institution": "华兴银行"}
+            services = server.services
+            pending = services.access_service.submit_registration_request(
+                {"name": "越权", "email": "blocked@example.com", "institution": "华兴银行"}
+            )
+            with self.assertRaises(PermissionError):
+                services.access_service.review_registration(
+                    ExecutionContext("u_lina", normalize_tenant_id("华兴银行")),
+                    pending["request_id"],
+                    approved=True,
                 )
-                with self.assertRaises(PermissionError):
-                    services.access_service.review_registration(
-                        ExecutionContext("u_lina", normalize_tenant_id("华兴银行")),
-                        pending["request_id"],
-                        approved=True,
-                    )
-            finally:
-                server.server_close()
-                server.services.close()
 
     def test_registration_rejects_empty_active_catalog_cleanly(self) -> None:
         with TemporaryDirectory() as tmpdir:

@@ -1315,7 +1315,14 @@ export function mapBackendRows(response: BackendAnalysisResponse, _fallbackQuest
     ...Object.assign({}, ...selectedTables.map((table) => table.fieldLabels || {})),
     ...backendFieldLabels,
   };
-  const fieldMetadata = Object.assign({}, ...selectedTables.map((table) => table.fieldMetadata || {}));
+  // The backend field contract preserves the configured raw-table role even
+  // when a numeric-looking dimension would otherwise be inferred as a metric.
+  // A current selected-table overlay is newer than a persisted task snapshot.
+  const contractMetadata = fieldMetadataFromSchemaMapping(mapping);
+  const fieldMetadata = {
+    ...contractMetadata,
+    ...Object.assign({}, ...selectedTables.map((table) => table.fieldMetadata || {})),
+  };
   const metricCandidates = Array.from(new Set([
     firstResult?.visualization_artifact?.y,
     firstResult?.chart_spec?.y,
@@ -1365,6 +1372,27 @@ export function mapBackendRows(response: BackendAnalysisResponse, _fallbackQuest
       weekChange: backendDisplayValue(row.week_change ?? row.weekly_net_increase),
     };
   });
+}
+
+export function fieldMetadataFromSchemaMapping(mapping: Record<string, unknown>): Record<string, FieldDisplayMetadata> {
+  const contract = Array.isArray(mapping.field_contract)
+    ? mapping.field_contract.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    : [];
+  const metadata: Record<string, FieldDisplayMetadata> = {};
+  for (const item of contract) {
+    const field = String(item.canonicalId || item.queryAlias || "").trim();
+    const role = String(item.role || "").trim().toLowerCase();
+    if (!field || (role !== "metric" && role !== "dimension" && role !== "date")) continue;
+    metadata[field] = {
+      type: String(item.dataType || "string"),
+      semanticRole: role,
+      dateFormat: role === "date" ? "yyyy-MM-dd" : undefined,
+      isPrimaryKey: Boolean(item.isPrimaryKey),
+      isMetric: role === "metric",
+      isTime: role === "date",
+    };
+  }
+  return metadata;
 }
 
 export function visualTypeFromBackend(type?: string): VisualizationType {

@@ -18,6 +18,96 @@ export type VisualizationFilterGroup = {
   rules: VisualizationFilterRule[];
 };
 
+export type VisualizationRankDirection = "desc" | "asc";
+
+export type VisualizationMetricRankConfig = {
+  metricField: string;
+  direction: VisualizationRankDirection;
+};
+
+export type VisualizationMetricFormatConfig = {
+  metricField: string;
+  percent: boolean;
+  decimalPlaces?: number;
+};
+
+export type VisualizationAssociationOperator = "gt" | "gte" | "eq" | "lte" | "lt";
+export type VisualizationAssociationSource = "metric" | "progress";
+export type VisualizationAssociationStyle = "background" | "text" | "value";
+export type VisualizationProgressColorMode = "gradient" | "reverse_gradient" | "solid";
+export type VisualizationProgressDenominatorMode = "selected_row" | "column_max";
+
+export type VisualizationAssociationRule = {
+  id: string;
+  source: VisualizationAssociationSource;
+  operator: VisualizationAssociationOperator;
+  threshold: number;
+  targetField: string;
+  style: VisualizationAssociationStyle;
+  color: string;
+  replacementValue?: string;
+};
+
+export type VisualizationMetricProgressConfig = {
+  metricField: string;
+  denominatorMode?: VisualizationProgressDenominatorMode;
+  denominatorRules: VisualizationFilterRule[];
+  color: string;
+  colorEnd?: string;
+  colorMode?: VisualizationProgressColorMode;
+  associationRules: VisualizationAssociationRule[];
+};
+
+export type VisualizationCalculatedColumnConfig = {
+  id: string;
+  name: string;
+  position: number;
+  expression: string;
+};
+
+export type VisualizationTableFont = "system" | "humanist" | "serif" | "mono";
+export type VisualizationTableDensity = "compact" | "comfortable";
+
+export type VisualizationTableStyleConfig = {
+  templateId: string;
+  headerBackground: string;
+  headerTextColor: string;
+  headerBorderColor: string;
+  bodyBackground: string;
+  alternateRowBackground: string;
+  bodyTextColor: string;
+  borderColor: string;
+  accentColor: string;
+  totalBackground: string;
+  totalTextColor: string;
+  fontFamily: VisualizationTableFont;
+  density: VisualizationTableDensity;
+  bandedRows: boolean;
+  emphasizeFirstColumn: boolean;
+};
+
+export type VisualizationChartFont = "system" | "humanist" | "mono";
+export type VisualizationChartHeight = "compact" | "standard" | "expanded";
+export type VisualizationChartBarWidth = "slim" | "standard" | "wide";
+
+export type VisualizationChartStyleConfig = {
+  templateId: string;
+  backgroundColor: string;
+  plotBackgroundColor: string;
+  textColor: string;
+  mutedTextColor: string;
+  gridColor: string;
+  axisColor: string;
+  palette: string[];
+  fontFamily: VisualizationChartFont;
+  chartHeight: VisualizationChartHeight;
+  lineWidth: number;
+  pointRadius: number;
+  barRadius: number;
+  barWidth: VisualizationChartBarWidth;
+  areaOpacity: number;
+};
+
 export const visualizationFilterOperators: Array<{ value: VisualizationFilterOperator; label: string }> = [
   { value: "in", label: "等于其中任一" },
   { value: "not_in", label: "不等于任一" },
@@ -31,6 +121,12 @@ export type VisualizationCardConfig = {
   mergedDimensionFields?: string[];
   frozenColumnFields?: string[];
   frozenRowKeys?: string[];
+  metricRankings?: VisualizationMetricRankConfig[];
+  metricFormats?: VisualizationMetricFormatConfig[];
+  metricProgress?: VisualizationMetricProgressConfig[];
+  calculatedColumns?: VisualizationCalculatedColumnConfig[];
+  tableStyle?: VisualizationTableStyleConfig;
+  chartStyle?: VisualizationChartStyleConfig;
   filters: VisualizationFilters;
   filterGroups: VisualizationFilterGroup[];
   sumFilteredRows: boolean;
@@ -298,6 +394,423 @@ export function defaultComboLineFields(metricFields: string[], current: string[]
 export function numericValue(value: unknown) {
   const parsed = typeof value === "number" ? value : Number(String(value ?? "").replace(/,/g, "").replace(/%$/, ""));
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function normalizeMetricRankings(configs: VisualizationMetricRankConfig[] = [], metricFields: string[] = []) {
+  const allowed = new Set(metricFields);
+  const seen = new Set<string>();
+  return configs.filter((config) => {
+    if (!config?.metricField || seen.has(config.metricField) || (allowed.size && !allowed.has(config.metricField))) return false;
+    seen.add(config.metricField);
+    return true;
+  }).map((config) => ({ metricField: config.metricField, direction: config.direction === "asc" ? "asc" as const : "desc" as const }));
+}
+
+export function normalizeMetricFormats(configs: VisualizationMetricFormatConfig[] = [], metricFields: string[] = []) {
+  const allowed = new Set(metricFields);
+  const seen = new Set<string>();
+  return configs.slice(0, 100).flatMap((config): VisualizationMetricFormatConfig[] => {
+    const metricField = String(config?.metricField || "").slice(0, 300);
+    if (!metricField || seen.has(metricField) || (allowed.size && !allowed.has(metricField))) return [];
+    seen.add(metricField);
+    const parsedPlaces = config.decimalPlaces === undefined || config.decimalPlaces === null
+      ? undefined
+      : Math.max(0, Math.min(8, Math.trunc(Number(config.decimalPlaces))));
+    const decimalPlaces = Number.isFinite(parsedPlaces) ? parsedPlaces : undefined;
+    const percent = Boolean(config.percent);
+    return percent || decimalPlaces !== undefined ? [{ metricField, percent, ...(decimalPlaces !== undefined ? { decimalPlaces } : {}) }] : [];
+  });
+}
+
+export function normalizeMetricProgress(configs: VisualizationMetricProgressConfig[] = [], metricFields: string[] = []) {
+  const allowed = new Set(metricFields);
+  const seen = new Set<string>();
+  return configs.filter((config) => {
+    if (!config?.metricField || seen.has(config.metricField) || (allowed.size && !allowed.has(config.metricField))) return false;
+    seen.add(config.metricField);
+    return true;
+  }).map((config) => ({
+    metricField: config.metricField,
+    denominatorMode: config.denominatorMode === "column_max" ? "column_max" as const : "selected_row" as const,
+    denominatorRules: normalizeVisualizationFilterGroups([{ id: `progress-${config.metricField}`, rules: config.denominatorRules || [] }])[0]?.rules || [],
+    color: normalizeHexColor(config.color, "#2c7be5"),
+    colorEnd: normalizeHexColor(config.colorEnd, normalizeHexColor(config.color, "#2c7be5")),
+    colorMode: config.colorMode === "solid" ? "solid" as const : config.colorMode === "reverse_gradient" ? "reverse_gradient" as const : "gradient" as const,
+    associationRules: (config.associationRules || []).filter((rule) => rule && Number.isFinite(Number(rule.threshold))).map((rule, index) => ({
+      id: rule.id || `association-${config.metricField}-${index}`,
+      source: rule.source === "progress" ? "progress" as const : "metric" as const,
+      operator: (["gt", "gte", "eq", "lte", "lt"] as VisualizationAssociationOperator[]).includes(rule.operator) ? rule.operator : "gte" as const,
+      threshold: Number(rule.threshold),
+      targetField: rule.targetField || config.metricField,
+      style: rule.style === "text" ? "text" as const : rule.style === "value" ? "value" as const : "background" as const,
+      color: normalizeHexColor(rule.color, "#fff1b8"),
+      replacementValue: String(rule.replacementValue || "").slice(0, 120),
+    })),
+  }));
+}
+
+export function normalizeCalculatedColumns(configs: VisualizationCalculatedColumnConfig[] = []) {
+  const seen = new Set<string>();
+  return configs.slice(0, 20).filter((config) => {
+    if (!config?.id || seen.has(config.id)) return false;
+    seen.add(config.id);
+    return true;
+  }).map((config, index) => ({
+    id: String(config.id).slice(0, 160),
+    name: String(config.name || `新增列${index + 1}`).trim().slice(0, 80) || `新增列${index + 1}`,
+    position: Math.max(0, Math.min(200, Number.isFinite(Number(config.position)) ? Math.trunc(Number(config.position)) : index)),
+    expression: String(config.expression || "").trim().slice(0, 2000),
+  }));
+}
+
+type FormulaToken = { kind: "number" | "field" | "word" | "operator" | "left" | "right" | "comma" | "end"; value: string; offset: number };
+type FormulaNode =
+  | { kind: "number"; value: number }
+  | { kind: "field"; field: string }
+  | { kind: "unary"; operator: "+" | "-"; value: FormulaNode }
+  | { kind: "binary"; operator: string; left: FormulaNode; right: FormulaNode }
+  | { kind: "function"; name: "SUM" | "AVERAGE" | "COUNT"; arguments: FormulaNode[] }
+  | { kind: "case"; condition: FormulaNode; whenTrue: FormulaNode; whenFalse: FormulaNode };
+
+export type VisualizationFormulaEvaluation = { value: number | null; error: string | null };
+export type CompiledVisualizationFormula = { error: string | null; evaluate: (values: Record<string, unknown>) => VisualizationFormulaEvaluation };
+
+function tokenizeVisualizationFormula(source: string): FormulaToken[] {
+  const tokens: FormulaToken[] = [];
+  let index = 0;
+  while (index < source.length) {
+    const character = source[index];
+    if (/\s/.test(character)) { index += 1; continue; }
+    if (character === "[") {
+      const close = source.indexOf("]", index + 1);
+      if (close < 0) throw new Error(`第 ${index + 1} 位缺少 ]`);
+      const field = source.slice(index + 1, close).trim();
+      if (!field) throw new Error(`第 ${index + 1} 位指标名为空`);
+      tokens.push({ kind: "field", value: field, offset: index });
+      index = close + 1;
+      continue;
+    }
+    const numberMatch = source.slice(index).match(/^(?:\d+(?:\.\d*)?|\.\d+)/);
+    if (numberMatch) { tokens.push({ kind: "number", value: numberMatch[0], offset: index }); index += numberMatch[0].length; continue; }
+    const wordMatch = source.slice(index).match(/^[A-Za-z_][A-Za-z0-9_]*/);
+    if (wordMatch) { tokens.push({ kind: "word", value: wordMatch[0].toUpperCase(), offset: index }); index += wordMatch[0].length; continue; }
+    const two = source.slice(index, index + 2);
+    if ([">=", "<=", "<>", "!="].includes(two)) { tokens.push({ kind: "operator", value: two, offset: index }); index += 2; continue; }
+    if (["+", "-", "*", "/", ">", "<", "="].includes(character)) { tokens.push({ kind: "operator", value: character, offset: index }); index += 1; continue; }
+    if (character === "(") tokens.push({ kind: "left", value: character, offset: index });
+    else if (character === ")") tokens.push({ kind: "right", value: character, offset: index });
+    else if (character === ",") tokens.push({ kind: "comma", value: character, offset: index });
+    else throw new Error(`第 ${index + 1} 位包含不支持的符号 ${character}`);
+    index += 1;
+  }
+  tokens.push({ kind: "end", value: "", offset: source.length });
+  return tokens;
+}
+
+class VisualizationFormulaParser {
+  private index = 0;
+  constructor(private readonly tokens: FormulaToken[], private readonly allowedFields: Map<string, string>) {}
+  parse() {
+    const expression = this.parseComparison();
+    if (this.peek().kind !== "end") this.fail(`无法识别 ${this.peek().value || "结尾"}`);
+    return expression;
+  }
+  private peek() { return this.tokens[this.index]; }
+  private take() { return this.tokens[this.index++]; }
+  private fail(message: string): never { throw new Error(`第 ${this.peek().offset + 1} 位${message}`); }
+  private match(kind: FormulaToken["kind"], value?: string) {
+    const token = this.peek();
+    if (token.kind !== kind || (value !== undefined && token.value !== value)) return false;
+    this.index += 1;
+    return true;
+  }
+  private expect(kind: FormulaToken["kind"], value?: string) {
+    if (!this.match(kind, value)) this.fail(`应为 ${value || kind}`);
+  }
+  private parseComparison(): FormulaNode {
+    let left = this.parseAdditive();
+    const token = this.peek();
+    if (token.kind === "operator" && [">", ">=", "<", "<=", "=", "<>", "!="].includes(token.value)) {
+      this.take();
+      left = { kind: "binary", operator: token.value, left, right: this.parseAdditive() };
+    }
+    return left;
+  }
+  private parseAdditive(): FormulaNode {
+    let left = this.parseMultiplicative();
+    while (this.peek().kind === "operator" && ["+", "-"].includes(this.peek().value)) {
+      const operator = this.take().value;
+      left = { kind: "binary", operator, left, right: this.parseMultiplicative() };
+    }
+    return left;
+  }
+  private parseMultiplicative(): FormulaNode {
+    let left = this.parseUnary();
+    while (this.peek().kind === "operator" && ["*", "/"].includes(this.peek().value)) {
+      const operator = this.take().value;
+      left = { kind: "binary", operator, left, right: this.parseUnary() };
+    }
+    return left;
+  }
+  private parseUnary(): FormulaNode {
+    if (this.peek().kind === "operator" && ["+", "-"].includes(this.peek().value)) {
+      const operator = this.take().value as "+" | "-";
+      return { kind: "unary", operator, value: this.parseUnary() };
+    }
+    return this.parsePrimary();
+  }
+  private parsePrimary(): FormulaNode {
+    const token = this.peek();
+    if (this.match("number")) return { kind: "number", value: Number(token.value) };
+    if (this.match("field")) {
+      const field = this.allowedFields.get(token.value);
+      if (!field) throw new Error(`指标 [${token.value}] 不在当前表格中`);
+      return { kind: "field", field };
+    }
+    if (this.match("left")) { const expression = this.parseComparison(); this.expect("right"); return expression; }
+    if (token.kind === "word" && token.value === "CASE") return this.parseCase();
+    if (token.kind === "word" && ["SUM", "AVERAGE", "COUNT"].includes(token.value)) return this.parseFunction();
+    this.fail(`缺少数字、指标或函数`);
+  }
+  private parseFunction(): FormulaNode {
+    const name = this.take().value as "SUM" | "AVERAGE" | "COUNT";
+    this.expect("left");
+    const args: FormulaNode[] = [];
+    if (!this.match("right")) {
+      do { args.push(this.parseComparison()); } while (this.match("comma"));
+      this.expect("right");
+    }
+    if (!args.length) throw new Error(`${name} 至少需要一个参数`);
+    return { kind: "function", name, arguments: args };
+  }
+  private parseCase(): FormulaNode {
+    this.expect("word", "CASE");
+    this.expect("word", "WHEN");
+    const condition = this.parseComparison();
+    this.expect("word", "THEN");
+    const whenTrue = this.parseComparison();
+    this.expect("word", "ELSE");
+    const whenFalse = this.parseComparison();
+    this.expect("word", "END");
+    return { kind: "case", condition, whenTrue, whenFalse };
+  }
+}
+
+function formulaNumericValue(value: unknown) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const parsed = typeof value === "number" ? value : Number(String(value).replace(/,/g, "").replace(/%$/, ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function evaluateFormulaNode(node: FormulaNode, values: Record<string, unknown>): number | null {
+  if (node.kind === "number") return node.value;
+  if (node.kind === "field") return formulaNumericValue(values[node.field]);
+  if (node.kind === "unary") { const value = evaluateFormulaNode(node.value, values); return value === null ? null : node.operator === "-" ? -value : value; }
+  if (node.kind === "function") {
+    const args = node.arguments.map((argument) => evaluateFormulaNode(argument, values));
+    if (node.name === "COUNT") return args.filter((value) => value !== null).length;
+    const numeric = args.filter((value): value is number => value !== null);
+    if (!numeric.length) return null;
+    const sum = numeric.reduce((total, value) => total + value, 0);
+    return node.name === "AVERAGE" ? sum / numeric.length : sum;
+  }
+  if (node.kind === "case") return evaluateFormulaNode(node.condition, values) ? evaluateFormulaNode(node.whenTrue, values) : evaluateFormulaNode(node.whenFalse, values);
+  const left = evaluateFormulaNode(node.left, values);
+  const right = evaluateFormulaNode(node.right, values);
+  if ([">", ">=", "<", "<=", "=", "<>", "!="].includes(node.operator)) {
+    if (left === null || right === null) return 0;
+    if (node.operator === ">") return left > right ? 1 : 0;
+    if (node.operator === ">=") return left >= right ? 1 : 0;
+    if (node.operator === "<") return left < right ? 1 : 0;
+    if (node.operator === "<=") return left <= right ? 1 : 0;
+    if (node.operator === "=") return Math.abs(left - right) < 1e-9 ? 1 : 0;
+    return Math.abs(left - right) >= 1e-9 ? 1 : 0;
+  }
+  if (left === null || right === null) return null;
+  if (node.operator === "+") return left + right;
+  if (node.operator === "-") return left - right;
+  if (node.operator === "*") return left * right;
+  if (right === 0) throw new Error("除数不能为 0");
+  return left / right;
+}
+
+export function compileVisualizationFormula(expression: string, metricFields: string[], labels: Record<string, string> = {}): CompiledVisualizationFormula {
+  const source = String(expression || "").trim();
+  if (!source) return { error: "请输入计算规则", evaluate: () => ({ value: null, error: null }) };
+  try {
+    const allowedFields = new Map(metricFields.map((field) => [field, field]));
+    const labelCounts = new Map<string, number>();
+    metricFields.forEach((field) => { const label = String(labels[field] || "").trim(); if (label) labelCounts.set(label, (labelCounts.get(label) || 0) + 1); });
+    metricFields.forEach((field) => { const label = String(labels[field] || "").trim(); if (label && labelCounts.get(label) === 1) allowedFields.set(label, field); });
+    const node = new VisualizationFormulaParser(tokenizeVisualizationFormula(source), allowedFields).parse();
+    return {
+      error: null,
+      evaluate: (values) => {
+        try {
+          const value = evaluateFormulaNode(node, values);
+          return value === null || !Number.isFinite(value) ? { value: null, error: value === null ? null : "计算结果不是有效数值" } : { value, error: null };
+        } catch (error) { return { value: null, error: error instanceof Error ? error.message : "计算失败" }; }
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "公式格式不正确";
+    return { error: message, evaluate: () => ({ value: null, error: message }) };
+  }
+}
+
+export function ordinalRanks<T>(items: T[], valueFor: (item: T) => unknown, direction: VisualizationRankDirection = "desc") {
+  const ranked = items.map((item, index) => ({ item, index, value: nullableNumericValue(valueFor(item)) }));
+  ranked.sort((left, right) => {
+    if (left.value === null && right.value === null) return left.index - right.index;
+    if (left.value === null) return 1;
+    if (right.value === null) return -1;
+    const compared = direction === "asc" ? left.value - right.value : right.value - left.value;
+    return compared || left.index - right.index;
+  });
+  return new Map(ranked.map((entry, rankIndex) => [entry.item, rankIndex + 1]));
+}
+
+export function resolveProgressDenominator(rows: AnalysisRow[], config: VisualizationMetricProgressConfig, candidateValues?: unknown[]) {
+  if (config.denominatorMode === "column_max") {
+    const values = (candidateValues || rows.map((row) => row.raw[config.metricField]))
+      .map(nullableNumericValue)
+      .filter((value): value is number => value !== null && Number.isFinite(value));
+    if (!values.length) return { status: "non_numeric" as const, matches: [] as AnalysisRow[], value: null as number | null };
+    const value = Math.max(...values);
+    if (value === 0) return { status: "zero" as const, matches: [] as AnalysisRow[], value };
+    if (value < 0) return { status: "non_positive" as const, matches: [] as AnalysisRow[], value: null as number | null };
+    return { status: "ready" as const, matches: [] as AnalysisRow[], value };
+  }
+  const rules = normalizeVisualizationFilterGroups([{ id: "progress-denominator", rules: config.denominatorRules || [] }])[0]?.rules || [];
+  if (!rules.length || rules.some((rule) => !rule.field || rule.values.length !== 1)) return { status: "incomplete" as const, matches: [] as AnalysisRow[], value: null as number | null };
+  const matches = filterVisualizationRows(rows, {}, [{ id: "progress-denominator", rules }]);
+  if (matches.length !== 1) return { status: matches.length ? "multiple" as const : "missing" as const, matches, value: null as number | null };
+  const value = nullableNumericValue(matches[0].raw[config.metricField]);
+  if (value === null) return { status: "non_numeric" as const, matches, value };
+  if (value === 0) return { status: "zero" as const, matches, value };
+  return { status: "ready" as const, matches, value };
+}
+
+export function progressPercentage(numerator: unknown, denominator: number | null) {
+  const numeric = nullableNumericValue(numerator);
+  if (numeric === null || denominator === null || !Number.isFinite(denominator) || denominator === 0) return null;
+  return numeric / denominator * 100;
+}
+
+export function associationRuleMatches(rule: VisualizationAssociationRule, metricValue: unknown, progressValue: number | null) {
+  const actual = rule.source === "progress" ? progressValue : nullableNumericValue(metricValue);
+  if (actual === null || !Number.isFinite(actual)) return false;
+  if (rule.operator === "gt") return actual > rule.threshold;
+  if (rule.operator === "gte") return actual >= rule.threshold;
+  if (rule.operator === "eq") return Math.abs(actual - rule.threshold) < 1e-9;
+  if (rule.operator === "lte") return actual <= rule.threshold;
+  return actual < rule.threshold;
+}
+
+export function normalizeHexColor(value: unknown, fallback = "#2c7be5") {
+  const normalized = String(value || "").trim();
+  return /^#[0-9a-f]{6}$/i.test(normalized) ? normalized.toLowerCase() : fallback;
+}
+
+export const defaultVisualizationTableStyle: VisualizationTableStyleConfig = {
+  templateId: "sda-clean",
+  headerBackground: "#F5FAF7",
+  headerTextColor: "#536B5E",
+  headerBorderColor: "#DCE7DF",
+  bodyBackground: "#FFFFFF",
+  alternateRowBackground: "#F8FBF9",
+  bodyTextColor: "#343B37",
+  borderColor: "#E7ECE9",
+  accentColor: "#3F8F68",
+  totalBackground: "#EAF3EE",
+  totalTextColor: "#294E3B",
+  fontFamily: "system",
+  density: "comfortable",
+  bandedRows: true,
+  emphasizeFirstColumn: false,
+};
+
+export function normalizeVisualizationTableStyle(value?: Partial<VisualizationTableStyleConfig> | null): VisualizationTableStyleConfig {
+  const source = value || {};
+  const fontFamily: VisualizationTableFont = (["system", "humanist", "serif", "mono"] as VisualizationTableFont[]).includes(source.fontFamily as VisualizationTableFont) ? source.fontFamily as VisualizationTableFont : "system";
+  return {
+    templateId: String(source.templateId || defaultVisualizationTableStyle.templateId).trim().slice(0, 120) || defaultVisualizationTableStyle.templateId,
+    headerBackground: normalizeHexColor(source.headerBackground, defaultVisualizationTableStyle.headerBackground),
+    headerTextColor: normalizeHexColor(source.headerTextColor, defaultVisualizationTableStyle.headerTextColor),
+    headerBorderColor: normalizeHexColor(source.headerBorderColor, defaultVisualizationTableStyle.headerBorderColor),
+    bodyBackground: normalizeHexColor(source.bodyBackground, defaultVisualizationTableStyle.bodyBackground),
+    alternateRowBackground: normalizeHexColor(source.alternateRowBackground, defaultVisualizationTableStyle.alternateRowBackground),
+    bodyTextColor: normalizeHexColor(source.bodyTextColor, defaultVisualizationTableStyle.bodyTextColor),
+    borderColor: normalizeHexColor(source.borderColor, defaultVisualizationTableStyle.borderColor),
+    accentColor: normalizeHexColor(source.accentColor, defaultVisualizationTableStyle.accentColor),
+    totalBackground: normalizeHexColor(source.totalBackground, defaultVisualizationTableStyle.totalBackground),
+    totalTextColor: normalizeHexColor(source.totalTextColor, defaultVisualizationTableStyle.totalTextColor),
+    fontFamily,
+    density: source.density === "compact" ? "compact" : "comfortable",
+    bandedRows: source.bandedRows !== false,
+    emphasizeFirstColumn: source.emphasizeFirstColumn === true,
+  };
+}
+
+export const defaultVisualizationChartStyle: VisualizationChartStyleConfig = {
+  templateId: "chart-jade",
+  backgroundColor: "#FBFDFC",
+  plotBackgroundColor: "#FFFFFF",
+  textColor: "#34443C",
+  mutedTextColor: "#7F8F87",
+  gridColor: "#E7EEE9",
+  axisColor: "#CFDAD3",
+  palette: ["#287557", "#5F8173", "#617988", "#84958B", "#526F65", "#A18B62", "#8C9992", "#A1ABA5"],
+  fontFamily: "system",
+  chartHeight: "standard",
+  lineWidth: 2,
+  pointRadius: 2.5,
+  barRadius: 4,
+  barWidth: "standard",
+  areaOpacity: 0.1,
+};
+
+export function normalizeVisualizationChartStyle(value?: Partial<VisualizationChartStyleConfig> | null): VisualizationChartStyleConfig {
+  const source = value || {};
+  const palette = Array.isArray(source.palette)
+    ? source.palette.map((color) => normalizeHexColor(color, "")).filter(Boolean).slice(0, 12)
+    : [];
+  const fontFamily = (["system", "humanist", "mono"] as VisualizationChartFont[]).includes(source.fontFamily as VisualizationChartFont) ? source.fontFamily as VisualizationChartFont : defaultVisualizationChartStyle.fontFamily;
+  const chartHeight = (["compact", "standard", "expanded"] as VisualizationChartHeight[]).includes(source.chartHeight as VisualizationChartHeight) ? source.chartHeight as VisualizationChartHeight : defaultVisualizationChartStyle.chartHeight;
+  const barWidth = (["slim", "standard", "wide"] as VisualizationChartBarWidth[]).includes(source.barWidth as VisualizationChartBarWidth) ? source.barWidth as VisualizationChartBarWidth : defaultVisualizationChartStyle.barWidth;
+  const bounded = (raw: unknown, fallback: number, minimum: number, maximum: number) => {
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? Math.max(minimum, Math.min(maximum, parsed)) : fallback;
+  };
+  return {
+    templateId: String(source.templateId || defaultVisualizationChartStyle.templateId).trim().slice(0, 120) || defaultVisualizationChartStyle.templateId,
+    backgroundColor: normalizeHexColor(source.backgroundColor, defaultVisualizationChartStyle.backgroundColor),
+    plotBackgroundColor: normalizeHexColor(source.plotBackgroundColor, defaultVisualizationChartStyle.plotBackgroundColor),
+    textColor: normalizeHexColor(source.textColor, defaultVisualizationChartStyle.textColor),
+    mutedTextColor: normalizeHexColor(source.mutedTextColor, defaultVisualizationChartStyle.mutedTextColor),
+    gridColor: normalizeHexColor(source.gridColor, defaultVisualizationChartStyle.gridColor),
+    axisColor: normalizeHexColor(source.axisColor, defaultVisualizationChartStyle.axisColor),
+    palette: palette.length >= 2 ? palette : [...defaultVisualizationChartStyle.palette],
+    fontFamily,
+    chartHeight,
+    lineWidth: bounded(source.lineWidth, defaultVisualizationChartStyle.lineWidth, 1, 4),
+    pointRadius: bounded(source.pointRadius, defaultVisualizationChartStyle.pointRadius, 0, 6),
+    barRadius: bounded(source.barRadius, defaultVisualizationChartStyle.barRadius, 0, 12),
+    barWidth,
+    areaOpacity: bounded(source.areaOpacity, defaultVisualizationChartStyle.areaOpacity, 0, 0.4),
+  };
+}
+
+export function readableTextColor(background: string) {
+  const color = normalizeHexColor(background).slice(1);
+  const [red, green, blue] = [0, 2, 4].map((offset) => Number.parseInt(color.slice(offset, offset + 2), 16));
+  return (red * 299 + green * 587 + blue * 114) / 1000 < 142 ? "#ffffff" : "#1d1d1f";
+}
+
+function nullableNumericValue(value: unknown) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const parsed = typeof value === "number" ? value : Number(String(value).replace(/,/g, "").replace(/%$/, ""));
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function displayValue(value: unknown) {

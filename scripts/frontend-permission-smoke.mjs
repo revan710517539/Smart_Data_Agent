@@ -150,6 +150,11 @@ async function main() {
     console.log(JSON.stringify({ dashboardPerformance }));
     return;
   }
+  if (process.env.SDA_SMOKE_TABLE_ENHANCEMENTS_ONLY === "true") {
+    await verifyTableMetricEnhancements(cdp, appUrl);
+    console.log("多维表格与交叉表指标排名、进度样式、关联规则及计算列浏览器验收通过");
+    return;
+  }
   await cdp.evaluate(`[...document.querySelectorAll("nav button")].find((button) => button.textContent.trim() === "经营分析")?.click()`);
   await assertEval(cdp, `(() => { const group = [...document.querySelectorAll("nav button")].find((button) => button.textContent.trim() === "经营分析")?.parentElement; return [...(group?.querySelectorAll("a") || [])].map((link) => link.getAttribute("href")).join("|") === "/weekly-report|/supervision|/customer-segment-analysis"; })()`, "business analysis must place customer-segment analysis after institution supervision");
   await navigate(cdp, `${appUrl}/data-assets/data-management`);
@@ -991,6 +996,215 @@ async function runRealtimeVoiceSmoke(cdp, appUrl) {
   await assertEval(cdp, `(() => { const log = window.__analysisFetchLog; const result = log.findIndex((url) => url.includes("task_id=mock_task_1")); const next = log.findIndex((url) => url.includes("/api/analysis/run-async")); return result >= 0 && next > result; })()`, "queued voice command must start only after the previous result is fetched");
   await cdp.evaluate(`[...document.querySelectorAll("button")].find((button) => button.getAttribute("aria-label") === "停止实时语音交互")?.click()`);
   await waitForEval(cdp, `!document.body.innerText.includes("实时语音持续在线")`);
+}
+
+async function verifyTableMetricEnhancements(cdp, appUrl) {
+  await cdp.page.addInitScript(({ authKey }) => {
+    if (!location.search.includes("table-smoke=")) return;
+    const session = JSON.parse(localStorage.getItem(authKey));
+    if (!session?.tenant_id || !session?.user?.id) return;
+    const key = `sda:self-analysis:workbench:v1:${session.tenant_id}:${session.user.id}`;
+    localStorage.removeItem(`sda:table-templates:v1:${session.tenant_id}:${session.user.id}`);
+    const labels = { branch: "机构", month: "月份", amount: "放款金额", target: "目标金额" };
+    const fieldMetadata = { branch: { type: "string", semanticRole: "dimension" }, month: { type: "string", semanticRole: "dimension" }, amount: { type: "decimal", semanticRole: "metric", isMetric: true }, target: { type: "decimal", semanticRole: "metric", isMetric: true } };
+    const rows = [
+      { branch: "华东", raw: { branch: "华东", month: "2026-07", amount: 80, target: 100 }, fieldLabels: labels, fieldMetadata },
+      { branch: "华东", raw: { branch: "华东", month: "2026-08", amount: 120, target: 100 }, fieldLabels: labels, fieldMetadata },
+      { branch: "华北", raw: { branch: "华北", month: "2026-07", amount: 60, target: 90 }, fieldLabels: labels, fieldMetadata },
+      { branch: "华北", raw: { branch: "华北", month: "2026-08", amount: 150, target: 130 }, fieldLabels: labels, fieldMetadata },
+    ];
+    sessionStorage.setItem(key, JSON.stringify({ selectedDataTables: [], selectedTopic: null, showResult: true, analysisPlan: "浏览器隔离验收", analysisRows: rows, analysisSummary: "", analysisScenarios: "", analysisTaskId: "browser_table_enhancements", resultMode: "visual", visualTypes: { primary: "table", secondary: "pivot" }, scriptPlanName: "浏览器隔离验收", sqlScript: "", pythonScript: "", analysisInputCollapsed: true }));
+  }, { authKey: authStorageKey });
+  await navigate(cdp, `${appUrl}/self-analysis/query?table-smoke=${Date.now()}`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-card]'))`);
+  await cdp.evaluate(`(() => { const card = document.querySelector('[data-visual-card]'); if (card.querySelector('[data-visual-table-metric-header]')) return; card.querySelector('[data-visual-operation-toggle="true"]')?.click(); card.querySelector('[data-visual-panel-trigger="style"]')?.click(); })()`);
+  if (!await cdp.evaluate(`Boolean(document.querySelector('[data-visual-card] [data-visual-table-metric-header]'))`)) {
+    await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-style-menu="true"]'))`);
+    await cdp.evaluate(`[...document.querySelectorAll('[data-visual-style-menu="true"] button')].find((button) => button.textContent.trim() === "多维表格")?.click()`);
+  }
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-card] [data-visual-table-metric-header]'))`);
+  if (await cdp.evaluate(`document.querySelectorAll('[data-visual-card] [data-visual-table-dimension-header]').length < 2`)) {
+    await cdp.evaluate(`(() => { const card = document.querySelector('[data-visual-card]'); if (card.querySelector('[data-visual-operation-toggle="true"]')?.getAttribute('aria-expanded') !== 'true') card.querySelector('[data-visual-operation-toggle="true"]')?.click(); card.querySelector('[data-visual-panel-trigger="dimension"]')?.click(); })()`);
+    await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-field-panel="维度"]'))`);
+    await cdp.evaluate(`[...document.querySelectorAll('[data-visual-field-panel="维度"] button')].find((button) => button.textContent.trim() === '月份')?.click()`);
+    await waitForEval(cdp, `document.querySelectorAll('[data-visual-card] [data-visual-table-dimension-header]').length >= 2`);
+  }
+  await cdp.evaluate(`document.querySelector('[data-visual-card] [data-visual-more="true"]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-more-menu="true"] [data-table-style-template]'))`);
+  await cdp.evaluate(`document.querySelector('[data-visual-more-menu="true"] [data-table-style-template]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-table-template-gallery="true"]'))`);
+  await assertEval(cdp, `(() => { const gallery = document.querySelector('[data-table-template-gallery="true"]'); const preview = gallery?.querySelector('[data-table-template-preview]'); const scroll = gallery?.querySelector('[data-table-template-scroll="true"]'); const galleryRect = gallery?.getBoundingClientRect(); const previewRect = preview?.getBoundingClientRect(); const toolbar = document.querySelector('[data-visual-card]'); const style = gallery ? getComputedStyle(gallery) : null; return gallery?.parentElement === document.body && !toolbar.querySelector('[data-visual-panel-trigger="template"]') && document.querySelectorAll('[data-table-template-built-in]').length === 10 && document.querySelectorAll('[data-table-template-preview]').length === 11 && document.querySelectorAll('[data-table-template-featured="true"]').length === 1 && gallery.textContent.includes('银行经营排名') && galleryRect.width <= 353 && galleryRect.bottom <= innerHeight - 40 && Number.parseFloat(style.maxHeight) <= 880 && getComputedStyle(scroll).overflowY === 'auto' && previewRect.height <= 34; })()`, "style templates must open as a compact viewport-level gallery with one featured custom template and an internally scrollable height cap");
+  if (process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR) await cdp.page.screenshot({ path: join(process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR, "template-gallery.png") });
+  await dispatchRealClick(cdp, '[data-table-template-built-in="excel-navy"]');
+  await waitForEval(cdp, `document.querySelector('[data-visual-card] [data-visual-table-scroll]')?.dataset.tableTemplateId === 'excel-navy'`);
+  const appliedTemplateStyle = await cdp.evaluate(`(() => { const card = document.querySelector('[data-visual-card]'); const table = card.querySelector('[data-visual-table-scroll]'); const header = table?.querySelector('thead th'); const computed = header ? getComputedStyle(header) : null; return { banded: table?.dataset.tableBanded, density: table?.dataset.tableDensity, background: computed?.backgroundColor, color: computed?.color, headerVariable: table?.style.getPropertyValue('--sda-table-header-bg') }; })()`);
+  if (!(appliedTemplateStyle.banded === 'true' && appliedTemplateStyle.density === 'compact' && appliedTemplateStyle.background === 'rgb(36, 86, 128)' && appliedTemplateStyle.color === 'rgb(255, 255, 255)')) throw new Error(`selected classic template must apply live table tokens: ${JSON.stringify(appliedTemplateStyle)}`);
+  await cdp.evaluate(`(() => { const dimension = document.querySelector('[data-visual-card] [data-visual-table-dimension-header]'); if (!dimension) return; const rect = dimension.getBoundingClientRect(); dimension.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.bottom - 2 })); })()`);
+  if (await cdp.evaluate(`Boolean(document.querySelector('[data-visual-table-header-kind="dimension"]'))`)) {
+    await assertEval(cdp, `!document.querySelector('[data-visual-table-header-kind="dimension"] [data-visual-metric-ranking], [data-visual-table-header-kind="dimension"] [data-visual-metric-progress], [data-visual-table-header-kind="dimension"] [data-visual-metric-percent], [data-visual-table-header-kind="dimension"] [data-visual-metric-decimals], [data-visual-table-header-kind="dimension"] [data-visual-rank-direction], [data-visual-table-header-kind="dimension"] [data-visual-calculation-rule]')`, "dimension headers must not expose metric formatting, ranking, progress, rank direction or calculation actions");
+    await cdp.evaluate(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
+  }
+  await cdp.evaluate(`(() => { const header = document.querySelector('[data-visual-card] [data-visual-table-metric-header]'); window.__metricField = header.dataset.visualTableMetricHeader; const rect = header.getBoundingClientRect(); header.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.bottom - 2 })); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-table-header-kind="metric"] [data-visual-metric-ranking]')) && Boolean(document.querySelector('[data-visual-table-header-kind="metric"] [data-visual-metric-progress]')) && Boolean(document.querySelector('[data-visual-table-header-kind="metric"] [data-visual-metric-percent]')) && Boolean(document.querySelector('[data-visual-table-header-kind="metric"] [data-visual-metric-decimals]'))`);
+  await assertEval(cdp, `!document.querySelector('[data-visual-table-header-kind="metric"] [data-visual-rank-direction], [data-visual-table-header-kind="metric"] [data-visual-calculation-rule]')`, "ordinary metric headers must not expose rank directions or calculation rules");
+  await cdp.evaluate(`document.querySelector('[data-visual-table-header-kind="metric"] [data-visual-metric-percent]')?.click()`);
+  await waitForEval(cdp, `[...document.querySelectorAll('[data-visual-card] tbody td')].some((cell) => cell.textContent.trim().endsWith('%'))`);
+  await cdp.evaluate(`(() => { const header = document.querySelector('[data-visual-card] [data-visual-table-metric-header="' + CSS.escape(window.__metricField) + '"]'); const rect = header.getBoundingClientRect(); header.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.bottom - 2 })); })()`);
+  await waitForEval(cdp, `document.querySelector('[data-visual-metric-percent]')?.textContent.includes('隐藏百分号')`);
+  await cdp.evaluate(`document.querySelector('[data-visual-metric-percent]')?.click()`);
+  await waitForEval(cdp, `![...document.querySelectorAll('[data-visual-card] tbody td')].some((cell) => cell.textContent.trim().endsWith('%'))`);
+  await cdp.evaluate(`(() => { const header = document.querySelector('[data-visual-card] [data-visual-table-metric-header="' + CSS.escape(window.__metricField) + '"]'); const rect = header.getBoundingClientRect(); header.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.bottom - 2 })); })()`);
+  await cdp.evaluate(`document.querySelector('[data-visual-metric-decimals] button')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('input[aria-label="小数点后位数"]'))`);
+  await cdp.evaluate(`(() => { const input = document.querySelector('input[aria-label="小数点后位数"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '1'); input.dispatchEvent(new Event('input', { bubbles: true })); input.blur(); })()`);
+  await waitForEval(cdp, `[...document.querySelectorAll('[data-visual-card] tbody td')].some((cell) => /\\d+\\.0$/.test(cell.textContent.trim().replaceAll(',', '')))`);
+  await cdp.evaluate(`(() => { const header = document.querySelector('[data-visual-card] [data-visual-table-metric-header="' + CSS.escape(window.__metricField) + '"]'); const rect = header.getBoundingClientRect(); header.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.bottom - 2 })); })()`);
+  await cdp.evaluate(`document.querySelector('[data-visual-table-header-kind="metric"] [data-visual-metric-ranking]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-card] [data-visual-table-rank-header="' + CSS.escape(window.__metricField) + '"]'))`);
+  await assertEval(cdp, `(() => { const metric = document.querySelector('[data-visual-card] [data-visual-table-metric-header="' + CSS.escape(window.__metricField) + '"]'); const rank = metric?.nextElementSibling; const values = [...document.querySelectorAll('[data-visual-card] [data-visual-rank-cell="' + CSS.escape(window.__metricField) + '"]')].map((cell) => Number(cell.textContent.trim())).filter(Number.isFinite); return rank?.dataset.visualTableRankHeader === window.__metricField && values.length > 0 && new Set(values).size === values.length && Math.min(...values) === 1 && Math.max(...values) === values.length; })()`, "ranking column must be adjacent and contain stable one-based ordinal ranks");
+  await cdp.evaluate(`(() => { const header = document.querySelector('[data-visual-card] [data-visual-table-rank-header="' + CSS.escape(window.__metricField) + '"]'); const rect = header.getBoundingClientRect(); header.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.bottom - 2 })); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-table-header-kind="rank"] [data-visual-rank-direction="desc"]'))`);
+  await assertEval(cdp, `(() => { const menu = document.querySelector('[data-visual-table-header-kind="rank"]'); const labels = [...menu.querySelectorAll('button')].map((button) => button.textContent.trim()); return JSON.stringify(labels) === JSON.stringify(['评论','从大到小','从小到大','向左新增一列','向右新增一列']) && !menu.querySelector('[data-visual-metric-ranking], [data-visual-metric-progress], [data-visual-metric-percent], [data-visual-metric-decimals], [data-visual-calculation-rule], [data-visual-merge-dimension], [data-visual-freeze-column]'); })()`, "rank header menu must keep rank directions exclusive and must not expose metric formatting or calculation rules");
+  await cdp.evaluate(`document.querySelector('[data-visual-rank-direction="asc"]')?.click()`);
+  await cdp.evaluate(`(() => { const header = document.querySelector('[data-visual-card] [data-visual-table-metric-header="' + CSS.escape(window.__metricField) + '"]'); const rect = header.getBoundingClientRect(); header.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.bottom - 2 })); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-table-header-kind="metric"] [data-visual-metric-progress]'))`);
+  await cdp.evaluate(`document.querySelector('[data-visual-table-header-kind="metric"] [data-visual-metric-progress]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-table-progress-dialog="true"]'))`);
+  await assertEval(cdp, `(() => { const dialog = document.querySelector('[data-table-progress-dialog="true"]'); const box = dialog?.getBoundingClientRect(); return Boolean(document.querySelector('[data-progress-formula="true"]')) && Boolean(document.querySelector('[data-progress-denominator="true"]')) && Boolean(document.querySelector('[data-progress-color="true"]')) && Boolean(document.querySelector('[data-progress-association="true"]')) && document.querySelectorAll('[data-progress-palette-location="primary"]').length === 4 && document.querySelectorAll('[data-progress-palette]').length === 4 && document.querySelectorAll('[data-progress-color-mode-option]').length === 3 && !document.querySelector('[data-progress-palette-more-panel="true"]') && !document.querySelector('[data-progress-association-editor="true"]') && !dialog.textContent.includes('经典配色') && !dialog.textContent.includes('填充模式') && box.width <= 1045 && box.height <= 745; })()`, "progress dialog must be smaller, show four primary palettes, hide redundant labels, expose three fill modes and keep rules collapsed");
+  await cdp.evaluate(`document.querySelector('[data-progress-palette-more="true"]')?.click()`);
+  await waitForEval(cdp, `document.querySelectorAll('[data-progress-palette-location="additional"]').length === 6`);
+  await assertEval(cdp, `document.querySelectorAll('[data-progress-palette]').length === 10 && Boolean(document.querySelector('[data-progress-palette-more-panel="true"]'))`, "palette dropdown must reveal the six additional color combinations");
+  if (process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR) await cdp.page.screenshot({ path: join(process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR, "progress-palette-expanded.png") });
+  await cdp.evaluate(`document.querySelector('[data-progress-palette="青瓷"]')?.click(); document.querySelector('[data-progress-color-mode-option="solid"]')?.click()`);
+  await waitForEval(cdp, `document.querySelector('[data-progress-color-mode-option="solid"]')?.getAttribute('aria-pressed') === 'true'`);
+  await cdp.evaluate(`document.querySelector('[data-progress-color-mode-option="reverse_gradient"]')?.click()`);
+  await waitForEval(cdp, `document.querySelector('[data-progress-color-mode-option="reverse_gradient"]')?.getAttribute('aria-pressed') === 'true' && document.querySelector('[data-progress-color-preview="true"] > div')?.style.backgroundImage.includes('linear-gradient')`);
+  const denominatorReady = await cdp.evaluate(`(async () => {
+    const pause = (ms = 80) => new Promise((resolve) => setTimeout(resolve, ms));
+    const selectValue = (select, value) => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, value); select.dispatchEvent(new Event('change', { bubbles: true })); };
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const section = document.querySelector('[data-progress-denominator="true"]');
+      let selects = [...section.querySelectorAll('select')];
+      const fieldSelect = selects.at(-2);
+      if (!fieldSelect) return false;
+      if (!fieldSelect.value) selectValue(fieldSelect, [...fieldSelect.options].find((option) => option.value)?.value || '');
+      await pause();
+      selects = [...section.querySelectorAll('select')];
+      const valueSelect = selects.at(-1);
+      const options = [...valueSelect.options].filter((option) => option.value);
+      for (const option of options) {
+        selectValue(valueSelect, option.value); await pause();
+        const status = section.querySelector('[data-progress-denominator-status]')?.dataset.progressDenominatorStatus;
+        if (status === 'ready') return true;
+        if (status === 'multiple') break;
+      }
+      const add = [...section.querySelectorAll('button')].find((button) => button.textContent.includes('添加筛选'));
+      if (!add || add.disabled) return false;
+      add.click(); await pause();
+    }
+    return false;
+  })()`, true);
+  if (!denominatorReady) {
+    const denominatorState = await cdp.evaluate(`(() => { const section = document.querySelector('[data-progress-denominator="true"]'); return { status: section?.querySelector('[data-progress-denominator-status]')?.dataset.progressDenominatorStatus, selects: [...(section?.querySelectorAll('select') || [])].map((select) => ({ value: select.value, options: [...select.options].map((option) => option.value) })) }; })()`);
+    throw new Error(`progress denominator fixture could not resolve a unique row: ${JSON.stringify(denominatorState)}`);
+  }
+  await cdp.evaluate(`document.querySelector('[data-progress-association="true"] > button')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-progress-association-editor="true"]'))`);
+  await cdp.evaluate(`(() => { const editor = document.querySelector('[data-progress-association-editor="true"]'); [...editor.querySelectorAll('button')].find((button) => button.textContent.includes('添加关联规则'))?.click(); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('input[aria-label="关联规则条件值"]'))`);
+  await cdp.evaluate(`(() => { const editor = document.querySelector('[data-progress-association-editor="true"]'); [...editor.querySelectorAll('button')].find((button) => button.textContent.includes('添加关联规则'))?.click(); })()`);
+  await waitForEval(cdp, `document.querySelectorAll('[data-association-rule-row]').length === 2`);
+  await assertEval(cdp, `(() => [...document.querySelectorAll('[data-association-rule-row]')].every((row) => { const children = [...row.children]; const top = Math.min(...children.map((child) => child.getBoundingClientRect().top)); return row.getBoundingClientRect().height <= 56 && children.every((child) => Math.abs(child.getBoundingClientRect().top - top) <= 2 && child.getBoundingClientRect().height <= 38); }))()`, "each association rule must stay on one aligned row with consistent control heights");
+  await cdp.evaluate(`(() => {
+    const inputSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    const selectSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+    for (const input of document.querySelectorAll('input[aria-label="关联规则条件值"]')) { inputSetter.call(input, '-1000000000'); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); }
+    const firstRow = document.querySelector('[data-association-rule-row]');
+    const styleSelect = [...firstRow.querySelectorAll('select')].find((select) => [...select.options].some((option) => option.value === 'value'));
+    selectSetter.call(styleSelect, 'value'); styleSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    const color = document.querySelector('input[aria-label="进度条颜色码"]'); inputSetter.call(color, '#3366cc'); color.dispatchEvent(new Event('input', { bubbles: true })); color.dispatchEvent(new Event('change', { bubbles: true })); color.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+  })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('input[aria-label="关联规则枚举值"]'))`);
+  await cdp.evaluate(`(() => { const input = document.querySelector('input[aria-label="关联规则枚举值"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '达标'); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  if (process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR) await cdp.page.screenshot({ path: join(process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR, "progress-dialog.png") });
+  await cdp.evaluate(`[...document.querySelectorAll('[data-table-progress-dialog="true"] button')].find((button) => button.textContent.trim() === '确定')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-card] [data-visual-progress-cell="' + CSS.escape(window.__metricField) + '"] [data-progress-width]'))`);
+  await assertEval(cdp, `(() => { const cells = [...document.querySelectorAll('[data-visual-card] [data-visual-progress-cell="' + CSS.escape(window.__metricField) + '"]')]; return cells.some((cell) => Number(cell.querySelector('[data-progress-width]')?.dataset.progressWidth) > 0 && cell.querySelector('[data-progress-width]').style.backgroundImage.includes('linear-gradient') && cell.querySelector('[data-progress-width]').dataset.progressFillMode === 'reverse_gradient' && cell.querySelector('[data-progress-data-bar="true"]') && cell.querySelector('[data-progress-data-bar-track="true"]')?.getBoundingClientRect().width < cell.getBoundingClientRect().width) && cells.some((cell) => cell.style.backgroundColor) && cells.some((cell) => cell.textContent.trim() === '达标'); })()`, "saved progress must render an inset reverse-gradient data bar plus independent whole-cell background and enum display effects");
+
+  await cdp.evaluate(`(() => { const header = document.querySelector('[data-visual-card] [data-visual-table-metric-header="' + CSS.escape(window.__metricField) + '"]'); const rect = header.getBoundingClientRect(); header.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.bottom - 2 })); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-table-header-kind="metric"] [data-visual-insert-column="right"]'))`);
+  await assertEval(cdp, `!document.querySelector('[data-visual-table-header-kind="metric"] [data-visual-calculation-rule="true"]')`, "source metric columns must not expose calculation rules");
+  await cdp.evaluate(`document.querySelector('[data-visual-table-header-kind="metric"] [data-visual-insert-column="right"]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-card] [data-visual-table-calculated-header]'))`);
+  await cdp.evaluate(`(() => { const header = document.querySelector('[data-visual-card] [data-visual-table-calculated-header]'); window.__calculatedColumn = header.dataset.visualTableCalculatedHeader; header.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true })); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('input[aria-label="修改计算列名称"]'))`);
+  await cdp.evaluate(`(() => { const input = document.querySelector('input[aria-label="修改计算列名称"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '折算金额'); input.dispatchEvent(new Event('input', { bubbles: true })); input.blur(); })()`);
+  await waitForEval(cdp, `document.querySelector('[data-visual-card] [data-visual-table-calculated-header="' + CSS.escape(window.__calculatedColumn) + '"]')?.textContent.trim() === '折算金额'`);
+  await cdp.evaluate(`(() => { const header = document.querySelector('[data-visual-card] [data-visual-table-calculated-header="' + CSS.escape(window.__calculatedColumn) + '"]'); const rect = header.getBoundingClientRect(); header.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.bottom - 2 })); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-table-header-kind="calculated"] [data-visual-calculation-rule="true"]'))`);
+  const calculatedCountBeforeRule = await cdp.evaluate(`document.querySelectorAll('[data-visual-card] [data-visual-table-calculated-header]').length`);
+  await cdp.evaluate(`document.querySelector('[data-visual-table-header-kind="calculated"] [data-visual-calculation-rule="true"]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-table-calculation-dialog="true"] [data-calculation-expression="true"]'))`);
+  await assertEval(cdp, `document.querySelectorAll('[data-visual-card] [data-visual-table-calculated-header]').length === ${calculatedCountBeforeRule}`, "opening the current column calculation rule must not create another column");
+  await assertEval(cdp, `document.querySelectorAll('[data-table-calculation-dialog="true"] [data-calculation-metric]').length >= 2 && document.querySelector('[data-calculation-operators="true"]')?.textContent.includes('CASE WHEN')`, "calculation dialog must expose all metrics as draggable tokens and SQL-style operators");
+  await cdp.evaluate(`(() => { const editor = document.querySelector('[data-calculation-expression="true"]'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(editor, '[放款金额] / 2'); editor.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await waitForEval(cdp, `document.querySelector('[data-calculation-validation="ready"]')?.textContent.includes('首行预览')`);
+  if (process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR) await cdp.page.screenshot({ path: join(process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR, "calculation-dialog.png") });
+  await cdp.evaluate(`[...document.querySelectorAll('[data-table-calculation-dialog="true"] button')].find((button) => button.textContent.trim() === '确定')?.click()`);
+  await waitForEval(cdp, `document.querySelectorAll('[data-visual-card] [data-visual-calculated-cell="' + CSS.escape(window.__calculatedColumn) + '"]').length >= 4`);
+  await assertEval(cdp, `(() => { const values = [...document.querySelectorAll('[data-visual-card] [data-visual-calculated-cell="' + CSS.escape(window.__calculatedColumn) + '"]')].slice(0, 4).map((cell) => Number(cell.textContent.trim().replaceAll(',', ''))); return JSON.stringify(values) === JSON.stringify([40,60,30,75]); })()`, "calculated column must evaluate the saved formula for every table row");
+  await cdp.evaluate(`(() => { const card = document.querySelector('[data-visual-card]'); if (card.querySelector('[data-visual-operation-toggle="true"]')?.getAttribute('aria-expanded') !== 'true') card.querySelector('[data-visual-operation-toggle="true"]')?.click(); card.querySelector('[data-visual-panel-trigger="style"]')?.click(); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-style-menu="true"]'))`);
+  await cdp.evaluate(`[...document.querySelectorAll('[data-visual-style-menu="true"] button')].find((button) => button.textContent.trim() === "交叉表")?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-card] [data-pivot-table="true"] [data-visual-table-metric-header]')) && Boolean(document.querySelector('[data-visual-card] [data-pivot-table="true"] [data-visual-table-rank-header]')) && Boolean(document.querySelector('[data-visual-card] [data-pivot-table="true"] [data-visual-progress-cell]')) && Boolean(document.querySelector('[data-visual-card] [data-pivot-table="true"] [data-visual-table-calculated-header="' + CSS.escape(window.__calculatedColumn) + '"]')) && Boolean(document.querySelector('[data-visual-card] [data-pivot-table="true"] [data-visual-calculated-cell="' + CSS.escape(window.__calculatedColumn) + '"]'))`);
+  await cdp.evaluate(`(() => { const header = document.querySelector('[data-visual-card] [data-pivot-table="true"] [data-visual-table-metric-header]'); const rect = header.getBoundingClientRect(); header.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.bottom - 2 })); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-table-header-kind="metric"] [data-visual-metric-ranking]')) && Boolean(document.querySelector('[data-visual-table-header-kind="metric"] [data-visual-metric-progress]'))`);
+  if (process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR) await cdp.page.screenshot({ path: join(process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR, "pivot-calculated-column.png") });
+  await cdp.evaluate(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
+  await cdp.evaluate(`(() => { const card = document.querySelector('[data-visual-card]'); card.querySelector('[data-visual-more="true"]')?.click(); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-more-menu="true"] [data-table-style-template]')) && Boolean(document.querySelector('[data-visual-more-menu="true"] [data-save-table-template]'))`);
+  await assertEval(cdp, `(() => { const buttons = [...document.querySelectorAll('[data-visual-more-menu="true"] button')]; return buttons.at(-2)?.hasAttribute('data-table-style-template') && buttons.at(-1)?.hasAttribute('data-save-table-template'); })()`, "style templates must sit immediately above the final save-template item in the table More menu");
+  await cdp.evaluate(`document.querySelector('[data-save-table-template]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-save-table-template-dialog="true"] input[aria-label="表格模板名称"]'))`);
+  await cdp.evaluate(`(() => { const input = document.querySelector('[data-save-table-template-dialog="true"] input[aria-label="表格模板名称"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '我的经营表格'); input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await cdp.evaluate(`[...document.querySelectorAll('[data-save-table-template-dialog="true"] button')].find((button) => button.textContent.trim() === '保存')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-table-template-gallery="true"] [data-table-template-custom]'))`);
+  await assertEval(cdp, `(() => { const session = JSON.parse(localStorage.getItem(${JSON.stringify(authStorageKey)})); const saved = JSON.parse(localStorage.getItem('sda:table-templates:v1:' + session.tenant_id + ':' + session.user.id)); window.__customTableTemplateId = saved[0].id; return saved.length === 1 && saved[0].name === '我的经营表格' && !('rows' in saved[0]) && !('filters' in saved[0]) && saved[0].metricRankings.length === 1 && saved[0].metricFormats.length === 1 && saved[0].metricFormats[0].decimalPlaces === 1 && saved[0].metricProgress.length === 1 && saved[0].calculatedColumns.length === 1; })()`, "custom template must be tenant/user scoped and copy formatting, style and rules without data or filters");
+  if (process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR) await cdp.page.screenshot({ path: join(process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR, "custom-template-saved.png") });
+  await cdp.evaluate(`(() => { document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); const target = document.querySelectorAll('[data-visual-card]')[1]; target.querySelector('[data-visual-more="true"]')?.click(); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-more-menu="true"] [data-table-style-template]'))`);
+  await cdp.evaluate(`document.querySelector('[data-visual-more-menu="true"] [data-table-style-template]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-table-template-gallery="true"] [data-table-template-featured="true"]'))`);
+  await dispatchRealClick(cdp, '[data-table-template-gallery="true"] [data-table-template-featured="true"] > button');
+  await waitForEval(cdp, `document.querySelectorAll('[data-visual-card]')[1]?.querySelector('[data-visual-table-scroll]')?.dataset.tableTemplateId === 'featured-bank-performance-ranking'`);
+  const featuredPivotState = await cdp.evaluate(`(() => { const target = document.querySelectorAll('[data-visual-card]')[1]; const table = target.querySelector('[data-visual-table-scroll]'); const header = table?.querySelector('thead th'); const metricHeader = table?.querySelector('[data-visual-table-metric-header]'); const widths = [...target.querySelectorAll('[data-progress-width]')].map((fill) => Number(fill.dataset.progressWidth)); return { keepsData: target.textContent.includes('华东'), pivot: Boolean(target.querySelector('[data-pivot-table="true"]')), rank: Boolean(target.querySelector('[data-pivot-table="true"] [data-visual-table-rank-header]')), widths, background: header ? getComputedStyle(header).backgroundColor : '', metricBackground: metricHeader ? getComputedStyle(metricHeader).backgroundColor : '', headerVariable: table?.style.getPropertyValue('--sda-table-header-bg'), totalVariable: table?.style.getPropertyValue('--sda-table-total-bg'), templateId: table?.dataset.tableTemplateId, text: target.textContent.slice(0, 320) }; })()`);
+  if (!(featuredPivotState.keepsData && featuredPivotState.pivot && featuredPivotState.rank && featuredPivotState.widths.includes(100) && featuredPivotState.widths.some((width) => width > 0 && width < 100) && featuredPivotState.metricBackground === 'rgb(36, 86, 128)' && featuredPivotState.headerVariable === '#245680')) throw new Error(`featured bank template must preserve pivot data and apply navy tokens, ranks and column-maximum data bars: ${JSON.stringify(featuredPivotState)}`);
+  if (process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR) await cdp.page.screenshot({ path: join(process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR, "bank-performance-template-pivot.png") });
+  await cdp.evaluate(`(() => { const target = document.querySelectorAll('[data-visual-card]')[1]; if (target.querySelector('[data-visual-operation-toggle="true"]')?.getAttribute('aria-expanded') !== 'true') target.querySelector('[data-visual-operation-toggle="true"]')?.click(); target.querySelector('[data-visual-panel-trigger="style"]')?.click(); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelectorAll('[data-visual-card]')[1]?.querySelector('[data-visual-style-menu="true"]'))`);
+  await cdp.evaluate(`(() => { const target = document.querySelectorAll('[data-visual-card]')[1]; [...target.querySelectorAll('[data-visual-style-menu="true"] button')].find((button) => button.textContent.trim() === '多维表格')?.click(); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelectorAll('[data-visual-card]')[1]?.querySelector('[data-visual-table-rank-header]')) && Boolean(document.querySelectorAll('[data-visual-card]')[1]?.querySelector('[data-visual-progress-cell]')) && document.querySelectorAll('[data-visual-card]')[1]?.querySelector('[data-visual-table-scroll]')?.dataset.tableTemplateId === 'featured-bank-performance-ranking'`);
+  if (process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR) await cdp.page.screenshot({ path: join(process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR, "bank-performance-template-table.png") });
+  await cdp.evaluate(`(() => { const target = document.querySelectorAll('[data-visual-card]')[1]; target.querySelector('[data-visual-more="true"]')?.click(); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-more-menu="true"] [data-table-style-template]'))`);
+  await cdp.evaluate(`document.querySelector('[data-visual-more-menu="true"] [data-table-style-template]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-table-template-gallery="true"] [data-table-template-custom^="custom-table-"]'))`);
+  await dispatchRealClick(cdp, '[data-table-template-gallery="true"] [data-table-template-custom^="custom-table-"] > button');
+  await waitForEval(cdp, `document.querySelectorAll('[data-visual-card]')[1]?.querySelector('[data-visual-table-scroll]')?.dataset.tableTemplateId === window.__customTableTemplateId`);
+  const appliedCustomState = await cdp.evaluate(`(() => { const target = document.querySelectorAll('[data-visual-card]')[1]; return { keepsData: target.textContent.includes('华东'), rank: Boolean(target.querySelector('[data-visual-table-rank-header]')), progress: Boolean(target.querySelector('[data-visual-progress-cell]')), calculated: Boolean(target.querySelector('[data-visual-table-calculated-header]')), notice: target.querySelector('[data-visual-table-freeze-notice]')?.textContent || '', text: target.textContent.slice(0, 500) }; })()`);
+  if (!(appliedCustomState.keepsData && appliedCustomState.rank && appliedCustomState.progress && appliedCustomState.calculated)) throw new Error(`one-click custom template application must preserve data and recreate rules: ${JSON.stringify(appliedCustomState)}`);
+  if (process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR) await cdp.page.screenshot({ path: join(process.env.SDA_SMOKE_TABLE_SCREENSHOT_DIR, "custom-template-applied.png") });
+  await cdp.evaluate(`(() => { const target = document.querySelectorAll('[data-visual-card]')[1]; if (target.querySelector('[data-visual-operation-toggle="true"]')?.getAttribute('aria-expanded') !== 'true') target.querySelector('[data-visual-operation-toggle="true"]')?.click(); target.querySelector('[data-visual-panel-trigger="style"]')?.click(); })()`);
+  await waitForEval(cdp, `Boolean(document.querySelectorAll('[data-visual-card]')[1]?.querySelector('[data-visual-style-menu="true"]'))`);
+  await cdp.evaluate(`(() => { const target = document.querySelectorAll('[data-visual-card]')[1]; [...target.querySelectorAll('[data-visual-style-menu="true"] button')].find((button) => button.textContent.trim() === '柱状图')?.click(); })()`);
+  await waitForEval(cdp, `!document.querySelector('[data-table-template-gallery="true"]')`);
+  await cdp.evaluate(`document.querySelectorAll('[data-visual-card]')[1]?.querySelector('[data-visual-more="true"]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-more-menu="true"]'))`);
+  await assertEval(cdp, `!document.querySelector('[data-visual-more-menu="true"] [data-table-style-template], [data-visual-more-menu="true"] [data-save-table-template]')`, "non-table visualizations must hide both style-template and save-template actions");
+  const calculatedColumnId = await cdp.evaluate(`window.__calculatedColumn`);
+  await navigate(cdp, `${appUrl}/self-analysis/query`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-card] [data-pivot-table="true"] [data-visual-table-calculated-header=${JSON.stringify(calculatedColumnId)}]'))`);
+  await assertEval(cdp, `document.querySelector('[data-visual-card] [data-pivot-table="true"] [data-visual-table-calculated-header=${JSON.stringify(calculatedColumnId)}]')?.textContent.trim() === '折算金额'`, "calculated column name, formula and pivot presentation must restore after navigation");
 }
 
 async function selectFirstAnalysisTable(cdp) {

@@ -14,6 +14,7 @@ import {
 import { globalMessageBoardSubmittedEvent } from "./message-board/GlobalMessageBoardShortcut";
 import { MessageBoardAttachmentGallery } from "./message-board/MessageBoardAttachmentGallery";
 import { DataPageSelector } from "./ui/DataPageSelector";
+import { AppSelect } from "./ui/AppSelect";
 
 const messagePageSize = 20;
 const messageStatusOptions: { value: MessageBoardEntry["status"] | ""; label: string }[] = [
@@ -231,7 +232,7 @@ export function MessageBoardManagement() {
           </div>
           <div className="flex items-center gap-2">
             {total > messagePageSize && <DataPageSelector page={page} totalPages={Math.ceil(total / messagePageSize)} shownCount={messages.length} totalCount={total} onChange={setPage} ariaLabel="留言分页" />}
-            <select
+            <AppSelect
               value={statusFilter}
               onChange={(event) => {
                 setPage(1);
@@ -244,7 +245,7 @@ export function MessageBoardManagement() {
               {messageStatusOptions.map((option) => (
                 <option key={option.value || "all"} value={option.value}>{option.label}</option>
               ))}
-            </select>
+            </AppSelect>
             <form onSubmit={(event) => { event.preventDefault(); setPage(1); setAppliedQuery(query.trim()); }} className="relative w-[320px] max-w-full">
               <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#aeaeb2]" />
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索留言人、内容、页面或机构" className="h-9 w-full rounded-lg border border-[#e5e5ea] bg-[#fafbfc] pl-9 pr-3 text-[12px] text-[#1d1d1f] outline-none focus:border-[#8bb7e6] focus:bg-white" />
@@ -301,7 +302,7 @@ export function MessageBoardManagement() {
                   <div className="truncate text-[10px] text-[#aeaeb2]">{message.page_url || message.page_key}</div>
                 </div>
                 <div>{quote?.selected_text ? <span className="inline-flex items-center gap-1 rounded-full bg-[#f5f1fb] px-2 py-0.5 text-[10px] text-[#7654a8]"><Quote className="h-3 w-3" />是</span> : <span className="text-[11px] text-[#aeaeb2]">否</span>}</div>
-                <select
+                <AppSelect
                   value={message.status}
                   onChange={(event) => void changeStatus(message, event.target.value as MessageBoardEntry["status"])}
                   disabled={updatingId === message.message_id}
@@ -311,7 +312,7 @@ export function MessageBoardManagement() {
                   <option value="new">新增加</option>
                   <option value="adopted">已采纳</option>
                   <option value="completed">已完成</option>
-                </select>
+                </AppSelect>
                 <div className="flex items-center justify-end gap-1.5 text-[#8a8a8e]">
                   {message.attachment_ids.length > 0 && <span className="flex items-center gap-0.5 text-[10px]"><ImageIcon className="h-3.5 w-3.5" />{message.attachment_ids.length}</span>}
                   <button type="button" onClick={() => setExpandedId((current) => current === message.message_id ? null : message.message_id)} aria-label={expanded ? "折叠留言详情" : "展开留言详情"} className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-[#f2f3f5]">{expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button>

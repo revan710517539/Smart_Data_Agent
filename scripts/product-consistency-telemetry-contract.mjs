@@ -6,6 +6,7 @@ const files = await Promise.all([
   "src/app/components/SelfAnalysis.tsx",
   "src/app/components/DataAssets.tsx",
   "src/app/components/data-assets/TableRelationshipBuilder.tsx",
+  "src/app/components/ui/FormDialog.tsx",
   "src/app/components/LoginPage.tsx",
   "src/app/components/ui/DataPageSelector.tsx",
   "src/app/components/Layout.tsx",
@@ -21,7 +22,7 @@ const files = await Promise.all([
   "backend/platform/database/mysql/migrations/0031_user_interaction_events.sql",
 ].map((path) => readFile(path, "utf8")));
 
-const [visualReport, selfAnalysis, dataAssets, relationships, login, pagination, layout, platformContext, systemSettings, visualCard, supervisor, telemetryClient, telemetryRoute, authRoute, accessService, telemetryStore, migration] = files;
+const [visualReport, selfAnalysis, dataAssets, relationships, formDialog, login, pagination, layout, platformContext, systemSettings, visualCard, supervisor, telemetryClient, telemetryRoute, authRoute, accessService, telemetryStore, migration] = files;
 
 assert.ok(!visualReport.includes('label="存主题"'), "可视化报表不得显示存主题按钮");
 assert.ok(!selfAnalysis.includes('handleSaveTarget("topic")'), "智能分析不得显示存主题入口");
@@ -32,10 +33,11 @@ assert.match(selfAnalysis, /prepareQuestionSwitch/, "切换分析问题时必须
 assert.match(platformContext, /runBeforeLogout/, "退出登录前必须有机会沉淀最新一轮主题表 SQL");
 
 assert.match(dataAssets, /onClick=\{\(\) => setRawUploadOpen\(true\)\}[\s\S]*?上传Excel文件/, "上传 Excel 按钮必须打开上传弹窗");
-assert.match(dataAssets, /createPortal\(<div[\s\S]*?data-static-workbook-modal-overlay="true"[\s\S]*?<section role="dialog"[\s\S]*?data-static-workbook-dialog="true"[\s\S]*?document\.body\)/, "上传必须使用 Portal 弹窗而非页面跳转");
-assert.match(relationships, /createPortal\(<div[\s\S]*?data-table-relationship-modal-overlay="true"[\s\S]*?<section role="dialog"[\s\S]*?data-table-relationship-dialog="true"[\s\S]*?document\.body\)/, "新增表关系必须使用 Portal 弹窗而非页面样式");
-assert.match(dataAssets, /event\.key === "Escape" && !uploading/, "上传弹窗必须支持 Escape 安全关闭");
-assert.match(relationships, /event\.key === "Escape" && !saving/, "表关系弹窗必须支持 Escape 安全关闭");
+assert.match(dataAssets, /<FormDialog[\s\S]*?data-static-workbook-dialog[\s\S]*?data-static-workbook-modal-overlay/, "上传必须使用统一表单弹窗而非页面跳转");
+assert.match(relationships, /<FormDialog[\s\S]*?data-table-relationship-dialog[\s\S]*?data-table-relationship-modal-overlay/, "新增表关系必须使用统一表单弹窗而非页面样式");
+assert.match(formDialog, /DialogPrimitive\.Portal[\s\S]*?DialogPrimitive\.Overlay[\s\S]*?DialogPrimitive\.Content/, "统一表单弹窗必须通过 Portal 分离遮罩与内容");
+assert.match(formDialog, /onEscapeKeyDown=[\s\S]*?busy[\s\S]*?preventDefault/, "统一表单弹窗必须支持 Escape 安全关闭");
+assert.match(formDialog, /onInteractOutside=[\s\S]*?busy \|\| !closeOnOutside/, "统一表单弹窗必须只在非忙碌状态响应遮罩关闭");
 assert.ok(!relationships.includes("每个横条是一组经过权限和主键校验的多表关系"), "表关系说明横条必须移除");
 assert.ok(!relationships.includes("系统血缘证据"), "系统血缘证据块必须移除");
 assert.match(relationships, /const canvasExtent = useMemo/);

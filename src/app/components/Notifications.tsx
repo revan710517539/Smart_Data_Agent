@@ -35,6 +35,7 @@ import {
 } from "../services/notificationApi";
 import { fetchMetricDictionary } from "../services/metricDictionaryApi";
 import { apiErrorMessage } from "../services/apiClient";
+import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "./ui/FormDialog";
 
 type NotificationSection = "alerts" | "subscriptions" | "history";
 
@@ -591,29 +592,23 @@ function TeamsRuleModal({
     document.execCommand(command, false, value);
   };
   useEffect(() => {
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = originalOverflow; };
-  }, []);
-  useEffect(() => {
     if (!templateEditing || !templateEditorRef.current) return;
     templateEditorRef.current.innerHTML = safeTemplateMarkup(templateDraft.bodyHtml || defaultTemplateBody(selectedMetrics), selectedMetrics, true);
   // Populate the editable canvas only when it opens; do not reset the caret during typing.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateEditing]);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1d1d1f]/35 px-5 py-8" role="presentation" onMouseDown={onClose}>
-      <section className="flex h-[min(860px,calc(100vh-2rem))] w-full max-w-[1180px] flex-col overflow-hidden rounded-2xl border border-[#e5e5ea] bg-white shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="teams-rule-title" onMouseDown={(event) => event.stopPropagation()}>
-        <header className="shrink-0 flex items-start justify-between border-b border-[#f0f0f2] px-6 py-5">
-          <div>
-            <p className="text-[12px] font-medium text-[#8a8a8e]">推送与订阅</p>
-            <h3 id="teams-rule-title" className="mt-1 text-[20px] font-semibold tracking-tight text-[#1d1d1f]">新建 Teams 指标规则</h3>
-            <p className="mt-1 text-[12px] text-[#8a8a8e]">按固定经营快报格式，每天仅发送给本人（当前） Teams 账号。</p>
-          </div>
-          <button type="button" onClick={onClose} aria-label="关闭新建规则弹窗" className="rounded-lg p-2 text-[#8a8a8e] transition-colors hover:bg-[#f5f5f7] hover:text-[#1d1d1f]"><X className="h-4 w-4" /></button>
-        </header>
-
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+    <FormDialog
+      open
+      title="新建 Teams 指标规则"
+      description="推送与订阅 · 按固定经营快报格式，每天仅发送给本人（当前） Teams 账号。"
+      widthClassName="max-w-[1180px]"
+      heightClassName="h-[min(860px,calc(100vh-2rem))]"
+      busy={busy}
+      onClose={onClose}
+      bodyClassName="px-6 py-5"
+      footer={<><div className="mr-auto min-w-0"><span className={`block text-[11px] ${teamsConnected ? "text-[#34a853]" : "text-[#8a8a8e]"}`}>{teamsConnected ? "Teams 已连接，发送对象固定为本人。" : "请先点击页面上的“连接 Teams”完成授权。"}</span>{notice && <span className={`mt-1 block max-w-[680px] text-[11px] ${notice.includes("已发送") ? "text-[#248a3d]" : "text-[#d06b35]"}`}>{notice}</span>}</div>{!teamsConnected && <FormDialogCancelButton disabled={busy} onClick={onConnect}>连接 Teams</FormDialogCancelButton>}<FormDialogCancelButton disabled={busy} onClick={onTest}>测试</FormDialogCancelButton><FormDialogCancelButton onClick={onClose}>取消</FormDialogCancelButton><FormDialogPrimaryButton disabled={busy} onClick={onEnable}>启用</FormDialogPrimaryButton></>}
+    >
           <div className="space-y-5 pr-1">
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <label className="block text-[12px] font-medium text-[#636366]">规则名称
@@ -642,14 +637,7 @@ function TeamsRuleModal({
             <div className="mt-2 text-[10px] text-[#aeaeb2]">已识别的指标会显示为占位符；发送时会在原位置填入指标名称、指标值、统计周期与环比变化。</div>
           </div>
           </div>
-        </div>
-
-        <footer className="shrink-0 flex items-center justify-between border-t border-[#f0f0f2] bg-white px-6 py-4">
-          <div className="min-w-0"><span className={`block text-[11px] ${teamsConnected ? "text-[#34a853]" : "text-[#8a8a8e]"}`}>{teamsConnected ? "Teams 已连接，发送对象固定为本人。" : "请先点击页面上的“连接 Teams”完成授权。"}</span>{notice && <span className={`mt-1 block max-w-[680px] text-[11px] ${notice.includes("已发送") ? "text-[#248a3d]" : "text-[#d06b35]"}`}>{notice}</span>}</div>
-          <div className="flex gap-2">{!teamsConnected && <button type="button" disabled={busy} onClick={onConnect} className="h-9 rounded-lg border border-[#9fb7d4] bg-white px-4 text-[12px] font-medium text-[#0a66c2] hover:bg-[#edf4fb] disabled:opacity-50">连接 Teams</button>}<button type="button" disabled={busy} onClick={onTest} className="h-9 rounded-lg border border-[#9fb7d4] bg-[#edf4fb] px-4 text-[12px] font-medium text-[#0a66c2] hover:bg-[#e2eef9] disabled:opacity-50">测试</button><button type="button" onClick={onClose} className="h-9 rounded-lg border border-[#d1d1d6] px-4 text-[12px] text-[#636366] hover:bg-[#f5f5f7]">取消</button><button type="button" disabled={busy} onClick={onEnable} className="h-9 rounded-lg bg-[#1d1d1f] px-4 text-[12px] font-medium text-white disabled:opacity-50">启用</button></div>
-        </footer>
-      </section>
-    </div>
+    </FormDialog>
   );
 }
 

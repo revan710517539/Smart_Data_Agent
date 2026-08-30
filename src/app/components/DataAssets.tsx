@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import { zhCN } from "date-fns/locale";
 import { useLocation } from "react-router";
 import {
@@ -110,6 +109,8 @@ import { pageDataAvailableForRawCatalog, pageDataScope } from "./page-data/assig
 import { TableRelationshipWorkspace } from "./data-assets/TableRelationshipBuilder";
 import { DataPageSelector } from "./ui/DataPageSelector";
 import { ConfirmDialog, askConfirm } from "./ui/ConfirmDialog";
+import { AppSelect } from "./ui/AppSelect";
+import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "./ui/FormDialog";
 import { Calendar } from "./ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
@@ -874,7 +875,7 @@ function MetricManagement({
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      <select
+                      <AppSelect
                         value={metric.alignmentStatus === "aligned" ? "aligned" : "unaligned"}
                         onChange={(event) => void onAlignmentChange(metric, event.target.value as "aligned" | "unaligned")}
                         disabled={!canEditMetric(metric) || Boolean(alignmentSavingId)}
@@ -885,7 +886,7 @@ function MetricManagement({
                       >
                         <option value="unaligned">未对齐</option>
                         <option value="aligned">已对齐</option>
-                      </select>
+                      </AppSelect>
                     </div>
                   </td>
                 </tr>
@@ -1013,16 +1014,16 @@ function MetricBatchImportModal({
   onImport: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4">
-      <div className="w-full max-w-[620px] rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
-        <div className="flex items-center justify-between border-b border-[#f0f0f2] px-5 py-4">
-          <div>
-            <h3 className="text-[14px] text-[#1d1d1f]">批量添加指标</h3>
-            <p className="mt-0.5 text-[11px] text-[#8a8a8e]">上传标准 Excel 后新增指标；完全相同的重复行只导入一次，口径冲突时整批不写入。</p>
-          </div>
-          <button type="button" onClick={onClose} disabled={importing} className="rounded-lg px-3 py-1.5 text-[12px] text-[#8a8a8e] hover:bg-[#f2f2f7] disabled:opacity-40">关闭</button>
-        </div>
-        <div className="space-y-4 p-5">
+    <FormDialog
+      open
+      title="批量添加指标"
+      description="上传标准 Excel 后新增指标；完全相同的重复行只导入一次，口径冲突时整批不写入。"
+      widthClassName="max-w-[620px]"
+      busy={importing}
+      onClose={onClose}
+      footer={<><FormDialogCancelButton onClick={onClose} disabled={importing} /><FormDialogPrimaryButton onClick={onImport} disabled={!file || importing}><Upload className="h-3.5 w-3.5" />{importing ? "正在导入" : "开始导入"}</FormDialogPrimaryButton></>}
+    >
+        <div className="space-y-4">
           <label className="block rounded-xl border border-dashed border-[#d1d1d6] bg-[#fafbfc] p-5 text-center hover:bg-[#f7f7f8]">
             <Upload className="mx-auto h-5 w-5 text-[#636366]" />
             <span className="mt-2 block text-[13px] text-[#1d1d1f]">{file ? file.name : "选择指标 Excel 文件"}</span>
@@ -1037,15 +1038,7 @@ function MetricBatchImportModal({
           </div>
           {notice && <div className={`rounded-lg px-3 py-2 text-[12px] leading-[1.6] ${/失败|无效|无法|缺少|为空|超过|冲突|重名/.test(notice) ? "bg-[#fff5f4] text-[#c5221f]" : "bg-[#fafbfc] text-[#636366]"}`}>{notice}</div>}
         </div>
-        <div className="flex items-center justify-end gap-2 border-t border-[#f0f0f2] px-5 py-4">
-          <button type="button" onClick={onClose} disabled={importing} className="rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[12px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-40">取消</button>
-          <button type="button" onClick={onImport} disabled={!file || importing} className="inline-flex items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-4 py-2 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-40">
-            <Upload className="h-3.5 w-3.5" />
-            {importing ? "正在导入" : "开始导入"}
-          </button>
-        </div>
-      </div>
-    </div>
+    </FormDialog>
   );
 }
 
@@ -1075,24 +1068,15 @@ function MetricEditor({
   onSave: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4">
-      <div className="w-full max-w-[880px] rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
-        <div className="flex items-center justify-between border-b border-[#f0f0f2] px-5 py-4">
-          <div>
-            <h3 className="text-[14px] text-[#1d1d1f]">{editing ? "修改指标" : "新增指标"}</h3>
-            <p className="mt-0.5 text-[11px] text-[#aeaeb2]">
-              指标ID由系统自动生成；指标名称建议采用“客群 + 业务节点 + 计算逻辑”的命名规则
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg px-3 py-1.5 text-[12px] text-[#8a8a8e] hover:bg-[#f2f2f7]"
-          >
-            关闭
-          </button>
-        </div>
-        <div className="grid max-h-[70vh] gap-4 overflow-y-auto p-5 md:grid-cols-2">
+    <FormDialog
+      open
+      title={editing ? "修改指标" : "新增指标"}
+      description="指标ID由系统自动生成；指标名称建议采用“客群 + 业务节点 + 计算逻辑”的命名规则"
+      widthClassName="max-w-[880px]"
+      onClose={onClose}
+      bodyClassName="grid gap-4 md:grid-cols-2"
+      footer={<><span className="mr-auto text-[12px] text-[#d93025]">{notice}</span><FormDialogCancelButton onClick={onClose} /><FormDialogPrimaryButton onClick={onSave}><FilePlus2 className="h-3.5 w-3.5" />保存指标</FormDialogPrimaryButton></>}
+    >
           {metricColumns.map((column) => (
             <label key={column.key} className={column.multiline ? "md:col-span-2" : ""}>
               <span className="mb-1.5 block text-[12px] text-[#636366]">{column.label}</span>
@@ -1122,20 +1106,7 @@ function MetricEditor({
             visibleRoles={form.visibleRoles || []}
             onChange={onListChange}
           />
-        </div>
-        <div className="flex items-center justify-between border-t border-[#f0f0f2] px-5 py-4">
-          <span className="text-[12px] text-[#d93025]">{notice}</span>
-          <button
-            type="button"
-            onClick={onSave}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-4 py-2 text-[12px] text-white hover:bg-[#2c2c2e]"
-          >
-            <FilePlus2 className="w-3.5 h-3.5" />
-            保存指标
-          </button>
-        </div>
-      </div>
-    </div>
+    </FormDialog>
   );
 }
 
@@ -1821,14 +1792,6 @@ function StaticWorkbookUploadModal({
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !uploading) onClose();
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose, uploading]);
-
   const upload = async () => {
     if (!file) {
       setError("请选择 Excel 工作簿。");
@@ -1850,13 +1813,20 @@ function StaticWorkbookUploadModal({
     }
   };
 
-  return createPortal(<div className="fixed inset-0 z-[160] flex items-center justify-center bg-[rgba(18,33,27,0.32)] p-4 sm:p-6" data-static-workbook-modal-overlay="true" onMouseDown={(event) => { if (event.target === event.currentTarget && !uploading) onClose(); }}>
-    <section role="dialog" aria-modal="true" aria-labelledby="static-workbook-dialog-title" aria-describedby="static-workbook-dialog-description" aria-busy={uploading} data-static-workbook-dialog="true" className="flex max-h-[82vh] w-full max-w-[600px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/15" style={{ contain: "layout paint" }} onMouseDown={(event) => event.stopPropagation()}>
-      <div className="flex items-start justify-between border-b border-[#ecefed] px-5 py-4">
-        <div><h3 id="static-workbook-dialog-title" className="text-[17px] font-semibold text-[#1d1d1f]">上传Excel文件</h3><p id="static-workbook-dialog-description" className="mt-1 text-[11px] leading-5 text-[#8b938e]">支持 Excel 工作簿及飞书表格导出的 .xlsx 文件；每个非空 Sheet 会生成一张不可变、只读的静态原始表。</p></div>
-        <button type="button" onClick={onClose} disabled={uploading} className="rounded-lg p-2 text-[#8a8f8c] hover:bg-[#f2f4f3] disabled:opacity-50" aria-label="关闭上传弹窗"><X className="h-5 w-5" /></button>
-      </div>
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
+  return <FormDialog
+    open
+    title="上传Excel文件"
+    description="支持 Excel 工作簿及飞书表格导出的 .xlsx 文件；每个非空 Sheet 会生成一张不可变、只读的静态原始表。"
+    widthClassName="max-w-[600px]"
+    heightClassName="max-h-[82vh]"
+    zIndexClassName="z-[160]"
+    busy={uploading}
+    onClose={onClose}
+    bodyClassName="space-y-4"
+    dataAttributes={{ "data-static-workbook-dialog": "true" }}
+    overlayDataAttributes={{ "data-static-workbook-modal-overlay": "true" }}
+    footer={<><FormDialogCancelButton onClick={onClose} disabled={uploading} /><FormDialogPrimaryButton onClick={() => void upload()} disabled={uploading || !file}>{uploading ? "上传并生成中…" : "上传并生成"}</FormDialogPrimaryButton></>}
+  >
         <label className="flex min-h-[150px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-[#b9d2c3] bg-[#f8fcf9] px-5 text-center hover:border-[#76af8f]">
           <Upload className="h-7 w-7 text-[#31835b]" />
           <span className="mt-3 text-[13px] text-[#3d4a42]">{file ? file.name : "选择 Excel / 飞书表格导出文件"}</span>
@@ -1865,10 +1835,7 @@ function StaticWorkbookUploadModal({
         </label>
         <div className="rounded-lg bg-[#f7f8f7] px-3 py-2.5 text-[10px] leading-5 text-[#747d77]">静态表会进入原始表、智能分析和表关系目录；它不会覆盖 Data Crawler 文件，也不会随采集任务自动更新。</div>
         {error && <div className="rounded-lg border border-[#f3d5d0] bg-[#fff8f7] px-3 py-2 text-[11px] text-[#b8493e]">{error}</div>}
-      </div>
-      <div className="flex justify-end gap-2 border-t border-[#ecefed] px-5 py-3"><button type="button" onClick={onClose} disabled={uploading} className="h-9 rounded-lg border border-[#dfe3e1] bg-white px-4 text-[12px] text-[#5f6762] hover:bg-[#f7f8f7] disabled:opacity-50">取消</button><button type="button" onClick={() => void upload()} disabled={uploading || !file} className="h-9 rounded-lg bg-[#0f8f58] px-5 text-[12px] text-white hover:bg-[#0b7d4c] disabled:cursor-not-allowed disabled:opacity-50">{uploading ? "上传并生成中…" : "上传并生成"}</button></div>
-    </section>
-  </div>, document.body);
+  </FormDialog>;
 }
 
 function DataTablePagination({
@@ -2198,19 +2165,18 @@ function DataTableCreateModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4 py-6">
-      <div role="dialog" aria-modal="true" aria-label={`新增${tableLabel}`} className="flex max-h-[calc(100vh-48px)] w-full max-w-[960px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
-        <div className="flex items-center justify-between border-b border-[#f0f0f2] px-5 py-4">
-          <div>
-            <h3 className="text-[14px] text-[#1d1d1f]">新增{tableLabel}</h3>
-            <p className="mt-0.5 text-[11px] text-[#aeaeb2]">按照{tableLabel}资产要求填写基础信息和字段语义，带 * 的项目为必填。</p>
-          </div>
-          <button type="button" aria-label={`关闭新增${tableLabel}弹窗`} onClick={onClose} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#8a8a8e] hover:bg-[#f2f2f7]">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+    <FormDialog
+      open
+      title={`新增${tableLabel}`}
+      description={`按照${tableLabel}资产要求填写基础信息和字段语义，带 * 的项目为必填。`}
+      widthClassName="max-w-[960px]"
+      heightClassName="max-h-[calc(100vh-48px)]"
+      busy={saving}
+      onClose={onClose}
+      ariaLabel={`新增${tableLabel}`}
+      bodyClassName="space-y-5"
+      footer={<><span className="mr-auto min-w-0 text-[11px] text-[#d93025]">{error}</span><FormDialogCancelButton onClick={onClose} disabled={saving} /><FormDialogPrimaryButton onClick={() => void save()} disabled={saving}><Save className="h-3.5 w-3.5" />{saving ? "保存中..." : `保存${tableLabel}`}</FormDialogPrimaryButton></>}
+    >
           {isRaw ? (
             <div className="grid gap-4 md:grid-cols-2">
               <DataTableFormField label="表英文名" required value={rawDraft.tableNameEn} placeholder="loan_operation_fact" onChange={(value) => setRawDraft((current) => ({ ...current, tableNameEn: value }))} />
@@ -2267,9 +2233,9 @@ function DataTableCreateModal({
                   <div key={index} className="grid grid-cols-[1fr_1fr_0.72fr_0.8fr_0.66fr_1.25fr_1.15fr_36px] gap-2 border-t border-[#f8f8f8] p-3">
                     <input aria-label={`字段${index + 1}英文名`} value={field.fieldNameEn} onChange={(event) => updateField(index, "fieldNameEn", event.target.value)} className="h-8 rounded-md border border-[#e5e5ea] px-2 text-[11px] outline-none focus:border-[#c7c7cc]" />
                     <input aria-label={`字段${index + 1}中文名`} value={field.fieldNameCn} onChange={(event) => updateField(index, "fieldNameCn", event.target.value)} className="h-8 rounded-md border border-[#e5e5ea] px-2 text-[11px] outline-none focus:border-[#c7c7cc]" />
-                    <select aria-label={`字段${index + 1}字段角色`} value={field.semanticRole} onChange={(event) => updateField(index, "semanticRole", event.target.value)} className="h-8 rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]"><option value="metric">指标</option><option value="dimension">维度</option><option value="date">日期</option></select>
-                    <select aria-label={`字段${index + 1}类型`} value={field.semanticRole === "date" ? dateFieldFormat : field.type} disabled={field.semanticRole !== "metric"} onChange={(event) => updateField(index, "type", event.target.value)} className="h-8 rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc] disabled:bg-[#fafbfc]">{field.semanticRole === "metric" ? metricFieldTypes.map((type) => <option key={type} value={type}>{type}</option>) : <option value={field.semanticRole === "date" ? dateFieldFormat : "string"}>{field.semanticRole === "date" ? dateFieldFormat : "string"}</option>}</select>
-                    <select aria-label={`字段${index + 1}是否主键`} value={field.isPrimaryKey ? "yes" : "no"} onChange={(event) => updateField(index, "isPrimaryKey", event.target.value === "yes")} className="h-8 rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]"><option value="no">否</option><option value="yes">是</option></select>
+                    <AppSelect aria-label={`字段${index + 1}字段角色`} value={field.semanticRole} onChange={(event) => updateField(index, "semanticRole", event.target.value)} controlSize="compact" className="text-[11px]"><option value="metric">指标</option><option value="dimension">维度</option><option value="date">日期</option></AppSelect>
+                    <AppSelect aria-label={`字段${index + 1}类型`} value={field.semanticRole === "date" ? dateFieldFormat : field.type} disabled={field.semanticRole !== "metric"} onChange={(event) => updateField(index, "type", event.target.value)} controlSize="compact" className="text-[11px]">{field.semanticRole === "metric" ? metricFieldTypes.map((type) => <option key={type} value={type}>{type}</option>) : <option value={field.semanticRole === "date" ? dateFieldFormat : "string"}>{field.semanticRole === "date" ? dateFieldFormat : "string"}</option>}</AppSelect>
+                    <AppSelect aria-label={`字段${index + 1}是否主键`} value={field.isPrimaryKey ? "yes" : "no"} onChange={(event) => updateField(index, "isPrimaryKey", event.target.value === "yes")} controlSize="compact" className="text-[11px]"><option value="no">否</option><option value="yes">是</option></AppSelect>
                     <input aria-label={`字段${index + 1}语义解释`} value={field.explanation} onChange={(event) => updateField(index, "explanation", event.target.value)} className="h-8 rounded-md border border-[#e5e5ea] px-2 text-[11px] outline-none focus:border-[#c7c7cc]" />
                     <input aria-label={`字段${index + 1}示例用法`} value={field.exampleUsage || ""} onChange={(event) => updateField(index, "exampleUsage", event.target.value)} className="h-8 rounded-md border border-[#e5e5ea] px-2 text-[11px] outline-none focus:border-[#c7c7cc]" />
                     <button type="button" aria-label={`删除字段${index + 1}`} onClick={() => setFields(fields.filter((_, fieldIndex) => fieldIndex !== index))} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#8a8a8e] hover:bg-[#fff0f0] hover:text-[#d93025]">
@@ -2280,19 +2246,7 @@ function DataTableCreateModal({
               </div>
             </div>
           </div>
-        </div>
-
-        <div className="flex items-center justify-between gap-4 border-t border-[#f0f0f2] px-5 py-4">
-          <span className="min-w-0 text-[11px] text-[#d93025]">{error}</span>
-          <div className="flex shrink-0 items-center gap-2">
-            <button type="button" onClick={onClose} disabled={saving} className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-4 text-[12px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-50">取消</button>
-            <button type="button" onClick={() => void save()} disabled={saving} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-4 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-50">
-              <Save className="h-3.5 w-3.5" />{saving ? "保存中..." : `保存${tableLabel}`}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    </FormDialog>
   );
 }
 
@@ -3315,7 +3269,7 @@ function RawTableCard({
         <div className="flex shrink-0 flex-nowrap items-center gap-2 self-end whitespace-nowrap lg:self-start" data-raw-table-actions="true">
           {dataAvailable && <label className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] text-[#636366]">
             <span>外部引用</span>
-            <select
+            <AppSelect
               aria-label={`${table.tableNameCn} 外部引用`}
               value={table.externalReferenceMode || "private"}
               disabled={!table.sourceKey || !table.schemaFingerprint}
@@ -3325,7 +3279,7 @@ function RawTableCard({
             >
               <option value="private">单独使用</option>
               <option value="shared">可分享</option>
-            </select>
+            </AppSelect>
           </label>}
           {dataAvailable && <span className="h-7 shrink-0 whitespace-nowrap rounded-md border border-[#e5e5ea] bg-white px-2 py-1 text-[11px] text-[#636366]">
             CSV 文件 · {table.rowCount ?? 0} 行
@@ -3642,9 +3596,9 @@ function AssetFieldTable({
           <span className="text-[#1d1d1f]">{field.fieldNameCn}</span>
           {editing ? (
             <>
-              <select aria-label={`${field.fieldNameCn || field.fieldNameEn}字段角色`} value={field.semanticRole} onChange={(event) => onChange(index, "semanticRole", event.target.value)} className="h-8 rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#8fbfa4]"><option value="metric">指标</option><option value="dimension">维度</option><option value="date">日期</option></select>
-              <select aria-label={`${field.fieldNameCn || field.fieldNameEn}字段类型`} value={field.semanticRole === "date" ? dateFieldFormat : field.type} onChange={(event) => onChange(index, "type", event.target.value)} disabled={field.semanticRole !== "metric"} className="h-8 rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#8fbfa4] disabled:bg-[#fafbfc] disabled:text-[#8a8a8e]">{field.semanticRole === "metric" ? metricFieldTypes.map((type) => <option key={type} value={type}>{type}</option>) : <option value={field.semanticRole === "date" ? dateFieldFormat : "string"}>{field.semanticRole === "date" ? dateFieldFormat : "string"}</option>}</select>
-              <select aria-label={`${field.fieldNameCn || field.fieldNameEn}是否主键`} value={field.isPrimaryKey ? "yes" : "no"} onChange={(event) => onChange(index, "isPrimaryKey", event.target.value === "yes")} className="h-8 rounded-md border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#8fbfa4]"><option value="no">否</option><option value="yes">是</option></select>
+              <AppSelect aria-label={`${field.fieldNameCn || field.fieldNameEn}字段角色`} value={field.semanticRole} onChange={(event) => onChange(index, "semanticRole", event.target.value)} controlSize="compact" className="text-[11px]"><option value="metric">指标</option><option value="dimension">维度</option><option value="date">日期</option></AppSelect>
+              <AppSelect aria-label={`${field.fieldNameCn || field.fieldNameEn}字段类型`} value={field.semanticRole === "date" ? dateFieldFormat : field.type} onChange={(event) => onChange(index, "type", event.target.value)} disabled={field.semanticRole !== "metric"} controlSize="compact" className="text-[11px]">{field.semanticRole === "metric" ? metricFieldTypes.map((type) => <option key={type} value={type}>{type}</option>) : <option value={field.semanticRole === "date" ? dateFieldFormat : "string"}>{field.semanticRole === "date" ? dateFieldFormat : "string"}</option>}</AppSelect>
+              <AppSelect aria-label={`${field.fieldNameCn || field.fieldNameEn}是否主键`} value={field.isPrimaryKey ? "yes" : "no"} onChange={(event) => onChange(index, "isPrimaryKey", event.target.value === "yes")} controlSize="compact" className="text-[11px]"><option value="no">否</option><option value="yes">是</option></AppSelect>
               <textarea
                 value={field.explanation}
                 onChange={(event) => onChange(index, "explanation", event.target.value)}
@@ -3787,16 +3741,18 @@ function MemoryItemEditor({
   const text = (field: string) => String(state.draft[field] ?? "");
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/20 px-4 py-8" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-      <div role="dialog" aria-modal="true" aria-label={dialogTitle} className="flex max-h-full w-full max-w-[680px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
-        <div className="flex items-center justify-between border-b border-[#f0f0f2] px-5 py-4">
-          <div>
-            <h3 className="text-[14px] font-medium text-[#1d1d1f]">{dialogTitle}</h3>
-            <p className="mt-1 text-[11px] text-[#8a8a8e]">新增和编辑会生成待复核版本，批准后才进入 Skill 与分析运行召回。</p>
-          </div>
-          <button type="button" aria-label="关闭记忆窗口" onClick={onClose} disabled={busy} className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#f2f2f7] disabled:opacity-40"><X className="h-4 w-4" /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+    <FormDialog
+      open
+      title={dialogTitle}
+      description="新增和编辑会生成待复核版本，批准后才进入 Skill 与分析运行召回。"
+      widthClassName="max-w-[680px]"
+      heightClassName="max-h-full"
+      zIndexClassName="z-[120]"
+      busy={busy}
+      onClose={onClose}
+      ariaLabel={dialogTitle}
+      footer={<><FormDialogCancelButton onClick={onClose} disabled={busy}>{readOnly ? "关闭" : "取消"}</FormDialogCancelButton>{readOnly && canManage && <FormDialogPrimaryButton onClick={() => onChange({ ...state, mode: "edit" })}><Pencil className="h-3.5 w-3.5" />编辑</FormDialogPrimaryButton>}{!readOnly && <FormDialogPrimaryButton onClick={onSave} disabled={busy}><Save className="h-3.5 w-3.5" />{busy ? "保存中…" : "保存"}</FormDialogPrimaryButton>}</>}
+    >
           {state.allowTypeChange && state.mode === "create" && (
             <MemoryEditorField label="记忆类型" value={state.itemType} readOnly={false} onChange={(value) => changeType(value as MemoryItemType)} options={memoryTypeOptions} />
           )}
@@ -3849,14 +3805,7 @@ function MemoryItemEditor({
             </div>
           )}
           {notice && state.mode !== "view" && <div role={/失败|请|冲突|无权限/.test(notice) ? "alert" : "status"} className={`mt-4 rounded-lg px-3 py-2 text-[11px] ${/失败|请|冲突|无权限/.test(notice) ? "bg-[#fff0f0] text-[#d93025]" : "bg-[#eef8f1] text-[#258a3f]"}`}>{notice}</div>}
-        </div>
-        <div className="flex justify-end gap-2 border-t border-[#f0f0f2] px-5 py-3">
-          <button type="button" onClick={onClose} disabled={busy} className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-4 text-[12px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-40">{readOnly ? "关闭" : "取消"}</button>
-          {readOnly && canManage && <button type="button" onClick={() => onChange({ ...state, mode: "edit" })} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-4 text-[12px] text-white"><Pencil className="h-3.5 w-3.5" />编辑</button>}
-          {!readOnly && <button type="button" onClick={onSave} disabled={busy} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-4 text-[12px] text-white disabled:opacity-40"><Save className="h-3.5 w-3.5" />{busy ? "保存中…" : "保存"}</button>}
-        </div>
-      </div>
-    </div>
+    </FormDialog>
   );
 }
 
@@ -3866,7 +3815,7 @@ function MemoryEditorField({ label, value, readOnly, onChange, required = false,
     <label className="block text-[11px] text-[#636366]">
       {label}{required && <span className="ml-0.5 text-[#d93025]">*</span>}
       {options ? (
-        <select aria-label={label} value={value} disabled={readOnly} onChange={(event) => onChange(event.target.value)} className={`${controlClass} h-9 disabled:opacity-100`}>{options.map((option) => <option key={option} value={option}>{memoryTypeOptionLabel(option)}</option>)}</select>
+        <AppSelect aria-label={label} value={value} disabled={readOnly} onChange={(event) => onChange(event.target.value)} className={`${controlClass} h-9 disabled:opacity-100`}>{options.map((option) => <option key={option} value={option}>{memoryTypeOptionLabel(option)}</option>)}</AppSelect>
       ) : multiline ? (
         <textarea aria-label={label} value={value} readOnly={readOnly} onChange={(event) => onChange(event.target.value)} rows={3} className={`${controlClass} min-h-[82px] py-2`} />
       ) : (
@@ -4016,15 +3965,15 @@ function MemoryToolbar({
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[#fafbfc] p-2">
       <div className="flex flex-wrap items-center gap-2">
-        <select aria-label="记忆排序" value={sort} onChange={(event) => onSortChange(event.target.value as "time" | "weight")} className="h-8 rounded-md border border-[#e5e5ea] bg-white px-2 text-[12px] text-[#636366] outline-none">
+        <AppSelect aria-label="记忆排序" value={sort} onChange={(event) => onSortChange(event.target.value as "time" | "weight")} controlSize="compact" className="text-[12px] text-[#636366]">
           <option value="time">按时间倒排</option>
           <option value="weight">按权重排序</option>
-        </select>
-        <select aria-label="记忆状态" value={status} onChange={(event) => onStatusChange(event.target.value as "all" | "当前有效" | "历史归档")} className="h-8 rounded-md border border-[#e5e5ea] bg-white px-2 text-[12px] text-[#636366] outline-none">
+        </AppSelect>
+        <AppSelect aria-label="记忆状态" value={status} onChange={(event) => onStatusChange(event.target.value as "all" | "当前有效" | "历史归档")} controlSize="compact" className="text-[12px] text-[#636366]">
           <option value="all">全部状态</option>
           <option value="当前有效">当前有效</option>
           <option value="历史归档">历史归档</option>
-        </select>
+        </AppSelect>
       </div>
       {action && (
         <button type="button" onClick={action.onClick} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#d9d9de] bg-white px-3 text-[11px] font-medium text-[#3a3a3c] hover:bg-[#f2f2f7]" aria-label={action.label}>

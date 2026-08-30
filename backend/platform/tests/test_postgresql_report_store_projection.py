@@ -64,6 +64,37 @@ class PostgreSQLReportStoreProjectionTests(unittest.TestCase):
                 }],
                 "sumFilteredRows": True,
                 "comboLineFields": ["amount"],
+                "metricRankings": [{"metricField": "amount", "direction": "asc"}],
+                "metricFormats": [
+                    {"metricField": "amount", "percent": False, "decimalPlaces": 2},
+                    {"metricField": "missing", "percent": True, "decimalPlaces": -2},
+                ],
+                "metricProgress": [{
+                    "metricField": "amount",
+                    "denominatorRules": [{"id": "denominator-1", "field": "branch", "operator": "in", "values": ["A"]}],
+                    "color": "#22aa66",
+                    "colorEnd": "#4488cc",
+                    "colorMode": "solid",
+                    "associationRules": [{
+                        "id": "association-1",
+                        "source": "progress",
+                        "operator": "gte",
+                        "threshold": 80,
+                        "targetField": "branch",
+                        "style": "value",
+                        "color": "#ffeecc",
+                        "replacementValue": "达标",
+                    }],
+                }],
+                "calculatedColumns": [{"id": "calculated-1", "name": "折算金额", "position": 2, "expression": "[amount] / 2"}],
+                "tableStyle": {
+                    "templateId": "tabulator-modern",
+                    "headerBackground": "#354550",
+                    "headerTextColor": "#f7fafc",
+                    "fontFamily": "mono",
+                    "density": "compact",
+                    "bandedRows": False,
+                },
             },
         }]
         row = {
@@ -83,6 +114,18 @@ class PostgreSQLReportStoreProjectionTests(unittest.TestCase):
         self.assertEqual(result["visualizations"][0]["type"], "bar")
         self.assertEqual(result["visualizations"][0]["config"]["metricFields"], ["amount"])
         self.assertEqual(result["visualizations"][0]["config"]["filterGroups"][0]["rules"][0]["values"], ["A"])
+        self.assertEqual(result["visualizations"][0]["config"]["metricRankings"], [{"metricField": "amount", "direction": "asc"}])
+        self.assertEqual(result["visualizations"][0]["config"]["metricFormats"], [{"metricField": "amount", "percent": False, "decimalPlaces": 2}])
+        self.assertEqual(result["visualizations"][0]["config"]["metricProgress"][0]["denominatorRules"][0]["operator"], "in")
+        self.assertEqual(result["visualizations"][0]["config"]["metricProgress"][0]["associationRules"][0]["color"], "#FFEECC")
+        self.assertEqual(result["visualizations"][0]["config"]["metricProgress"][0]["colorEnd"], "#4488CC")
+        self.assertEqual(result["visualizations"][0]["config"]["metricProgress"][0]["colorMode"], "solid")
+        self.assertEqual(result["visualizations"][0]["config"]["metricProgress"][0]["associationRules"][0]["replacementValue"], "达标")
+        self.assertEqual(result["visualizations"][0]["config"]["calculatedColumns"], [{"id": "calculated-1", "name": "折算金额", "position": 2, "expression": "[amount] / 2"}])
+        self.assertEqual(result["visualizations"][0]["config"]["tableStyle"]["templateId"], "tabulator-modern")
+        self.assertEqual(result["visualizations"][0]["config"]["tableStyle"]["headerBackground"], "#354550")
+        self.assertEqual(result["visualizations"][0]["config"]["tableStyle"]["fontFamily"], "mono")
+        self.assertFalse(result["visualizations"][0]["config"]["tableStyle"]["bandedRows"])
 
     def test_invalid_saved_analysis_visualization_is_rejected_before_persistence(self) -> None:
         with self.assertRaisesRegex(ValueError, "saved_analysis_visualizations_invalid"):

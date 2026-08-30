@@ -36,6 +36,7 @@ const checks = [
   [preload.includes("routeWarmGroup") && preload.includes('return "self-analysis"'), "空闲预热必须优先当前菜单分组并保持全站回退"],
   [preload.includes('path === "/dashboard"'), "多机构分析一级入口必须纳入统一预热映射"],
   [preload.includes('path.startsWith("/agent/message-board")'), "留言板页面必须纳入统一预热映射"],
+  [preload.includes('path.startsWith("/settings/skin")') && routes.includes('preparedNamed(routeLoaders.skins, "SkinManagement")'), "皮肤管理必须使用独立按需模块并纳入统一预热映射"],
   [layout.includes('navigationStatus !== "ready"'), "权限导航未就绪时不得启动页面预热"],
   [layout.includes("sda-navigation-keys-v1") && layout.includes("isSuperAdmin") && layout.includes("optimisticKeys"), "登录后必须用超级管理员全菜单或会话缓存立刻渲染，不得清空菜单再白屏等待导航"],
   [layout.includes('data-navigation-loading="true"'), "无缓存时权限加载必须显示局部加载态而不是空白主栏"],

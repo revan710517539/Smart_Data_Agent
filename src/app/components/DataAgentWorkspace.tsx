@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation } from "react-router";
+import { AppSelect } from "./ui/AppSelect";
+import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "./ui/FormDialog";
 import {
   BrainCircuit,
   Play,
@@ -150,7 +152,7 @@ function TaskSelect({
 }) {
   return (
     <div className="relative">
-      <select
+      <AppSelect
         aria-label={ariaLabel}
         value={value}
         disabled={disabled}
@@ -158,7 +160,7 @@ function TaskSelect({
         className={taskSelectClass}
       >
         {children}
-      </select>
+      </AppSelect>
       <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#8a8a8e]" />
     </div>
   );
@@ -809,24 +811,20 @@ function AgentTaskModal({
         );
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/20 px-4" data-task-modal onMouseDown={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={title} className="flex max-h-[86vh] w-full max-w-[760px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-[#f0f0f2] bg-white px-6 py-4">
-          <div>
-            <h3 className="text-[16px] text-[#1d1d1f]">{title}</h3>
-            <p className="mt-1 text-[11px] text-[#8a8a8e]">配置记忆提取或指标异动分析流程；数据由配置的 CSV 文件夹提供。</p>
-          </div>
-          <button
-            type="button"
-            aria-label="关闭任务弹窗"
-            onClick={onClose}
-            className="rounded-md p-2 text-[#8a8a8e] hover:bg-[#f2f2f7]"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="grid min-h-0 gap-4 overflow-y-auto px-6 py-5 md:grid-cols-2">
+    <FormDialog
+      title={title}
+      description="配置记忆提取或指标异动分析流程；数据由配置的 CSV 文件夹提供。"
+      ariaLabel={title}
+      onClose={onClose}
+      widthClassName="max-w-[760px]"
+      zIndexClassName="z-[90]"
+      bodyClassName="grid gap-4 md:grid-cols-2"
+      dataAttributes={{ "data-task-modal": "true" }}
+      footer={<>
+        <FormDialogCancelButton onClick={onClose}>{mode === "detail" ? "关闭" : "取消"}</FormDialogCancelButton>
+        {mode !== "detail" ? <FormDialogPrimaryButton onClick={onSave} disabled={!String(form.name || "").trim() || !taskReady}>{saveLabel}</FormDialogPrimaryButton> : null}
+      </>}
+    >
           <label className="space-y-1.5 text-[11px] text-[#636366]">
             任务名称
             <input aria-label="任务名称" value={form.name} disabled={readOnly} onChange={(event) => updateForm("name", event.target.value)} placeholder="请输入任务名称" className={taskControlClass} />
@@ -989,20 +987,7 @@ function AgentTaskModal({
               className={`${taskAreaClass} text-[#8a8a8e]`}
             />
           </label>}
-        </div>
-
-        <div className="flex justify-end gap-2 border-t border-[#f0f0f2] bg-white px-6 py-4">
-          <button type="button" onClick={onClose} className="h-9 rounded-lg border border-[#e5e5ea] px-4 text-[12px] text-[#636366] hover:bg-[#f2f2f7]">
-            {mode === "detail" ? "关闭" : "取消"}
-          </button>
-          {mode !== "detail" && (
-            <button type="button" onClick={onSave} disabled={!String(form.name || "").trim() || !taskReady} className="h-9 rounded-lg bg-[#1d1d1f] px-5 text-[12px] text-white hover:bg-[#2c2c2e] disabled:cursor-not-allowed disabled:bg-[#c7c7cc]">
-              {saveLabel}
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
+    </FormDialog>
   );
 }
 

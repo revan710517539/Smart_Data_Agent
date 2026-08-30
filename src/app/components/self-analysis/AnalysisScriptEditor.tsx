@@ -1,4 +1,5 @@
 import type { ScriptTab } from "./domain";
+import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "../ui/FormDialog";
 
 export function AnalysisScriptEditor({
   open,
@@ -41,15 +42,7 @@ export function AnalysisScriptEditor({
 }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4">
-      <div className="w-full max-w-[1040px] rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
-        <div className="flex items-center justify-between border-b border-[#f0f0f2] px-5 py-4">
-          <div>
-            <h3 className="text-[14px] text-[#1d1d1f]">脚本编辑</h3>
-            <p className="text-[11px] text-[#aeaeb2] mt-0.5">编辑分析思路、SQL、Python 可视化和 AI 总结后可保存或执行重跑</p>
-          </div>
-        </div>
-        <div className="grid gap-4 p-5 lg:grid-cols-[minmax(0,1.16fr)_minmax(300px,0.84fr)]">
+    <FormDialog title="脚本编辑" description="编辑分析思路、SQL、Python 可视化和 AI 总结后可保存或执行重跑" onClose={onClose} widthClassName="max-w-[1040px]" heightClassName="max-h-[92vh]" bodyClassName="grid gap-4 lg:grid-cols-[minmax(0,1.16fr)_minmax(300px,0.84fr)]" footer={<><FormDialogCancelButton onClick={onClose}>取消</FormDialogCancelButton><FormDialogCancelButton onClick={onSave}>保存</FormDialogCancelButton><FormDialogPrimaryButton onClick={onExecute}>执行</FormDialogPrimaryButton></>}>
           <div className="flex h-[470px] min-h-0 flex-col overflow-hidden rounded-lg border border-[#24252a] bg-[#101114]">
             <div className="flex gap-1 border-b border-white/10 bg-[#15161a] px-2 py-2">
               {[
@@ -109,31 +102,6 @@ export function AnalysisScriptEditor({
               className="min-h-[330px] flex-1 rounded-lg border border-[#e5e5ea] bg-white px-3 py-2 text-[13px] text-[#3a3a3c] leading-[1.7] outline-none focus:border-[#c7c7cc] resize-none"
             />
           </div>
-        </div>
-        <div className="flex justify-end gap-2 border-t border-[#f0f0f2] px-5 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[13px] text-[#636366] hover:bg-[#f2f2f7]"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={onSave}
-            className="rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[13px] text-[#1d1d1f] hover:bg-[#f2f2f7]"
-          >
-            保存
-          </button>
-          <button
-            type="button"
-            onClick={onExecute}
-            className="rounded-lg bg-[#1d1d1f] px-4 py-2 text-[13px] text-white hover:bg-[#2c2c2e]"
-          >
-            执行
-          </button>
-        </div>
-      </div>
-    </div>
+    </FormDialog>
   );
 }

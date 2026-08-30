@@ -10,6 +10,7 @@ from typing import Any
 
 from backend.platform.audit.store import sanitize_audit_detail
 from backend.platform.storage import connect_sqlite
+from backend.platform.visualization_config import normalize_chart_style, normalize_table_metric_enhancements, normalize_table_metric_formats, normalize_table_style
 
 
 APPLICATION_MODULE_KEYS = {
@@ -1136,9 +1137,17 @@ def _normalize_visual_report_config(value: Any) -> dict[str, Any]:
                 "id": str(raw_group.get("id") or f"filter-group-{group_index}").strip()[:160],
                 "rules": rules,
             })
-    return {
-        "metricFields": string_list(raw.get("metricFields")),
-        "dimensionFields": string_list(raw.get("dimensionFields")),
+    metric_fields = string_list(raw.get("metricFields"))
+    dimension_fields = string_list(raw.get("dimensionFields"))
+    metric_rankings, metric_progress, calculated_columns = normalize_table_metric_enhancements(raw, metric_fields, dimension_fields)
+    metric_formats = normalize_table_metric_formats(raw, metric_fields)
+    config = {
+        "metricFields": metric_fields,
+        "dimensionFields": dimension_fields,
+        "metricRankings": metric_rankings,
+        "metricFormats": metric_formats,
+        "metricProgress": metric_progress,
+        "calculatedColumns": calculated_columns,
         "filters": filters,
         "filterGroups": filter_groups,
         "sumFilteredRows": bool(raw.get("sumFilteredRows")),
@@ -1152,6 +1161,13 @@ def _normalize_visual_report_config(value: Any) -> dict[str, Any]:
         "maxLayoutSpan": _bounded_optional_int(raw.get("maxLayoutSpan"), 1, 12),
         "maxLayoutHeight": _bounded_optional_int(raw.get("maxLayoutHeight"), 160, 1600),
     }
+    table_style = normalize_table_style(raw.get("tableStyle"))
+    if table_style:
+        config["tableStyle"] = table_style
+    chart_style = normalize_chart_style(raw.get("chartStyle"))
+    if chart_style:
+        config["chartStyle"] = chart_style
+    return config
 
 
 def _normalize_page_visual_layout(module_key: str, value: Any) -> list[dict[str, Any]]:

@@ -40,6 +40,21 @@ class ProductionMetricDictionarySeedTests(unittest.TestCase):
         )
         store.replace_all.assert_not_called()
 
+    def test_relational_catalog_codes_are_not_rewritten(self) -> None:
+        store = Mock(spec=PostgreSQLMetricDictionaryStore)
+        metrics = [{"metricId": "m1"}]
+
+        with patch("backend.platform.bootstrap.load_default_metric_dictionary", return_value=metrics):
+            _seed_metric_dictionary_if_empty(
+                store,
+                None,
+                tenant_ids=["bank_huaxing"],
+                tenant_ids_are_canonical=True,
+                force=True,
+            )
+
+        store.seed_if_empty.assert_called_once_with("bank_huaxing", metrics, updated_by="u_super_admin")
+
     def test_relational_read_error_is_not_treated_as_empty(self) -> None:
         store = Mock(spec=PostgreSQLMetricDictionaryStore)
         store.seed_if_empty.side_effect = RuntimeError("database unavailable")

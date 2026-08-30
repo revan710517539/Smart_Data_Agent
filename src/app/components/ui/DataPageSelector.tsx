@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { AppSelect } from "./AppSelect";
 
 type DataPageSelectorProps = {
   page: number;
@@ -25,7 +26,7 @@ export function DataPageSelector({
   const safePage = Math.max(1, Math.min(page, safePageCount));
   return (
     <div className={`flex shrink-0 items-center gap-2 text-[11px] text-[#8a8a8e] ${className}`}>
-      <select
+      <AppSelect
         value={safePage}
         onChange={(event) => onChange(Number(event.target.value))}
         className="h-8 rounded-lg border border-[#e5e5ea] bg-white px-2.5 text-[11px] text-[#636366] outline-none hover:bg-[#f8f8f8] focus:border-[#7db797]"
@@ -36,7 +37,7 @@ export function DataPageSelector({
             第 {index + 1} 页 / 共 {safePageCount} 页
           </option>
         ))}
-      </select>
+      </AppSelect>
       <span className={compact ? "hidden xl:inline" : ""}>{shownCount} / {totalCount} 条</span>
     </div>
   );

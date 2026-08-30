@@ -279,6 +279,28 @@
     }
   }
 
+  /* Shared selects and dates keep one interaction contract in every portal. */
+  select[data-app-select="true"],
+  button[data-app-date-picker="true"] {
+    border-color: #dfe3e1 !important;
+    border-radius: 8px;
+    box-shadow: none !important;
+  }
+
+  select[data-app-select="true"]:hover,
+  button[data-app-date-picker="true"]:hover {
+    border-color: #c6cfca !important;
+    box-shadow: none !important;
+  }
+
+  select[data-app-select="true"]:focus,
+  select[data-app-select="true"]:focus-visible,
+  button[data-app-date-picker="true"]:focus,
+  button[data-app-date-picker="true"]:focus-visible {
+    border-color: #75ad8d !important;
+    box-shadow: 0 0 0 2px rgba(23, 138, 83, 0.10) !important;
+  }
+
   /*
    * Intelligent Analysis already renders focus on the surrounding composer.
    * Do not draw a second full-width outline/shadow around its borderless

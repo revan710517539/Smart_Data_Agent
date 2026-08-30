@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
-const [modalSource, pageSource, composerSource, dashboardSource, supervisionSource, customerSegmentSource, assetRouteSource, applicationRouteSource, assetApiSource] = await Promise.all([
+const [modalSource, formDialogSource, appSelectSource, pageSource, composerSource, dashboardSource, supervisionSource, customerSegmentSource, assetRouteSource, applicationRouteSource, assetApiSource] = await Promise.all([
   read("src/app/components/data-assets/PageDataAssets.tsx"),
+  read("src/app/components/ui/FormDialog.tsx"),
+  read("src/app/components/ui/AppSelect.tsx"),
   read("src/app/components/DataAssets.tsx"),
   read("src/app/components/page-data/PageDataComposer.tsx"),
   read("src/app/components/Dashboard.tsx"),
@@ -14,19 +16,21 @@ const [modalSource, pageSource, composerSource, dashboardSource, supervisionSour
   read("src/app/services/dataAssetApi.ts"),
 ]);
 
-assert.match(modalSource, /data-page-data-modal-overlay="true"[\s\S]*?<section[\s\S]*?role="dialog"[\s\S]*?data-page-data-modal="true"/, "全屏遮罩与弹窗内容必须是两个语义层");
-assert.doesNotMatch(modalSource, /data-page-data-modal-overlay="true"\s+role="dialog"/, "遮罩本身不得再声明为 dialog");
-assert.match(modalSource, /role="dialog"[\s\S]*?aria-modal="true"[\s\S]*?aria-labelledby="page-data-create-title"/, "弹窗内容必须保留可访问的模态语义");
+assert.match(modalSource, /<FormDialog[\s\S]*?dataAttributes=\{\{ "data-page-data-modal": "true" \}\}[\s\S]*?overlayDataAttributes=\{\{ "data-page-data-modal-overlay": "true" \}\}/, "页面数据必须使用统一表单弹窗并保留内容与遮罩标记");
+assert.match(formDialogSource, /DialogPrimitive\.Overlay[\s\S]*?DialogPrimitive\.Content/, "全屏遮罩与弹窗内容必须是两个语义层");
+assert.match(formDialogSource, /DialogPrimitive\.Title[\s\S]*?DialogPrimitive\.Description/, "统一表单弹窗必须保留可访问的标题和说明语义");
 assert.match(modalSource, /data-page-data-primary-fields="true"[\s\S]*?\{scopeLabel\}名称[\s\S]*?原始表/, "名称必须在左、数据集选择必须在右");
 assert.match(modalSource, /grid gap-4 md:grid-cols-2 md:items-start/, "两个主字段必须在桌面端同排并在窄屏回落为单列");
-assert.ok((modalSource.match(/mt-1\.5 h-10 w-full rounded-lg border border-\[#dedee3\]/g) || []).length >= 2, "名称输入框和原始表下拉框必须保持同高同形态");
-assert.match(modalSource, /bg-\[rgba\(18,33,27,0\.22\)\]/, "遮罩必须保留系统的轻量深绿中性色");
+assert.match(modalSource, /mt-1\.5 h-10 w-full rounded-lg border border-\[#dedee3\]/, "名称输入框必须保持统一控件高度");
+assert.match(modalSource, /<AppSelect[\s\S]*?className="mt-1\.5 w-full"/, "原始表选择必须使用统一下拉框");
+assert.match(appSelectSource, /controlSize === "compact" \? "h-8" : "h-10"/, "统一下拉框必须提供明确的默认和紧凑高度");
+assert.match(formDialogSource, /fixed inset-0 bg-black\/20/, "遮罩必须使用统一的轻量中性色");
 assert.doesNotMatch(modalSource, /data-page-data-modal-overlay="true"[\s\S]{0,260}backdrop-(?:blur|filter)/, "页面数据弹窗不得使用高成本背景模糊");
-assert.match(modalSource, /style=\{\{ contain: "layout paint" \}\}/, "弹窗内容必须隔离布局与绘制范围");
-assert.match(modalSource, /event\.key === "Escape"[\s\S]*?onClose\(\)/, "Escape 必须关闭未保存的弹窗");
-assert.match(modalSource, /event\.target === event\.currentTarget && !saving/, "点击遮罩必须只关闭未保存的弹窗");
+assert.match(formDialogSource, /overflow-hidden rounded-xl/, "弹窗内容必须隔离内部滚动和页面布局");
+assert.match(formDialogSource, /onEscapeKeyDown=[\s\S]*?busy/, "Escape 必须只关闭非忙碌弹窗");
+assert.match(formDialogSource, /onInteractOutside=[\s\S]*?busy \|\| !closeOnOutside/, "点击遮罩必须只关闭允许关闭且非忙碌的弹窗");
 assert.match(modalSource, /经营周报[\s\S]*?机构督导/, "单机构页面下拉框只能提供经营周报和机构督导");
-assert.match(modalSource, /<select[\s\S]*?onPageChange[\s\S]*?<Pencil[\s\S]*?<Trash2/, "数据横条右侧必须依次提供页面下拉框、编辑和删除");
+assert.match(modalSource, /<AppSelect[\s\S]*?onPageChange[\s\S]*?<Pencil[\s\S]*?<Trash2/, "数据横条右侧必须依次提供页面下拉框、编辑和删除");
 assert.match(modalSource, /新增单机构数据/, "必须提供新增单机构数据按钮文案");
 assert.match(modalSource, /新增多机构数据/, "必须提供新增多机构数据按钮文案");
 assert.match(modalSource, /新增明细数据/, "分客群页面必须提供新增明细数据按钮文案");

@@ -82,12 +82,12 @@ export function ConfirmDialog({
       {...overlayData}
     >
       <div
-        role="dialog"
+        role="alertdialog"
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={description ? descriptionId : undefined}
         data-app-confirm-dialog="true"
-        className="w-full max-w-[420px] rounded-xl border border-[#e5e5ea] bg-white p-5 shadow-2xl shadow-black/20"
+        className="w-full max-w-[380px] rounded-xl border border-[#e2e6e4] bg-white p-4 shadow-2xl shadow-black/20"
         onMouseDown={(event) => event.stopPropagation()}
         {...dialogData}
       >
@@ -102,7 +102,7 @@ export function ConfirmDialog({
           </div>
         </div>
         {error ? <p className="mt-3 text-[11px] leading-[1.6] text-[#d93025]" role="alert">{error}</p> : null}
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={onCancel} disabled={busy} className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-4 text-[12px] text-[#636366] hover:bg-[#f2f2f7] disabled:opacity-50">{cancelLabel}</button>
           <button type="button" onClick={onConfirm} disabled={busy || disabledConfirm} className="h-9 rounded-lg bg-[#d93025] px-4 text-[12px] text-white hover:bg-[#c5221f] disabled:cursor-not-allowed disabled:opacity-40">{busy ? busyLabel : confirmLabel}</button>
         </div>

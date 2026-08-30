@@ -122,6 +122,7 @@ LOCAL_RBAC_EXTENSION_MENU_OBJECTS = frozenset({
     "menu:data-assets.tools",
     "menu:settings.audit",
     "menu:settings.config",
+    "menu:settings.skin",
     "skill:data.analysis.profile",
     "skill:data.analysis.descriptive",
     "skill:data.analysis.attribution",
@@ -851,6 +852,7 @@ def _build_mysql_production_platform(runtime_config: RuntimeConfig) -> PlatformS
             metric_dictionary_store,
             None,
             tenant_ids=active_tenant_ids,
+            tenant_ids_are_canonical=True,
             force=True,
         )
         if runtime_config.environment in {"development", "test"}:
@@ -1219,6 +1221,7 @@ def _seed_metric_dictionary_if_empty(
     db_path: str | Path | None,
     *,
     tenant_ids: list[str] | None = None,
+    tenant_ids_are_canonical: bool = False,
     force: bool = False,
 ) -> None:
     if not force and not _should_seed_default_metric_dictionary(db_path):
@@ -1228,7 +1231,7 @@ def _seed_metric_dictionary_if_empty(
         return
     requested_tenant_ids = [OPERATING_TENANTS[0]] if tenant_ids is None else tenant_ids
     normalized_tenant_ids = [
-        raw_tenant_id if raw_tenant_id.startswith("tenant:") else normalize_tenant_id(raw_tenant_id)
+        raw_tenant_id if tenant_ids_are_canonical or raw_tenant_id.startswith("tenant:") else normalize_tenant_id(raw_tenant_id)
         for tenant_id in requested_tenant_ids
         if (raw_tenant_id := str(tenant_id).strip())
     ]

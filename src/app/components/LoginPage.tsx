@@ -14,6 +14,7 @@ import {
 } from "../services/authApi";
 import { ApiRequestError, apiErrorMessage } from "../services/apiClient";
 import { createClientUuid } from "../utils/clientUuid";
+import { AppSelect } from "./ui/AppSelect";
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -226,7 +227,7 @@ export function LoginPage() {
             </div>
             <label>
               <span className="mb-1.5 block text-[12px] text-[#636366]">机构</span>
-              <select
+              <AppSelect
                 value={institution}
                 onChange={(event) => {
                   surveyDraftRef.current.institution = event.target.value;
@@ -239,7 +240,7 @@ export function LoginPage() {
                     {tenant}
                   </option>
                 ))}
-              </select>
+              </AppSelect>
             </label>
 
             {notice && (

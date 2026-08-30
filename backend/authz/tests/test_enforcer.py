@@ -208,11 +208,11 @@ class AuthEnforcerTest(unittest.TestCase):
     def test_child_menu_selection_keeps_only_parent_and_child(self) -> None:
         expanded = expand_menu_selection(["business-analysis.weekly-report"])
 
-        self.assertEqual(expanded - {"settings", "settings.audit", "settings.config"}, {
+        self.assertEqual(expanded - {"settings", "settings.audit", "settings.config", "settings.skin"}, {
             "business-analysis",
             "business-analysis.weekly-report",
         })
-        self.assertTrue({"settings", "settings.audit", "settings.config"}.issubset(expanded))
+        self.assertTrue({"settings", "settings.audit", "settings.config", "settings.skin"}.issubset(expanded))
 
     def test_sqlite_policy_repository_matches_enforcer_contract(self) -> None:
         seed = build_default_rbac_seed(["华兴银行"])

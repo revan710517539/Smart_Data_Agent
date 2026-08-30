@@ -32,6 +32,7 @@ import { contextRailWideEvent } from "./context-rail/ContextSideRail";
 import { GlobalContextRail } from "./context-rail/GlobalContextRail";
 import { GlobalMessageBoardShortcut } from "./message-board/GlobalMessageBoardShortcut";
 import { ConfirmDialogHost } from "./ui/ConfirmDialog";
+import { AppSelect } from "./ui/AppSelect";
 import { fetchSystemConfig } from "../services/systemConfigApi";
 import {
   configuredTextModelOptions,
@@ -130,6 +131,7 @@ const menuItems: MenuItem[] = [
       { key: "settings.roles", path: "/settings/roles", label: "角色权限" },
       { key: "settings.audit", path: "/settings/audit", label: "审计日志" },
       { key: "settings.config", path: "/settings/config", label: "系统配置" },
+      { key: "settings.skin", path: "/settings/skin", label: "皮肤管理" },
     ],
   },
 ];
@@ -630,7 +632,7 @@ export function Layout() {
               </div>
             )}
             <div className="relative">
-              <select
+              <AppSelect
                 id="shared-text-model-selector"
                 aria-label="选择全局文本模型"
                 aria-busy={textModelLoadStatus === "loading" || textModelLoadStatus === "retrying"}
@@ -649,7 +651,7 @@ export function Layout() {
                 {textModelOptions.length ? textModelOptions.map((option) => (
                   <option key={option.id} value={option.id}>{option.label}</option>
                 )) : <option value="">{textModelEmptyLabel(textModelLoadStatus)}</option>}
-              </select>
+              </AppSelect>
               <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#8a8a8e]" />
             </div>
           </div>

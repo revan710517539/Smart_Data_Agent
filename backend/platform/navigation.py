@@ -7,6 +7,9 @@ from backend.platform.governance import PermissionBroker
 from backend.platform.tenancy import ExecutionContext
 
 
+_AUTHENTICATED_COMMON_MENU_KEYS = frozenset({"settings.skin"})
+
+
 @dataclass(frozen=True)
 class NavigationItem:
     key: str
@@ -81,7 +84,11 @@ def _visible_item(
         for child in (_visible_item(child, permission_broker, context) for child in item.children)
         if child is not None
     )
-    can_read_self = permission_broker.check_resource(context, f"menu:{item.key}", "read")
+    can_read_self = item.key in _AUTHENTICATED_COMMON_MENU_KEYS or permission_broker.check_resource(
+        context,
+        f"menu:{item.key}",
+        "read",
+    )
     if not can_read_self and not children:
         return None
     return NavigationItem(key=item.key, label=item.label, children=children)

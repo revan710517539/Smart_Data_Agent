@@ -21,7 +21,6 @@ import {
   EyeOff,
   ToggleRight,
   ToggleLeft,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
@@ -57,6 +56,8 @@ import { ApiRequestError, apiErrorMessage } from "../services/apiClient";
 import { demoFallbackDisabledMessage, isDemoFallbackEnabled } from "../services/apiContext";
 import { DataPageSelector, useClientPagination } from "./ui/DataPageSelector";
 import { ConfirmDialog, askConfirm } from "./ui/ConfirmDialog";
+import { AppSelect } from "./ui/AppSelect";
+import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "./ui/FormDialog";
 import {
   type UserFormKey,
   type AccessModal,
@@ -1509,14 +1510,15 @@ function UserEditorModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4">
-      <div className="w-full max-w-[640px] rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
-        <ModalHeader
-          title={editing ? "编辑用户" : "添加用户"}
-          desc="录入用户信息，并为用户授予具体机构下的管理员、操作员或自定义角色。"
-          onClose={onClose}
-        />
-        <div className="grid gap-4 p-5 md:grid-cols-2">
+    <FormDialog
+      open
+      title={editing ? "编辑用户" : "添加用户"}
+      description="录入用户信息，并为用户授予具体机构下的管理员、操作员或自定义角色。"
+      widthClassName="max-w-[640px]"
+      onClose={onClose}
+      bodyClassName="grid gap-4 md:grid-cols-2"
+      footer={<><span className="mr-auto min-w-0 flex-1 text-[12px] leading-[1.5] text-[#d93025]" role="alert" aria-live="polite">{saveError}</span><FormDialogCancelButton onClick={onClose} /><FormDialogPrimaryButton onClick={onSave} disabled={!form.name.trim() || !form.email.trim() || !form.tenantRoles.length}>保存用户</FormDialogPrimaryButton></>}
+    >
           <ModelInput label="姓名" value={form.name} onChange={(value) => onChange("name", value)} />
           <ModelInput label="邮箱" value={form.email} onChange={(value) => onChange("email", value)} />
           {!editing && (
@@ -1527,14 +1529,14 @@ function UserEditorModal({
           <ModelInput label="部门" value={form.department} onChange={(value) => onChange("department", value)} />
           <label>
             <span className="mb-1.5 block text-[11px] text-[#8a8a8e]">状态</span>
-            <select
+            <AppSelect
               value={form.status}
               onChange={(event) => onChange("status", event.target.value)}
               className="h-9 w-full rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
             >
               <option value="active">活跃</option>
               <option value="inactive">停用</option>
-            </select>
+            </AppSelect>
           </label>
           <div className="md:col-span-2 rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-3">
             <div className="mb-2 flex items-center justify-between">
@@ -1577,7 +1579,7 @@ function UserEditorModal({
                 const roleOptions = roleOptionsForInstitution(role.tenant, rolePermissions, canGrantAdminRole, role.role);
                 return (
                   <div key={`${role.tenant}_${role.role}_${index}`} className="grid gap-2 md:grid-cols-[1fr_1fr_32px]">
-                    <select
+                    <AppSelect
                       value={role.tenant}
                       onChange={(event) => {
                         const nextTenant = event.target.value;
@@ -1595,8 +1597,8 @@ function UserEditorModal({
                           {tenant}
                         </option>
                       ))}
-                    </select>
-                    <select
+                    </AppSelect>
+                    <AppSelect
                       value={role.role}
                       onChange={(event) => updateTenantRole(index, { role: event.target.value })}
                       className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
@@ -1606,7 +1608,7 @@ function UserEditorModal({
                           {option}
                         </option>
                       ))}
-                    </select>
+                    </AppSelect>
                     <button
                       type="button"
                       onClick={() => removeTenantRole(index)}
@@ -1621,31 +1623,7 @@ function UserEditorModal({
               })}
             </div>
           </div>
-        </div>
-        <div className="flex items-center gap-3 border-t border-[#f0f0f2] px-5 py-4">
-          <span className="min-w-0 flex-1 text-[12px] leading-[1.5] text-[#d93025]" role="alert" aria-live="polite">
-            {saveError}
-          </span>
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg border border-[#e5e5ea] bg-white px-4 py-2 text-[12px] text-[#636366] hover:bg-[#f2f2f7]"
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              onClick={onSave}
-              disabled={!form.name.trim() || !form.email.trim() || !form.tenantRoles.length}
-              className="rounded-lg bg-[#1d1d1f] px-4 py-2 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-40"
-            >
-              保存用户
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    </FormDialog>
   );
 }
 
@@ -1865,18 +1843,18 @@ function PermissionEditorModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`${institution.institution}权限配置`}
-        className="flex h-[min(760px,86vh)] w-full max-w-[1060px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20"
-      >
-        <ModalHeader
-          title={`${institution.institution}权限配置`}
-          desc="在机构域内维护默认管理员、操作员和自定义角色；菜单、指标数据范围和可管理角色统一在此配置。"
-          onClose={onClose}
-        />
+    <FormDialog
+      open
+      title={`${institution.institution}权限配置`}
+      description="在机构域内维护默认管理员、操作员和自定义角色；菜单、指标数据范围和可管理角色统一在此配置。"
+      ariaLabel={`${institution.institution}权限配置`}
+      widthClassName="max-w-[1060px]"
+      heightClassName="h-[min(760px,86vh)]"
+      busy={saving}
+      onClose={onClose}
+      bodyClassName="overflow-hidden p-0"
+      footer={<><span className={`mr-auto text-[12px] ${saveError ? "text-[#d93025]" : "text-[#8a8a8e]"}`}>{saveError || "保存后立即更新该机构角色权限配置。"}</span><FormDialogCancelButton onClick={onClose} disabled={saving} /><FormDialogPrimaryButton onClick={() => void save()} disabled={saving}>{saving ? "保存中" : "保存配置"}</FormDialogPrimaryButton></>}
+    >
         <div className="grid min-h-0 flex-1 overflow-hidden max-lg:grid-rows-[minmax(0,36%)_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)]">
           <div className="flex min-h-0 flex-col border-r border-[#f0f0f2] bg-[#fafbfc]">
             <div className="flex shrink-0 items-center justify-between px-4 pb-2 pt-4">
@@ -1977,30 +1955,7 @@ function PermissionEditorModal({
             )}
           </div>
         </div>
-        <div className="flex shrink-0 items-center justify-between border-t border-[#f0f0f2] px-5 py-3">
-          <span className={`text-[12px] ${saveError ? "text-[#d93025]" : "text-[#8a8a8e]"}`}>
-            {saveError || "保存后立即更新该机构角色权限配置。"}
-          </span>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-4 text-[12px] text-[#636366] hover:bg-[#f2f2f7]"
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              onClick={() => void save()}
-              disabled={saving}
-              className="h-9 rounded-lg bg-[#1d1d1f] px-4 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-40"
-            >
-              {saving ? "保存中" : "保存配置"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    </FormDialog>
   );
 }
 
@@ -2512,13 +2467,15 @@ function ModelAccessModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4">
-      <div className="flex h-[min(760px,86vh)] w-full max-w-[1200px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
-        <ModalHeader
-          title="模型接入管理"
-          desc="每个登录账号都可以绑定自己的模型 Key 与 API 地址，账号下所有机构共用；可选子模型以测试接口的实际返回为准。"
-          onClose={onClose}
-        />
+    <FormDialog
+      open
+      title="模型接入管理"
+      description="每个登录账号都可以绑定自己的模型 Key 与 API 地址，账号下所有机构共用；可选子模型以测试接口的实际返回为准。"
+      widthClassName="max-w-[1200px]"
+      heightClassName="h-[min(760px,86vh)]"
+      onClose={onClose}
+      bodyClassName="overflow-hidden p-0"
+    >
         <div
           className={`flex h-9 shrink-0 items-center overflow-hidden border-b border-[#f0f0f2] px-5 text-[11px] ${notice ? (isAccessFailureNotice(notice) ? "text-[#c83a3a]" : "text-[#258a3f]") : "text-transparent"}`}
           role="status"
@@ -2590,13 +2547,13 @@ function ModelAccessModal({
                             onChange={(event) => setModelEditDraft((current) => ({ ...current, name: event.target.value }))}
                             className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
                           />
-                          <select
+                          <AppSelect
                             value={modelEditDraft.modelName}
                             onChange={(event) => setModelEditDraft((current) => ({ ...current, modelName: event.target.value }))}
                             className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
                           >
                             {modelSourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}
-                          </select>
+                          </AppSelect>
                           <input value={modelEditDraft.key} autoComplete="off" data-1p-ignore="true" onChange={(event) => setModelEditDraft((current) => ({ ...current, key: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]" />
                           <input value={modelEditDraft.value} type="password" autoComplete="new-password" data-1p-ignore="true" placeholder={model.requiresCredential ? "请输入 API 密钥" : "留空保持原密钥"} onChange={(event) => setModelEditDraft((current) => ({ ...current, value: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]" />
                         </>
@@ -2752,13 +2709,13 @@ function ModelAccessModal({
                       {isEditing ? (
                         <>
                           <input value={speechEditDraft.name} autoComplete="off" data-1p-ignore="true" onChange={(event) => setSpeechEditDraft((current) => ({ ...current, name: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]" />
-                          <select
+                          <AppSelect
                             value={speechEditDraft.provider}
                             onChange={(event) => setSpeechEditDraft((current) => ({ ...current, provider: event.target.value, source: speechProviderLabel(event.target.value) }))}
                             className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]"
                           >
                             <option value="aliyun_fun_asr">阿里云 Fun-ASR</option>
-                          </select>
+                          </AppSelect>
                           <input value={speechEditDraft.apiBase} autoComplete="off" data-1p-ignore="true" onChange={(event) => setSpeechEditDraft((current) => ({ ...current, apiBase: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]" />
                           <input value={speechEditDraft.apiKey} type="password" autoComplete="new-password" data-1p-ignore="true" placeholder="留空保持原密钥" onChange={(event) => setSpeechEditDraft((current) => ({ ...current, apiKey: event.target.value }))} className="h-8 min-w-0 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[11px] outline-none focus:border-[#c7c7cc]" />
                         </>
@@ -2855,27 +2812,7 @@ function ModelAccessModal({
           </div>
         )}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function ModalHeader({ title, desc, onClose }: { title: string; desc: string; onClose: () => void }) {
-  return (
-    <div className="flex items-center justify-between border-b border-[#f0f0f2] px-5 py-4">
-      <div>
-        <h3 className="text-[14px] text-[#1d1d1f]">{title}</h3>
-        <p className="mt-0.5 text-[11px] text-[#aeaeb2]">{desc}</p>
-      </div>
-      <button
-        type="button"
-        onClick={onClose}
-        className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8a8a8e] hover:bg-[#f2f2f7]"
-        aria-label="关闭弹窗"
-      >
-        <X className="h-4 w-4" />
-      </button>
-    </div>
+    </FormDialog>
   );
 }
 
@@ -2952,7 +2889,7 @@ function ModelSelect({
   return (
     <label className="mb-3 block">
       <span className="mb-1.5 block text-[11px] text-[#8a8a8e]">{label}</span>
-      <select
+      <AppSelect
         value={value}
         onChange={(event) => onChange(event.target.value)}
         className="h-9 w-full rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] outline-none focus:border-[#c7c7cc]"
@@ -2962,7 +2899,7 @@ function ModelSelect({
             {option.label}
           </option>
         ))}
-      </select>
+      </AppSelect>
     </label>
   );
 }

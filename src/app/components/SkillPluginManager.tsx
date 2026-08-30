@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BookOpen, ChevronRight, Eye, EyeOff, Pencil, Plus, Trash2, Wrench, X } from "lucide-react";
+import { BookOpen, ChevronRight, Eye, EyeOff, Pencil, Plus, Trash2, Wrench } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
 import {
   deleteDataAssetItem,
@@ -13,6 +13,7 @@ import { askConfirm } from "./ui/ConfirmDialog";
 import { analysisSkillDisplayLocation, displayedAnalysisSkills } from "../services/analysisSkillCatalog";
 import { operatingTenantNames } from "../data/operatingTenants";
 import { DataPageSelector, useClientPagination } from "./ui/DataPageSelector";
+import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "./ui/FormDialog";
 
 const coreTopicSkills = [
   { id: "topic-descriptive", label: "描述性分析" },
@@ -214,10 +215,16 @@ function SkillEditor({
     .filter((skill) => skill.category === "主题" && skill.id !== draft.id)
     .map((skill) => ({ id: skill.id, label: skill.name, meta: skill.description }));
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/20 px-4" onMouseDown={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={`${draft.id ? "编辑" : "新增"}${draft.category} Skill`} className="flex max-h-[86vh] w-full max-w-[760px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-[#f0f0f2] bg-white px-6 py-4"><div><h3 className="text-[16px] text-[#1d1d1f]">{draft.id ? "编辑" : "新增"}{draft.category} Skill</h3><p className="mt-1 text-[11px] text-[#8a8a8e]">维护一套可直接进入智能分析上下文的完整方案。</p></div><button type="button" onClick={onClose} className="rounded-md p-2 text-[#8a8a8e] hover:bg-[#f2f2f7]" aria-label={`关闭${draft.category}弹窗`}><X className="h-4 w-4" /></button></div>
-        <div className="grid min-h-0 gap-4 overflow-y-auto px-6 py-5">
+    <FormDialog
+      title={`${draft.id ? "编辑" : "新增"}${draft.category} Skill`}
+      description="维护一套可直接进入智能分析上下文的完整方案。"
+      ariaLabel={`${draft.id ? "编辑" : "新增"}${draft.category} Skill`}
+      onClose={onClose}
+      widthClassName="max-w-[760px]"
+      zIndexClassName="z-[90]"
+      bodyClassName="grid gap-4"
+      footer={<><FormDialogCancelButton onClick={onClose}>取消</FormDialogCancelButton><FormDialogPrimaryButton onClick={onSave}>保存</FormDialogPrimaryButton></>}
+    >
           <Field label="名称" value={draft.name} onChange={(value) => onChange({ ...draft, name: value })} />
           <Field label="用途说明" value={draft.description} multiline onChange={(value) => onChange({ ...draft, description: value })} />
           <ReferencePicker label="对应记忆" value={draft.memoryRefs} options={memoryOptions} emptyText="知识记忆中暂无已提炼的意图、分析经验或行为习惯" onChange={(memoryRefs) => onChange({ ...draft, memoryRefs })} />
@@ -232,10 +239,7 @@ function SkillEditor({
             <label className="flex items-center gap-2 text-[12px] text-[#3a3a3c]"><input type="checkbox" checked={draft.enabled} onChange={(event) => onChange({ ...draft, enabled: event.target.checked })} data-skill-runtime-enabled={draft.id || "new"} />启用 Skill 运行时能力</label>
             <label className="flex items-center gap-2 text-[12px] text-[#3a3a3c]"><input type="checkbox" checked={analysisSkillDisplayLocation(draft) === "intelligent_analysis"} onChange={(event) => onChange({ ...draft, displayLocation: event.target.checked ? "intelligent_analysis" : "hidden" })} data-skill-intelligent-analysis-visible={draft.id || "new"} />展示在智能分析页面</label>
           </div>
-        </div>
-        <div className="flex justify-end gap-2 border-t border-[#f0f0f2] bg-white px-6 py-4"><button type="button" onClick={onClose} className="h-9 rounded-lg border border-[#e5e5ea] px-4 text-[12px] text-[#636366]">取消</button><button type="button" onClick={onSave} className="h-9 rounded-lg bg-[#1d1d1f] px-5 text-[12px] text-white">保存</button></div>
-      </div>
-    </div>
+    </FormDialog>
   );
 }
 

@@ -18,6 +18,11 @@
   --sda-canvas: #f3f7f5;
   --sda-surface: #ffffff;
   --sda-surface-subtle: #f7faf9;
+  --sda-sidebar: #f8fbfa;
+  --sda-shadow: rgba(20, 49, 38, 0.08);
+  --sda-overlay: rgba(18, 33, 27, 0.28);
+  --sda-radius-card: 10px;
+  --sda-font-family: Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
   /*
    * Neutral boundaries use three quiet levels so nested content does not read
    * as a stack of boxes. Semantic focus/selection colours stay independent.
@@ -26,9 +31,9 @@
   --sda-border-soft: rgba(64, 91, 76, 0.065);
   --sda-border-control: rgba(64, 91, 76, 0.16);
   --sda-border-strong: rgba(64, 91, 76, 0.20);
-  --sda-text: #18231f;
-  --sda-text-secondary: #596a63;
-  --sda-text-tertiary: #8b9a94;
+  --sda-text: #000000;
+  --sda-text-secondary: #262626;
+  --sda-text-tertiary: #595959;
 
   --background: var(--sda-canvas);
   --foreground: var(--sda-text);
@@ -69,6 +74,7 @@ body,
 #root {
   background: var(--sda-canvas);
   color: var(--sda-text);
+  font-family: var(--sda-font-family);
 }
 
 ::selection {
@@ -81,7 +87,7 @@ body,
 }
 
 #root [data-agent-sidebar="true"] {
-  background: #f8fbfa !important;
+  background: var(--sda-sidebar) !important;
   border-color: var(--sda-border) !important;
 }
 
@@ -107,28 +113,59 @@ body,
   background-color: var(--sda-surface-subtle) !important;
 }
 
+#root [class~="bg-white"],
+body > [class~="bg-white"] {
+  background-color: var(--sda-surface) !important;
+}
+
+#root [class~="text-[#1d1d1f]"],
+#root [class~="text-[#18231f]"],
+#root [class~="text-[#3a3a3c]"],
+#root [class~="text-[#303734]"],
+#root [class~="text-[#343b37]"] {
+  color: var(--sda-text) !important;
+}
+
+#root [class~="text-[#34443c]"],
+#root [class~="text-[#53615a]"],
+#root [class~="text-[#596a63]"],
+#root [class~="text-[#626965]"],
+#root [class~="text-[#636366]"] {
+  color: var(--sda-text-secondary) !important;
+}
+
+#root [class~="text-[#747f79]"],
+#root [class~="text-[#8a8a8e]"],
+#root [class~="text-[#8a9690]"],
+#root [class~="text-[#98a19c]"],
+#root [class~="text-[#9aa49f]"],
+#root [class~="text-[#a0a8a3]"],
+#root [class~="text-[#aeaeb2]"] {
+  color: var(--sda-text-tertiary) !important;
+}
+
 body #root [data-agent-main-shell="true"] {
   background: var(--sda-canvas) !important;
 }
 
 #root [class~="bg-[#f2f2f7]"],
 #root [class~="bg-[#f5f5f7]"] {
-  background-color: #f0f5f3 !important;
+  background-color: var(--sda-surface-subtle) !important;
 }
 
 #root [class~="bg-white"][class~="rounded-xl"][class*="border"],
 #root [class~="bg-white"][class~="rounded-2xl"][class*="border"],
 #root [data-slot="card"] {
   border-color: var(--sda-border) !important;
-  box-shadow: 0 1px 2px rgba(20, 49, 38, 0.025), 0 8px 22px rgba(20, 49, 38, 0.035);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--sda-shadow) 35%, transparent), 0 8px 22px var(--sda-shadow);
 }
 
 #root [class~="rounded-xl"] {
-  border-radius: 10px;
+  border-radius: var(--sda-radius-card);
 }
 
 #root [class~="rounded-2xl"] {
-  border-radius: 12px;
+  border-radius: calc(var(--sda-radius-card) + 2px);
 }
 
 /* Primary actions: replace the old near-black fill with the reference green. */
@@ -167,7 +204,7 @@ body #root [data-agent-main-shell="true"] {
 #root [data-slot="select-trigger"],
 #root [data-slot="textarea"] {
   border-color: var(--sda-border-control) !important;
-  background-color: #ffffff;
+  background-color: var(--sda-surface);
   border-radius: 7px;
 }
 
@@ -226,9 +263,14 @@ body #root [data-agent-main-shell="true"] {
 
 #root th,
 #root [data-slot="table-head"] {
-  color: #53675f;
+  color: var(--sda-text);
   border-color: var(--sda-border) !important;
   font-weight: 600;
+}
+
+#root td,
+#root [data-slot="table-cell"] {
+  color: var(--sda-text);
 }
 
 #root td,
@@ -241,12 +283,16 @@ body #root [data-agent-main-shell="true"] {
 @media (hover: hover) and (pointer: fine) {
   #root tbody tr:hover,
   #root [data-slot="table-row"]:hover {
-    background: #f5fbf8 !important;
+    background: var(--sda-brand-softer) !important;
   }
 }
 
 /* Popovers, menus and every shared or custom dialog follow one surface model. */
 #root [role="dialog"],
+body [role="dialog"],
+body [data-app-form-dialog="true"],
+body [data-skin-preview-dialog],
+body [data-chart-template-gallery="true"],
 #root [data-slot="dialog-content"],
 #root [data-slot="alert-dialog-content"],
 #root [data-slot="sheet-content"],
@@ -254,27 +300,34 @@ body #root [data-agent-main-shell="true"] {
 #root [data-slot="popover-content"],
 #root [data-slot="select-content"],
 #root [role="menu"] {
-  background: #ffffff !important;
+  background: var(--sda-surface) !important;
   border-color: var(--sda-border-strong) !important;
-  border-radius: 12px !important;
-  box-shadow: 0 18px 50px rgba(20, 49, 38, 0.16), 0 3px 10px rgba(20, 49, 38, 0.06) !important;
+  border-radius: calc(var(--sda-radius-card) + 2px) !important;
+  box-shadow: 0 18px 50px var(--sda-shadow), 0 3px 10px color-mix(in srgb, var(--sda-shadow) 55%, transparent) !important;
 }
 
 #root [role="dialog"] [class~="border-b"],
 #root [role="dialog"] [class~="border-t"],
+body [role="dialog"] [class~="border-b"],
+body [role="dialog"] [class~="border-t"],
 #root [data-slot="dialog-header"],
 #root [data-slot="dialog-footer"] {
   border-color: var(--sda-border) !important;
 }
 
 #root [data-slot="dialog-overlay"],
+body [data-app-form-dialog-overlay="true"],
+body [data-slot="dialog-overlay"],
+body [data-slot="alert-dialog-overlay"],
+body [data-slot="sheet-overlay"],
+body [data-slot="drawer-overlay"],
 #root [data-slot="alert-dialog-overlay"],
 #root [data-slot="sheet-overlay"],
 #root [data-slot="drawer-overlay"],
 #root [class~="fixed"][class~="inset-0"][class~="bg-black/20"],
 #root [class~="fixed"][class~="inset-0"][class~="bg-black/10"],
 #root [class~="fixed"][class~="inset-0"][class~="bg-[#1d1d1f]/35"] {
-  background-color: rgba(18, 33, 27, 0.28) !important;
+  background-color: var(--sda-overlay) !important;
   backdrop-filter: blur(2px);
 }
 

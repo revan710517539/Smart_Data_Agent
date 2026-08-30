@@ -7,6 +7,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from backend.platform.storage import connect_sqlite
+from backend.platform.visualization_config import normalize_chart_style, normalize_table_metric_enhancements, normalize_table_metric_formats, normalize_table_style
 from typing import Any
 from uuid import uuid4
 
@@ -1535,14 +1536,28 @@ def _normalize_saved_analysis_visualization_config(value: dict[str, Any]) -> dic
                     "rules": rules,
                 })
 
+    metric_fields = string_list(value.get("metricFields"))
+    dimension_fields = string_list(value.get("dimensionFields"))
+    metric_rankings, metric_progress, calculated_columns = normalize_table_metric_enhancements(value, metric_fields, dimension_fields)
+    metric_formats = normalize_table_metric_formats(value, metric_fields)
     config: dict[str, Any] = {
-        "metricFields": string_list(value.get("metricFields")),
-        "dimensionFields": string_list(value.get("dimensionFields")),
+        "metricFields": metric_fields,
+        "dimensionFields": dimension_fields,
+        "metricRankings": metric_rankings,
+        "metricFormats": metric_formats,
+        "metricProgress": metric_progress,
+        "calculatedColumns": calculated_columns,
         "filters": filters,
         "filterGroups": filter_groups,
         "sumFilteredRows": bool(value.get("sumFilteredRows")),
         "comboLineFields": string_list(value.get("comboLineFields")),
     }
+    table_style = normalize_table_style(value.get("tableStyle"))
+    if table_style:
+        config["tableStyle"] = table_style
+    chart_style = normalize_chart_style(value.get("chartStyle"))
+    if chart_style:
+        config["chartStyle"] = chart_style
     if "noteTitle" in value:
         config["noteTitle"] = str(value.get("noteTitle") or "").strip()[:500]
     if "noteBody" in value:

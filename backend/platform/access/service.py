@@ -88,13 +88,14 @@ _MENU_LABEL_TO_KEYS = {
     "预警规则": {"notifications.alerts"},
     "订阅管理": {"notifications.subscriptions"},
     "推送记录": {"notifications.history"},
-    "系统管理": {"settings", "settings.users", "settings.roles", "settings.audit", "settings.config"},
+    "系统管理": {"settings", "settings.users", "settings.roles", "settings.audit", "settings.config", "settings.skin"},
     "用户管理": {"settings.users"},
     "角色权限": {"settings.roles"},
     "审计日志": {"settings.audit"},
     "系统配置": {"settings.config"},
+    "皮肤管理": {"settings.skin"},
 }
-_MANDATORY_MENU_KEYS: set[str] = {"settings.audit", "settings.config"}
+_MANDATORY_MENU_KEYS: set[str] = {"settings.audit", "settings.config", "settings.skin"}
 _SYSTEM_ROLE_NAMES = {"管理员", "操作员"}
 
 

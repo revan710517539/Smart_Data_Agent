@@ -50,3 +50,71 @@
 - [x] 浏览器控制台无 warning/error
 
 final result: passed
+
+---
+
+# Design QA — 银行经营排名模板
+
+- Result: passed
+- Reference gallery: `/var/folders/5j/1tdj8bb17jbc5z_08kq65_bc0000gn/T/codex-clipboard-315fa27b-7c75-4f8e-809f-45526a96041f.png`
+- Reference table: `/var/folders/5j/1tdj8bb17jbc5z_08kq65_bc0000gn/T/codex-clipboard-63d4ce31-58e2-49f9-8e2a-d6f1e80b3464.png`
+- Implementation screenshots: `output/playwright/bank-performance-template/template-gallery.png`, `bank-performance-template-pivot.png`, `bank-performance-template-table.png`
+- Same-input comparisons: `output/playwright/bank-performance-template/gallery-comparison.png`, `table-comparison.png`
+
+## Visible comparison
+
+- The gallery remains a viewport-level floating panel, uses the existing compact three-column preview system, and caps at 900 px or the viewport minus 80 px. Its content area owns vertical overflow; the chart card does not grow with the gallery.
+- The custom section contains one compact, non-deletable `银行经营排名` tile. The tile previews the navy header, cool-blue grid and blue data-bar treatment.
+- Both pivot and multi-dimensional table results preserve their current rows and labels while applying a navy header, navy total row, thin cool-blue borders, alternating pale-blue rows, an adjacent one-based ranking column and inset blue gradient data bars.
+- The reference contains many score/rating/change fields that are absent from the browser fixture. The implementation intentionally applies only compatible current fields and does not invent screenshot rows, values, rating thresholds or change classifications.
+
+## Interaction and state
+
+- Real pointer click applies the featured template from the floating gallery.
+- The pivot and multi-dimensional table retain data, rankings and column-maximum data bars when switching table type.
+- Existing user-saved templates remain tenant/user scoped, deletable and limited to 20; the featured template does not consume that quota.
+- Existing selected-row denominator progress rules remain compatible and fail closed when the row selector is incomplete.
+
+---
+
+# Design QA — 进度弹窗配色与正反渐变
+
+- source visual truth: `/var/folders/5j/1tdj8bb17jbc5z_08kq65_bc0000gn/T/codex-clipboard-fc927e89-3e96-4cde-95fe-217a5a204c03.png`
+- implementation screenshots: `output/playwright/progress-palette-20260830/progress-dialog.png`, `output/playwright/progress-palette-20260830/progress-palette-expanded.png`
+- same-input comparisons: `output/playwright/progress-palette-20260830/progress-palette-collapsed-comparison.png`, `output/playwright/progress-palette-20260830/progress-palette-comparison.png`
+- viewport: 1440×960 CSS px, device scale factor 1
+- pixel normalization: source 2306×350 was scaled to 1044px wide and padded to 1044×260; the corresponding implementation color region was cropped at 1044×260; each combined comparison is 1044×520
+- state: cross/multi-dimensional table metric header → 显示进度; comparison covers both the four-palette collapsed state and six-palette expanded dropdown state
+
+## Findings
+
+- No actionable P0/P1/P2 difference remains. The latest written requirements intentionally supersede the reference's five always-visible swatches and two gray group labels.
+- Fonts and typography: module title, buttons and compact mode labels retain the existing SDA desktop typography; all three mode labels remain single-line and readable at 1440×960.
+- Spacing and layout rhythm: dialog maximum width is 1044px and maximum height is 744px, each approximately 76px smaller than the previous maximum. Four primary swatches, the dropdown control and three fill-mode buttons remain on one row; the association-rule controls remain one rule per row.
+- Colors and visual tokens: four restrained Office/Excel/Feishu/Primer-derived combinations are visible by default; the six additional combinations use the same two-tone preview grammar. Selected, hover and expanded states stay inside the existing green/neutral SDA token system.
+- Image quality and asset fidelity: there are no raster product assets in this control; palette and progress previews are native UI color samples and remain sharp at device scale factor 1.
+- Copy and content: the visible `经典配色` and `填充模式` labels are absent. Buttons read `正向渐变色`、`反向渐变色`、`完全色`; the extra palette trigger has an accessible label.
+
+## Focused interaction evidence
+
+- Initial DOM contains exactly four primary palette buttons and no expanded panel.
+- Activating the compact arrow renders exactly six additional palette buttons in a floating 3×2 panel without increasing dialog height.
+- Solid → reverse-gradient switching updates selected state and the live preview; saving preserves `reverse_gradient` through frontend normalization, backend projection and table-cell rendering.
+- The expanded palette panel floats above the following section without shifting or wrapping the association-rule layout.
+- The focused authenticated browser smoke completed with no console error and verified the saved reverse-gradient data bar in the table cell.
+
+## Comparison history
+
+- iteration 1: replaced five palettes with ten sourced combinations, removed the two redundant labels, added forward/reverse/solid modes and reduced the dialog frame.
+- iteration 2: added explicit four-versus-six DOM assertions, an expanded-dropdown screenshot and a saved table-cell assertion for `reverse_gradient`; no P0/P1/P2 visual repair was required after the combined comparison.
+
+## Verification
+
+- [x] `npm run test:visualization-interaction`
+- [x] `npm run typecheck`
+- [x] `npm run build`
+- [x] `python -m unittest backend.platform.tests.test_visual_reports` (15 tests)
+- [x] authenticated focused browser journey for table enhancements and screenshots
+- [x] collapsed and expanded same-input visual comparisons
+
+final result: passed

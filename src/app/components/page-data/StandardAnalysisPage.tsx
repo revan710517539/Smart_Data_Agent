@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Eye, GripVertical } from "lucide-react";
+import { Eye, GripVertical, LayoutTemplate, Plus } from "lucide-react";
 import { apiErrorMessage } from "../../services/apiClient";
 import { fetchApplicationModule, runApplicationAction, type ApplicationModuleKey } from "../../services/applicationApi";
 import { readVisualGridItemSize } from "../self-analysis/visualGridLayout";
@@ -42,7 +42,7 @@ export function StandardAnalysisPageHeader({
   leadingActions,
   headerDataAttribute,
 }: {
-  title: string;
+  title: ReactNode;
   description: string;
   metadata?: ReactNode;
   stickyNote: StandardAnalysisStickyNoteController;
@@ -69,6 +69,44 @@ export function StandardAnalysisPageHeader({
         {canEditLayout ? <PageDataModeToggle controller={editController} /> : null}
       </div>
     </div>
+  );
+}
+
+export function StandardReportPageCanvas({
+  children,
+  empty,
+  editable,
+  busy = false,
+  onEdit,
+  editLabel = "新增页面模块",
+  className = "",
+}: {
+  children?: ReactNode;
+  empty: boolean;
+  editable: boolean;
+  busy?: boolean;
+  onEdit: () => void;
+  editLabel?: string;
+  className?: string;
+}) {
+  return (
+    <section className={`min-h-[620px] rounded-xl border border-[#e8ecea] bg-[#f6f8f7] p-4 md:p-5 ${className}`} data-standard-report-page-canvas="true">
+      {children}
+      {empty ? (
+        <div className={`flex items-center justify-center rounded-xl border border-dashed border-[#d9e0dc] bg-white px-6 text-center ${children ? "mt-4 min-h-[150px]" : "min-h-[570px]"}`} data-standard-report-empty-module="true">
+          <div>
+            <span className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl border border-[#e0e6e2] bg-[#fafcfb] text-[#7c8981]"><LayoutTemplate className="h-4.5 w-4.5" /></span>
+            <div className="mt-3 text-[12px] text-[#68726c]">当前页面还没有内容</div>
+            <div className="mt-1 text-[10px] text-[#9aa19d]">{editable ? "添加第一个模块，开始编辑页面。" : "点击右上角编辑，开始配置页面。"}</div>
+            {editable ? (
+              <button type="button" disabled={busy} onClick={onEdit} className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#cfe0d6] bg-white px-4 text-[11px] text-[#3f7656] hover:border-[#a9cdb7] hover:bg-[#f3f8f5] disabled:cursor-wait disabled:opacity-50" data-standard-report-empty-edit="true">
+                <Plus className="h-3.5 w-3.5" />{busy ? "正在准备…" : editLabel}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
 

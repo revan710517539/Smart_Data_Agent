@@ -20,6 +20,7 @@ import {
   type InteractionTimelineEvent,
 } from "../services/interactionAnalyticsApi";
 import { ApiRequestError, apiErrorMessage } from "../services/apiClient";
+import { AppSelect } from "./ui/AppSelect";
 
 type AnalyticsLoadStatus = "loading" | "retrying" | "ready" | "failed";
 type TrendMetricKey = "visits" | "visitors" | "this_week_visits" | "events" | "peak_hour";
@@ -132,11 +133,11 @@ export function InteractionAnalytics() {
           <p className="mt-1 text-[13px] text-[#aeaeb2]">全平台跨机构视角 · 从同一张轻量行为明细表识别来访、数据使用与访问断点</p>
         </div>
         <div className="flex items-center gap-2" data-page-header-actions="true">
-          <select value={days} onChange={(event) => { setDays(Number(event.target.value)); setPage(1); }} className="h-9 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] outline-none focus:border-[#b7ddc3]" aria-label="统计周期">
+          <AppSelect value={days} onChange={(event) => { setDays(Number(event.target.value)); setPage(1); }} className="h-9" aria-label="统计周期">
             <option value={7}>近 7 天</option>
             <option value={30}>近 30 天</option>
             <option value={90}>近 90 天</option>
-          </select>
+          </AppSelect>
           <button type="button" onClick={() => setRefreshToken((value) => value + 1)} disabled={loading} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] hover:bg-[#f5f5f7] disabled:opacity-50">
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />刷新
           </button>

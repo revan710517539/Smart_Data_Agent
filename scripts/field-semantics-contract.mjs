@@ -5,6 +5,7 @@ const dataAssets = fs.readFileSync("src/app/components/DataAssets.tsx", "utf8");
 const semantics = fs.readFileSync("src/app/data/fieldSemantics.ts", "utf8");
 const model = fs.readFileSync("src/app/components/visualization/visualizationDataModel.ts", "utf8");
 const views = fs.readFileSync("src/app/components/self-analysis/ResultViews.tsx", "utf8");
+const domain = fs.readFileSync("src/app/components/self-analysis/domain.ts", "utf8");
 const routes = fs.readFileSync("backend/platform/api/routes/assets.py", "utf8");
 
 assert.match(dataAssets, /字段角色[\s\S]*是否主键/, "字段列表必须在类型前展示角色，并提供是否主键选择");
@@ -15,6 +16,9 @@ assert.match(semantics, /type === "rate" \? `\$\{formatted\}%`/, "rate 必须追
 assert.match(semantics, /type === "integer"[\s\S]*maximumFractionDigits: 0/, "integer 不得显示小数位");
 assert.match(model, /semanticRole === "date"[\s\S]*isPrimaryKey/, "趋势图必须先按日期、再按主键选择横轴");
 assert.match(views, /normalizeVisualizationSelections\([\s\S]*fieldMetadata\)/, "共享可视化选择必须消费字段语义");
+assert.match(domain, /fieldMetadataFromSchemaMapping\(mapping\)/, "分析结果必须读取后端字段合同中的权威角色");
+assert.match(domain, /role !== "metric" && role !== "dimension" && role !== "date"/, "未知字段角色必须失败关闭，不能按数值形态猜测");
+assert.match(views, /analysisSource[\s\S]*table\.fieldMetadata/, "共享可视化必须让当前绑定数据表配置覆盖旧结果快照");
 assert.match(routes, /raw_table_metadata_schema_changed/, "字段配置必须校验当前 CSV 结构指纹");
 assert.match(routes, /"primaryKeys": primary_keys/, "后端必须投影联合主键");
 

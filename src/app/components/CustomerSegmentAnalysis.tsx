@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, FileSpreadsheet, Upload, X } from "lucide-react";
+import { CheckCircle2, FileSpreadsheet, Upload } from "lucide-react";
 import { usePlatformContext } from "../platform/PlatformContext";
 import { apiErrorMessage } from "../services/apiClient";
 import { fetchApplicationModule } from "../services/applicationApi";
@@ -16,6 +16,7 @@ import {
 } from "./page-data/PageDataComposer";
 import { StandardAnalysisPageHeader, StandardAnalysisPageStickyNote } from "./page-data/StandardAnalysisPage";
 import { useStickyNote } from "./notes/useStickyNote";
+import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "./ui/FormDialog";
 
 type CustomerSegmentState = { customerSegmentList?: CustomerSegmentListMetadata | null };
 
@@ -144,19 +145,25 @@ function CustomerSegmentUploadModal({ tenantId, userId, onClose, onConfirmed }: 
     }
   };
 
-  return <div className="fixed inset-0 z-[170] flex items-center justify-center bg-[rgba(18,33,27,0.28)] p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !checking && !confirming) onClose(); }} data-customer-segment-upload-overlay="true">
-    <section role="dialog" aria-modal="true" aria-labelledby="customer-segment-upload-title" className="flex max-h-[86vh] w-full max-w-[560px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/15" onMouseDown={(event) => event.stopPropagation()}>
-      <div className="flex items-start justify-between border-b border-[#f0f0f2] px-5 py-4"><div><h3 id="customer-segment-upload-title" className="text-[15px] text-[#1d1d1f]">上传客群名单</h3><p className="mt-1 text-[11px] leading-5 text-[#8a8a8e]">仅读取首个工作表 A 列；不识别表头，A1 即第一个客户号，其他列不读取。</p></div><button type="button" aria-label="关闭客群名单弹窗" disabled={checking || confirming} onClick={onClose} className="rounded-lg p-2 text-[#8a8a8e] hover:bg-[#f2f2f7] disabled:opacity-50"><X className="h-4 w-4" /></button></div>
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+  return <FormDialog
+    open
+    title="上传客群名单"
+    description="仅读取首个工作表 A 列；不识别表头，A1 即第一个客户号，其他列不读取。"
+    widthClassName="max-w-[560px]"
+    heightClassName="max-h-[86vh]"
+    zIndexClassName="z-[170]"
+    busy={checking || confirming}
+    onClose={onClose}
+    bodyClassName="space-y-4"
+    overlayDataAttributes={{ "data-customer-segment-upload-overlay": "true" }}
+    footer={<><FormDialogCancelButton disabled={checking || confirming} onClick={onClose} /><FormDialogPrimaryButton disabled={!preview || checking || confirming} onClick={() => void confirm()} data-customer-segment-confirm="true">{confirming ? "保存中…" : "确认"}</FormDialogPrimaryButton></>}
+  >
         <input ref={inputRef} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={(event) => void selectFile(event.target.files?.[0] || null)} />
         <button type="button" disabled={checking || confirming} onClick={() => inputRef.current?.click()} className="flex min-h-[112px] w-full items-center justify-center gap-3 rounded-xl border border-dashed border-[#bfd7c8] bg-[#f8fbf9] px-5 text-left hover:bg-[#f3f8f5] disabled:opacity-50" data-customer-segment-file-picker="true"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-[#178a53] shadow-sm"><FileSpreadsheet className="h-5 w-5" /></span><span><span className="block text-[13px] text-[#31473a]">{file?.name || "选择 Excel 客户号名单"}</span><span className="mt-1 block text-[10px] text-[#8a978f]">无表头 · 只读取 A 列 · 最多 20,000 个去重客户号</span></span></button>
         {checking && <div className="rounded-lg border border-[#e5e5ea] bg-[#fafbfc] px-4 py-3 text-[11px] text-[#7a7a80]">正在校验格式并过滤重复客户号…</div>}
         {preview && <div className="rounded-xl border border-[#cfe7d8] bg-[#f4faf6] p-4" data-customer-segment-preview="true"><div className="flex items-center gap-2 text-[12px] text-[#177a4d]"><CheckCircle2 className="h-4 w-4" />校验通过</div><div className="mt-3 text-[30px] font-medium tracking-tight text-[#1d1d1f]">{preview.customer_count.toLocaleString("zh-CN")}</div><div className="text-[11px] text-[#6d7c73]">个不重复客户号</div><div className="mt-3 flex flex-wrap gap-2 text-[10px] text-[#78867e]"><span className="rounded-md bg-white px-2 py-1">已过滤重复 {preview.duplicate_count} 个</span>{preview.blank_count > 0 && <span className="rounded-md bg-white px-2 py-1">已忽略空行 {preview.blank_count} 行</span>}{preview.other_columns_ignored && <span className="rounded-md bg-white px-2 py-1">其他列未读取</span>}</div></div>}
         {error && <div className="rounded-lg border border-[#ffd7d7] bg-[#fff5f5] px-3 py-2 text-[11px] leading-5 text-[#c62828]">{error}</div>}
-      </div>
-      <div className="flex items-center justify-end gap-2 border-t border-[#f0f0f2] px-5 py-4"><button type="button" disabled={checking || confirming} onClick={onClose} className="h-9 rounded-lg border border-[#e5e5ea] px-4 text-[12px] text-[#636366] hover:bg-[#f7f7f8] disabled:opacity-50">取消</button><button type="button" disabled={!preview || checking || confirming} onClick={() => void confirm()} className="h-9 rounded-lg bg-[#178a53] px-5 text-[12px] text-white hover:bg-[#127647] disabled:opacity-40" data-customer-segment-confirm="true">{confirming ? "保存中…" : "确认"}</button></div>
-    </section>
-  </div>;
+  </FormDialog>;
 }
 
 function CustomerSegmentStateCard({ message, error = false }: { message: string; error?: boolean }) {

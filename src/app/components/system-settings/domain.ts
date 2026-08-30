@@ -88,7 +88,7 @@ export const permissionMenuGroups = [
   { label: "任务工作台", children: ["待办任务", "自动化任务"] },
   { label: "数据资产", children: ["指标字典", "知识记忆", "站内数据", "质量监控"] },
   { label: "推送与订阅", children: ["预警规则", "订阅管理", "推送记录"] },
-  { label: "系统管理", children: ["用户管理", "角色权限", "审计日志", "系统配置"] },
+  { label: "系统管理", children: ["用户管理", "角色权限", "审计日志", "系统配置", "皮肤管理"] },
 ];
 
 export const permissionMenus = permissionMenuGroups.flatMap((group) => group.automatic ? [] : group.children);
@@ -246,7 +246,7 @@ export const initialPermissionInstitutions: InstitutionPermission[] = operatingT
   return {
     id: `tenant_${index + 1}`,
     institution: tenant,
-    adminMenus: ["经营周报", "机构督导", "分客群分析", "智能分析", "我的报告", "分析配置", "skill/插件", "指标字典", "知识记忆", "站内数据", "质量监控", "用户管理", "角色权限", "审计日志", "系统配置"],
+    adminMenus: ["经营周报", "机构督导", "分客群分析", "智能分析", "我的报告", "分析配置", "skill/插件", "指标字典", "知识记忆", "站内数据", "质量监控", "用户管理", "角色权限", "审计日志", "系统配置", "皮肤管理"],
     adminDataScopes: allPermissionDataScopes,
     operatorSuperMenus: [],
     operatorSuperDataScopes: [],

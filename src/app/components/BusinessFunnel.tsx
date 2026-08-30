@@ -12,6 +12,7 @@ import { runApplicationAction } from "../services/applicationApi";
 import { apiErrorMessage } from "../services/apiClient";
 import { fetchOperatingSnapshot, type OperatingSnapshot } from "../services/operatingSnapshotApi";
 import { updateAnalysisWorkspacePageContext } from "./analysis-workspace/AnalysisWorkspaceRail";
+import { AppSelect } from "./ui/AppSelect";
 
 type ProductView = "consumer" | "business" | "compare";
 
@@ -111,7 +112,7 @@ export function BusinessFunnel() {
         </div>
         <div className="flex w-fit min-h-9 shrink-0 items-center gap-[0.2cm]" data-page-header-actions="true">
           <div className="relative">
-            <select
+            <AppSelect
               value={selectedBank}
               onChange={(e) => {
                 setSelectedBank(e.target.value);
@@ -126,7 +127,7 @@ export function BusinessFunnel() {
               className="h-9 appearance-none rounded-lg border border-[#e5e5ea] bg-white pl-8 pr-7 text-[12px] text-[#3a3a3c] focus:outline-none cursor-pointer">
               <option>全部分行</option>
               {banks.map((b) => (<option key={b}>{b}</option>))}
-            </select>
+            </AppSelect>
             <Building2 className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#c7c7cc]" />
             <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-[#c7c7cc] pointer-events-none" />
           </div>

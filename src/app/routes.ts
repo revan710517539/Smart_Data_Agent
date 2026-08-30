@@ -19,6 +19,7 @@ const DataAgentWorkspace = preparedNamed(routeLoaders.workspace, "DataAgentWorks
 const DataAssets = preparedNamed(routeLoaders.assets, "DataAssets");
 const Notifications = preparedNamed(routeLoaders.notifications, "Notifications");
 const SystemSettings = preparedNamed(routeLoaders.settings, "SystemSettings");
+const SkinManagement = preparedNamed(routeLoaders.skins, "SkinManagement");
 const LoginPage = preparedNamed(routeLoaders.login, "LoginPage");
 const Layout = preparedNamed(routeLoaders.layout, "Layout", false);
 const SkillPluginManager = preparedNamed(routeLoaders.skills, "SkillPluginManager");
@@ -160,6 +161,7 @@ export const router = createBrowserRouter([
       { path: "settings/roles", Component: withPageSuspense(SystemSettings) },
       { path: "settings/audit", Component: withPageSuspense(SystemSettings) },
       { path: "settings/config", Component: withPageSuspense(SystemSettings) },
+      { path: "settings/skin", Component: withPageSuspense(SkinManagement) },
       { path: "bridge-authorize", Component: withPageSuspense(BridgeAuthorization) },
       {
         path: "*",

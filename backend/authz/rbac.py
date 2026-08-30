@@ -47,6 +47,7 @@ DEFAULT_TENANT_ADMIN_MENU_KEYS = (
     "settings",
     "settings.users",
     "settings.roles",
+    "settings.skin",
 )
 
 

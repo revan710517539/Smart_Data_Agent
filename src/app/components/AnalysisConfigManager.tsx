@@ -3,6 +3,7 @@ import { ChevronDown, Eye, EyeOff, Pencil, Plus, Trash2, X } from "lucide-react"
 import { usePlatformContext } from "../platform/PlatformContext";
 import { apiErrorMessage } from "../services/apiClient";
 import { askConfirm } from "./ui/ConfirmDialog";
+import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "./ui/FormDialog";
 import { pageVisibleAnalysisSkills } from "../services/analysisSkillCatalog";
 import {
   deleteDataAssetItem,
@@ -250,22 +251,21 @@ function ShortcutEditor({
   };
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/20 px-4" onMouseDown={onClose}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`${draft.id ? "编辑" : "新增"}分析配置`}
-        className="flex max-h-[86vh] w-full max-w-[760px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-[#f0f0f2] px-6 py-4">
-          <div>
-            <h3 className="text-[16px] text-[#1d1d1f]">{draft.id ? "编辑" : "新增"}分析配置</h3>
-            <p className="mt-1 text-[11px] text-[#8a8a8e]">快捷键只由这里维护，不会因执行一次分析自动新增。</p>
-          </div>
-          <button type="button" onClick={onClose} className="rounded-md p-2 text-[#8a8a8e]" aria-label="关闭编辑分析配置"><X className="h-4 w-4" /></button>
-        </div>
-        <div className="grid min-h-0 gap-4 overflow-y-auto px-6 py-5">
+    <FormDialog
+      title={`${draft.id ? "编辑" : "新增"}分析配置`}
+      description="快捷键只由这里维护，不会因执行一次分析自动新增。"
+      ariaLabel={`${draft.id ? "编辑" : "新增"}分析配置`}
+      onClose={onClose}
+      busy={saving}
+      widthClassName="max-w-[760px]"
+      zIndexClassName="z-[90]"
+      bodyClassName="grid gap-4"
+      footer={<>
+        <p role="alert" className="mr-auto min-w-0 text-[11px] text-[#d93025]">{saveError}</p>
+        <FormDialogCancelButton onClick={onClose} disabled={saving}>取消</FormDialogCancelButton>
+        <FormDialogPrimaryButton onClick={() => void save()} disabled={saving}>{saving ? "保存中…" : "保存"}</FormDialogPrimaryButton>
+      </>}
+    >
           <label>
             <span className="mb-1.5 block text-[11px] text-[#636366]">快捷键名称</span>
             <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} className="h-9 w-full rounded-lg border border-[#e5e5ea] px-3 text-[12px] outline-none focus:border-[#aeaeb2]" />
@@ -347,16 +347,7 @@ function ShortcutEditor({
           <label className="flex items-center gap-2 text-[12px] text-[#3a3a3c]">
             <input type="checkbox" checked={draft.visible} onChange={(event) => setDraft({ ...draft, visible: event.target.checked })} />展示在智能分析输入框下方
           </label>
-        </div>
-        <div className="flex items-center justify-between gap-4 border-t border-[#f0f0f2] px-6 py-4">
-          <p role="alert" className="min-w-0 text-[11px] text-[#d93025]">{saveError}</p>
-          <div className="flex shrink-0 gap-2">
-            <button type="button" onClick={onClose} disabled={saving} className="h-9 rounded-lg border border-[#e5e5ea] px-4 text-[12px] text-[#636366] disabled:cursor-not-allowed disabled:opacity-50">取消</button>
-            <button type="button" onClick={() => void save()} disabled={saving} className="h-9 rounded-lg bg-[#1d1d1f] px-5 text-[12px] text-white disabled:cursor-not-allowed disabled:opacity-50">{saving ? "保存中…" : "保存"}</button>
-          </div>
-        </div>
-      </div>
-    </div>
+    </FormDialog>
   );
 }
 

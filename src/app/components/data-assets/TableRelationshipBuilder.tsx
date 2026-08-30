@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent } from "react";
-import { createPortal } from "react-dom";
 import { Database, GitBranch, GripVertical, Link2, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { apiErrorMessage } from "../../services/apiClient";
 import { askConfirm } from "../ui/ConfirmDialog";
@@ -14,6 +13,7 @@ import {
   type TableRelationshipNode,
 } from "../../services/dataAssetApi";
 import { DataPageSelector, useClientPagination } from "../ui/DataPageSelector";
+import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "../ui/FormDialog";
 
 type Endpoint = { nodeId: string; field: string };
 type Props = {
@@ -240,9 +240,21 @@ function TableRelationshipModal({ tenantId, userId, initial, onClose, onSaved }:
     }
   };
 
-  return createPortal(<div className="fixed inset-0 z-[160] flex items-center justify-center bg-[rgba(18,33,27,0.32)] p-4 sm:p-6" data-table-relationship-modal-overlay="true" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) onClose(); }}>
-    <section role="dialog" aria-modal="true" aria-busy={saving} aria-labelledby="table-relationship-dialog-title" aria-describedby="table-relationship-dialog-description" data-table-relationship-dialog="true" className="flex h-[min(760px,86vh)] w-full max-w-[1180px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/15" style={{ contain: "layout paint" }} onMouseDown={(event) => event.stopPropagation()}>
-      <div className="flex shrink-0 items-center justify-between border-b border-[#ecefed] px-5 py-4"><div><h3 id="table-relationship-dialog-title" className="text-[17px] font-semibold text-[#1d1d1f]">{initial ? "编辑表关系" : "新增表关系"}</h3><p id="table-relationship-dialog-description" className="mt-1 text-[11px] text-[#8b938e]">拖入授权数据集；点击一个字段连接点，再点击另一张表的字段连接点完成主键关联，也支持按住后拖到目标字段。</p></div><button type="button" onClick={onClose} disabled={saving} aria-label="关闭表关系弹窗" className="rounded-lg p-2 text-[#8a8f8c] hover:bg-[#f2f4f3] disabled:opacity-50"><X className="h-5 w-5" /></button></div>
+  return <FormDialog
+    open
+    title={initial ? "编辑表关系" : "新增表关系"}
+    description="拖入授权数据集；点击一个字段连接点，再点击另一张表的字段连接点完成主键关联，也支持按住后拖到目标字段。"
+    widthClassName="max-w-[1180px]"
+    heightClassName="h-[min(760px,86vh)]"
+    zIndexClassName="z-[160]"
+    busy={saving}
+    onClose={onClose}
+    bodyClassName="overflow-hidden p-0"
+    contentClassName="[contain:layout_paint]"
+    dataAttributes={{ "data-table-relationship-dialog": "true" }}
+    overlayDataAttributes={{ "data-table-relationship-modal-overlay": "true" }}
+    footer={<><FormDialogCancelButton onClick={onClose} disabled={saving} /><FormDialogPrimaryButton onClick={() => void save()} disabled={saving || loading}>{saving ? "保存中…" : "保存"}</FormDialogPrimaryButton></>}
+  >
       <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)] overflow-hidden">
         <aside className="min-h-0 overflow-y-auto border-r border-[#ecefed] bg-[#fbfcfb] p-4">
           <div className="relative mb-3"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#a0a5a2]" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索机构或数据集" className="h-10 w-full rounded-lg border border-[#dfe5e1] bg-white pl-9 pr-3 text-[12px] outline-none focus:border-[#7db797]" /></div>
@@ -274,7 +286,5 @@ function TableRelationshipModal({ tenantId, userId, initial, onClose, onSaved }:
           <div className="mt-2 flex min-h-5 items-center justify-between gap-3 text-[10px]" aria-live="polite"><span data-relationship-save-status="true" className={error && !saving ? "text-[#c7463a]" : "text-[#7f8983]"}>{saving ? "正在保存中……" : error || (pending ? "已选择起点，请点击另一张表的关联字段。" : "连接必须至少一端为主键，且两端字段类型一致；同机构多表会先按关系连接。")}</span>{edges.length > 0 && !saving && <button type="button" aria-label="撤销上一条关系" onClick={() => setEdges((current) => current.slice(0, -1))} className="shrink-0 whitespace-nowrap border-0 bg-transparent p-0 text-[11px] font-normal leading-5 text-[#4e7760] hover:text-[#2f6649] hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8dc4a5] focus-visible:ring-offset-1">撤销上一条关系</button>}</div>
         </main>
       </div>
-      <div className="relative z-10 flex shrink-0 items-center justify-end gap-2 border-t border-[#ecefed] bg-white px-5 py-3"><button type="button" onClick={onClose} disabled={saving} className="h-9 rounded-lg border border-[#dfe3e1] bg-white px-4 text-[12px] text-[#5f6762] hover:bg-[#f7f8f7] disabled:opacity-50">取消</button><button type="button" onClick={() => void save()} disabled={saving || loading} className="h-9 rounded-lg bg-[#0f8f58] px-5 text-[12px] text-white hover:bg-[#0b7d4c] disabled:cursor-not-allowed disabled:opacity-50">{saving ? "保存中…" : "保存"}</button></div>
-    </section>
-  </div>, document.body);
+  </FormDialog>;
 }

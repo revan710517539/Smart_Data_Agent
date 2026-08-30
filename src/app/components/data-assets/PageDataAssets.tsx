@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
-import { LayoutDashboard, Pencil, Plus, Trash2, X } from "lucide-react";
+import { LayoutDashboard, Pencil, Plus, Trash2 } from "lucide-react";
 import type {
   MultiInstitutionPageDataCandidate,
   PageDataAsset,
@@ -11,6 +11,8 @@ import type {
 import { normalizeFieldSemantics } from "../../data/fieldSemantics";
 import { apiErrorMessage } from "../../services/apiClient";
 import { askConfirm } from "../ui/ConfirmDialog";
+import { AppSelect } from "../ui/AppSelect";
+import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "../ui/FormDialog";
 import { visualizationOptions, type VisualizationType } from "../self-analysis/domain";
 import { singleInstitutionAssignedPage } from "../page-data/assignment";
 
@@ -62,7 +64,7 @@ export function PageDataAssetList({
           </div>
           {scope === "single_institution" ? <label className="shrink-0">
             <span className="sr-only">{asset.name}放置页面</span>
-            <select
+            <AppSelect
               aria-label={`${asset.name}放置页面`}
               value={singleInstitutionAssignedPage(asset)}
               disabled={!canManage}
@@ -70,7 +72,7 @@ export function PageDataAssetList({
               className="h-8 min-w-[112px] rounded-lg border border-[#dfe5e1] bg-white px-2.5 text-[11px] text-[#536159] outline-none focus:border-[#8fbfa4] disabled:opacity-50"
             >
               {pageOptions.map((page) => <option key={page.code} value={page.code}>{page.label}</option>)}
-            </select>
+            </AppSelect>
           </label> : <span className="shrink-0 rounded-lg border border-[#dfe5e1] bg-white px-2.5 py-2 text-[11px] text-[#536159]">{scope === "customer_segment" ? "分客群分析" : "多机构分析"}</span>}
           {canManage && <button type="button" aria-label={`编辑页面数据${asset.name}`} title="编辑页面数据" onClick={() => onEdit(asset)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8a918d] hover:bg-white hover:text-[#178a53]"><Pencil className="h-3.5 w-3.5" /></button>}
           {canManage && <button type="button" aria-label={`删除页面数据${asset.name}`} title="删除页面数据" onClick={() => void askConfirm({ title: "删除页面数据", description: `确定删除「${asset.name}」？`, hint: "此操作不可撤销。" }).then((ok) => ok ? onDelete(asset) : undefined).catch(() => undefined)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#a1a1a6] hover:bg-[#fff1f1] hover:text-[#d93025]"><Trash2 className="h-3.5 w-3.5" /></button>}
@@ -175,27 +177,23 @@ export const PageDataCreateModal = memo(function PageDataCreateModal({
 
   const scopeLabel = scope === "multi_institution" ? "多机构数据" : scope === "customer_segment" ? "分客群明细数据" : "单机构数据";
 
-  return <div
-    className="fixed inset-0 z-[150] flex items-center justify-center bg-[rgba(18,33,27,0.22)] p-4 sm:p-6"
-    data-page-data-modal-overlay="true"
-    onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) onClose(); }}
+  return <FormDialog
+    title={`${editing ? "编辑" : "新增"}${scopeLabel}`}
+    description={scope === "multi_institution" ? "仅使用当前账号有权访问、已在表关系中显式关联且结构一致的数据表。" : scope === "customer_segment" ? "仅可选择当前机构中唯一主键为客户号的客户粒度明细表。" : "引用当前机构原始表，配置经营周报或机构督导及默认可视化。"}
+    ariaLabel={`${editing ? "编辑" : "新增"}${scopeLabel}`}
+    onClose={onClose}
+    busy={saving}
+    widthClassName="max-w-[760px]"
+    heightClassName="max-h-[88vh]"
+    zIndexClassName="z-[150]"
+    bodyClassName="space-y-5"
+    dataAttributes={{ "data-page-data-modal": "true" }}
+    overlayDataAttributes={{ "data-page-data-modal-overlay": "true" }}
+    footer={<><FormDialogCancelButton onClick={onClose} disabled={saving}>取消</FormDialogCancelButton><FormDialogPrimaryButton disabled={saving || candidatesLoading} onClick={() => void submit()}>{saving ? "保存中" : editing ? "保存" : `添加${scopeLabel}`}</FormDialogPrimaryButton></>}
   >
-    <section
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="page-data-create-title"
-      aria-describedby="page-data-create-description"
-      aria-busy={saving}
-      data-page-data-modal="true"
-      className="flex max-h-[88vh] w-full max-w-[760px] flex-col overflow-hidden rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/15"
-      style={{ contain: "layout paint" }}
-      onMouseDown={(event) => event.stopPropagation()}
-    >
-      <div className="flex items-center justify-between border-b border-[#f0f0f2] px-5 py-4"><div><h3 id="page-data-create-title" className="text-[15px] text-[#1d1d1f]">{editing ? "编辑" : "新增"}{scopeLabel}</h3><p id="page-data-create-description" className="mt-1 text-[11px] text-[#9a9aa0]">{scope === "multi_institution" ? "仅使用当前账号有权访问、已在表关系中显式关联且结构一致的数据表。" : scope === "customer_segment" ? "仅可选择当前机构中唯一主键为客户号的客户粒度明细表。" : "引用当前机构原始表，配置经营周报或机构督导及默认可视化。"}</p></div><button type="button" aria-label={`关闭${scopeLabel}弹窗`} disabled={saving} onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8a8a8e] hover:bg-[#f2f2f7] disabled:opacity-50"><X className="h-4 w-4" /></button></div>
-      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
         <div className="grid gap-4 md:grid-cols-2 md:items-start" data-page-data-primary-fields="true">
           <label className="block min-w-0 text-[11px] text-[#636366]">{scopeLabel}名称<input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：分行放款趋势" className="mt-1.5 h-10 w-full rounded-lg border border-[#dedee3] bg-white px-3 text-[12px] text-[#1d1d1f] outline-none focus:border-[#8fbfa4]" /></label>
-          <label className="block min-w-0 text-[11px] text-[#636366]">{scope === "multi_institution" ? "已关联数据集" : "原始表"}<span className="ml-1 text-[#d93025]">*</span><select value={sourceKey} onChange={(event) => selectTable(event.target.value)} disabled={candidatesLoading} className="mt-1.5 h-10 w-full rounded-lg border border-[#dedee3] bg-white px-3 text-[12px] text-[#1d1d1f] outline-none focus:border-[#8fbfa4] disabled:bg-[#f7f7f8]"><option value="">{candidatesLoading ? "正在读取已关联数据集…" : scope === "multi_institution" ? "请选择已关联数据集" : "请选择原始表"}</option>{scope === "multi_institution" ? multiInstitutionCandidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>) : rawTables.map((table) => <option key={table.id} value={table.sourceKey}>{table.tableNameCn || table.tableNameEn} · {table.rowCount || 0} 行</option>)}</select></label>
+          <label className="block min-w-0 text-[11px] text-[#636366]">{scope === "multi_institution" ? "已关联数据集" : "原始表"}<span className="ml-1 text-[#d93025]">*</span><AppSelect value={sourceKey} onChange={(event) => selectTable(event.target.value)} disabled={candidatesLoading} className="mt-1.5 w-full"><option value="">{candidatesLoading ? "正在读取已关联数据集…" : scope === "multi_institution" ? "请选择已关联数据集" : "请选择原始表"}</option>{scope === "multi_institution" ? multiInstitutionCandidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>) : rawTables.map((table) => <option key={table.id} value={table.sourceKey}>{table.tableNameCn || table.tableNameEn} · {table.rowCount || 0} 行</option>)}</AppSelect></label>
         </div>
         {scope === "single_institution" ? <ChoiceSection title="放置页面" hint="单机构数据只放置到一个页面">{pageOptions.map((page) => <CheckChoice key={page.code} checked={targetPage === page.code} label={page.label} onChange={() => setTargetPage(page.code as Extract<PageDataPageCode, "weekly_report" | "institution_supervision">)} />)}</ChoiceSection> : scope === "multi_institution" ? <ChoiceSection title="包含机构" hint="来自表关系配置且当前账号有权访问">{selectedCandidate?.sources.map((source) => <span key={`${source.tenantId}:${source.sourceKey}`} className="rounded-lg border border-[#dce9e0] bg-[#f5faf7] px-2.5 py-2 text-[11px] text-[#536159]">{source.institutionName} · {source.sourceTableName}</span>)}{!selectedCandidate && !candidatesLoading && <EmptyChoice text="选择数据集后显示包含机构" />}</ChoiceSection> : <ChoiceSection title="客户关联键" hint="由原始表主键确定，不允许手工改写"><span className="rounded-lg border border-[#dce9e0] bg-[#f5faf7] px-2.5 py-2 text-[11px] text-[#536159]">{customerKeyLabel(selectedTable)}</span></ChoiceSection>}
         <ChoiceSection title="默认指标" hint="来自所选原始表中的数值字段">{fieldGroups.metrics.map((field) => <CheckChoice key={field.fieldNameEn} checked={metrics.includes(field.fieldNameEn)} label={field.fieldNameCn || field.fieldNameEn} onChange={() => setMetrics((current) => toggle(current, field.fieldNameEn))} />)}{selectedTable && !fieldGroups.metrics.length && <EmptyChoice text="该表没有可识别的数值指标" />}</ChoiceSection>
@@ -203,10 +201,7 @@ export const PageDataCreateModal = memo(function PageDataCreateModal({
         <ChoiceSection title="默认样式" hint="使用系统内嵌可视化样式">{visualizationOptions.map((option) => <button key={option.type} type="button" onClick={() => setVisualizationType(option.type)} className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] ${visualizationType === option.type ? "border-[#a7d5b8] bg-[#edf8f1] text-[#178a53]" : "border-[#e5e5ea] bg-white text-[#636366] hover:bg-[#f7faf8]"}`}><option.icon className="h-3.5 w-3.5" />{option.label}</button>)}</ChoiceSection>
         {scope === "multi_institution" && !candidatesLoading && !multiInstitutionCandidates.length && <div className="rounded-lg border border-dashed border-[#dfe7e2] bg-[#fafcfb] px-3 py-3 text-[11px] leading-5 text-[#7b8780]">{candidatesError || "暂无可用多机构数据。请先在“表关系”中显式配置不同机构的对应原始表；系统不会根据同名表或同名字段自动匹配。"}</div>}
         {error && <div className="rounded-lg border border-[#ffd7d7] bg-[#fff5f5] px-3 py-2 text-[11px] text-[#c62828]">{error}</div>}
-      </div>
-      <div className="flex items-center justify-end gap-2 border-t border-[#f0f0f2] px-5 py-4"><button type="button" onClick={onClose} className="h-9 rounded-lg border border-[#e5e5ea] px-4 text-[12px] text-[#636366] hover:bg-[#f7f7f8]">取消</button><button type="button" disabled={saving || candidatesLoading} onClick={() => void submit()} className="h-9 rounded-lg bg-[#178a53] px-4 text-[12px] text-white hover:bg-[#127647] disabled:opacity-50">{saving ? "保存中" : editing ? "保存" : `添加${scopeLabel}`}</button></div>
-    </section>
-  </div>;
+  </FormDialog>;
 });
 
 function ChoiceSection({ title, hint, children }: { title: string; hint: string; children: ReactNode }) {

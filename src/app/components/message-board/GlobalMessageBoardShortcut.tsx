@@ -48,6 +48,7 @@ const pageTitles: Record<string, string> = {
   "/settings/roles": "角色权限",
   "/settings/audit": "审计日志",
   "/settings/config": "系统配置",
+  "/settings/skin": "皮肤管理",
   "/bridge-authorize": "Bridge 授权",
 };
 

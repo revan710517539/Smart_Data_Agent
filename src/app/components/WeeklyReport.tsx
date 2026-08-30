@@ -149,6 +149,7 @@ import { useStickyNote } from "./notes/useStickyNote";
 import { canDeleteSharedVisual } from "./visualization/visualAccess";
 import { useVisualReportCollection, VisualReportDeleteConfirm } from "./visual-report/VisualReportLibrary";
 import { askConfirm } from "./ui/ConfirmDialog";
+import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "./ui/FormDialog";
 import type { VisualReport } from "../services/visualReportApi";
 import { VisualReportCards } from "./visual-report/VisualReportCards";
 
@@ -1826,25 +1827,18 @@ export function WeeklyReport() {
         />
       )}
       {isExportDialogOpen && (
-        <div
-          className="weekly-report-print-hidden fixed inset-0 z-[120] flex items-center justify-center bg-black/20 px-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="weekly-report-export-title"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setIsExportDialogOpen(false);
-          }}
+        <FormDialog
+          open
+          title="导出经营周报"
+          description="导出文件只包含周报正文，不含左侧菜单、右侧工作台栏和页面右上角操作按钮。"
+          widthClassName="max-w-[420px]"
+          zIndexClassName="z-[120]"
+          busy={isExporting}
+          onClose={() => setIsExportDialogOpen(false)}
+          bodyClassName="space-y-4"
+          contentClassName="weekly-report-print-hidden"
+          footer={<><FormDialogCancelButton onClick={() => setIsExportDialogOpen(false)} disabled={isExporting} /><FormDialogPrimaryButton onClick={() => void confirmExportReport()} disabled={isExporting}>{isExporting ? "导出中…" : "导出"}</FormDialogPrimaryButton></>}
         >
-          <div className="w-full max-w-[360px] rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/15">
-            <div className="border-b border-[#f0f0f2] px-4 py-3">
-              <h3 id="weekly-report-export-title" className="text-[15px] text-[#1d1d1f]">
-                导出经营周报
-              </h3>
-              <p className="mt-1 text-[12px] leading-relaxed text-[#8a8a8e]">
-                导出文件只包含周报正文，不含左侧菜单、右侧工作台栏和页面右上角操作按钮。
-              </p>
-            </div>
-            <div className="space-y-4 px-4 py-4">
               <fieldset>
                 <legend className="mb-2 text-[12px] font-medium text-[#3a3a3c]">导出格式</legend>
                 <div className="grid grid-cols-2 gap-2">
@@ -1866,26 +1860,7 @@ export function WeeklyReport() {
                   <label className="flex cursor-pointer items-center justify-between rounded-lg border border-[#e5e5ea] px-3 py-2"><span><span className="block text-[12px] text-[#1d1d1f]">带 AI 分析</span><span className="mt-0.5 block text-[10px] text-[#8a8a8e]">附上已在周报中确认的 AI 分析结论</span></span><input type="checkbox" checked={includeExportAnalysis} onChange={(event) => setIncludeExportAnalysis(event.target.checked)} className="h-4 w-4 accent-[#1d1d1f]" /></label>
                 </div>
               </fieldset>
-            </div>
-            <div className="flex items-center justify-end gap-2 px-4 py-3">
-              <button
-                type="button"
-                onClick={() => setIsExportDialogOpen(false)}
-                className="rounded-lg border border-[#e5e5ea] px-3 py-1.5 text-[12px] text-[#636366] hover:bg-[#f2f2f7]"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={() => void confirmExportReport()}
-                disabled={isExporting}
-                className="rounded-lg bg-[#1d1d1f] px-3 py-1.5 text-[12px] text-white hover:bg-[#2c2c2e] disabled:opacity-50"
-              >
-                {isExporting ? "导出中…" : "导出"}
-              </button>
-            </div>
-          </div>
-        </div>
+        </FormDialog>
       )}
     </div>
   );

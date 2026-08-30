@@ -94,13 +94,14 @@ MENU_TREE = (
             MenuResource("settings.roles", "角色权限"),
             MenuResource("settings.audit", "审计日志"),
             MenuResource("settings.config", "系统配置"),
+            MenuResource("settings.skin", "皮肤管理"),
         ),
     ),
 )
 
-# System Management is a stable four-page workbench.  Do not let a saved role
+# System Management is a stable five-page workbench.  Do not let a saved role
 # menu selection make audit or configuration disappear from its left navigation.
-MANDATORY_MENU_KEYS = frozenset({"settings.audit", "settings.config"})
+MANDATORY_MENU_KEYS = frozenset({"settings.audit", "settings.config", "settings.skin"})
 DEFAULT_ROLE_NAMES = ("管理员", "操作员")
 CUSTOM_ROLE_CANDIDATES: tuple[str, ...] = ()
 RETIRED_SEEDED_CUSTOM_ROLES = ("客户经理分析岗", "周报分析岗", "指标维护岗")

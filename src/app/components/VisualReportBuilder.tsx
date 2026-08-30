@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, BarChart3, BookmarkPlus, Check, Clock3, Lightbulb, Pencil, Plus, RotateCcw, Search, Sparkles, Table2, X } from "lucide-react";
+import { ArrowLeft, BarChart3, BookmarkPlus, Check, Clock3, Lightbulb, Plus, RotateCcw, Search, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router";
 import { usePlatformContext } from "../platform/PlatformContext";
 import { apiErrorMessage } from "../services/apiClient";
@@ -9,10 +9,10 @@ import type { AnalysisRow, VisualizationType } from "./self-analysis/domain";
 import { AnalysisVisualCard } from "./self-analysis/ResultViews";
 import type { VisualizationCardConfig } from "./visualization/visualizationDataModel";
 import { VisualReportCards } from "./visual-report/VisualReportCards";
-import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
 import { useStickyNote } from "./notes/useStickyNote";
-import { PAGE_DATA_PAGE_GUTTER_CLASS } from "./page-data/PageDataComposer";
-import { DEFAULT_REPORT_PAGE_TEMPLATE } from "./page-data/StandardAnalysisPage";
+import { PAGE_DATA_PAGE_GUTTER_CLASS, type PageEditController } from "./page-data/PageDataComposer";
+import { DEFAULT_REPORT_PAGE_TEMPLATE, StandardAnalysisPageHeader, StandardAnalysisPageStickyNote, StandardReportPageCanvas } from "./page-data/StandardAnalysisPage";
+import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "./ui/FormDialog";
 import { isPageDataDataset, rowsFromPageVisualDataset, rowsFromRawVisualDataset, rowsFromTopicVisualDataset, visualReportDatasetReference, type VisualReportDataset } from "./visual-report/reportData";
 
 const emptyConfig: VisualizationCardConfig = {
@@ -204,15 +204,13 @@ export function VisualReportBuilder() {
     setView("editor");
   };
 
-  const createReport = () => openReport(newVisualReport(), "edit");
+  const createReport = () => openReport(newVisualReport(), "browse");
 
-  const previewReport = async () => {
-    if (mode === "browse") {
-      setMode("edit");
-      return;
-    }
-    const saved = await persistReport(report);
-    if (saved) setMode("browse");
+  const reportEditController: PageEditController = {
+    mode,
+    setMode,
+    savingLayout: saving,
+    saveLayout: async () => Boolean(await persistReport(report)),
   };
 
   const filteredReports = useMemo(() => {
@@ -242,53 +240,50 @@ export function VisualReportBuilder() {
 
   return (
     <div className={PAGE_DATA_PAGE_GUTTER_CLASS} data-visual-report-builder="true" data-visual-report-mode={mode} data-default-report-page-template={DEFAULT_REPORT_PAGE_TEMPLATE}>
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <button type="button" onClick={() => setView("landing")} className="mb-2 inline-flex items-center gap-1 text-[10px] text-[#7d8781] hover:text-[#178a53]" data-visual-report-back="true"><ArrowLeft className="h-3 w-3" />返回报表首页</button>
-          {editingTitle ? (
-            <input
-              autoFocus
-              value={titleDraft}
-              onChange={(event) => setTitleDraft(event.target.value)}
-              onBlur={commitTitle}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") event.currentTarget.blur();
-                if (event.key === "Escape") { setTitleDraft(report.title); setEditingTitle(false); }
-              }}
-              aria-label="可视化报表名称"
-              className="h-9 w-full max-w-[520px] rounded-lg border border-[#cfe1d5] bg-white px-3 text-[18px] text-[#1d1d1f] outline-none ring-2 ring-[#2ca66f]/10"
-            />
-          ) : (
-            <button type="button" onDoubleClick={() => setEditingTitle(true)} className="max-w-full cursor-text truncate rounded-md px-1 py-0.5 text-left text-[18px] tracking-tight text-[#1d1d1f] hover:bg-[#f5faf7]" title="双击修改报表名称" data-visual-report-title="true">
-              {report.title}
-            </button>
-          )}
-          <p className="mt-1 text-[12px] text-[#9a9aa0]">双击名称编辑，点击其他位置自动保存 · 当前机构：{selectedInstitution}</p>
-        </div>
-        <div className="flex w-fit min-h-9 shrink-0 flex-wrap items-center justify-end gap-[0.2cm]" data-page-header-actions="true">
-          <DestinationButton label="存我的" icon={BookmarkPlus} done={report.destinations.includes("mine")} disabled={saving} onClick={() => void saveDestination("mine")} />
-          <DestinationButton label="存经验" icon={Lightbulb} done={report.destinations.includes("experience")} disabled={saving} onClick={() => void saveDestination("experience")} />
-          <DestinationButton label="存周报" icon={BookmarkPlus} done={report.destinations.includes("weekly")} disabled={saving} onClick={() => void saveDestination("weekly")} />
-          <StickyNoteButton onClick={stickyNote.show} className="text-[#53615a]" />
-          <button type="button" onClick={() => void previewReport()} disabled={saving} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#dfe7e2] bg-white px-3 text-[12px] text-[#53615a] hover:bg-[#f4f8f5] disabled:cursor-wait disabled:opacity-60" data-visual-report-mode-toggle="true">
-            {mode === "browse" ? <Pencil className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
-            {mode === "browse" ? "编辑" : "保存"}
-          </button>
-        </div>
-      </div>
+      <button type="button" onClick={() => setView("landing")} className="mb-2 inline-flex items-center gap-1 text-[10px] text-[#7d8781] hover:text-[#178a53]" data-visual-report-back="true"><ArrowLeft className="h-3 w-3" />返回报表首页</button>
+      <StandardAnalysisPageHeader
+        title={editingTitle ? (
+          <input
+            autoFocus
+            value={titleDraft}
+            onChange={(event) => setTitleDraft(event.target.value)}
+            onBlur={commitTitle}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.currentTarget.blur();
+              if (event.key === "Escape") { setTitleDraft(report.title); setEditingTitle(false); }
+            }}
+            aria-label="可视化报表名称"
+            className="h-9 w-full max-w-[520px] rounded-lg border border-[#cfe1d5] bg-white px-3 text-[18px] text-[#1d1d1f] outline-none ring-2 ring-[#2ca66f]/10"
+          />
+        ) : (
+          <button type="button" onDoubleClick={() => setEditingTitle(true)} className="max-w-full cursor-text truncate rounded-md px-1 py-0.5 text-left text-[18px] tracking-tight text-[#1d1d1f] hover:bg-[#f5faf7]" title="双击修改报表名称" data-visual-report-title="true">{report.title}</button>
+        )}
+        description="从空白画布开始编辑当前机构的可视化报表"
+        metadata={<>双击名称编辑，点击其他位置自动保存 · 当前机构：{selectedInstitution}</>}
+        stickyNote={stickyNote}
+        editController={reportEditController}
+        canEditLayout
+        headerDataAttribute="visual-report"
+      />
 
       {notice && <div className="mb-4 rounded-lg border border-[#d7efd9] bg-[#eef8f1] px-3 py-2 text-[11px] text-[#258a3f]" role="status">{notice}</div>}
       {error && <div className="mb-4 rounded-lg border border-[#ffd0d0] bg-[#fff5f5] px-3 py-2 text-[11px] text-[#c84034]" role="alert">{error}</div>}
-      <div className="min-h-[620px] rounded-xl border border-[#eef1ef] bg-white p-4 md:p-5" data-visual-report-canvas="true" data-report-list-loading={reportLoading ? "true" : "false"}>
-          <StickyNotePanel className="mb-4" note={stickyNote.note} editing={stickyNote.editing} onChange={stickyNote.updateItems} onFinishEdit={stickyNote.finishEdit} onStartEdit={() => stickyNote.setEditing(true)} onHide={stickyNote.hide} uploadContext={stickyNote.uploadContext} />
+      {report.cards.length ? <div className="mb-3 flex flex-wrap items-center justify-end gap-2" data-visual-report-destinations="true">
+        <DestinationButton label="存我的" icon={BookmarkPlus} done={report.destinations.includes("mine")} disabled={saving} onClick={() => void saveDestination("mine")} />
+        <DestinationButton label="存经验" icon={Lightbulb} done={report.destinations.includes("experience")} disabled={saving} onClick={() => void saveDestination("experience")} />
+        <DestinationButton label="存周报" icon={BookmarkPlus} done={report.destinations.includes("weekly")} disabled={saving} onClick={() => void saveDestination("weekly")} />
+      </div> : null}
+      <StandardAnalysisPageStickyNote stickyNote={stickyNote} />
+      <div data-visual-report-canvas="true" data-report-list-loading={reportLoading ? "true" : "false"}>
+        <StandardReportPageCanvas empty={!report.cards.length} editable={mode === "edit"} busy={catalogLoading} onEdit={() => setModalOpen(true)} editLabel="新增图表">
           <VisualReportCards report={report} editable={mode === "edit"} onChange={setReport} railPageKey="visual-reports" />
-          {mode === "edit" && (
-            <button type="button" disabled={catalogLoading} onClick={() => setModalOpen(true)} className={`group flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#cfdad3] bg-[#fbfdfc] text-[12px] text-[#758079] transition-colors hover:border-[#8fc8a4] hover:bg-[#f5faf7] hover:text-[#178a53] disabled:cursor-wait disabled:opacity-60 ${report.cards.length ? "mt-4 min-h-[140px]" : "min-h-[560px]"}`} data-add-visual-report-chart="true">
+          {mode === "edit" && report.cards.length ? (
+            <button type="button" disabled={catalogLoading} onClick={() => setModalOpen(true)} className="group mt-4 flex min-h-[140px] w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#cfdad3] bg-white text-[12px] text-[#758079] transition-colors hover:border-[#8fc8a4] hover:bg-[#f5faf7] hover:text-[#178a53] disabled:cursor-wait disabled:opacity-60" data-add-visual-report-chart="true">
               <span className="flex h-10 w-10 items-center justify-center rounded-full border border-[#dbe5df] bg-white group-hover:border-[#b8d9c4]"><Plus className="h-5 w-5" /></span>
               {catalogLoading ? "正在准备数据集…" : "新增图表"}
             </button>
-          )}
-          {mode === "browse" && !report.cards.length && <div className="flex min-h-[560px] items-center justify-center text-center"><div><Table2 className="mx-auto h-8 w-8 text-[#d0d5d2]" /><div className="mt-3 text-[12px] text-[#8f9692]">当前报表还是空白页</div><div className="mt-1 text-[10px] text-[#b1b6b3]">点击右上角“编辑”后新增图表</div></div></div>}
+          ) : null}
+        </StandardReportPageCanvas>
       </div>
       {saving && <div className="mt-2 text-right text-[10px] text-[#9aa19d]">正在保存…</div>}
       {modalOpen && <VisualChartModal rawTables={rawTables} topicTables={topicTables} tenantId={tenantId} userId={userId} reportId={report.id} drafts={visualChartDrafts} draftRevision={visualChartDraftRevision} onDraftChange={updateVisualChartDraft} onRestore={resetVisualChartDrafts} onCancel={() => setModalOpen(false)} onSave={addCard} />}
@@ -460,13 +455,22 @@ function VisualChartModal({ rawTables, topicTables, tenantId, userId, reportId, 
     setLoadingRows(false);
   };
 
-  return <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/25 px-4" data-visual-report-modal="true">
-    <div className="flex h-[min(88vh,900px)] w-full max-w-[1180px] flex-col overflow-hidden rounded-xl border border-[#dfe5e1] bg-white shadow-2xl shadow-black/20">
-      <div className="flex shrink-0 items-center justify-between border-b border-[#eef1ef] px-5 py-4">
-        <div><h3 className="text-[14px] text-[#1d1d1f]">新增可视化图表</h3><p className="mt-1 text-[10px] text-[#949b97]">先选择当前机构有权限的数据集，再通过标准图表控件选择样式、指标和维度。</p></div>
-        <button type="button" onClick={onCancel} className="rounded-lg p-1.5 text-[#8a8a8e] hover:bg-[#f2f2f7]" aria-label="关闭新增图表弹窗"><X className="h-4 w-4" /></button>
-      </div>
-      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)] overflow-hidden lg:grid-cols-[300px_minmax(0,1fr)] lg:grid-rows-1">
+  return <FormDialog
+    title="新增可视化图表"
+    description="先选择当前机构有权限的数据集，再通过标准图表控件选择样式、指标和维度。"
+    onClose={onCancel}
+    widthClassName="max-w-[1180px]"
+    heightClassName="h-[min(88vh,900px)]"
+    bodyClassName="flex p-0 lg:overflow-hidden"
+    zIndexClassName="z-[90]"
+    dataAttributes={{ "data-visual-report-modal": "true" }}
+    footer={<>
+      <FormDialogCancelButton onClick={onCancel}>取消</FormDialogCancelButton>
+      <FormDialogCancelButton onClick={restoreDrafts} data-visual-report-restore="true"><RotateCcw className="mr-1.5 inline h-3.5 w-3.5" />恢复</FormDialogCancelButton>
+      <FormDialogPrimaryButton disabled={!selected || !rows.length || loadingRows || Boolean(rowError)} onClick={() => selected && onSave({ id: `visual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, title: datasetName(selected), type, dataset: visualReportDatasetReference(selected), config })}>保存</FormDialogPrimaryButton>
+    </>}
+  >
+      <div className="grid min-h-[620px] flex-1 grid-rows-[260px_360px] overflow-hidden lg:min-h-0 lg:grid-cols-[300px_minmax(0,1fr)] lg:grid-rows-1">
         <div className="flex min-h-0 flex-col border-b border-[#eef1ef] p-4 lg:border-b-0 lg:border-r">
           <div className="mb-3 flex rounded-lg bg-[#f2f5f3] p-0.5" data-visual-report-dataset-tabs="true">
             <button type="button" onClick={() => switchTab("raw")} className={`h-8 flex-1 rounded-md text-[11px] ${tab === "raw" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#7b827e]"}`}>原始表 {rawTables.length}</button>
@@ -485,13 +489,7 @@ function VisualChartModal({ rawTables, topicTables, tenantId, userId, reportId, 
           {!selected ? <div className="flex h-full items-center justify-center text-[11px] text-[#a1a7a3]">请从左侧选择数据集</div> : loadingRows ? <div className="flex h-full items-center justify-center text-[11px] text-[#8d9791]">正在读取数据集…</div> : rowError ? <div className="flex h-full items-center justify-center text-[11px] text-[#c06c31]">{rowError}</div> : <AnalysisVisualCard id="visual-report-preview" stateKey={`visual-report-preview:${reportId}:${draftRevision}:${visualDatasetDraftKey(selected)}`} title={datasetName(selected)} type={type} rows={rows} initialConfig={config} fillHeight showFollowUp={false} onFollowUp={() => undefined} onComment={() => undefined} onTypeChange={(nextType) => { setType(nextType); onDraftChange(visualDatasetDraftKey(selected), { type: nextType }); }} onConfigChange={(nextConfig) => { setConfig(nextConfig); onDraftChange(visualDatasetDraftKey(selected), { config: nextConfig }); }} />}
         </div>
       </div>
-      <div className="relative z-10 flex shrink-0 items-center justify-end gap-2 border-t border-[#eef1ef] bg-white px-5 py-3">
-        <button type="button" onClick={onCancel} className="h-8 rounded-lg border border-[#e1e5e2] bg-white px-4 text-[11px] text-[#636b67] hover:bg-[#f6f8f7]">取消</button>
-        <button type="button" onClick={restoreDrafts} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e1e5e2] bg-white px-4 text-[11px] text-[#636b67] hover:bg-[#f6f8f7]" data-visual-report-restore="true"><RotateCcw className="h-3.5 w-3.5" />恢复</button>
-        <button type="button" disabled={!selected || !rows.length || loadingRows || Boolean(rowError)} onClick={() => selected && onSave({ id: `visual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, title: datasetName(selected), type, dataset: visualReportDatasetReference(selected), config })} className="h-8 rounded-lg bg-[#1d1d1f] px-4 text-[11px] text-white hover:bg-[#2c2c2e] disabled:cursor-not-allowed disabled:opacity-40">保存</button>
-      </div>
-    </div>
-  </div>;
+  </FormDialog>;
 }
 
 function visualDatasetDraftKey(dataset: VisualReportDataset) {

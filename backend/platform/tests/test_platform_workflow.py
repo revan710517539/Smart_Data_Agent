@@ -1539,9 +1539,39 @@ class PlatformWorkflowTest(unittest.TestCase):
             self.assertIn("settings", payload["menu_keys"])
             self.assertIn("settings.audit", payload["menu_keys"])
             self.assertIn("settings.config", payload["menu_keys"])
+            self.assertIn("settings.skin", payload["menu_keys"])
             self.assertNotIn("dashboard", payload["menu_keys"])
             self.assertNotIn("self-analysis.my-reports", payload["menu_keys"])
             self.assertNotIn("settings.users", payload["menu_keys"])
+
+    def test_http_navigation_exposes_skin_to_policy_empty_authenticated_role(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            server = create_server("127.0.0.1", 0, f"{tmpdir}/api.sqlite")
+            repository = server.services.permission_broker.enforcer.repository
+            repository.seed(
+                roles=[Role("role:tenant_demo:skin_common", "tenant_demo", "通用皮肤角色", RoleLevel.OPERATOR)],
+                assignments=[RoleAssignment("u_skin_common", "tenant_demo", "role:tenant_demo:skin_common")],
+                policies=[],
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                conn.request(
+                    "GET",
+                    "/api/navigation",
+                    headers={"X-User-Id": "u_skin_common", "X-Tenant-Id": "tenant_demo"},
+                )
+                response = conn.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["menu_keys"], ["settings", "settings.skin"])
 
     def test_super_admin_navigation_includes_dashboard_and_opt_in_menus(self) -> None:
         with TemporaryDirectory() as tmpdir:

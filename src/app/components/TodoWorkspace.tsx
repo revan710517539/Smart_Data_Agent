@@ -16,11 +16,13 @@ import {
   Tag,
   Trash2,
   Users,
-  X,
 } from "lucide-react";
 import { fetchApplicationModule, runApplicationAction } from "../services/applicationApi";
 import { DataPageSelector, useClientPagination } from "./ui/DataPageSelector";
 import { askConfirm } from "./ui/ConfirmDialog";
+import { AppSelect } from "./ui/AppSelect";
+import { DatePicker } from "./ui/DatePicker";
+import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "./ui/FormDialog";
 
 type TodoStatus = "todo" | "in_progress" | "done" | "closed";
 type TodoPriority = "low" | "medium" | "high" | "urgent";
@@ -486,7 +488,7 @@ export function TodoWorkspace({
       {toolbarLeftHost &&
         createPortal(
           <div className="flex items-center gap-3" data-todo-toolbar="filters-and-views">
-            <select
+            <AppSelect
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value as TodoStatus | "all")}
               aria-label="筛选待办状态"
@@ -497,7 +499,7 @@ export function TodoWorkspace({
               <option value="in_progress">进行中</option>
               <option value="done">已完成</option>
               <option value="closed">已关闭</option>
-            </select>
+            </AppSelect>
             <div className="flex rounded-lg bg-[#f2f2f7] p-1" aria-label="待办展示方式">
               {[
                 { key: "list", label: "列表", icon: ListChecks },
@@ -541,18 +543,15 @@ export function TodoWorkspace({
         </div>
       )}
       {composerOpen && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/20 px-4 py-8">
-          <div className="w-full max-w-4xl rounded-xl border border-[#d1d1d6] bg-white p-5 shadow-2xl shadow-black/10">
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <h3 className="text-[14px] text-[#1d1d1f]">{editingId ? "编辑待办" : "新建待办"}</h3>
-                <p className="mt-0.5 text-[12px] text-[#8a8a8e]">支持个人事项、团队安排和系统注入任务统一沉淀。</p>
-              </div>
-              <button onClick={closeComposer} className="rounded-lg p-2 text-[#8a8a8e] hover:bg-[#f2f2f7]">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="grid gap-3">
+        <FormDialog
+          title={editingId ? "编辑待办" : "新建待办"}
+          description="支持个人事项、团队安排和系统注入任务统一沉淀。"
+          onClose={closeComposer}
+          widthClassName="max-w-4xl"
+          zIndexClassName="z-[120]"
+          bodyClassName="grid gap-3"
+          footer={<><FormDialogCancelButton onClick={closeComposer}>取消</FormDialogCancelButton><FormDialogPrimaryButton onClick={saveTodo}>{editingId ? "保存修改" : "新建待办"}</FormDialogPrimaryButton></>}
+        >
               <input
                 value={form.title}
                 onChange={(event) => setForm((prev) => ({ ...prev, title: event.target.value }))}
@@ -566,7 +565,7 @@ export function TodoWorkspace({
                 className="min-h-[72px] resize-y rounded-lg border border-[#e5e5ea] px-3 py-2 text-[13px] leading-[1.6] outline-none focus:border-[#c7c7cc]"
               />
               <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-                <select
+                <AppSelect
                   value={form.priority}
                   onChange={(event) => setForm((prev) => ({ ...prev, priority: event.target.value as TodoPriority }))}
                   className="h-10 rounded-lg border border-[#e5e5ea] px-3 text-[13px] outline-none"
@@ -575,8 +574,8 @@ export function TodoWorkspace({
                   <option value="high">高优先级</option>
                   <option value="medium">中优先级</option>
                   <option value="low">低优先级</option>
-                </select>
-                <select
+                </AppSelect>
+                <AppSelect
                   value={form.status}
                   onChange={(event) => setForm((prev) => ({ ...prev, status: event.target.value as TodoStatus }))}
                   className="h-10 rounded-lg border border-[#e5e5ea] px-3 text-[13px] outline-none"
@@ -585,12 +584,12 @@ export function TodoWorkspace({
                   <option value="in_progress">进行中</option>
                   <option value="done">已完成</option>
                   <option value="closed">已关闭</option>
-                </select>
-                <input
-                  type="date"
+                </AppSelect>
+                <DatePicker
                   value={form.dueDate}
-                  onChange={(event) => setForm((prev) => ({ ...prev, dueDate: event.target.value }))}
-                  className="h-10 rounded-lg border border-[#e5e5ea] px-3 text-[13px] outline-none"
+                  onValueChange={(value) => setForm((prev) => ({ ...prev, dueDate: value }))}
+                  ariaLabel="待办截止日期"
+                  className="w-full text-[13px]"
                 />
                 <input
                   value={form.assignee}
@@ -611,17 +610,7 @@ export function TodoWorkspace({
                   className="h-10 rounded-lg border border-[#e5e5ea] px-3 text-[13px] outline-none"
                 />
               </div>
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button onClick={closeComposer} className="rounded-lg bg-[#f2f2f7] px-4 py-2 text-[13px] text-[#636366] hover:bg-[#e5e5ea]">
-                取消
-              </button>
-              <button onClick={saveTodo} className="rounded-lg bg-[#1d1d1f] px-4 py-2 text-[13px] text-white hover:bg-[#2c2c2e]">
-                {editingId ? "保存修改" : "新建待办"}
-              </button>
-            </div>
-          </div>
-        </div>
+        </FormDialog>
       )}
 
       {loading ? (
@@ -981,18 +970,14 @@ function TodoCalendarView({
               </div>
               {editingDateIndex === dayIndex && (
                 <div className="absolute left-3 top-14 z-20 rounded-lg border border-[#e5e5ea] bg-white p-2 shadow-xl shadow-black/10">
-                  <input
-                    type="date"
-                    defaultValue={day}
+                  <DatePicker
+                    value={day}
                     min={todayIso()}
                     autoFocus
-                    onChange={(event) => onChangeDate(dayIndex, event.target.value)}
-                    onBlur={(event) => onChangeDate(dayIndex, event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") onChangeDate(dayIndex, event.currentTarget.value);
-                      if (event.key === "Escape") onEditDate(null);
-                    }}
-                    className="h-8 rounded-md border border-[#e5e5ea] px-2 text-[12px] outline-none"
+                    ariaLabel={`修改${formatMonthDay(day)}日期`}
+                    onValueChange={(value) => onChangeDate(dayIndex, value)}
+                    onBlur={() => onEditDate(null)}
+                    className="h-8 text-[12px]"
                   />
                 </div>
               )}
@@ -1234,22 +1219,18 @@ function CalendarLaneDeleteDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/20 px-4 py-8" data-calendar-delete-dialog>
-      <div className="w-full max-w-xl rounded-xl border border-[#d1d1d6] bg-white p-5 shadow-2xl shadow-black/10">
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div>
-            <h3 className="text-[14px] text-[#1d1d1f]">删除日期泳道</h3>
-            <p className="mt-1 text-[12px] leading-[1.6] text-[#8a8a8e]">
-              将删除 {formatMonthDay(laneDate)} 泳道。{todos.length ? "请先为该泳道中的任务选择迁移日期。" : "该泳道没有任务，可直接删除。"}
-            </p>
-          </div>
-          <button type="button" onClick={onCancel} className="rounded-lg p-2 text-[#8a8a8e] hover:bg-[#f2f2f7]">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
+    <FormDialog
+      open
+      title="删除日期泳道"
+      description={`将删除 ${formatMonthDay(laneDate)} 泳道。${todos.length ? "请先为该泳道中的任务选择迁移日期。" : "该泳道没有任务，可直接删除。"}`}
+      widthClassName="max-w-xl"
+      zIndexClassName="z-[130]"
+      onClose={onCancel}
+      dataAttributes={{ "data-calendar-delete-dialog": "true" }}
+      footer={<><FormDialogCancelButton onClick={onCancel} /><FormDialogPrimaryButton tone="danger" onClick={onConfirm}>删除</FormDialogPrimaryButton></>}
+    >
         {todos.length > 0 && (
-          <div className="mb-4 rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-3">
+          <div className="rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-3">
             <div className="mb-2 text-[12px] text-[#636366]">迁移泳道内任务</div>
             <div className="space-y-2">
               {todos.map((todo) => (
@@ -1258,7 +1239,7 @@ function CalendarLaneDeleteDialog({
                     <div className="truncate text-[12px] text-[#1d1d1f]">{todo.title}</div>
                     <div className="mt-0.5 truncate text-[11px] text-[#8a8a8e]">{todo.assignee} · {statusConfig[todo.status].label}</div>
                   </div>
-                  <select
+                  <AppSelect
                     value={assignments[todo.id] || dateOptions[0]}
                     onChange={(event) => onAssign(todo.id, event.target.value)}
                     className="h-8 rounded-lg border border-[#e5e5ea] bg-white px-2 text-[12px] text-[#1d1d1f] outline-none"
@@ -1268,23 +1249,14 @@ function CalendarLaneDeleteDialog({
                         {formatMonthDay(date)}
                       </option>
                     ))}
-                  </select>
+                  </AppSelect>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        <div className="flex justify-end gap-2">
-          <button type="button" onClick={onCancel} className="rounded-lg bg-[#f2f2f7] px-4 py-2 text-[13px] text-[#636366] hover:bg-[#e5e5ea]">
-            取消
-          </button>
-          <button type="button" onClick={onConfirm} className="rounded-lg bg-[#d92d20] px-4 py-2 text-[13px] text-white hover:bg-[#b42318]">
-            删除
-          </button>
-        </div>
-      </div>
-    </div>
+    </FormDialog>
   );
 }
 

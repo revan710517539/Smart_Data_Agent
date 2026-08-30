@@ -1,7 +1,8 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { createPortal } from "react-dom";
+import { AppSelect } from "../ui/AppSelect";
 import { trackInteraction } from "../../services/interactionTelemetry";
-import { ArrowDown, ArrowUp, ArrowUpDown, AudioLines, Check, ChevronDown, Copy, Download, Ellipsis, Filter, MessageSquareText, Pin, Plus, SlidersHorizontal, Trash2, Type, X } from "lucide-react";
+import { ArrowDown, ArrowLeftToLine, ArrowRightToLine, ArrowUp, ArrowUpDown, AudioLines, Calculator, Check, ChevronDown, Copy, Download, Ellipsis, Filter, LayoutTemplate, MessageSquareText, Percent, Pin, Plus, Save, SlidersHorizontal, Trash2, Type, X } from "lucide-react";
 import {
   Area,
   AreaChart,
@@ -42,10 +43,17 @@ import {
   type VisualizationType,
 } from "./domain";
 import { selectVisibleVisualPoints } from "../visualization/visualPointWindow";
+import { TableProgressDialog } from "../visualization/TableProgressDialog";
+import { TableCalculatedColumnDialog } from "../visualization/TableCalculatedColumnDialog";
+import { SaveTableTemplateDialog, TableTemplateGallery } from "../visualization/TableTemplateGallery";
+import { applyCustomTableTemplate, createBankPerformanceTableTemplate, createCustomTableTemplate, readCustomTableTemplates, tableTemplateChangedEvent, tableTemplateStorageKey, writeCustomTableTemplates, type BuiltInTableTemplate, type CustomTableTemplate } from "../visualization/tableStyleTemplates";
+import { ChartTemplateGallery } from "../visualization/ChartTemplateGallery";
+import { chartTemplateById, type BuiltInChartTemplate } from "../visualization/chartStyleTemplates";
 import { useVisualizationVoiceCommand } from "../visualization/useVisualizationVoiceCommand";
 import { insertVisualVoiceText, resolveVisualizationVoiceCommand } from "../visualization/visualizationCommand";
 import { formatFieldValue, type FieldDisplayMetadata } from "../../data/fieldSemantics";
 import { usePlatformContext } from "../../platform/PlatformContext";
+import { useSkinTheme } from "../../theme/SkinThemeContext";
 import { normalizeNoteItems, noteItemsFromText, type RichNoteItem } from "../notes/richNote";
 import { VisualNoteFields, VisualNoteTitle } from "../visualization/VisualNoteFields";
 import { DataPageSelector, useClientPagination } from "../ui/DataPageSelector";
@@ -55,29 +63,50 @@ import {
   filterVisualizationRows,
   groupRowsForMergedDimensions,
   legacyFiltersToFilterGroups,
+  associationRuleMatches,
+  compileVisualizationFormula,
   mergedDimensionCellSpan,
   metricTotal,
   moveVisualizationFieldWithinGroup,
+  normalizeMetricProgress,
+  normalizeMetricRankings,
+  normalizeMetricFormats,
+  normalizeCalculatedColumns,
   normalizeVisualizationFilterGroups,
   normalizeVisualizationSelections,
+  normalizeVisualizationChartStyle,
+  normalizeVisualizationTableStyle,
   numericValue,
+  ordinalRanks,
   orderedTableFields,
+  progressPercentage,
+  readableTextColor,
+  resolveProgressDenominator,
   selectedTableFields,
   toggleVisualizationField,
   visualizationRoleFields,
-  visualizationChartColor,
   visualizationFilterGroupsToLegacyFilters,
   visualizationFilterOperators,
   visualizationFilterValues,
   type VisualizationCardConfig,
+  type VisualizationCalculatedColumnConfig,
+  type VisualizationMetricProgressConfig,
+  type VisualizationMetricFormatConfig,
+  type VisualizationMetricRankConfig,
+  type VisualizationRankDirection,
   type VisualizationFilterGroup,
   type VisualizationFilterOperator,
   type VisualizationFilterRule,
   type VisualizationFilters,
+  type VisualizationTableStyleConfig,
+  type VisualizationChartStyleConfig,
 } from "../visualization/visualizationDataModel";
 import { nextTableSortState, sortTableRows, type TableSortState } from "../visualization/tableSort";
+import "../../../styles/table-templates.css";
 
 export type { VisualizationCardConfig } from "../visualization/visualizationDataModel";
+
+type VisualTableHeaderTarget = { field: string; kind: "dimension" | "metric" | "rank" | "calculated"; columnIndex: number };
 
 export function RawDataTable({ rows, onDownload }: { rows: AnalysisRow[]; onDownload: () => void }) {
   const [mergedDimensionFields, setMergedDimensionFields] = useState<string[]>([]);
@@ -114,7 +143,7 @@ export function RawDataTable({ rows, onDownload }: { rows: AnalysisRow[]; onDown
         mergedDimensionFields={mergedDimensionFields}
         frozenColumnFields={frozenColumnFields}
         frozenRowKeys={frozenRowKeys}
-        onDimensionHeaderContextMenu={(field, event) => { event.preventDefault(); event.stopPropagation(); setRowMenu(null); setHeaderMenu({ field, ...clampMenu(event.clientX, event.clientY, 210) }); }}
+        onDimensionHeaderContextMenu={(target, event) => { event.preventDefault(); event.stopPropagation(); setRowMenu(null); setHeaderMenu({ field: target.field, ...clampMenu(event.clientX, event.clientY, 210) }); }}
         onRowContextMenu={(rowKey, event) => { event.preventDefault(); event.stopPropagation(); setHeaderMenu(null); setRowMenu({ rowKey, ...clampMenu(event.clientX, event.clientY, 188) }); }}
       />
       {headerMenu && createPortal(<div className="fixed z-[200] w-[210px] rounded-xl border border-[#dce7df] bg-white p-1.5 shadow-xl shadow-black/10" style={{ left: headerMenu.left, top: headerMenu.top }} data-visual-table-header-menu={headerMenu.field} data-visual-interactive="true">
@@ -162,9 +191,18 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const [moreMenuPos, setMoreMenuPos] = useState<{ top: number; left: number } | null>(null);
   const { tenantId, userId } = usePlatformContext();
+  const { activeSkin } = useSkinTheme();
   const fields = useMemo(() => analysisRawFields(rows), [rows]);
-  const fieldLabels = rows[0]?.fieldLabels || {};
-  const fieldMetadata = rows[0]?.fieldMetadata || {};
+  const fieldLabels = useMemo(
+    () => ({ ...(rows[0]?.fieldLabels || {}), ...Object.assign({}, ...(analysisSource || []).map((table) => table.fieldLabels || {})) }),
+    [analysisSource, rows],
+  );
+  // Current data-governance metadata owns field classification. Result rows
+  // remain the value source, but an older row snapshot must not override it.
+  const fieldMetadata = useMemo(
+    () => ({ ...(rows[0]?.fieldMetadata || {}), ...Object.assign({}, ...(analysisSource || []).map((table) => table.fieldMetadata || {})) }),
+    [analysisSource, rows],
+  );
   const roleFields = useMemo(
     () => visualizationRoleFields(fields, fieldMetadata, numericRawFields(rows)),
     [fields, fieldMetadata, rows],
@@ -176,6 +214,12 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   const [mergedDimensionFields, setMergedDimensionFields] = useState<string[]>(initialConfig?.mergedDimensionFields || []);
   const [frozenColumnFields, setFrozenColumnFields] = useState<string[]>(initialConfig?.frozenColumnFields || []);
   const [frozenRowKeys, setFrozenRowKeys] = useState<string[]>(initialConfig?.frozenRowKeys || []);
+  const [metricRankings, setMetricRankings] = useState<VisualizationMetricRankConfig[]>(() => normalizeMetricRankings(initialConfig?.metricRankings || []));
+  const [metricFormats, setMetricFormats] = useState<VisualizationMetricFormatConfig[]>(() => normalizeMetricFormats(initialConfig?.metricFormats || []));
+  const [metricProgress, setMetricProgress] = useState<VisualizationMetricProgressConfig[]>(() => normalizeMetricProgress(initialConfig?.metricProgress || []));
+  const [calculatedColumns, setCalculatedColumns] = useState<VisualizationCalculatedColumnConfig[]>(() => normalizeCalculatedColumns(initialConfig?.calculatedColumns || []));
+  const [tableStyle, setTableStyle] = useState<VisualizationTableStyleConfig>(() => normalizeVisualizationTableStyle(initialConfig?.tableStyle));
+  const [chartStyle, setChartStyle] = useState<VisualizationChartStyleConfig>(() => normalizeVisualizationChartStyle(initialConfig?.chartStyle || chartTemplateById(activeSkin.chartTemplateId).style));
   const [filters, setFilters] = useState<VisualizationFilters>(initialConfig?.filters || {});
   const [filterGroups, setFilterGroups] = useState<VisualizationFilterGroup[]>(() => initialConfig?.filterGroups?.length ? normalizeVisualizationFilterGroups(initialConfig.filterGroups) : legacyFiltersToFilterGroups(initialConfig?.filters || {}));
   const [sumFilteredRows, setSumFilteredRows] = useState(Boolean(initialConfig?.sumFilteredRows));
@@ -187,10 +231,22 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   const [moreOpen, setMoreOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const filterSnapshotRef = useRef<{ filterGroups: VisualizationFilterGroup[]; filters: VisualizationFilters; sumFilteredRows: boolean } | null>(null);
-  const [activePanel, setActivePanel] = useState<"style" | "metric" | "dimension" | null>(null);
+  const [activePanel, setActivePanel] = useState<"template" | "style" | "metric" | "dimension" | null>(null);
+  const [templateMenuPos, setTemplateMenuPos] = useState<{ top: number; left: number } | null>(null);
   const [commentPoint, setCommentPoint] = useState<{ left: number; top: number } | null>(null);
-  const [tableHeaderMenu, setTableHeaderMenu] = useState<{ field: string; left: number; top: number } | null>(null);
+  const [tableHeaderMenu, setTableHeaderMenu] = useState<(VisualTableHeaderTarget & { left: number; top: number }) | null>(null);
   const [tableRowMenu, setTableRowMenu] = useState<{ rowKey: string; left: number; top: number } | null>(null);
+  const [progressDialogMetric, setProgressDialogMetric] = useState<string | null>(null);
+  const [decimalEditorMetric, setDecimalEditorMetric] = useState<string | null>(null);
+  const [decimalPlacesDraft, setDecimalPlacesDraft] = useState("");
+  const [calculationDialogColumnId, setCalculationDialogColumnId] = useState<string | null>(null);
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+  const templateLibraryKey = tenantId && userId ? tableTemplateStorageKey(tenantId, userId) : "";
+  const [customTemplates, setCustomTemplates] = useState<CustomTableTemplate[]>([]);
+  const featuredTableTemplates = useMemo(
+    () => [createBankPerformanceTableTemplate(metricFields, dimensionFields, fieldLabels)],
+    [dimensionFields.join("\u0000"), fieldLabels, metricFields.join("\u0000")],
+  );
   const [commandNotice, setCommandNotice] = useState("");
   const [tableNotice, setTableNotice] = useState("");
   const [voiceNoticeVisible, setVoiceNoticeVisible] = useState(false);
@@ -204,6 +260,26 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   });
   const [noteTitleHidden, setNoteTitleHidden] = useState(Boolean(initialConfig?.noteTitleHidden));
   const [cardType, setCardType] = useState<VisualizationType>(type);
+  const isTableCard = cardType === "table" || cardType === "pivot";
+  const isTextCard = cardType === "text";
+  const appliedSkinIdRef = useRef(activeSkin.id);
+  useEffect(() => {
+    if (appliedSkinIdRef.current === activeSkin.id) return;
+    appliedSkinIdRef.current = activeSkin.id;
+    const template = chartTemplateById(activeSkin.chartTemplateId);
+    setChartStyle(template.style);
+    setTableNotice(`已随页面皮肤应用图表模板：${template.name}`);
+  }, [activeSkin]);
+  useEffect(() => {
+    setCustomTemplates(templateLibraryKey ? readCustomTableTemplates(templateLibraryKey) : []);
+    if (!templateLibraryKey) return;
+    const syncTemplates = (event: Event) => {
+      const detail = (event as CustomEvent<{ key?: string; templates?: CustomTableTemplate[] }>).detail;
+      if (detail?.key === templateLibraryKey) setCustomTemplates(detail.templates || readCustomTableTemplates(templateLibraryKey));
+    };
+    window.addEventListener(tableTemplateChangedEvent, syncTemplates);
+    return () => window.removeEventListener(tableTemplateChangedEvent, syncTemplates);
+  }, [templateLibraryKey]);
   useEffect(() => { setCardType(type); }, [type]);
   const applyType = (next: VisualizationType) => {
     setCardType(next);
@@ -243,6 +319,12 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     mergedDimensionFields,
     frozenColumnFields,
     frozenRowKeys,
+    metricRankings,
+    metricFormats,
+    metricProgress,
+    calculatedColumns,
+    tableStyle,
+    chartStyle,
     filters,
     filterGroups,
     sumFilteredRows,
@@ -255,7 +337,7 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     layoutHeight: visualGridHeight,
     maxLayoutSpan: visualGridMaxSpan,
     maxLayoutHeight: visualGridMaxHeight,
-  }), [comboLineFields, dimensionFields, filterGroups, filters, frozenColumnFields, frozenRowKeys, mergedDimensionFields, metricFields, noteBody, noteItems, noteTitle, noteTitleHidden, sumFilteredRows, visualGridHeight, visualGridMaxHeight, visualGridMaxSpan, visualGridSpan]);
+  }), [calculatedColumns, chartStyle, comboLineFields, dimensionFields, filterGroups, filters, frozenColumnFields, frozenRowKeys, mergedDimensionFields, metricFields, metricFormats, metricProgress, metricRankings, noteBody, noteItems, noteTitle, noteTitleHidden, sumFilteredRows, tableStyle, visualGridHeight, visualGridMaxHeight, visualGridMaxSpan, visualGridSpan]);
 
   useEffect(() => { if (!editingTitle) setDraftTitle(title); }, [editingTitle, title]);
 
@@ -278,6 +360,12 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
         if (Array.isArray(source.mergedDimensionFields)) setMergedDimensionFields(source.mergedDimensionFields);
         if (Array.isArray(source.frozenColumnFields)) setFrozenColumnFields(source.frozenColumnFields);
         if (Array.isArray(source.frozenRowKeys)) setFrozenRowKeys(source.frozenRowKeys);
+        if (Array.isArray(source.metricRankings)) setMetricRankings(normalizeMetricRankings(source.metricRankings));
+        if (Array.isArray(source.metricFormats)) setMetricFormats(normalizeMetricFormats(source.metricFormats));
+        if (Array.isArray(source.metricProgress)) setMetricProgress(normalizeMetricProgress(source.metricProgress));
+        if (Array.isArray(source.calculatedColumns)) setCalculatedColumns(normalizeCalculatedColumns(source.calculatedColumns));
+        if (source.tableStyle) setTableStyle(normalizeVisualizationTableStyle(source.tableStyle));
+        if (source.chartStyle) setChartStyle(normalizeVisualizationChartStyle(source.chartStyle));
         if (source.filters) setFilters(source.filters);
         setFilterGroups(source.filterGroups?.length ? normalizeVisualizationFilterGroups(source.filterGroups) : legacyFiltersToFilterGroups(source.filters || {}));
         setSumFilteredRows(Boolean(source.sumFilteredRows));
@@ -308,8 +396,14 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     const allowed = new Set([...dimensionFields, ...metricFields]);
     setMergedDimensionFields((current) => { const next = current.filter((field) => allowed.has(field)); return sameFields(current, next) ? current : next; });
     setFrozenColumnFields((current) => { const next = current.filter((field) => allowed.has(field)); return sameFields(current, next) ? current : next; });
-    setTableHeaderMenu((current) => current && cardType === "table" && allowed.has(current.field) ? current : null);
-  }, [cardType, dimensionFields, metricFields]);
+    setMetricRankings((current) => { const next = normalizeMetricRankings(current, metricFields); return JSON.stringify(current) === JSON.stringify(next) ? current : next; });
+    setMetricFormats((current) => { const next = normalizeMetricFormats(current, metricFields); return JSON.stringify(current) === JSON.stringify(next) ? current : next; });
+    setMetricProgress((current) => { const next = normalizeMetricProgress(current, metricFields); return JSON.stringify(current) === JSON.stringify(next) ? current : next; });
+    setCalculatedColumns((current) => { const next = normalizeCalculatedColumns(current); return JSON.stringify(current) === JSON.stringify(next) ? current : next; });
+    setTableHeaderMenu((current) => current && (cardType === "table" || cardType === "pivot") && (current.kind === "calculated" ? calculatedColumns.some((column) => column.id === current.field) : allowed.has(current.field)) ? current : null);
+    setProgressDialogMetric((current) => current && metricFields.includes(current) ? current : null);
+    setCalculationDialogColumnId((current) => current && calculatedColumns.some((column) => column.id === current) ? current : null);
+  }, [calculatedColumns, cardType, dimensionFields, metricFields]);
 
   useEffect(() => {
     const next = defaultComboLineFields(metricFields, comboLineFields);
@@ -397,13 +491,15 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
       if (!target.closest('[data-visual-filter-panel="true"], [data-visual-filter-value-menu], [data-visual-filter-value-trigger]')) setFilterOpen(false);
       if (
         !target.closest('[data-visual-style-menu="true"]')
+        && !target.closest('[data-table-template-gallery="true"], [data-chart-template-gallery="true"]')
         && !target.closest("[data-visual-field-panel]")
         && !target.closest("[data-visual-panel-trigger]")
       ) setActivePanel(null);
-      if (!target.closest('[data-visual-comment-action="true"], [data-visual-table-header-menu], [data-visual-table-row-menu]')) {
+      if (!target.closest('[data-visual-comment-action="true"], [data-visual-table-header-menu], [data-visual-table-row-menu], [data-table-progress-dialog]')) {
         setCommentPoint(null);
         setTableHeaderMenu(null);
         setTableRowMenu(null);
+        setDecimalEditorMetric(null);
       }
     };
     document.addEventListener("pointerdown", dismissTransientControls, true);
@@ -418,7 +514,7 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     const update = () => {
       const rect = moreButtonRef.current?.getBoundingClientRect();
       if (!rect) return;
-      const width = 112;
+      const width = 128;
       setMoreMenuPos({
         top: rect.bottom + 4,
         left: Math.min(Math.max(8, rect.left), window.innerWidth - width - 8),
@@ -433,6 +529,30 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     };
   }, [moreOpen]);
 
+  useEffect(() => {
+    if (activePanel !== "template" || isTextCard) {
+      setTemplateMenuPos(null);
+      return;
+    }
+    const update = () => {
+      const rect = moreButtonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(352, window.innerWidth - 16);
+      const height = Math.min(900, window.innerHeight - 80);
+      setTemplateMenuPos({
+        top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - height - 8)),
+        left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
+      });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [activePanel, isTextCard]);
+
   const toggleOperations = () => {
     if (operationsOpen) {
       setOperationsOpen(false);
@@ -440,7 +560,7 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     } else setOperationsOpen(true);
   };
 
-  const togglePanel = (panel: "style" | "metric" | "dimension") => {
+  const togglePanel = (panel: "template" | "style" | "metric" | "dimension") => {
     setActivePanel((current) => current === panel ? null : panel);
   };
 
@@ -463,13 +583,14 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   const pointWithinCard = (clientX: number, clientY: number, width = 44) => { const rect = cardRef.current?.getBoundingClientRect(); return rect ? { left: Math.max(8, Math.min(clientX - rect.left, rect.width - width - 8)), top: Math.max(8, clientY - rect.top) } : null; };
   const eventInsideVisualTable = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest("[data-visual-table-scroll]"));
   const revealCommentAt = (clientX: number, clientY: number) => { const point = pointWithinCard(clientX, clientY); if (point) { setTableHeaderMenu(null); setTableRowMenu(null); setCommentPoint(point); } };
-  const revealTableHeaderMenu = (field: string, event: ReactMouseEvent<HTMLElement>) => {
-    if (cardType !== "table") return;
+  const revealTableHeaderMenu = (target: VisualTableHeaderTarget, event: ReactMouseEvent<HTMLElement>) => {
+    if (cardType !== "table" && cardType !== "pivot") return;
     event.preventDefault();
     event.stopPropagation();
     setCommentPoint(null);
     setTableRowMenu(null);
-    setTableHeaderMenu({ field, left: Math.max(8, Math.min(event.clientX, window.innerWidth - 218)), top: Math.max(8, Math.min(event.clientY, window.innerHeight - 180)) });
+    setDecimalEditorMetric(null);
+    setTableHeaderMenu({ ...target, left: Math.max(8, Math.min(event.clientX, window.innerWidth - 218)), top: Math.max(8, Math.min(event.clientY, window.innerHeight - 390)) });
   };
   const revealTableRowMenu = (rowKey: string, event: ReactMouseEvent<HTMLElement>) => {
     if (cardType !== "table") return;
@@ -491,11 +612,112 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     setFrozenRowKeys((current) => current.includes(rowKey) ? current.filter((item) => item !== rowKey) : [...current, rowKey]);
     setTableRowMenu(null);
   };
-  const isTextCard = cardType === "text";
-  const isTableCard = cardType === "table" || cardType === "pivot";
+  const setRankingDirection = (metricField: string, direction: VisualizationRankDirection) => {
+    setMetricRankings((current) => current.some((item) => item.metricField === metricField)
+      ? current.map((item) => item.metricField === metricField ? { ...item, direction } : item)
+      : [...current, { metricField, direction }]);
+    setTableHeaderMenu(null);
+  };
+  const toggleRanking = (metricField: string) => {
+    setMetricRankings((current) => current.some((item) => item.metricField === metricField) ? current.filter((item) => item.metricField !== metricField) : [...current, { metricField, direction: "desc" }]);
+    setTableHeaderMenu(null);
+  };
+  const insertCalculatedColumn = (side: "left" | "right") => {
+    if (!tableHeaderMenu) return;
+    const position = Math.max(0, tableHeaderMenu.columnIndex + (side === "right" ? 1 : 0));
+    const id = `calculated-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setCalculatedColumns((current) => normalizeCalculatedColumns([
+      ...current.map((column) => column.position >= position ? { ...column, position: column.position + 1 } : column),
+      { id, name: `新增列${current.length + 1}`, position, expression: "" },
+    ]));
+    setTableHeaderMenu(null);
+  };
+  const openCalculationRule = () => {
+    if (!tableHeaderMenu || tableHeaderMenu.kind !== "calculated") return;
+    setCalculationDialogColumnId(tableHeaderMenu.field);
+    setTableHeaderMenu(null);
+  };
+  const toggleMetricPercent = (metricField: string) => {
+    setMetricFormats((current) => {
+      const existing = current.find((item) => item.metricField === metricField);
+      const next = existing
+        ? current.map((item) => item.metricField === metricField ? { ...item, percent: !item.percent } : item)
+        : [...current, { metricField, percent: true }];
+      return normalizeMetricFormats(next, metricFields);
+    });
+    setTableHeaderMenu(null);
+  };
+  const openDecimalPlacesEditor = (metricField: string) => {
+    const existing = metricFormats.find((item) => item.metricField === metricField);
+    setDecimalPlacesDraft(existing?.decimalPlaces === undefined ? "" : String(existing.decimalPlaces));
+    setDecimalEditorMetric(metricField);
+  };
+  const commitDecimalPlaces = (metricField: string) => {
+    const trimmed = decimalPlacesDraft.trim();
+    setMetricFormats((current) => {
+      const existing = current.find((item) => item.metricField === metricField);
+      const without = current.filter((item) => item.metricField !== metricField);
+      if (!trimmed) return normalizeMetricFormats(existing?.percent ? [...without, { metricField, percent: true }] : without, metricFields);
+      const decimalPlaces = Math.max(0, Math.min(8, Math.trunc(Number(trimmed))));
+      return normalizeMetricFormats([...without, { metricField, percent: Boolean(existing?.percent), decimalPlaces: Number.isFinite(decimalPlaces) ? decimalPlaces : 0 }], metricFields);
+    });
+    setDecimalEditorMetric(null);
+    setTableHeaderMenu(null);
+  };
+  const updateCalculatedColumn = (id: string, patch: Partial<VisualizationCalculatedColumnConfig>) => {
+    setCalculatedColumns((current) => normalizeCalculatedColumns(current.map((column) => column.id === id ? { ...column, ...patch } : column)));
+  };
+  const applyBuiltInTableTemplate = (template: BuiltInTableTemplate) => {
+    setTableStyle(template.style);
+    setMetricProgress((current) => current.map((progress) => ({ ...progress, color: template.progressColors[0], colorEnd: template.progressColors[1], colorMode: "gradient" })));
+    setTableNotice(`已应用模板：${template.name}`);
+    setActivePanel(null);
+    trackVisual("visualization_result", { action: "apply_table_template", template_id: template.id, template_kind: "built_in" });
+  };
+  const applySavedTableTemplate = (template: CustomTableTemplate) => {
+    const result = applyCustomTableTemplate(template, metricFields, dimensionFields, fieldLabels);
+    setTableStyle(result.tableStyle || template.tableStyle);
+    setMetricRankings(result.metricRankings || []);
+    setMetricFormats(result.metricFormats || []);
+    setMetricProgress(result.metricProgress || []);
+    setCalculatedColumns(result.calculatedColumns || []);
+    setMergedDimensionFields(result.mergedDimensionFields || []);
+    setFrozenColumnFields(result.frozenColumnFields || []);
+    setFrozenRowKeys([]);
+    setTableNotice(result.warnings.length ? `已应用“${template.name}”，跳过 ${result.warnings.length} 项未匹配规则` : `已应用自定义模板：${template.name}`);
+    setActivePanel(null);
+    trackVisual("visualization_result", { action: "apply_table_template", template_id: template.id, template_kind: "custom", skipped_rules: result.warnings.length });
+  };
+  const saveCurrentTableTemplate = (name: string) => {
+    if (!templateLibraryKey) { setTableNotice("当前租户或用户身份不可用，未保存模板"); setSaveTemplateOpen(false); return; }
+    const template = createCustomTableTemplate(name, currentConfig, fieldLabels);
+    const next = writeCustomTableTemplates(templateLibraryKey, [template, ...customTemplates.filter((item) => item.id !== template.id)]);
+    setCustomTemplates(next);
+    setTableStyle(template.tableStyle);
+    setSaveTemplateOpen(false);
+    setActivePanel("template");
+    setTableNotice(`模板“${template.name}”已保存`);
+    trackVisual("visualization_result", { action: "save_table_template", template_id: template.id });
+  };
+  const deleteSavedTableTemplate = (template: CustomTableTemplate) => {
+    if (!templateLibraryKey) return;
+    const next = writeCustomTableTemplates(templateLibraryKey, customTemplates.filter((item) => item.id !== template.id));
+    setCustomTemplates(next);
+    setTableNotice(`已删除模板：${template.name}`);
+  };
+  const applyBuiltInChartTemplate = (template: BuiltInChartTemplate) => {
+    setChartStyle(template.style);
+    setTableNotice(`已应用图表模板：${template.name}`);
+    setActivePanel(null);
+    trackVisual("visualization_result", { action: "apply_chart_template", template_id: template.id, chart_type: cardType });
+  };
   const chartAreaRef = useRef<HTMLDivElement>(null);
   useVisualTableRegionWheelLock(chartAreaRef, isTableCard);
   const primaryToolsOpen = !isTextCard || operationsOpen;
+  const headerRanking = tableHeaderMenu ? metricRankings.find((item) => item.metricField === tableHeaderMenu.field) : undefined;
+  const headerMetricFormat = tableHeaderMenu ? metricFormats.find((item) => item.metricField === tableHeaderMenu.field) : undefined;
+  const headerProgress = tableHeaderMenu ? metricProgress.find((item) => item.metricField === tableHeaderMenu.field) : undefined;
+  const headerCalculatedColumn = tableHeaderMenu?.kind === "calculated" ? calculatedColumns.find((column) => column.id === tableHeaderMenu.field) : undefined;
   return <div ref={cardRef} data-visual-card={id} data-visual-text-card={isTextCard ? "true" : "false"} data-visual-values={showData ? "shown" : "hidden"} data-visual-grid-span={visualGridSpan} data-visual-grid-height={visualGridHeight} data-visual-grid-max-span={visualGridMaxSpan} data-visual-grid-max-height={visualGridMaxHeight} className={`relative rounded-xl border border-[#dce9e0] bg-[#fbfdfc] p-4 ${activePanel === "style" ? "overflow-hidden" : ""} ${fillHeight ? "flex h-full min-h-0 flex-col" : ""}`} onClick={(event) => { if (!(event.target instanceof Element) || event.target.closest('[data-visual-interactive="true"]') || eventInsideVisualTable(event.target)) return; trackVisual("visualization_click", { chart_type: cardType, metric_fields: metricFields, dimension_fields: dimensionFields }); revealCommentAt(event.clientX, event.clientY); }} onContextMenu={(event) => { if (event.target instanceof Element && event.target.closest("[data-rich-note-editor], [data-visual-note-selection], [data-visual-note-title-row]")) return; event.preventDefault(); if (eventInsideVisualTable(event.target)) return; revealCommentAt(event.clientX, event.clientY); }}>
     <div className={isTextCard ? "mb-3 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-1" : "mb-3 flex items-start justify-between gap-2.5"}>
       {!isTextCard && <div className="min-w-0 flex-1 pr-1" data-visual-interactive="true">{editingTitle ? <input autoFocus value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} onBlur={commitTitle} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setDraftTitle(title); setEditingTitle(false); } }} className="h-7 w-full rounded-md border border-[#b7ddc3] bg-white px-2 text-[12px] text-[#1d1d1f] outline-none ring-2 ring-[#2ca66f]/15" aria-label="可视化标题" data-visual-title-input="true" /> : <button type="button" onDoubleClick={(event) => { event.stopPropagation(); if (onTitleChange) setEditingTitle(true); }} className={`max-w-full truncate text-left text-[12px] text-[#1d1d1f] ${onTitleChange ? "cursor-text rounded px-1 py-1 hover:bg-[#f5faf7]" : ""}`} title={onTitleChange ? "双击修改标题" : title} data-visual-title="true">{title}</button>}</div>}
@@ -503,18 +725,20 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
         <div className={isTextCard ? "flex shrink-0 flex-nowrap items-center justify-end gap-0 rounded-full bg-[#f0f6f2] p-0.5" : "contents"}>
         <div aria-hidden={!primaryToolsOpen} {...(!primaryToolsOpen ? ({ inert: "" } as Record<string, string>) : {})} className={`flex items-center gap-0 overflow-hidden transition-[max-width,opacity] duration-200 motion-reduce:transition-none ${primaryToolsOpen ? "max-w-[360px] opacity-100" : "pointer-events-none max-w-0 opacity-0"}`} data-visual-primary-tray={primaryToolsOpen ? "expanded" : "collapsed"}>
           <div className="relative">
-            <button ref={moreButtonRef} type="button" onClick={(event) => { trackVisual("visual_more_click"); const rect = event.currentTarget.getBoundingClientRect(); setMoreMenuPos({ top: rect.bottom + 4, left: Math.min(Math.max(8, rect.left), window.innerWidth - 120) }); setMoreOpen((value) => !value); setFilterOpen(false); }} className={`inline-flex h-7 w-8 items-center justify-center rounded-full ${moreOpen || activeFilterCount ? "bg-white text-[#178a53] shadow-sm" : "text-[#4f685b] hover:bg-white/80"}`} aria-label="更多可视化操作" aria-expanded={moreOpen} data-visual-more="true"><Ellipsis className="h-4 w-4" /></button>
-            {moreOpen && moreMenuPos && createPortal(<div className="fixed z-[120] w-28 rounded-lg border border-[#dce7df] bg-white p-1 shadow-lg shadow-black/[0.08]" style={{ top: moreMenuPos.top, left: moreMenuPos.left }} data-visual-more-menu="true" data-visual-interactive="true">
+            <button ref={moreButtonRef} type="button" onClick={(event) => { trackVisual("visual_more_click"); const rect = event.currentTarget.getBoundingClientRect(); setMoreMenuPos({ top: rect.bottom + 4, left: Math.min(Math.max(8, rect.left), window.innerWidth - 136) }); setMoreOpen((value) => !value); setFilterOpen(false); }} className={`inline-flex h-7 w-8 items-center justify-center rounded-full ${moreOpen || activeFilterCount ? "bg-white text-[#178a53] shadow-sm" : "text-[#4f685b] hover:bg-white/80"}`} aria-label="更多可视化操作" aria-expanded={moreOpen} data-visual-more="true"><Ellipsis className="h-4 w-4" /></button>
+            {moreOpen && moreMenuPos && createPortal(<div className="fixed z-[120] w-32 rounded-lg border border-[#dce7df] bg-white p-1 shadow-lg shadow-black/[0.08]" style={{ top: moreMenuPos.top, left: moreMenuPos.left }} data-visual-more-menu="true" data-visual-interactive="true">
               <MoreMenuButton icon={Type} label="文本框" dataAttr="data-visual-more-text" onClick={() => { trackVisual("visual_text_card_click"); if (onCreateText) onCreateText(currentConfig); else onDuplicate?.(currentConfig, { asText: true }); setMoreOpen(false); }} disabled={!onCreateText && !onDuplicate} />
               <MoreMenuButton icon={Filter} label={activeFilterCount ? `条件 ${activeFilterCount}` : "条件"} dataAttr="data-visual-filter-toggle" onClick={() => { trackVisual("visual_condition_click"); openFilters(); }} disabled={isTextCard} />
               <MoreMenuButton icon={Copy} label="复制" disabled={!onDuplicate} onClick={() => { trackVisual("visual_copy_click"); onDuplicate?.(currentConfig); setMoreOpen(false); }} />
               <MoreMenuButton icon={Trash2} label="删除" destructive disabled={!onDelete} onClick={() => { trackVisual("visual_delete_click"); onDelete?.(); setMoreOpen(false); }} />
+              {!isTextCard && <MoreMenuButton icon={LayoutTemplate} label="样式模板" dataAttr={isTableCard ? "data-table-style-template" : "data-chart-style-template"} onClick={() => { trackVisual("visual_template_click"); setMoreOpen(false); setActivePanel((current) => current === "template" ? null : "template"); }} />}
+              {isTableCard && <MoreMenuButton icon={Save} label="保存模板" dataAttr="data-save-table-template" onClick={() => { setMoreOpen(false); setSaveTemplateOpen(true); }} />}
             </div>, document.body)}
           </div>
           <button type="button" onClick={() => { trackVisual(showData ? "visual_hide_data_click" : "visual_show_data_click"); setShowData((value) => !value); }} disabled={!rows.length} className="h-7 whitespace-nowrap rounded-full px-2 text-[11px] text-[#4f685b] hover:bg-white/80 disabled:opacity-40" data-visual-data-toggle="true">{showData ? "隐藏数据" : "显示数据"}</button>
           {showFollowUp && <button type="button" onClick={() => { trackVisual("visual_follow_up_click"); onFollowUp({ dataTables: analysisSource }); }} className="h-7 whitespace-nowrap rounded-full px-2 text-[11px] text-[#178a53] hover:bg-white/80" aria-label={`追问${title}`} data-visual-follow-up="true">追问</button>}
         </div>
-        <div aria-hidden={!operationsOpen} {...(!operationsOpen ? ({ inert: "" } as Record<string, string>) : {})} className={`flex items-center gap-0.5 overflow-hidden transition-[max-width,opacity] duration-200 motion-reduce:transition-none ${operationsOpen ? "max-w-[260px] opacity-100" : "pointer-events-none max-w-0 opacity-0"}`} data-visual-operation-tray={operationsOpen ? "expanded" : "collapsed"}>
+        <div aria-hidden={!operationsOpen} {...(!operationsOpen ? ({ inert: "" } as Record<string, string>) : {})} className={`flex items-center gap-0.5 overflow-hidden transition-[max-width,opacity] duration-200 motion-reduce:transition-none ${operationsOpen ? "max-w-[330px] opacity-100" : "pointer-events-none max-w-0 opacity-0"}`} data-visual-operation-tray={operationsOpen ? "expanded" : "collapsed"}>
           <button tabIndex={operationsOpen ? 0 : -1} type="button" data-visual-panel-trigger="style" onClick={() => { trackVisual("visual_style_click"); setMoreOpen(false); togglePanel("style"); }} className={`h-7 whitespace-nowrap rounded-full px-2 text-[11px] outline-none focus-visible:outline-none ${activePanel === "style" ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`}>样式</button>
           <button tabIndex={operationsOpen ? 0 : -1} type="button" data-visual-panel-trigger="metric" onClick={() => { trackVisual("visual_metric_click"); setMoreOpen(false); togglePanel("metric"); }} className={`h-7 whitespace-nowrap rounded-full px-2 text-[11px] outline-none focus-visible:outline-none ${activePanel === "metric" ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`}>指标</button>
           <button tabIndex={operationsOpen ? 0 : -1} type="button" data-visual-panel-trigger="dimension" onClick={() => { trackVisual("visual_dimension_click"); setMoreOpen(false); togglePanel("dimension"); }} className={`h-7 whitespace-nowrap rounded-full px-2 text-[11px] outline-none focus-visible:outline-none ${activePanel === "dimension" ? "bg-white text-[#178a53] shadow-sm" : "text-[#53615a] hover:bg-white/80"}`}>维度</button>
@@ -528,21 +752,42 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     </div>
 
     {filterOpen && <VisualizationFilterPanel rows={rows} dimensions={dimensionCandidates} labels={fieldLabels} value={draftFilterGroups} sumRows={draftSumRows} onChange={(next) => { setDraftFilterGroups(next); applyFilterState(next, draftSumRows); }} onSumRowsChange={(next) => { setDraftSumRows(next); applyFilterState(draftFilterGroups, next); }} onCancel={() => { const snapshot = filterSnapshotRef.current; if (snapshot) { setFilterGroups(snapshot.filterGroups); setFilters(snapshot.filters); setSumFilteredRows(snapshot.sumFilteredRows); } setFilterOpen(false); }} onSave={() => { applyFilterState(draftFilterGroups, draftSumRows); trackVisual("visualization_result", { action: "condition", filter_count: draftFilterGroups.reduce((count, group) => count + group.rules.filter((rule) => rule.field && rule.values.length).length, 0), dimension_fields: Array.from(new Set(draftFilterGroups.flatMap((group) => group.rules.map((rule) => rule.field).filter(Boolean)))) }); setFilterOpen(false); }} />}
+    {isTableCard && activePanel === "template" && templateMenuPos && createPortal(<TableTemplateGallery currentTemplateId={tableStyle.templateId} featuredTemplates={featuredTableTemplates} customTemplates={customTemplates} position={templateMenuPos} onApplyBuiltIn={applyBuiltInTableTemplate} onApplyCustom={applySavedTableTemplate} onDeleteCustom={deleteSavedTableTemplate} />, document.body)}
+    {!isTableCard && !isTextCard && activePanel === "template" && templateMenuPos && createPortal(<ChartTemplateGallery currentTemplateId={chartStyle.templateId} position={templateMenuPos} onApply={applyBuiltInChartTemplate} />, document.body)}
     {operationsOpen && activePanel === "style" && <div className={`absolute right-4 z-30 grid max-h-[calc(100%-4rem)] w-[min(17.5rem,calc(100%-2rem))] grid-cols-2 gap-0.5 overflow-y-auto overflow-x-hidden rounded-lg border border-[#dce7df] bg-white p-1 shadow-lg shadow-black/[0.08] ${isTextCard ? "top-11" : "top-12"}`} data-visual-style-menu="true" data-visual-style-layout="two-column" data-visual-interactive="true">{visualizationOptions.map((option) => <button key={option.type} type="button" onClick={() => { applyType(option.type); trackVisual("visualization_result", { action: "style", chart_type: option.type }); setActivePanel(null); }} className={`flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12px] ${option.type === cardType ? "bg-[#eaf7ef] text-[#178a53]" : "text-[#636366] hover:bg-[#f5faf7]"}`}><option.icon className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{option.label}</span></button>)}</div>}
     {operationsOpen && activePanel === "metric" && <FieldPanel title="指标" fields={metricFields} candidates={numericFields} labels={fieldLabels} reorder={metricReorder} onToggle={(field) => { const next = toggleVisualizationField("metric", cardType, metricFields, field); setMetricFields(next); trackVisual("visualization_result", { action: "metric", metric_fields: next, changed_field: field }); }} />}
     {operationsOpen && activePanel === "dimension" && <FieldPanel title="维度" fields={dimensionFields} candidates={dimensionCandidates} labels={fieldLabels} reorder={dimensionReorder} onToggle={(field) => { const next = toggleVisualizationField("dimension", cardType, dimensionFields, field); setDimensionFields(next); trackVisual("visualization_result", { action: "dimension", dimension_fields: next, changed_field: field }); }} />}
     {voiceNoticeVisible && (voice.listening || voice.error || commandNotice || voice.transcript) && <div className="absolute right-4 top-12 z-40 max-w-[280px] rounded-lg border border-[#dce7df] bg-white px-3 py-2 text-[10px] leading-4 text-[#53615a] shadow-lg" role="status" data-visual-voice-notice="true" data-visual-interactive="true">{voice.listening ? (isTextCard ? "正在将语音转写到文本框…" : "正在听取样式、指标或维度指令…") : voice.error || commandNotice || voice.transcript}</div>}
     {tableNotice ? <div className="mb-2 rounded-lg border border-[#ead7b8] bg-[#fff8ee] px-3 py-2 text-[11px] leading-5 text-[#8a6a2b]" role="alert" data-visual-table-freeze-notice="true">{tableNotice}</div> : null}
     {commentPoint && <button type="button" aria-label="评论可视化" onClick={() => { onComment(); setCommentPoint(null); }} className="absolute z-40 flex h-8 w-8 items-center justify-center rounded-full bg-[#178a53] text-white shadow-lg shadow-black/20 outline-none hover:bg-[#117847] focus-visible:outline-none" style={commentPoint} data-visual-comment-action="true" data-visual-interactive="true"><MessageSquareText className="h-4 w-4" /></button>}
-    {tableHeaderMenu && createPortal(<div className="fixed z-[200] w-[210px] rounded-xl border border-[#dce7df] bg-white p-1.5 shadow-xl shadow-black/10" style={{ left: tableHeaderMenu.left, top: tableHeaderMenu.top }} data-visual-table-header-menu={tableHeaderMenu.field} data-visual-interactive="true">
-      <button type="button" onClick={() => { onComment({ selectedText: fieldLabels[tableHeaderMenu.field] || tableHeaderMenu.field }); setTableHeaderMenu(null); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-table-header-comment="true"><MessageSquareText className="h-3.5 w-3.5 text-[#178a53]" />评论</button>
-      <button type="button" aria-pressed={mergedDimensionFields.includes(tableHeaderMenu.field)} onClick={() => { setMergedDimensionFields((current) => { const next = current.includes(tableHeaderMenu.field) ? current.filter((field) => field !== tableHeaderMenu.field) : [...current, tableHeaderMenu.field]; if (next.length) { setFrozenColumnFields([]); setFrozenRowKeys([]); } return next; }); setTableHeaderMenu(null); }} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-merge-dimension={tableHeaderMenu.field}><span>{mergedDimensionFields.includes(tableHeaderMenu.field) ? "取消合并重复单元格" : "合并重复单元格"}</span>{mergedDimensionFields.includes(tableHeaderMenu.field) && <Check className="h-3.5 w-3.5 text-[#178a53]" />}</button>
-      <button type="button" aria-pressed={frozenColumnFields.includes(tableHeaderMenu.field)} onClick={() => toggleFrozenColumn(tableHeaderMenu.field)} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-freeze-column={tableHeaderMenu.field}><span>{frozenColumnFields.includes(tableHeaderMenu.field) ? "取消冻结到首列" : "冻结到首列"}</span>{frozenColumnFields.includes(tableHeaderMenu.field) ? <Check className="h-3.5 w-3.5 text-[#178a53]" /> : <Pin className="h-3.5 w-3.5 text-[#8aa396]" />}</button>
+    {tableHeaderMenu && createPortal(<div className="fixed z-[200] w-[210px] rounded-xl border border-[#dce7df] bg-white p-1.5 shadow-xl shadow-black/10" style={{ left: tableHeaderMenu.left, top: tableHeaderMenu.top }} data-visual-table-header-menu={tableHeaderMenu.field} data-visual-table-header-kind={tableHeaderMenu.kind} data-visual-interactive="true">
+      <button type="button" onClick={() => { onComment({ selectedText: tableHeaderMenu.kind === "calculated" ? headerCalculatedColumn?.name || "新增列" : `${fieldLabels[tableHeaderMenu.field] || tableHeaderMenu.field}${tableHeaderMenu.kind === "rank" ? "-排名" : ""}` }); setTableHeaderMenu(null); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-table-header-comment="true"><MessageSquareText className="h-3.5 w-3.5 text-[#178a53]" />评论</button>
+      {tableHeaderMenu.kind === "rank" ? <>
+        <button type="button" aria-pressed={headerRanking?.direction === "desc"} onClick={() => setRankingDirection(tableHeaderMenu.field, "desc")} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-rank-direction="desc"><span>从大到小</span>{headerRanking?.direction === "desc" && <Check className="h-3.5 w-3.5 text-[#178a53]" />}</button>
+        <button type="button" aria-pressed={headerRanking?.direction === "asc"} onClick={() => setRankingDirection(tableHeaderMenu.field, "asc")} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-rank-direction="asc"><span>从小到大</span>{headerRanking?.direction === "asc" && <Check className="h-3.5 w-3.5 text-[#178a53]" />}</button>
+      </> : <>
+        {tableHeaderMenu.kind === "metric" && <button type="button" aria-pressed={Boolean(headerRanking)} onClick={() => toggleRanking(tableHeaderMenu.field)} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-metric-ranking={tableHeaderMenu.field}><span className="inline-flex items-center gap-2"><ArrowUpDown className="h-3.5 w-3.5 text-[#178a53]" />{headerRanking ? "取消排名" : "排名"}</span>{headerRanking && <Check className="h-3.5 w-3.5 text-[#178a53]" />}</button>}
+        {tableHeaderMenu.kind === "metric" && <button type="button" aria-pressed={Boolean(headerProgress)} onClick={() => { setProgressDialogMetric(tableHeaderMenu.field); setTableHeaderMenu(null); }} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-metric-progress={tableHeaderMenu.field}><span className="inline-flex items-center gap-2"><SlidersHorizontal className="h-3.5 w-3.5 text-[#178a53]" />显示进度</span>{headerProgress && <Check className="h-3.5 w-3.5 text-[#178a53]" />}</button>}
+        {tableHeaderMenu.kind === "metric" && <button type="button" aria-pressed={Boolean(headerMetricFormat?.percent)} onClick={() => toggleMetricPercent(tableHeaderMenu.field)} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-metric-percent={tableHeaderMenu.field}><span className="inline-flex items-center gap-2"><Percent className="h-3.5 w-3.5 text-[#178a53]" />{headerMetricFormat?.percent ? "隐藏百分号" : "显示百分号"}</span>{headerMetricFormat?.percent && <Check className="h-3.5 w-3.5 text-[#178a53]" />}</button>}
+        {tableHeaderMenu.kind === "metric" && <div className="flex min-h-8 w-full items-center justify-between gap-2 rounded-lg px-2.5 text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-metric-decimals={tableHeaderMenu.field}>
+          <button type="button" onClick={() => openDecimalPlacesEditor(tableHeaderMenu.field)} className="flex min-w-0 flex-1 items-center gap-2 py-2 text-left"><span className="inline-flex h-3.5 min-w-3.5 items-center justify-center text-[8px] font-semibold text-[#178a53]">.0</span>小数点位数</button>
+          {decimalEditorMetric === tableHeaderMenu.field ? <input autoFocus type="number" min={0} max={8} step={1} value={decimalPlacesDraft} placeholder="2" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => setDecimalPlacesDraft(event.target.value.replace(/\D/g, "").slice(0, 1))} onBlur={() => commitDecimalPlaces(tableHeaderMenu.field)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setDecimalEditorMetric(null); event.currentTarget.blur(); } }} aria-label="小数点后位数" className="h-6 w-10 rounded border border-[#cfded5] bg-white px-1 text-center text-[10px] tabular-nums text-[#34443c] outline-none focus:border-[#78ab8e]" data-visual-metric-decimal-input={tableHeaderMenu.field} /> : <span className="text-[9px] tabular-nums text-[#94a099]">{headerMetricFormat?.decimalPlaces ?? "设置"}</span>}
+        </div>}
+        {cardType === "table" && tableHeaderMenu.kind === "dimension" && <button type="button" aria-pressed={mergedDimensionFields.includes(tableHeaderMenu.field)} onClick={() => { setMergedDimensionFields((current) => { const next = current.includes(tableHeaderMenu.field) ? current.filter((field) => field !== tableHeaderMenu.field) : [...current, tableHeaderMenu.field]; if (next.length) { setFrozenColumnFields([]); setFrozenRowKeys([]); } return next; }); setTableHeaderMenu(null); }} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-merge-dimension={tableHeaderMenu.field}><span>{mergedDimensionFields.includes(tableHeaderMenu.field) ? "取消合并重复单元格" : "合并重复单元格"}</span>{mergedDimensionFields.includes(tableHeaderMenu.field) && <Check className="h-3.5 w-3.5 text-[#178a53]" />}</button>}
+        {cardType === "table" && tableHeaderMenu.kind !== "calculated" && <button type="button" aria-pressed={frozenColumnFields.includes(tableHeaderMenu.field)} onClick={() => toggleFrozenColumn(tableHeaderMenu.field)} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-freeze-column={tableHeaderMenu.field}><span>{frozenColumnFields.includes(tableHeaderMenu.field) ? "取消冻结到首列" : "冻结到首列"}</span>{frozenColumnFields.includes(tableHeaderMenu.field) ? <Check className="h-3.5 w-3.5 text-[#178a53]" /> : <Pin className="h-3.5 w-3.5 text-[#8aa396]" />}</button>}
+      </>}
+      <div className="my-1 h-px bg-[#edf1ee]" />
+      <button type="button" onClick={() => insertCalculatedColumn("left")} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-insert-column="left"><ArrowLeftToLine className="h-3.5 w-3.5 text-[#6f8f7e]" />向左新增一列</button>
+      <button type="button" onClick={() => insertCalculatedColumn("right")} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-insert-column="right"><ArrowRightToLine className="h-3.5 w-3.5 text-[#6f8f7e]" />向右新增一列</button>
+      {tableHeaderMenu.kind === "calculated" && <button type="button" onClick={openCalculationRule} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-calculation-rule="true"><Calculator className="h-3.5 w-3.5 text-[#6f8f7e]" />计算规则</button>}
     </div>, document.body)}
     {tableRowMenu && createPortal(<div className="fixed z-[200] w-[188px] rounded-xl border border-[#dce7df] bg-white p-1.5 shadow-xl shadow-black/10" style={{ left: tableRowMenu.left, top: tableRowMenu.top }} data-visual-table-row-menu={tableRowMenu.rowKey} data-visual-interactive="true">
       <button type="button" aria-pressed={frozenRowKeys.includes(tableRowMenu.rowKey)} onClick={() => toggleFrozenRow(tableRowMenu.rowKey)} className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] text-[#53615a] hover:bg-[#f5faf7]" data-visual-freeze-row={tableRowMenu.rowKey}><span>{frozenRowKeys.includes(tableRowMenu.rowKey) ? "取消冻结到首行" : "冻结到首行"}</span>{frozenRowKeys.includes(tableRowMenu.rowKey) ? <Check className="h-3.5 w-3.5 text-[#178a53]" /> : <Pin className="h-3.5 w-3.5 text-[#8aa396]" />}</button>
     </div>, document.body)}
-    <div ref={chartAreaRef} className={fillHeight ? `flex min-h-0 flex-1 flex-col ${isTableCard ? "overflow-hidden" : "overflow-auto"}` : ""} onWheelCapture={isTextCard || isTableCard ? undefined : passWheelToPage} data-chart-wheel-passthrough={isTextCard || isTableCard ? undefined : "true"} data-visual-table-region={isTableCard ? "true" : undefined}>{isTextCard ? <VisualNoteFields title={noteTitle} body={noteBody} items={noteItems} titleHidden={true} fields={fields} metricFields={metricFields} dimensionFields={dimensionFields} labels={fieldLabels} uploadContext={{ tenantId, userId, reportId: `visual-note-${stateKey}`, blockId: String(id) }} onTitleChange={(value) => { setNoteTitle(value); onTitleChange?.(value || title); }} onBodyChange={setNoteBody} onItemsChange={setNoteItems} onHideTitle={() => setNoteTitleHidden(true)} onOpenComment={(selectedText) => onComment({ selectedText })} onOpenAnalysis={(selectedText) => onFollowUp({ selectedText, dataTables: analysisSource })} /> : <VisualizationRenderer type={cardType} rows={rows} metricFields={metricFields} dimensionFields={dimensionFields} mergedDimensionFields={mergedDimensionFields} frozenColumnFields={frozenColumnFields} frozenRowKeys={frozenRowKeys} filters={filters} filterGroups={filterGroups} sumFilteredRows={sumFilteredRows} comboLineFields={comboLineFields} onComboLineFieldsChange={setComboLineFields} onMetricFieldsChange={setMetricFields} onDimensionFieldsChange={setDimensionFields} onDimensionHeaderContextMenu={revealTableHeaderMenu} onRowContextMenu={revealTableRowMenu} metricReorder={metricReorder} compact={compact} showData={showData} fillHeight={fillHeight} />}</div>
+    {progressDialogMetric && <TableProgressDialog rows={rows} metricField={progressDialogMetric} metricFields={metricFields} dimensionFields={dimensionFields} labels={fieldLabels} initial={metricProgress.find((item) => item.metricField === progressDialogMetric)} onCancel={() => setProgressDialogMetric(null)} onRemove={() => { setMetricProgress((current) => current.filter((item) => item.metricField !== progressDialogMetric)); setProgressDialogMetric(null); }} onSave={(config) => { setMetricProgress((current) => [...current.filter((item) => item.metricField !== progressDialogMetric), config]); setProgressDialogMetric(null); }} />}
+    {calculationDialogColumnId && calculatedColumns.find((column) => column.id === calculationDialogColumnId) && <TableCalculatedColumnDialog initial={calculatedColumns.find((column) => column.id === calculationDialogColumnId)!} metricFields={metricFields} labels={fieldLabels} sampleValues={rows[0]?.raw || {}} onCancel={() => setCalculationDialogColumnId(null)} onRemove={() => { setCalculatedColumns((current) => current.filter((column) => column.id !== calculationDialogColumnId)); setCalculationDialogColumnId(null); }} onSave={(column) => { updateCalculatedColumn(column.id, column); setCalculationDialogColumnId(null); }} />}
+    {saveTemplateOpen && isTableCard && <SaveTableTemplateDialog suggestedName={`${title.replace(/\s*·.*$/, "").trim() || "表格"}模板`} onCancel={() => setSaveTemplateOpen(false)} onSave={saveCurrentTableTemplate} />}
+    <div ref={chartAreaRef} className={fillHeight ? `flex min-h-0 flex-1 flex-col ${isTableCard ? "overflow-hidden" : "overflow-auto"}` : ""} style={!isTableCard && !isTextCard ? { backgroundColor: chartStyle.backgroundColor, color: chartStyle.textColor, fontFamily: chartFontFamily(chartStyle.fontFamily), borderRadius: 8 } : undefined} onWheelCapture={isTextCard || isTableCard ? undefined : passWheelToPage} data-chart-wheel-passthrough={isTextCard || isTableCard ? undefined : "true"} data-visual-table-region={isTableCard ? "true" : undefined} data-chart-template-id={!isTableCard && !isTextCard ? chartStyle.templateId : undefined}>{isTextCard ? <VisualNoteFields title={noteTitle} body={noteBody} items={noteItems} titleHidden={true} fields={fields} metricFields={metricFields} dimensionFields={dimensionFields} labels={fieldLabels} uploadContext={{ tenantId, userId, reportId: `visual-note-${stateKey}`, blockId: String(id) }} onTitleChange={(value) => { setNoteTitle(value); onTitleChange?.(value || title); }} onBodyChange={setNoteBody} onItemsChange={setNoteItems} onHideTitle={() => setNoteTitleHidden(true)} onOpenComment={(selectedText) => onComment({ selectedText })} onOpenAnalysis={(selectedText) => onFollowUp({ selectedText, dataTables: analysisSource })} /> : <VisualizationRenderer type={cardType} rows={rows} metricFields={metricFields} dimensionFields={dimensionFields} mergedDimensionFields={mergedDimensionFields} frozenColumnFields={frozenColumnFields} frozenRowKeys={frozenRowKeys} metricRankings={metricRankings} metricFormats={metricFormats} metricProgress={metricProgress} calculatedColumns={calculatedColumns} tableStyle={tableStyle} chartStyle={chartStyle} filters={filters} filterGroups={filterGroups} sumFilteredRows={sumFilteredRows} comboLineFields={comboLineFields} onComboLineFieldsChange={setComboLineFields} onMetricFieldsChange={setMetricFields} onDimensionFieldsChange={setDimensionFields} onCalculatedColumnChange={updateCalculatedColumn} onDimensionHeaderContextMenu={revealTableHeaderMenu} onRowContextMenu={revealTableRowMenu} metricReorder={metricReorder} compact={compact} showData={showData} fillHeight={fillHeight} />}</div>
     <ReorderPreview reorder={metricReorder} /><ReorderPreview reorder={dimensionReorder} />
   </div>;
 }
@@ -695,8 +940,8 @@ function VisualizationFilterPanel({ rows, dimensions, labels, value, sumRows, on
       <div className="space-y-1.5 border-l border-[#d6e5dc] pl-3">{group.rules.map((rule, ruleIndex) => <div key={rule.id} className="relative" data-visual-filter-rule={rule.id}>
         {ruleIndex > 0 && <div className="mb-1 flex items-center gap-2"><span className="-ml-[23px] inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-[#edf5f0] px-1 text-[9px] font-medium text-[#46705c]" data-filter-rule-relation="and">且</span><span className="h-px flex-1 bg-[#edf1ee]" /></div>}
         <div className="grid grid-cols-[minmax(128px,1fr)_118px_minmax(180px,1.35fr)_auto_auto] items-start gap-2">
-          <label className="relative"><span className="sr-only">维度</span><select value={rule.field} onChange={(event) => { setActiveValuesRule(null); updateRule(group.id, rule.id, (current) => ({ ...current, field: event.target.value, values: [] })); }} className="h-9 w-full appearance-none rounded-lg border border-[#dfe7e2] bg-white px-3 pr-7 text-[11px] text-[#34443c] outline-none focus:border-[#8fbaa2] focus:ring-2 focus:ring-[#2b7b5a]/10"><option value="">选择维度</option>{dimensions.map((field) => <option key={field} value={field}>{labels[field] || field}</option>)}</select><ChevronDown className="pointer-events-none absolute right-2.5 top-3 h-3 w-3 text-[#8a9690]" /></label>
-          <label className="relative"><span className="sr-only">算子</span><select value={rule.operator} onChange={(event) => updateRule(group.id, rule.id, (current) => ({ ...current, operator: event.target.value as VisualizationFilterOperator }))} className="h-9 w-full appearance-none rounded-lg border border-[#dfe7e2] bg-white px-3 pr-7 text-[11px] text-[#34443c] outline-none focus:border-[#8fbaa2] focus:ring-2 focus:ring-[#2b7b5a]/10">{visualizationFilterOperators.map((operator) => <option key={operator.value} value={operator.value}>{operator.label}</option>)}</select><ChevronDown className="pointer-events-none absolute right-2.5 top-3 h-3 w-3 text-[#8a9690]" /></label>
+          <label className="relative"><span className="sr-only">维度</span><AppSelect value={rule.field} onChange={(event) => { setActiveValuesRule(null); updateRule(group.id, rule.id, (current) => ({ ...current, field: event.target.value, values: [] })); }} className="h-9 w-full appearance-none pr-7 text-[11px] text-[#34443c]"><option value="">选择维度</option>{dimensions.map((field) => <option key={field} value={field}>{labels[field] || field}</option>)}</AppSelect><ChevronDown className="pointer-events-none absolute right-2.5 top-3 h-3 w-3 text-[#8a9690]" /></label>
+          <label className="relative"><span className="sr-only">算子</span><AppSelect value={rule.operator} onChange={(event) => updateRule(group.id, rule.id, (current) => ({ ...current, operator: event.target.value as VisualizationFilterOperator }))} className="h-9 w-full appearance-none pr-7 text-[11px] text-[#34443c]">{visualizationFilterOperators.map((operator) => <option key={operator.value} value={operator.value}>{operator.label}</option>)}</AppSelect><ChevronDown className="pointer-events-none absolute right-2.5 top-3 h-3 w-3 text-[#8a9690]" /></label>
           <div className="relative"><button type="button" disabled={!rule.field} onClick={(event) => toggleValueMenu(rule.id, event.currentTarget)} className="flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-[#dfe7e2] bg-white px-3 text-left text-[11px] text-[#34443c] outline-none hover:border-[#bdd2c5] focus:border-[#8fbaa2] focus:ring-2 focus:ring-[#2b7b5a]/10 disabled:cursor-not-allowed disabled:bg-[#f7f8f8] disabled:text-[#b2b8b4]" aria-expanded={activeValuesRule === rule.id} data-visual-filter-value-trigger={rule.id}><span className="truncate">{rule.values.length ? (rule.values.length <= 2 ? rule.values.join("、") : `已选 ${rule.values.length} 项`) : "选择具体值"}</span><ChevronDown className="h-3 w-3 shrink-0 text-[#8a9690]" /></button>{activeValuesRule === rule.id && valueMenuPosition && createPortal(<div className="fixed z-[120] rounded-lg border border-[#dce7df] bg-white p-1.5 shadow-xl shadow-black/[0.12]" style={{ left: valueMenuPosition.left, top: valueMenuPosition.top, width: valueMenuPosition.width, transform: valueMenuPosition.openAbove ? "translateY(-100%)" : undefined }} data-visual-filter-value-menu="true" data-visual-filter-panel="true" onPointerDown={(event) => event.stopPropagation()}><div className="max-h-44 overflow-y-auto">{visualizationFilterValues(rows, rule.field).length ? visualizationFilterValues(rows, rule.field).map((option) => { const checked = rule.values.includes(option); return <button key={option} type="button" onClick={() => toggleValue(group.id, rule, option)} className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[10px] ${checked ? "bg-[#edf6f1] text-[#286e51]" : "text-[#53615a] hover:bg-[#f6f8f7]"}`}><span className={`inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${checked ? "border-[#5f9278] bg-[#5f9278] text-white" : "border-[#cfd9d3] bg-white"}`}>{checked && <Check className="h-2.5 w-2.5" />}</span><span className="truncate">{option}</span></button>; }) : <div className="px-2 py-5 text-center text-[10px] text-[#8a9690]">当前维度暂无可选值</div>}</div><button type="button" onClick={closeValueMenu} className="mt-1 h-7 w-full rounded-md bg-[#f4f7f5] text-[10px] text-[#4e675a] hover:bg-[#edf3ef]">完成</button></div>, document.body)}</div>
           <button type="button" onClick={() => { setActiveValuesRule(null); addRule(group.id, rule.id); }} className="inline-flex h-9 items-center gap-1 whitespace-nowrap rounded-lg px-2 text-[10px] font-medium text-[#2c7053] hover:bg-[#edf6f1]"><Plus className="h-3.5 w-3.5" />添加筛选</button>
           <button type="button" onClick={() => removeRule(group.id, rule.id)} className="inline-flex h-9 w-8 items-center justify-center rounded-lg text-[#9aa49f] hover:bg-white hover:text-[#b14f4f]" aria-label="删除筛选"><Trash2 className="h-3.5 w-3.5" /></button>
@@ -782,15 +1027,21 @@ type ResultTableProps = {
   mergedDimensionFields?: string[];
   frozenColumnFields?: string[];
   frozenRowKeys?: string[];
+  metricRankings?: VisualizationMetricRankConfig[];
+  metricFormats?: VisualizationMetricFormatConfig[];
+  metricProgress?: VisualizationMetricProgressConfig[];
+  calculatedColumns?: VisualizationCalculatedColumnConfig[];
+  tableStyle?: VisualizationTableStyleConfig;
+  onCalculatedColumnChange?: (id: string, patch: Partial<VisualizationCalculatedColumnConfig>) => void;
   onDimensionFieldsChange?: (fields: string[]) => void;
   onMetricFieldsChange?: (fields: string[]) => void;
-  onDimensionHeaderContextMenu?: (field: string, event: ReactMouseEvent<HTMLTableCellElement>) => void;
+  onDimensionHeaderContextMenu?: (target: VisualTableHeaderTarget, event: ReactMouseEvent<HTMLTableCellElement>) => void;
   onRowContextMenu?: (rowKey: string, event: ReactMouseEvent<HTMLTableCellElement>) => void;
   fillHeight?: boolean;
   compact?: boolean;
 };
 
-function ResultTable({ rows, emptyLabel, dimensionFields, metricFields, mergedDimensionFields = [], frozenColumnFields = [], frozenRowKeys = [], onDimensionFieldsChange, onMetricFieldsChange, onDimensionHeaderContextMenu, onRowContextMenu, fillHeight, compact }: ResultTableProps) {
+function ResultTable({ rows, emptyLabel, dimensionFields, metricFields, mergedDimensionFields = [], frozenColumnFields = [], frozenRowKeys = [], metricRankings = [], metricFormats = [], metricProgress = [], calculatedColumns = [], tableStyle, onCalculatedColumnChange, onDimensionFieldsChange, onMetricFieldsChange, onDimensionHeaderContextMenu, onRowContextMenu, fillHeight, compact }: ResultTableProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   useVisualTableScrollLock(scrollerRef);
   const instance = useId();
@@ -798,6 +1049,7 @@ function ResultTable({ rows, emptyLabel, dimensionFields, metricFields, mergedDi
   const controlled = Boolean(dimensionFields && metricFields);
   const [localFields, setLocalFields] = useState(availableFields);
   const [sortState, setSortState] = useState<TableSortState>(null);
+  const [editingCalculatedColumn, setEditingCalculatedColumn] = useState<string | null>(null);
   const fields = controlled ? orderedTableFields(dimensionFields || [], metricFields || [], frozenColumnFields) : [...frozenColumnFields.filter((field) => localFields.includes(field)), ...localFields.filter((field) => !frozenColumnFields.includes(field))];
   const rowEntries = useMemo(() => rows.map((row, index) => ({ key: tableRowKey(row, index), row, index })), [rows]);
   const availableRowKeys = useMemo(() => rowEntries.map((entry) => entry.key), [rowEntries]);
@@ -810,79 +1062,144 @@ function ResultTable({ rows, emptyLabel, dimensionFields, metricFields, mergedDi
   useEffect(() => setRowKeys((current) => reconcileFields(current, availableRowKeys, availableRowKeys)), [availableRowKeys.join("\u0000")]);
   useEffect(() => setSortState((current) => current && fields.includes(current.field) ? current : null), [fields.join("\u0000")]);
   const pinnedRowKeys = frozenRowKeys.filter((key) => rowByKey.has(key));
-  const orderedRows = useMemo(() => {
-    const rest = rowKeys.filter((key) => !pinnedRowKeys.includes(key));
-    return [...pinnedRowKeys, ...rest].map((key) => rowByKey.get(key)).filter((row): row is AnalysisRow => Boolean(row));
-  }, [pinnedRowKeys.join("\u0000"), rowByKey, rowKeys]);
+  const orderedRows = useMemo(() => [...pinnedRowKeys, ...rowKeys.filter((key) => !pinnedRowKeys.includes(key))].map((key) => rowByKey.get(key)).filter((row): row is AnalysisRow => Boolean(row)), [pinnedRowKeys.join("\u0000"), rowByKey, rowKeys]);
   const localReorder = useRightPressReorder(localFields, setLocalFields, `${instance}-columns`);
   const dimensionReorder = useRightPressReorder(dimensionFields || [], (updater) => onDimensionFieldsChange?.(updater(dimensionFields || [])), `${instance}-dimensions`, (field) => rows[0]?.fieldLabels[field] || field);
   const metricReorder = useRightPressReorder(metricFields || [], (updater) => onMetricFieldsChange?.(updater(metricFields || [])), `${instance}-metrics`, (field) => rows[0]?.fieldLabels[field] || field);
   const rowReorder = useRightPressReorder(rowKeys, setRowKeys, `${instance}-rows`, (key) => orderedRows.find((row, index) => tableRowKey(row, index) === key)?.branch || "表格行");
   const fieldLabels = rows[0]?.fieldLabels || {};
   const fieldMetadata = rows[0]?.fieldMetadata || {};
+  const normalizedTableStyle = normalizeVisualizationTableStyle(tableStyle);
   const controllerFor = (field: string) => !controlled ? localReorder : dimensionFields?.includes(field) ? dimensionReorder : metricReorder;
-  const sortedRows = useMemo(() => sortTableRows(
-    groupRowsForMergedDimensions(orderedRows, dimensionFields || [], mergedDimensionFields),
-    sortState,
-  ), [dimensionFields, mergedDimensionFields, orderedRows, sortState]);
+  const sortedRows = useMemo(() => sortTableRows(groupRowsForMergedDimensions(orderedRows, dimensionFields || [], mergedDimensionFields), sortState), [dimensionFields, mergedDimensionFields, orderedRows, sortState]);
   const displayedRows = useMemo(() => {
     if (!pinnedRowKeys.length) return sortedRows;
     const pinned = pinnedRowKeys.map((key) => rowByKey.get(key)).filter((row): row is AnalysisRow => Boolean(row));
     const pinnedSet = new Set(pinned);
     return [...pinned, ...sortedRows.filter((row) => !pinnedSet.has(row))];
   }, [pinnedRowKeys, rowByKey, sortedRows]);
+  const rankingByMetric = useMemo(() => new Map(metricRankings.map((config) => [config.metricField, ordinalRanks(orderedRows, (row) => row.raw[config.metricField], config.direction)])), [metricRankings, orderedRows]);
+  const formatByMetric = useMemo(() => new Map(metricFormats.map((config) => [config.metricField, config])), [metricFormats]);
+  const progressByMetric = useMemo(() => new Map(metricProgress.map((config) => [config.metricField, { config, denominator: resolveProgressDenominator(rows, config, rows.map((row) => row.raw[config.metricField])) }])), [metricProgress, rows]);
+  const calculatedEvaluators = useMemo(() => new Map(calculatedColumns.map((column) => [column.id, compileVisualizationFormula(column.expression, metricFields || [], fieldLabels)])), [calculatedColumns, fieldLabels, metricFields]);
+  const displayColumns = useMemo(() => {
+    const columns: Array<{ key: string; field: string; kind: "field" | "rank" | "calculated"; calculated?: VisualizationCalculatedColumnConfig }> = fields.flatMap((field) => [{ key: field, field, kind: "field" as const }, ...(rankingByMetric.has(field) ? [{ key: `${field}::rank`, field, kind: "rank" as const }] : [])]);
+    calculatedColumns.forEach((calculated) => columns.splice(Math.max(0, Math.min(calculated.position, columns.length)), 0, { key: `calculated::${calculated.id}`, field: calculated.id, kind: "calculated", calculated }));
+    return columns;
+  }, [calculatedColumns, fields, rankingByMetric]);
+  const associationPresentationFor = (row: AnalysisRow, targetField: string) => {
+    const style: { backgroundColor?: string; color?: string } = {};
+    let replacementValue: string | undefined;
+    progressByMetric.forEach(({ config, denominator }) => {
+      const percentage = progressPercentage(row.raw[config.metricField], denominator.value);
+      config.associationRules.forEach((rule) => {
+        if (rule.targetField !== targetField || !associationRuleMatches(rule, row.raw[config.metricField], percentage)) return;
+        if (rule.style === "text") style.color = rule.color;
+        else if (rule.style === "background") style.backgroundColor = rule.color;
+        else replacementValue = rule.replacementValue || "";
+      });
+    });
+    return { style, replacementValue };
+  };
   useLayoutEffect(() => {
     const root = scrollerRef.current;
     if (!root) return;
     const lefts: number[] = [];
     let left = 0;
-    frozenColumnFields.forEach((field) => {
-      lefts.push(left);
-      const cell = root.querySelector(`[data-visual-table-field="${cssEscape(field)}"]`);
-      left += cell instanceof HTMLElement ? cell.getBoundingClientRect().width : 0;
-    });
+    frozenColumnFields.forEach((field) => { lefts.push(left); const cell = root.querySelector(`[data-visual-table-field="${cssEscape(field)}"]:not([data-visual-table-rank-header])`); left += cell instanceof HTMLElement ? cell.getBoundingClientRect().width : 0; });
     setColumnLefts(lefts);
     const header = root.querySelector("thead tr");
     const headerHeight = header instanceof HTMLElement ? header.getBoundingClientRect().height : 0;
     const tops: number[] = [];
     let top = headerHeight;
-    pinnedRowKeys.forEach((key) => {
-      tops.push(top);
-      const row = root.querySelector(`[data-visual-table-row="${cssEscape(key)}"]`);
-      top += row instanceof HTMLElement ? row.getBoundingClientRect().height : 0;
-    });
+    pinnedRowKeys.forEach((key) => { tops.push(top); const row = root.querySelector(`[data-visual-table-row="${cssEscape(key)}"]`); top += row instanceof HTMLElement ? row.getBoundingClientRect().height : 0; });
     setRowTops(tops);
-  }, [displayedRows.length, fields.join("\u0000"), frozenColumnFields.join("\u0000"), pinnedRowKeys.join("\u0000")]);
-  return <div ref={scrollerRef} className={`min-h-0 overflow-auto overscroll-contain rounded-lg border border-[#edf1ee] bg-white ${fillHeight ? "min-h-0 flex-1" : compact ? "max-h-[220px]" : "max-h-[300px]"}`} style={{ overscrollBehavior: "none" }} data-visual-table-scroll="true" data-table-long-press-reorder="true">
+  }, [calculatedColumns, displayedRows.length, fields.join("\u0000"), frozenColumnFields.join("\u0000"), pinnedRowKeys.join("\u0000")]);
+  return <div ref={scrollerRef} className={`min-h-0 overflow-auto overscroll-contain rounded-lg border border-[#edf1ee] bg-white ${fillHeight ? "min-h-0 flex-1" : compact ? "max-h-[220px]" : "max-h-[300px]"}`} style={{ overscrollBehavior: "none", ...tableThemeVariables(normalizedTableStyle) }} data-visual-table-scroll="true" data-table-long-press-reorder="true" data-visual-table-theme="true" data-table-template-id={normalizedTableStyle.templateId} data-table-banded={normalizedTableStyle.bandedRows ? "true" : "false"} data-table-first-column={normalizedTableStyle.emphasizeFirstColumn ? "true" : "false"} data-table-density={normalizedTableStyle.density}>
     <table className="w-full border-separate border-spacing-0 text-[12px]">
-      <thead className="sticky top-0 z-20 bg-[#f5faf7]" data-visual-table-frozen-header="true"><tr className="text-[#6f8177]">{fields.map((field, fieldIndex) => {
-        const reorder = controllerFor(field);
+      <thead className="sticky top-0 z-20 bg-[#f5faf7]" data-visual-table-frozen-header="true"><tr className="text-[#6f8177]">{displayColumns.map((column, columnIndex) => {
+        const { field } = column;
+        const rank = column.kind === "rank";
+        const calculated = column.kind === "calculated";
+        const reorder = calculated ? null : controllerFor(field);
         const dimension = Boolean(controlled && dimensionFields?.includes(field));
-        const frozen = frozenColumnFields.includes(field);
+        const frozen = !rank && !calculated && frozenColumnFields.includes(field);
         const frozenIndex = frozenColumnFields.indexOf(field);
         const direction = sortState?.field === field ? sortState.direction : null;
         const SortIcon = direction === "asc" ? ArrowUp : direction === "desc" ? ArrowDown : ArrowUpDown;
         const nextLabel = direction === "asc" ? "切换为倒排" : direction === "desc" ? "恢复原始顺序" : "切换为正排";
-        return <th key={field} data-visual-table-field={field} data-reorder-field={field} data-reorder-group={reorder.group} data-reorder-floating={reorder.floating === field ? "true" : "false"} data-reorder-target={reorder.target === field ? "true" : "false"} data-visual-table-dimension-header={dimension ? field : undefined} data-visual-table-metric-header={!dimension && controlled ? field : undefined} data-visual-table-frozen-column={frozen ? field : undefined} onContextMenu={onDimensionHeaderContextMenu ? (event) => onDimensionHeaderContextMenu(field, event) : undefined} onClick={(event) => { if (reorder.consumeClick()) event.stopPropagation(); }} onPointerDown={(event) => reorder.start(field, event)} onPointerUp={() => reorder.end(true)} onPointerCancel={() => reorder.end(false)} className={`sticky top-0 cursor-grab whitespace-nowrap border-b border-[#edf1ee] px-3 py-2.5 text-left font-medium active:cursor-grabbing ${frozen ? "z-30 bg-[#eef6f1] shadow-[1px_0_0_#dce7df]" : "z-20 bg-[#f5faf7] shadow-[0_1px_0_0_#edf1ee]"} ${reorder.floating === field ? "bg-[#eaf7ef] text-[#178a53] shadow-[inset_0_0_0_1px_#b7ddc3]" : reorder.target === field ? "bg-[#f6fbf8] text-[#178a53] shadow-[inset_2px_0_0_#2ca66f]" : ""}`} style={frozen ? { left: columnLefts[frozenIndex] || 0 } : undefined}><span className="inline-flex items-center gap-1.5"><span>{fieldLabels[field] || field}</span>{frozen ? <Pin className="h-3 w-3 text-[#178a53]" /> : null}<button type="button" onPointerDown={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setSortState((current) => nextTableSortState(current, field)); }} aria-label={`${fieldLabels[field] || field}：${nextLabel}`} title={nextLabel} data-visual-table-sort={field} data-visual-table-sort-direction={direction || "original"} className={`rounded p-0.5 transition-colors hover:bg-white ${direction ? "text-[#178a53]" : "text-[#9aa7a0]"}`}><SortIcon className="h-3 w-3" /></button></span></th>;
+        const floating = Boolean(reorder && reorder.floating === field);
+        const target = Boolean(reorder && reorder.target === field);
+        return <th key={column.key} data-visual-table-field={field} data-reorder-field={rank || calculated ? undefined : field} data-reorder-group={rank || calculated ? undefined : reorder?.group} data-reorder-floating={floating ? "true" : "false"} data-reorder-target={target ? "true" : "false"} data-visual-table-dimension-header={!rank && !calculated && dimension ? field : undefined} data-visual-table-metric-header={!rank && !calculated && !dimension && controlled ? field : undefined} data-visual-table-rank-header={rank ? field : undefined} data-visual-table-calculated-header={calculated ? field : undefined} data-visual-table-frozen-column={frozen ? field : undefined} onContextMenu={onDimensionHeaderContextMenu ? (event) => onDimensionHeaderContextMenu({ field, kind: calculated ? "calculated" : rank ? "rank" : dimension ? "dimension" : "metric", columnIndex }, event) : undefined} onClick={(event) => { if (!rank && !calculated && reorder?.consumeClick()) event.stopPropagation(); }} onPointerDown={(event) => { if (!rank && !calculated) reorder?.start(field, event); }} onPointerUp={() => { if (!rank && !calculated) reorder?.end(true); }} onPointerCancel={() => { if (!rank && !calculated) reorder?.end(false); }} onDoubleClick={() => { if (calculated) setEditingCalculatedColumn(field); }} className={`sticky top-0 whitespace-nowrap border-b border-[#edf1ee] px-3 py-2.5 text-left font-medium ${rank ? "z-20 bg-[#f8faf9] text-[#60756b]" : calculated ? "z-20 cursor-text bg-[#f7f9f8] text-[#496257]" : "cursor-grab active:cursor-grabbing"} ${frozen ? "z-30 bg-[#eef6f1] shadow-[1px_0_0_#dce7df]" : "z-20 shadow-[0_1px_0_0_#edf1ee]"} ${floating ? "bg-[#eaf7ef] text-[#178a53] shadow-[inset_0_0_0_1px_#b7ddc3]" : target ? "bg-[#f6fbf8] text-[#178a53] shadow-[inset_2px_0_0_#2ca66f]" : ""}`} style={frozen ? { left: columnLefts[frozenIndex] || 0 } : undefined}>{calculated && editingCalculatedColumn === field ? <input autoFocus defaultValue={column.calculated?.name || "新增列"} onClick={(event) => event.stopPropagation()} onBlur={(event) => { onCalculatedColumnChange?.(field, { name: event.target.value }); setEditingCalculatedColumn(null); }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") setEditingCalculatedColumn(null); }} className="h-7 w-28 rounded-md border border-[#9fc2ae] bg-white px-2 text-[11px] text-[#34443c] outline-none" aria-label="修改计算列名称" data-calculated-column-name-input={field} /> : <span className="inline-flex items-center gap-1.5"><span>{calculated ? column.calculated?.name || "新增列" : `${fieldLabels[field] || field}${rank ? "-排名" : ""}`}</span>{frozen ? <Pin className="h-3 w-3 text-[#178a53]" /> : null}{!rank && !calculated && <button type="button" onPointerDown={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setSortState((current) => nextTableSortState(current, field)); }} aria-label={`${fieldLabels[field] || field}：${nextLabel}`} title={nextLabel} data-visual-table-sort={field} data-visual-table-sort-direction={direction || "original"} className={`rounded p-0.5 transition-colors hover:bg-white ${direction ? "text-[#178a53]" : "text-[#9aa7a0]"}`}><SortIcon className="h-3 w-3" /></button>}</span>}</th>;
       })}</tr></thead>
       <tbody>{displayedRows.length ? displayedRows.map((row, index) => {
         const originalIndex = originalIndexByRow.get(row) ?? index;
         const rowKey = tableRowKey(row, originalIndex);
         const frozenRow = pinnedRowKeys.includes(rowKey);
         const frozenRowIndex = pinnedRowKeys.indexOf(rowKey);
-        const cellSpans = fields.map((field) => mergedDimensionCellSpan(displayedRows, index, field, dimensionFields || [], mergedDimensionFields));
-        const firstVisibleFieldIndex = Math.max(0, cellSpans.findIndex((span) => span > 0));
-        return <tr key={rowKey} data-visual-table-row={rowKey} data-visual-table-frozen-row={frozenRow ? rowKey : undefined} data-reorder-floating={rowReorder.floating === rowKey ? "true" : "false"} data-reorder-target={rowReorder.target === rowKey ? "true" : "false"} className={`${rowReorder.floating === rowKey ? "bg-[#eaf7ef] shadow-[inset_0_0_0_1px_#b7ddc3]" : rowReorder.target === rowKey ? "bg-[#f6fbf8] shadow-[inset_0_2px_0_#2ca66f]" : frozenRow ? "bg-[#f7fbf9]" : ""}`} style={frozenRow ? { position: "sticky", top: rowTops[frozenRowIndex] || 0, zIndex: 15 } : undefined}>{fields.map((field, fieldIndex) => {
-          const span = cellSpans[fieldIndex];
+        const cellSpans = displayColumns.map((column) => column.kind === "rank" || column.kind === "calculated" ? 1 : mergedDimensionCellSpan(displayedRows, index, column.field, dimensionFields || [], mergedDimensionFields));
+        const firstVisibleColumnIndex = Math.max(0, cellSpans.findIndex((span, columnIndex) => span > 0 && displayColumns[columnIndex].kind === "field"));
+        return <tr key={rowKey} data-visual-table-row={rowKey} data-visual-table-frozen-row={frozenRow ? rowKey : undefined} data-reorder-floating={rowReorder.floating === rowKey ? "true" : "false"} data-reorder-target={rowReorder.target === rowKey ? "true" : "false"} className={`${rowReorder.floating === rowKey ? "bg-[#eaf7ef] shadow-[inset_0_0_0_1px_#b7ddc3]" : rowReorder.target === rowKey ? "bg-[#f6fbf8] shadow-[inset_0_2px_0_#2ca66f]" : frozenRow ? "bg-[#f7fbf9]" : ""}`} style={frozenRow ? { position: "sticky", top: rowTops[frozenRowIndex] || 0, zIndex: 15 } : undefined}>{displayColumns.map((column, columnIndex) => {
+          const span = cellSpans[columnIndex];
           if (span === 0) return null;
-          const frozen = frozenColumnFields.includes(field);
+          const { field } = column;
+          const rank = column.kind === "rank";
+          const calculated = column.kind === "calculated";
+          const frozen = !rank && !calculated && frozenColumnFields.includes(field);
           const frozenIndex = frozenColumnFields.indexOf(field);
-          return <td key={field} rowSpan={span > 1 ? span : undefined} data-table-merged-dimension={span > 1 ? field : undefined} onContextMenu={onRowContextMenu ? (event) => onRowContextMenu(rowKey, event) : undefined} {...(fieldIndex === firstVisibleFieldIndex ? { "data-reorder-field": rowKey, "data-reorder-group": rowReorder.group, onClick: (event: ReactMouseEvent<HTMLTableCellElement>) => { if (rowReorder.consumeClick()) event.stopPropagation(); }, onPointerDown: (event: ReactPointerEvent<HTMLTableCellElement>) => rowReorder.start(rowKey, event), onPointerUp: () => rowReorder.end(true), onPointerCancel: () => rowReorder.end(false) } : {})} className={`whitespace-nowrap border-b border-[#f2f4f3] px-3 py-2.5 align-middle text-[#3a3a3c] ${span > 1 ? "bg-[#f8fbf9] font-medium text-[#265d43]" : frozen || frozenRow ? "bg-[#f7fbf9]" : ""} ${frozen ? "sticky z-[16] shadow-[1px_0_0_#edf1ee]" : ""} ${fieldIndex === firstVisibleFieldIndex ? "cursor-grab active:cursor-grabbing" : ""}`} style={frozen ? { left: columnLefts[frozenIndex] || 0 } : undefined}>{displayRawCell(row.raw[field], fieldMetadata[field])}</td>;
+          const progress = progressByMetric.get(field);
+          const association = calculated ? { style: {}, replacementValue: undefined } : associationPresentationFor(row, field);
+          const calculatedResult = calculated ? calculatedEvaluators.get(field)?.evaluate(row.raw) : undefined;
+          const displayValue = association.replacementValue !== undefined ? association.replacementValue : displayTableMetricValue(row.raw[field], fieldMetadata[field], formatByMetric.get(field));
+          const content = calculated ? (column.calculated?.expression ? calculatedResult?.error ? "-" : calculatedResult?.value === null || calculatedResult?.value === undefined ? "" : new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 6 }).format(calculatedResult.value) : "") : rank ? rankingByMetric.get(field)?.get(row) : progress ? <ProgressMetricValue value={row.raw[field]} metadata={fieldMetadata[field]} format={formatByMetric.get(field)} color={progress.config.color} colorEnd={progress.config.colorEnd} colorMode={progress.config.colorMode} denominator={progress.denominator.value} denominatorStatus={progress.denominator.status} textColor={association.style.color} displayOverride={association.replacementValue} /> : displayValue;
+          return <td key={column.key} rowSpan={span > 1 ? span : undefined} title={calculatedResult?.error || undefined} data-table-merged-dimension={!rank && !calculated && span > 1 ? field : undefined} data-visual-rank-cell={rank ? field : undefined} data-visual-calculated-cell={calculated ? field : undefined} data-visual-progress-cell={!rank && !calculated && progress ? field : undefined} onContextMenu={onRowContextMenu ? (event) => onRowContextMenu(rowKey, event) : undefined} {...(columnIndex === firstVisibleColumnIndex ? { "data-reorder-field": rowKey, "data-reorder-group": rowReorder.group, onClick: (event: ReactMouseEvent<HTMLTableCellElement>) => { if (rowReorder.consumeClick()) event.stopPropagation(); }, onPointerDown: (event: ReactPointerEvent<HTMLTableCellElement>) => rowReorder.start(rowKey, event), onPointerUp: () => rowReorder.end(true), onPointerCancel: () => rowReorder.end(false) } : {})} className={`relative whitespace-nowrap border-b border-[#f2f4f3] px-3 py-2.5 align-middle text-[#3a3a3c] ${rank || calculated ? "text-right tabular-nums text-[#60756b]" : ""} ${!rank && !calculated && span > 1 ? "bg-[#f8fbf9] font-medium text-[#265d43]" : frozen || frozenRow ? "bg-[#f7fbf9]" : ""} ${frozen ? "sticky z-[16] shadow-[1px_0_0_#edf1ee]" : ""} ${columnIndex === firstVisibleColumnIndex ? "cursor-grab active:cursor-grabbing" : ""}`} style={{ ...(frozen ? { left: columnLefts[frozenIndex] || 0 } : {}), ...association.style }}>{content}</td>;
         })}</tr>;
-      }) : <tr><td className="px-3 py-8 text-center text-[#8a8a8e]" colSpan={Math.max(1, fields.length)}>{emptyLabel}</td></tr>}</tbody>
+      }) : <tr><td className="px-3 py-8 text-center text-[#8a8a8e]" colSpan={Math.max(1, displayColumns.length)}>{emptyLabel}</td></tr>}</tbody>
     </table>
     <ReorderPreview reorder={localReorder} /><ReorderPreview reorder={dimensionReorder} /><ReorderPreview reorder={metricReorder} /><ReorderPreview reorder={rowReorder} />
   </div>;
+}
+
+function displayTableMetricValue(value: unknown, metadata?: FieldDisplayMetadata, format?: VisualizationMetricFormatConfig) {
+  if (!format) return displayRawCell(value, metadata);
+  const parsed = typeof value === "number" ? value : Number(String(value ?? "").replace(/,/g, "").replace(/%$/, ""));
+  if (!Number.isFinite(parsed)) return displayRawCell(value, metadata);
+  const scaled = format.percent ? parsed * 100 : parsed;
+  const decimalPlaces = format.decimalPlaces ?? (format.percent ? 2 : undefined);
+  const displayed = decimalPlaces === undefined
+    ? new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 6 }).format(scaled)
+    : new Intl.NumberFormat("zh-CN", { minimumFractionDigits: decimalPlaces, maximumFractionDigits: decimalPlaces }).format(scaled);
+  return `${displayed}${format.percent ? "%" : ""}`;
+}
+
+function ProgressMetricValue({ value, metadata, format, color, colorEnd, colorMode, denominator, denominatorStatus, textColor, displayOverride }: { value: unknown; metadata?: FieldDisplayMetadata; format?: VisualizationMetricFormatConfig; color: string; colorEnd?: string; colorMode?: "gradient" | "reverse_gradient" | "solid"; denominator: number | null; denominatorStatus: string; textColor?: string; displayOverride?: string }) {
+  const percentage = progressPercentage(value, denominator);
+  const width = percentage === null ? 0 : Math.max(0, Math.min(100, percentage));
+  const foreground = textColor || (width >= 88 ? readableTextColor(colorMode === "reverse_gradient" ? color : colorEnd || color) : "var(--sda-table-body-text, #343b37)");
+  const fillStyle = colorMode === "solid" ? { backgroundColor: color } : colorMode === "reverse_gradient" ? { backgroundImage: `linear-gradient(90deg, ${colorEnd || color}, ${color})` } : { backgroundImage: `linear-gradient(90deg, ${color}, ${colorEnd || color})` };
+  return <div className="absolute inset-0 overflow-hidden" title={percentage === null ? `进度不可用：${denominatorStatus}` : `进度 ${percentage.toFixed(2)}%`} data-progress-data-bar="true"><div className="absolute inset-x-2 top-1/2 h-[calc(100%-8px)] min-h-[12px] max-h-[20px] -translate-y-1/2 overflow-hidden rounded-[3px]" data-progress-data-bar-track="true"><div className="h-full rounded-[3px] opacity-80 transition-[width] duration-200" style={{ width: `${width}%`, ...fillStyle }} data-progress-width={width.toFixed(2)} data-progress-fill-mode={colorMode || "gradient"} /></div><span className="relative z-[1] flex h-full items-center justify-end px-3 font-medium tabular-nums" style={{ color: foreground }}>{displayOverride !== undefined ? displayOverride : displayTableMetricValue(value, metadata, format)}</span></div>;
+}
+
+function tableThemeVariables(style: VisualizationTableStyleConfig): CSSProperties {
+  const fontStacks: Record<VisualizationTableStyleConfig["fontFamily"], string> = {
+    system: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    humanist: '"Aptos", "Segoe UI", "PingFang SC", sans-serif',
+    serif: 'Georgia, "Songti SC", serif',
+    mono: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
+  };
+  return {
+    "--sda-table-font": fontStacks[style.fontFamily],
+    "--sda-table-header-bg": style.headerBackground,
+    "--sda-table-header-text": style.headerTextColor,
+    "--sda-table-header-border": style.headerBorderColor,
+    "--sda-table-body-bg": style.bodyBackground,
+    "--sda-table-alt-bg": style.alternateRowBackground,
+    "--sda-table-body-text": style.bodyTextColor,
+    "--sda-table-border": style.borderColor,
+    "--sda-table-accent": style.accentColor,
+    "--sda-table-total-bg": style.totalBackground,
+    "--sda-table-total-text": style.totalTextColor,
+  } as CSSProperties;
 }
 
 function cssEscape(value: string) {
@@ -891,10 +1208,14 @@ function cssEscape(value: string) {
 
 function tableRowKey(row: AnalysisRow, index: number) { return `${row.branch}\u0000${JSON.stringify(row.raw)}\u0000${index}`; }
 
-type VisualizationRendererProps = { type: VisualizationType; rows: AnalysisRow[]; metricFields: string[]; dimensionFields: string[]; mergedDimensionFields: string[]; frozenColumnFields: string[]; frozenRowKeys: string[]; filters: VisualizationFilters; filterGroups: VisualizationFilterGroup[]; sumFilteredRows: boolean; comboLineFields: string[]; onComboLineFieldsChange: (fields: string[]) => void; onMetricFieldsChange: (fields: string[]) => void; onDimensionFieldsChange: (fields: string[]) => void; onDimensionHeaderContextMenu: (field: string, event: ReactMouseEvent<HTMLTableCellElement>) => void; onRowContextMenu: (rowKey: string, event: ReactMouseEvent<HTMLTableCellElement>) => void; metricReorder: ReorderController; compact?: boolean; showData: boolean; fillHeight?: boolean };
+type VisualizationRendererProps = { type: VisualizationType; rows: AnalysisRow[]; metricFields: string[]; dimensionFields: string[]; mergedDimensionFields: string[]; frozenColumnFields: string[]; frozenRowKeys: string[]; metricRankings: VisualizationMetricRankConfig[]; metricFormats: VisualizationMetricFormatConfig[]; metricProgress: VisualizationMetricProgressConfig[]; calculatedColumns: VisualizationCalculatedColumnConfig[]; tableStyle: VisualizationTableStyleConfig; chartStyle: VisualizationChartStyleConfig; filters: VisualizationFilters; filterGroups: VisualizationFilterGroup[]; sumFilteredRows: boolean; comboLineFields: string[]; onComboLineFieldsChange: (fields: string[]) => void; onMetricFieldsChange: (fields: string[]) => void; onDimensionFieldsChange: (fields: string[]) => void; onCalculatedColumnChange: (id: string, patch: Partial<VisualizationCalculatedColumnConfig>) => void; onDimensionHeaderContextMenu: (target: VisualTableHeaderTarget, event: ReactMouseEvent<HTMLTableCellElement>) => void; onRowContextMenu: (rowKey: string, event: ReactMouseEvent<HTMLTableCellElement>) => void; metricReorder: ReorderController; compact?: boolean; showData: boolean; fillHeight?: boolean };
 
-function VisualizationRenderer({ type, rows, metricFields, dimensionFields, mergedDimensionFields, frozenColumnFields, frozenRowKeys, filters, filterGroups, sumFilteredRows, comboLineFields, onComboLineFieldsChange, onMetricFieldsChange, onDimensionFieldsChange, onDimensionHeaderContextMenu, onRowContextMenu, metricReorder, compact, showData, fillHeight }: VisualizationRendererProps) {
-  const height = fillHeight ? "100%" : compact ? 220 : 300;
+function VisualizationRenderer({ type, rows, metricFields, dimensionFields, mergedDimensionFields, frozenColumnFields, frozenRowKeys, metricRankings, metricFormats, metricProgress, calculatedColumns, tableStyle, chartStyle, filters, filterGroups, sumFilteredRows, comboLineFields, onComboLineFieldsChange, onMetricFieldsChange, onDimensionFieldsChange, onCalculatedColumnChange, onDimensionHeaderContextMenu, onRowContextMenu, metricReorder, compact, showData, fillHeight }: VisualizationRendererProps) {
+  const normalizedChartStyle = normalizeVisualizationChartStyle(chartStyle);
+  const heightScale = normalizedChartStyle.chartHeight === "compact" ? -36 : normalizedChartStyle.chartHeight === "expanded" ? 48 : 0;
+  const height = fillHeight ? "100%" : Math.max(184, (compact ? 220 : 300) + heightScale);
+  const barSize = (compact ? 16 : 22) + (normalizedChartStyle.barWidth === "slim" ? -5 : normalizedChartStyle.barWidth === "wide" ? 6 : 0);
+  const chartColor = (index: number) => normalizedChartStyle.palette[index % normalizedChartStyle.palette.length];
   const [seriesMenu, setSeriesMenu] = useState<string | null>(null);
   const [scatterAxis, setScatterAxis] = useState<"x" | "y" | null>(null);
   const fieldLabels = rows[0]?.fieldLabels || {};
@@ -904,52 +1225,52 @@ function VisualizationRenderer({ type, rows, metricFields, dimensionFields, merg
   const visiblePoints = selectVisibleVisualPoints(points, type, compact);
   const chartData = visiblePoints.map((point) => ({ category: point.label, ...point.values }));
   const filteredRows = filterVisualizationRows(rows, filters, filterGroups);
-  const tick = { fontSize: 10, fill: "#8a9690" };
+  const tick = { fontSize: 10, fill: normalizedChartStyle.mutedTextColor, fontFamily: chartFontFamily(normalizedChartStyle.fontFamily) };
   const label = (field: string) => fieldLabels[field] || field;
   const format = (field: string, value: unknown) => formatFieldValue(value, fieldMetadata[field]);
-  const common = <><CartesianGrid stroke="#edf1ee" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="category" tick={tick} tickLine={false} axisLine={false} interval="preserveStartEnd" /><YAxis tick={tick} tickLine={false} axisLine={false} /><Tooltip content={<MetricTooltip definition={metricDefinition} fieldMetadata={fieldMetadata} />} /><Legend wrapperStyle={{ fontSize: 10, color: "#53615a" }} /></>;
+  const common = <><CartesianGrid stroke={normalizedChartStyle.gridColor} strokeDasharray="3 3" vertical={false} /><XAxis dataKey="category" tick={tick} tickLine={false} axisLine={{ stroke: normalizedChartStyle.axisColor }} interval="preserveStartEnd" /><YAxis tick={tick} tickLine={false} axisLine={false} /><Tooltip content={<MetricTooltip definition={metricDefinition} fieldMetadata={fieldMetadata} />} /><Legend wrapperStyle={{ fontSize: 10, color: normalizedChartStyle.mutedTextColor, fontFamily: chartFontFamily(normalizedChartStyle.fontFamily) }} /></>;
   if (type === "text") return null;
   if (!rows.length || !metricFields.length) return null;
 
   if (type === "kpi") {
     const cards = dimensionFields.length ? visiblePoints.flatMap((point) => metricFields.map((field) => ({ key: `${point.key}-${field}`, field, name: `${label(field)} · ${point.label}`, value: point.values[field] || 0 }))) : metricFields.map((field) => ({ key: field, field, name: label(field), value: metricTotal(rows, field, filters, filterGroups) }));
-    return <div className={`overflow-y-auto rounded-lg border border-[#edf1ee] bg-white p-3 ${fillHeight ? "h-full" : "max-h-[300px] min-h-[220px]"}`} data-kpi-scroll="true"><div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2.5">{cards.map((card, index) => <div key={card.key} className="flex h-[112px] min-w-0 flex-col justify-between rounded-xl border border-[#e2ece5] bg-gradient-to-br from-white to-[#f5faf7] p-3 shadow-sm shadow-black/[0.02]"><div className="line-clamp-2 text-[10px] leading-4 text-[#6f8177]">{card.name}</div><div className="text-[25px] font-light tabular-nums text-[#1d1d1f]">{format(card.field, card.value)}</div><div className="h-0.5 w-8 rounded-full" style={{ backgroundColor: chartColor(index) }} /></div>)}</div></div>;
+    return <div className={`overflow-y-auto rounded-lg border p-3 ${fillHeight ? "h-full" : "max-h-[300px] min-h-[220px]"}`} style={{ backgroundColor: normalizedChartStyle.backgroundColor, borderColor: normalizedChartStyle.gridColor }} data-kpi-scroll="true"><div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2.5">{cards.map((card, index) => <div key={card.key} className="flex h-[112px] min-w-0 flex-col justify-between rounded-xl border p-3" style={{ backgroundColor: normalizedChartStyle.plotBackgroundColor, borderColor: normalizedChartStyle.gridColor, borderRadius: Math.max(6, normalizedChartStyle.barRadius + 5) }}><div className="line-clamp-2 text-[10px] leading-4" style={{ color: normalizedChartStyle.mutedTextColor }}>{card.name}</div><div className="text-[25px] font-light tabular-nums" style={{ color: normalizedChartStyle.textColor }}>{format(card.field, card.value)}</div><div className="h-0.5 w-8 rounded-full" style={{ backgroundColor: chartColor(index) }} /></div>)}</div></div>;
   }
-  if (type === "table") return <ResultTable rows={filteredRows.slice(0, 50)} emptyLabel="暂无可视化数据" dimensionFields={dimensionFields} metricFields={metricFields} mergedDimensionFields={mergedDimensionFields} frozenColumnFields={frozenColumnFields} frozenRowKeys={frozenRowKeys} onDimensionFieldsChange={onDimensionFieldsChange} onMetricFieldsChange={onMetricFieldsChange} onDimensionHeaderContextMenu={onDimensionHeaderContextMenu} onRowContextMenu={onRowContextMenu} fillHeight={fillHeight} compact={compact} />;
-  if (type === "pivot") return <PivotTable rows={filteredRows} dimensionFields={dimensionFields} metricFields={metricFields} labels={fieldLabels} fieldMetadata={fieldMetadata} fillHeight={fillHeight} />;
+  if (type === "table") return <ResultTable rows={filteredRows.slice(0, 50)} emptyLabel="暂无可视化数据" dimensionFields={dimensionFields} metricFields={metricFields} mergedDimensionFields={mergedDimensionFields} frozenColumnFields={frozenColumnFields} frozenRowKeys={frozenRowKeys} metricRankings={metricRankings} metricFormats={metricFormats} metricProgress={metricProgress} calculatedColumns={calculatedColumns} tableStyle={tableStyle} onCalculatedColumnChange={onCalculatedColumnChange} onDimensionFieldsChange={onDimensionFieldsChange} onMetricFieldsChange={onMetricFieldsChange} onDimensionHeaderContextMenu={onDimensionHeaderContextMenu} onRowContextMenu={onRowContextMenu} fillHeight={fillHeight} compact={compact} />;
+  if (type === "pivot") return <PivotTable rows={filteredRows} dimensionFields={dimensionFields} metricFields={metricFields} labels={fieldLabels} fieldMetadata={fieldMetadata} metricRankings={metricRankings} metricFormats={metricFormats} metricProgress={metricProgress} calculatedColumns={calculatedColumns} tableStyle={tableStyle} onCalculatedColumnChange={onCalculatedColumnChange} onMetricHeaderContextMenu={onDimensionHeaderContextMenu} fillHeight={fillHeight} />;
   if (type === "line" || type === "area") {
     const Chart = type === "line" ? LineChart : AreaChart;
-    return <ResponsiveContainer width="100%" height={height}><Chart data={chartData} margin={{ top: showData ? 28 : 12, right: 16, left: -18, bottom: 4 }}>{common}{metricFields.map((field, index) => type === "line" ? <Line key={field} type="monotone" dataKey={field} name={label(field)} stroke={chartColor(index)} strokeWidth={2} dot={{ r: 2.5 }}>{showData && <LabelList dataKey={field} position="top" formatter={(value) => format(field, value)} fill={chartColor(index)} fontSize={9} />}</Line> : <Area key={field} type="monotone" dataKey={field} name={label(field)} stroke={chartColor(index)} fill={chartColor(index)} fillOpacity={0.08 + index * 0.025} strokeWidth={2}>{showData && <LabelList dataKey={field} position="top" formatter={(value) => format(field, value)} fill={chartColor(index)} fontSize={9} />}</Area>)}</Chart></ResponsiveContainer>;
+    return <ResponsiveContainer width="100%" height={height}><Chart data={chartData} margin={{ top: showData ? 28 : 12, right: 16, left: -18, bottom: 4 }}>{common}{metricFields.map((field, index) => type === "line" ? <Line key={field} type="monotone" dataKey={field} name={label(field)} stroke={chartColor(index)} strokeWidth={normalizedChartStyle.lineWidth} dot={{ r: normalizedChartStyle.pointRadius }}>{showData && <LabelList dataKey={field} position="top" formatter={(value) => format(field, value)} fill={chartColor(index)} fontSize={9} />}</Line> : <Area key={field} type="monotone" dataKey={field} name={label(field)} stroke={chartColor(index)} fill={chartColor(index)} fillOpacity={Math.min(.4, normalizedChartStyle.areaOpacity + index * .02)} strokeWidth={normalizedChartStyle.lineWidth}>{showData && <LabelList dataKey={field} position="top" formatter={(value) => format(field, value)} fill={chartColor(index)} fontSize={9} />}</Area>)}</Chart></ResponsiveContainer>;
   }
   if (type === "column" || type === "bar" || type === "stacked_bar") {
     const horizontal = type !== "bar";
-    return <ResponsiveContainer width="100%" height={height}><BarChart data={chartData} layout={horizontal ? "horizontal" : "vertical"} stackOffset={type === "stacked_bar" ? "expand" : undefined} margin={{ top: showData ? 28 : 12, right: type === "bar" ? 28 : 10, left: type === "bar" ? 16 : -18, bottom: 4 }}>{horizontal ? common : <><CartesianGrid stroke="#edf1ee" strokeDasharray="3 3" horizontal={false} /><XAxis type="number" tick={tick} tickLine={false} axisLine={false} /><YAxis type="category" dataKey="category" tick={tick} tickLine={false} axisLine={false} width={72} /><Tooltip content={<MetricTooltip definition={metricDefinition} fieldMetadata={fieldMetadata} />} /><Legend wrapperStyle={{ fontSize: 10 }} /></>}{metricFields.map((field, index) => <Bar key={field} dataKey={field} name={label(field)} stackId={type === "stacked_bar" ? "total" : undefined} fill={chartColor(index)} radius={type === "stacked_bar" ? 0 : horizontal ? [4, 4, 0, 0] : [0, 4, 4, 0]} barSize={compact ? 16 : 22}>{showData && <LabelList dataKey={field} position={type === "stacked_bar" ? "center" : horizontal ? "top" : "right"} formatter={(value) => format(field, value)} fill={type === "stacked_bar" ? "#ffffff" : chartColor(index)} fontSize={9} />}</Bar>)}</BarChart></ResponsiveContainer>;
+    return <ResponsiveContainer width="100%" height={height}><BarChart data={chartData} layout={horizontal ? "horizontal" : "vertical"} stackOffset={type === "stacked_bar" ? "expand" : undefined} margin={{ top: showData ? 28 : 12, right: type === "bar" ? 28 : 10, left: type === "bar" ? 16 : -18, bottom: 4 }}>{horizontal ? common : <><CartesianGrid stroke={normalizedChartStyle.gridColor} strokeDasharray="3 3" horizontal={false} /><XAxis type="number" tick={tick} tickLine={false} axisLine={{ stroke: normalizedChartStyle.axisColor }} /><YAxis type="category" dataKey="category" tick={tick} tickLine={false} axisLine={false} width={72} /><Tooltip content={<MetricTooltip definition={metricDefinition} fieldMetadata={fieldMetadata} />} /><Legend wrapperStyle={{ fontSize: 10, color: normalizedChartStyle.mutedTextColor }} /></>}{metricFields.map((field, index) => <Bar key={field} dataKey={field} name={label(field)} stackId={type === "stacked_bar" ? "total" : undefined} fill={chartColor(index)} radius={type === "stacked_bar" ? 0 : horizontal ? [normalizedChartStyle.barRadius, normalizedChartStyle.barRadius, 0, 0] : [0, normalizedChartStyle.barRadius, normalizedChartStyle.barRadius, 0]} barSize={barSize}>{showData && <LabelList dataKey={field} position={type === "stacked_bar" ? "center" : horizontal ? "top" : "right"} formatter={(value) => format(field, value)} fill={type === "stacked_bar" ? "#ffffff" : chartColor(index)} fontSize={9} />}</Bar>)}</BarChart></ResponsiveContainer>;
   }
   if (type === "combo") {
     const toggleSeries = (field: string) => onComboLineFieldsChange(comboLineFields.includes(field) ? comboLineFields.filter((item) => item !== field) : [...comboLineFields, field]);
-    return <div className="relative h-full min-h-[220px]" onPointerDown={() => setSeriesMenu(null)}><div className="mb-1 flex flex-wrap justify-end gap-1.5">{metricFields.map((field, index) => <div key={field} className="relative" data-combo-series-control={field}><button type="button" onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setSeriesMenu(field); }} className="inline-flex items-center gap-1 rounded-full bg-[#f5faf7] px-2 py-1 text-[9px] text-[#53615a]" title="右键切换图形"><span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: chartColor(index) }} />{label(field)} · {comboLineFields.includes(field) ? "趋势" : "柱状"}</button>{seriesMenu === field && <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => { toggleSeries(field); setSeriesMenu(null); }} className="absolute left-0 top-full z-30 mt-1 whitespace-nowrap rounded-lg border border-[#dce7df] bg-white px-3 py-2 text-[10px] text-[#53615a] shadow-lg" data-combo-series-menu={field}>转为{comboLineFields.includes(field) ? "柱状图" : "趋势图"}</button>}</div>)}</div><ResponsiveContainer width="100%" height={fillHeight ? "90%" : compact ? 190 : 265}><ComposedChart data={chartData} margin={{ top: showData ? 28 : 12, right: 16, left: -18, bottom: 4 }}>{common}{metricFields.map((field, index) => comboLineFields.includes(field) ? <Line key={field} type="monotone" dataKey={field} name={label(field)} stroke={chartColor(index)} strokeWidth={2.2} dot={{ r: 2.5 }}>{showData && <LabelList dataKey={field} position="top" formatter={(value) => format(field, value)} fill={chartColor(index)} fontSize={9} />}</Line> : <Bar key={field} dataKey={field} name={label(field)} fill={chartColor(index)} radius={[3, 3, 0, 0]} barSize={18}>{showData && <LabelList dataKey={field} position="top" formatter={(value) => format(field, value)} fill={chartColor(index)} fontSize={9} />}</Bar>)}</ComposedChart></ResponsiveContainer></div>;
+    return <div className="relative h-full min-h-[220px]" onPointerDown={() => setSeriesMenu(null)}><div className="mb-1 flex flex-wrap justify-end gap-1.5">{metricFields.map((field, index) => <div key={field} className="relative" data-combo-series-control={field}><button type="button" onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setSeriesMenu(field); }} className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[9px]" style={{ backgroundColor: normalizedChartStyle.plotBackgroundColor, color: normalizedChartStyle.mutedTextColor }} title="右键切换图形"><span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: chartColor(index) }} />{label(field)} · {comboLineFields.includes(field) ? "趋势" : "柱状"}</button>{seriesMenu === field && <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => { toggleSeries(field); setSeriesMenu(null); }} className="absolute left-0 top-full z-30 mt-1 whitespace-nowrap rounded-lg border px-3 py-2 text-[10px] shadow-lg" style={{ backgroundColor: normalizedChartStyle.plotBackgroundColor, borderColor: normalizedChartStyle.gridColor, color: normalizedChartStyle.mutedTextColor }} data-combo-series-menu={field}>转为{comboLineFields.includes(field) ? "柱状图" : "趋势图"}</button>}</div>)}</div><ResponsiveContainer width="100%" height={fillHeight ? "90%" : Math.max(170, Number(height) - 35)}><ComposedChart data={chartData} margin={{ top: showData ? 28 : 12, right: 16, left: -18, bottom: 4 }}>{common}{metricFields.map((field, index) => comboLineFields.includes(field) ? <Line key={field} type="monotone" dataKey={field} name={label(field)} stroke={chartColor(index)} strokeWidth={normalizedChartStyle.lineWidth} dot={{ r: normalizedChartStyle.pointRadius }}>{showData && <LabelList dataKey={field} position="top" formatter={(value) => format(field, value)} fill={chartColor(index)} fontSize={9} />}</Line> : <Bar key={field} dataKey={field} name={label(field)} fill={chartColor(index)} radius={[normalizedChartStyle.barRadius, normalizedChartStyle.barRadius, 0, 0]} barSize={barSize}>{showData && <LabelList dataKey={field} position="top" formatter={(value) => format(field, value)} fill={chartColor(index)} fontSize={9} />}</Bar>)}</ComposedChart></ResponsiveContainer></div>;
   }
   if (type === "donut") {
     const ringGap = compact ? 11 : 15;
     const outer = compact ? 92 : 124;
-    return <div className="relative"><ResponsiveContainer width="100%" height={height}><PieChart>{metricFields.map((field, metricIndex) => { const outerRadius = outer - metricIndex * ringGap; const innerRadius = outerRadius - Math.max(7, ringGap - 3); const data = visiblePoints.map((point) => ({ name: point.label, value: point.values[field] || 0, field })); return <Pie key={field} data={data} dataKey="value" nameKey="name" innerRadius={Math.max(18, innerRadius)} outerRadius={Math.max(25, outerRadius)} paddingAngle={1}>{data.map((entry, index) => <Cell key={`${field}-${entry.name}-${index}`} fill={chartColor(index)} opacity={Math.max(0.42, 1 - metricIndex * 0.09)} />)}{showData && metricIndex === 0 && <LabelList dataKey="value" position="outside" formatter={(value) => format(field, value)} fill="#53615a" fontSize={9} />}</Pie>; })}<Tooltip content={<MetricTooltip definition={metricDefinition} fieldMetadata={fieldMetadata} />} /></PieChart></ResponsiveContainer><div className="absolute bottom-1 left-1 flex max-w-[45%] flex-col gap-1">{metricFields.map((field, index) => <span key={field} className="inline-flex items-center gap-1 text-[9px] text-[#53615a]"><span className="h-1.5 w-4 rounded-full" style={{ backgroundColor: chartColor(index) }} />{label(field)}</span>)}</div></div>;
+    return <div className="relative"><ResponsiveContainer width="100%" height={height}><PieChart>{metricFields.map((field, metricIndex) => { const outerRadius = outer - metricIndex * ringGap; const innerRadius = outerRadius - Math.max(7, ringGap - 3); const data = visiblePoints.map((point) => ({ name: point.label, value: point.values[field] || 0, field })); return <Pie key={field} data={data} dataKey="value" nameKey="name" innerRadius={Math.max(18, innerRadius)} outerRadius={Math.max(25, outerRadius)} paddingAngle={1}>{data.map((entry, index) => <Cell key={`${field}-${entry.name}-${index}`} fill={chartColor(index)} opacity={Math.max(0.42, 1 - metricIndex * 0.09)} />)}{showData && metricIndex === 0 && <LabelList dataKey="value" position="outside" formatter={(value) => format(field, value)} fill={normalizedChartStyle.mutedTextColor} fontSize={9} />}</Pie>; })}<Tooltip content={<MetricTooltip definition={metricDefinition} fieldMetadata={fieldMetadata} />} /></PieChart></ResponsiveContainer><div className="absolute bottom-1 left-1 flex max-w-[45%] flex-col gap-1">{metricFields.map((field, index) => <span key={field} className="inline-flex items-center gap-1 text-[9px]" style={{ color: normalizedChartStyle.mutedTextColor }}><span className="h-1.5 w-4 rounded-full" style={{ backgroundColor: chartColor(index) }} />{label(field)}</span>)}</div></div>;
   }
   if (type === "scatter") {
     const [xField, yField] = metricFields;
     const data = visiblePoints.map((point) => ({ name: point.label, x: point.values[xField] || 0, y: point.values[yField] || 0 }));
     const replaceAxis = (field: string) => { const other = scatterAxis === "x" ? yField : xField; onMetricFieldsChange(scatterAxis === "x" ? [field, other] : [other, field]); setScatterAxis(null); };
-    return <div className="relative h-full min-h-[220px]"><div className="absolute right-1 top-0 z-20 flex gap-1"><button type="button" onContextMenu={(event) => { event.preventDefault(); setScatterAxis("x"); }} className="rounded-full bg-[#f5faf7] px-2 py-1 text-[9px] text-[#53615a]">X · {label(xField)}</button><button type="button" onContextMenu={(event) => { event.preventDefault(); setScatterAxis("y"); }} className="rounded-full bg-[#f5faf7] px-2 py-1 text-[9px] text-[#53615a]">Y · {label(yField)}</button></div>{scatterAxis && <div className="absolute right-1 top-7 z-30 w-36 rounded-lg border border-[#dce7df] bg-white p-1 shadow-lg">{numericRawFields(rows).filter((field) => !metricFields.includes(field) || field === (scatterAxis === "x" ? xField : yField)).map((field) => <button key={field} type="button" onClick={() => replaceAxis(field)} className="block w-full rounded-md px-2 py-1.5 text-left text-[10px] text-[#53615a] hover:bg-[#f5faf7]">{label(field)}</button>)}</div>}<ResponsiveContainer width="100%" height={height}><ScatterChart margin={{ top: 32, right: 16, left: -8, bottom: 6 }}><CartesianGrid stroke="#edf1ee" strokeDasharray="3 3" /><XAxis type="number" dataKey="x" name={label(xField)} tick={tick} /><YAxis type="number" dataKey="y" name={label(yField)} tick={tick} /><Tooltip cursor={{ strokeDasharray: "3 3" }} /><Scatter data={data} name={`${label(xField)} × ${label(yField)}`} fill="#178a53">{showData && <LabelList dataKey="name" position="top" fill="#53615a" fontSize={9} />}</Scatter></ScatterChart></ResponsiveContainer></div>;
+    return <div className="relative h-full min-h-[220px]"><div className="absolute right-1 top-0 z-20 flex gap-1"><button type="button" onContextMenu={(event) => { event.preventDefault(); setScatterAxis("x"); }} className="rounded-full px-2 py-1 text-[9px]" style={{ backgroundColor: normalizedChartStyle.plotBackgroundColor, color: normalizedChartStyle.mutedTextColor }}>X · {label(xField)}</button><button type="button" onContextMenu={(event) => { event.preventDefault(); setScatterAxis("y"); }} className="rounded-full px-2 py-1 text-[9px]" style={{ backgroundColor: normalizedChartStyle.plotBackgroundColor, color: normalizedChartStyle.mutedTextColor }}>Y · {label(yField)}</button></div>{scatterAxis && <div className="absolute right-1 top-7 z-30 w-36 rounded-lg border p-1 shadow-lg" style={{ backgroundColor: normalizedChartStyle.plotBackgroundColor, borderColor: normalizedChartStyle.gridColor }}>{numericRawFields(rows).filter((field) => !metricFields.includes(field) || field === (scatterAxis === "x" ? xField : yField)).map((field) => <button key={field} type="button" onClick={() => replaceAxis(field)} className="block w-full rounded-md px-2 py-1.5 text-left text-[10px]" style={{ color: normalizedChartStyle.mutedTextColor }}>{label(field)}</button>)}</div>}<ResponsiveContainer width="100%" height={height}><ScatterChart margin={{ top: 32, right: 16, left: -8, bottom: 6 }}><CartesianGrid stroke={normalizedChartStyle.gridColor} strokeDasharray="3 3" /><XAxis type="number" dataKey="x" name={label(xField)} tick={tick} axisLine={{ stroke: normalizedChartStyle.axisColor }} /><YAxis type="number" dataKey="y" name={label(yField)} tick={tick} axisLine={{ stroke: normalizedChartStyle.axisColor }} /><Tooltip cursor={{ stroke: normalizedChartStyle.axisColor, strokeDasharray: "3 3" }} /><Scatter data={data} name={`${label(xField)} × ${label(yField)}`} fill={chartColor(0)}>{showData && <LabelList dataKey="name" position="top" fill={normalizedChartStyle.mutedTextColor} fontSize={9} />}</Scatter></ScatterChart></ResponsiveContainer></div>;
   }
   if (type === "funnel") {
-    return <div className={`overflow-y-auto ${fillHeight ? "h-full" : "max-h-[300px]"}`}><div className="mb-2 flex flex-wrap gap-1.5">{metricFields.map((field) => <button key={field} type="button" data-reorder-field={field} data-reorder-group={metricReorder.group} data-reorder-floating={metricReorder.floating === field ? "true" : "false"} data-reorder-target={metricReorder.target === field ? "true" : "false"} onPointerDown={(event) => metricReorder.start(field, event)} onPointerUp={() => metricReorder.end(true)} onPointerCancel={() => metricReorder.end(false)} className={`cursor-grab rounded-full border px-2 py-1 text-[9px] ${metricReorder.floating === field ? "border-[#2ca66f] bg-[#eaf7ef] text-[#178a53]" : "border-[#dce7df] bg-white text-[#53615a]"}`}>{label(field)}</button>)}</div><div className="grid grid-cols-[repeat(auto-fit,minmax(210px,1fr))] gap-2">{visiblePoints.map((point) => { const data = metricFields.map((field, index) => ({ name: label(field), value: point.values[field] || 0, fill: chartColor(index), field })); return <div key={point.key} className="h-[230px] rounded-lg border border-[#edf1ee] bg-white p-2"><div className="truncate text-center text-[10px] text-[#53615a]">{point.label}</div><ResponsiveContainer width="100%" height="90%"><FunnelChart><Tooltip content={<MetricTooltip definition={metricDefinition} fieldMetadata={fieldMetadata} />} /><Funnel dataKey="value" data={data} isAnimationActive={false}><LabelList position="right" fill="#636366" stroke="none" dataKey="name" fontSize={9} /></Funnel></FunnelChart></ResponsiveContainer></div>; })}</div><ReorderPreview reorder={metricReorder} /></div>;
+    return <div className={`overflow-y-auto ${fillHeight ? "h-full" : "max-h-[300px]"}`}><div className="mb-2 flex flex-wrap gap-1.5">{metricFields.map((field) => <button key={field} type="button" data-reorder-field={field} data-reorder-group={metricReorder.group} data-reorder-floating={metricReorder.floating === field ? "true" : "false"} data-reorder-target={metricReorder.target === field ? "true" : "false"} onPointerDown={(event) => metricReorder.start(field, event)} onPointerUp={() => metricReorder.end(true)} onPointerCancel={() => metricReorder.end(false)} className="cursor-grab rounded-full border px-2 py-1 text-[9px]" style={{ backgroundColor: normalizedChartStyle.plotBackgroundColor, borderColor: normalizedChartStyle.gridColor, color: normalizedChartStyle.mutedTextColor }}>{label(field)}</button>)}</div><div className="grid grid-cols-[repeat(auto-fit,minmax(210px,1fr))] gap-2">{visiblePoints.map((point) => { const data = metricFields.map((field, index) => ({ name: label(field), value: point.values[field] || 0, fill: chartColor(index), field })); return <div key={point.key} className="h-[230px] rounded-lg border p-2" style={{ backgroundColor: normalizedChartStyle.plotBackgroundColor, borderColor: normalizedChartStyle.gridColor }}><div className="truncate text-center text-[10px]" style={{ color: normalizedChartStyle.mutedTextColor }}>{point.label}</div><ResponsiveContainer width="100%" height="90%"><FunnelChart><Tooltip content={<MetricTooltip definition={metricDefinition} fieldMetadata={fieldMetadata} />} /><Funnel dataKey="value" data={data} isAnimationActive={false}><LabelList position="right" fill={normalizedChartStyle.mutedTextColor} stroke="none" dataKey="name" fontSize={9} /></Funnel></FunnelChart></ResponsiveContainer></div>; })}</div><ReorderPreview reorder={metricReorder} /></div>;
   }
   if (type === "treemap") {
     const field = metricFields[0];
     const data = visiblePoints.map((point) => ({ name: `${point.label}\n${label(field)} ${format(field, point.values[field])}`, size: Math.max(0, point.values[field]) }));
-    return <ResponsiveContainer width="100%" height={height}><Treemap data={data} dataKey="size" nameKey="name" stroke="#ffffff" fill="#178a53" aspectRatio={4 / 3}><Tooltip /></Treemap></ResponsiveContainer>;
+    return <ResponsiveContainer width="100%" height={height}><Treemap data={data} dataKey="size" nameKey="name" stroke={normalizedChartStyle.plotBackgroundColor} fill={chartColor(0)} aspectRatio={4 / 3}><Tooltip /></Treemap></ResponsiveContainer>;
   }
   const radarData = visiblePoints.map((point) => ({ category: point.label.length > 12 ? `${point.label.slice(0, 12)}…` : point.label, ...point.values }));
-  return <ResponsiveContainer width="100%" height={height}><RadarChart data={radarData} outerRadius={compact ? "58%" : "66%"} margin={{ top: 26, right: 44, bottom: 26, left: 44 }}><PolarGrid stroke="#dfe8e2" /><PolarAngleAxis dataKey="category" tick={{ fontSize: 9, fill: "#6f8177" }} /><PolarRadiusAxis angle={90} tick={{ fontSize: 8, fill: "#a2aca6" }} axisLine={false} /><Tooltip content={<MetricTooltip definition={metricDefinition} fieldMetadata={fieldMetadata} />} /><Legend wrapperStyle={{ fontSize: 10 }} />{metricFields.map((field, index) => <Radar key={field} name={label(field)} dataKey={field} stroke={chartColor(index)} fill={chartColor(index)} fillOpacity={0.05 + index * 0.025} strokeWidth={2}>{showData && <LabelList dataKey={field} position="top" formatter={(value) => format(field, value)} fill={chartColor(index)} fontSize={9} />}</Radar>)}</RadarChart></ResponsiveContainer>;
+  return <ResponsiveContainer width="100%" height={height}><RadarChart data={radarData} outerRadius={compact ? "58%" : "66%"} margin={{ top: 26, right: 44, bottom: 26, left: 44 }}><PolarGrid stroke={normalizedChartStyle.gridColor} /><PolarAngleAxis dataKey="category" tick={{ fontSize: 9, fill: normalizedChartStyle.mutedTextColor }} /><PolarRadiusAxis angle={90} tick={{ fontSize: 8, fill: normalizedChartStyle.mutedTextColor }} axisLine={false} /><Tooltip content={<MetricTooltip definition={metricDefinition} fieldMetadata={fieldMetadata} />} /><Legend wrapperStyle={{ fontSize: 10, color: normalizedChartStyle.mutedTextColor }} />{metricFields.map((field, index) => <Radar key={field} name={label(field)} dataKey={field} stroke={chartColor(index)} fill={chartColor(index)} fillOpacity={Math.min(.4, normalizedChartStyle.areaOpacity + index * .02)} strokeWidth={normalizedChartStyle.lineWidth}>{showData && <LabelList dataKey={field} position="top" formatter={(value) => format(field, value)} fill={chartColor(index)} fontSize={9} />}</Radar>)}</RadarChart></ResponsiveContainer>;
 }
 
 function numericRawFields(rows: AnalysisRow[]) {
@@ -971,19 +1292,23 @@ function numberValue(value: unknown) {
   return Number.isFinite(number) ? number : null;
 }
 
-function chartColor(index: number) {
-  return visualizationChartColor(index);
+function chartFontFamily(font: VisualizationChartStyleConfig["fontFamily"]) {
+  if (font === "mono") return '"SFMono-Regular", Consolas, "Liberation Mono", monospace';
+  if (font === "humanist") return '"Avenir Next", Avenir, "PingFang SC", "Microsoft YaHei", sans-serif';
+  return 'Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif';
 }
 
-function PivotTable({ rows, dimensionFields, metricFields, labels, fieldMetadata, fillHeight }: { rows: AnalysisRow[]; dimensionFields: string[]; metricFields: string[]; labels: Record<string, string>; fieldMetadata: Record<string, FieldDisplayMetadata>; fillHeight?: boolean }) {
+function PivotTable({ rows, dimensionFields, metricFields, labels, fieldMetadata, metricRankings, metricFormats, metricProgress, calculatedColumns, tableStyle, onCalculatedColumnChange, onMetricHeaderContextMenu, fillHeight }: { rows: AnalysisRow[]; dimensionFields: string[]; metricFields: string[]; labels: Record<string, string>; fieldMetadata: Record<string, FieldDisplayMetadata>; metricRankings: VisualizationMetricRankConfig[]; metricFormats: VisualizationMetricFormatConfig[]; metricProgress: VisualizationMetricProgressConfig[]; calculatedColumns: VisualizationCalculatedColumnConfig[]; tableStyle: VisualizationTableStyleConfig; onCalculatedColumnChange: (id: string, patch: Partial<VisualizationCalculatedColumnConfig>) => void; onMetricHeaderContextMenu: (target: VisualTableHeaderTarget, event: ReactMouseEvent<HTMLTableCellElement>) => void; fillHeight?: boolean }) {
   const rowField = dimensionFields[0];
-  if (!rowField || !metricFields.length) return <ResultTable rows={rows.slice(0, 50)} emptyLabel="当前数据维度不足，已回退明细表" dimensionFields={dimensionFields} metricFields={metricFields} fillHeight={fillHeight} />;
-  return <PaginatedPivotTable rows={rows} dimensionFields={dimensionFields} metricFields={metricFields} labels={labels} fieldMetadata={fieldMetadata} fillHeight={fillHeight} rowField={rowField} />;
+  if (!rowField || !metricFields.length) return <ResultTable rows={rows.slice(0, 50)} emptyLabel="当前数据维度不足，已回退明细表" dimensionFields={dimensionFields} metricFields={metricFields} metricRankings={metricRankings} metricFormats={metricFormats} metricProgress={metricProgress} calculatedColumns={calculatedColumns} tableStyle={tableStyle} onCalculatedColumnChange={onCalculatedColumnChange} onDimensionHeaderContextMenu={onMetricHeaderContextMenu} fillHeight={fillHeight} />;
+  return <PaginatedPivotTable rows={rows} dimensionFields={dimensionFields} metricFields={metricFields} labels={labels} fieldMetadata={fieldMetadata} metricRankings={metricRankings} metricFormats={metricFormats} metricProgress={metricProgress} calculatedColumns={calculatedColumns} tableStyle={tableStyle} onCalculatedColumnChange={onCalculatedColumnChange} onMetricHeaderContextMenu={onMetricHeaderContextMenu} fillHeight={fillHeight} rowField={rowField} />;
 }
 
-function PaginatedPivotTable({ rows, dimensionFields, metricFields, labels, fieldMetadata, fillHeight, rowField }: { rows: AnalysisRow[]; dimensionFields: string[]; metricFields: string[]; labels: Record<string, string>; fieldMetadata: Record<string, FieldDisplayMetadata>; fillHeight?: boolean; rowField: string }) {
+function PaginatedPivotTable({ rows, dimensionFields, metricFields, labels, fieldMetadata, metricRankings, metricFormats, metricProgress, calculatedColumns, tableStyle, onCalculatedColumnChange, onMetricHeaderContextMenu, fillHeight, rowField }: { rows: AnalysisRow[]; dimensionFields: string[]; metricFields: string[]; labels: Record<string, string>; fieldMetadata: Record<string, FieldDisplayMetadata>; metricRankings: VisualizationMetricRankConfig[]; metricFormats: VisualizationMetricFormatConfig[]; metricProgress: VisualizationMetricProgressConfig[]; calculatedColumns: VisualizationCalculatedColumnConfig[]; tableStyle: VisualizationTableStyleConfig; onCalculatedColumnChange: (id: string, patch: Partial<VisualizationCalculatedColumnConfig>) => void; onMetricHeaderContextMenu: (target: VisualTableHeaderTarget, event: ReactMouseEvent<HTMLTableCellElement>) => void; fillHeight?: boolean; rowField: string }) {
   const tableRef = useRef<HTMLDivElement>(null);
   useVisualTableScrollLock(tableRef);
+  const [editingCalculatedColumn, setEditingCalculatedColumn] = useState<string | null>(null);
+  const normalizedTableStyle = normalizeVisualizationTableStyle(tableStyle);
   const columnFields = useMemo(() => dimensionFields.slice(1), [dimensionFields]);
   const pivotData = useMemo(() => {
     const columnFor = (row: AnalysisRow) => columnFields.length ? columnFields.map((field) => displayRawCell(row.raw[field], fieldMetadata[field])).join(" · ") : "汇总";
@@ -1001,14 +1326,77 @@ function PaginatedPivotTable({ rows, dimensionFields, metricFields, labels, fiel
     return { rowLabels, columnLabels, values };
   }, [columnFields, fieldMetadata, metricFields, rowField, rows]);
   const { rowLabels, columnLabels, values } = pivotData;
-  const pivotColumnPageSize = Math.max(1, Math.min(12, Math.floor(24 / Math.max(1, metricFields.length))));
+  const rankingConfig = new Map(metricRankings.map((config) => [config.metricField, config]));
+  const formatByMetric = new Map(metricFormats.map((config) => [config.metricField, config]));
+  const metricColumns = useMemo(() => {
+    const columns: Array<{ metric?: string; kind: "metric" | "rank" | "calculated"; calculated?: VisualizationCalculatedColumnConfig }> = metricFields.flatMap((metric) => [{ metric, kind: "metric" as const }, ...(rankingConfig.has(metric) ? [{ metric, kind: "rank" as const }] : [])]);
+    calculatedColumns.forEach((calculated) => columns.splice(Math.max(0, Math.min(calculated.position, columns.length)), 0, { kind: "calculated", calculated }));
+    return columns;
+  }, [calculatedColumns, metricFields, metricRankings]);
+  const calculatedEvaluators = useMemo(() => new Map(calculatedColumns.map((column) => [column.id, compileVisualizationFormula(column.expression, metricFields, labels)])), [calculatedColumns, labels, metricFields]);
+  const pivotColumnPageSize = Math.max(1, Math.min(12, Math.floor(24 / Math.max(1, metricColumns.length))));
   const rowPagination = useClientPagination(rowLabels, 20);
   const columnPagination = useClientPagination(columnLabels, pivotColumnPageSize);
   const columns = columnLabels.flatMap((column) => metricFields.map((metric) => ({ column, metric })));
-  const visibleColumns = columnPagination.items.flatMap((column) => metricFields.map((metric) => ({ column, metric })));
+  const visibleColumns = columnPagination.items.flatMap((column) => metricColumns.map((metricColumn) => ({ column, ...metricColumn })));
   const cellValue = (row: string, column: string, metric: string) => values.get(`${row}\u0000${column}\u0000${metric}`) || 0;
   const rowMetricTotal = (row: string, metric: string) => columnLabels.reduce((sum, column) => sum + cellValue(row, column, metric), 0);
   const columnMetricTotal = (column: string, metric: string) => rowLabels.reduce((sum, row) => sum + cellValue(row, column, metric), 0);
+  const calculatedValue = (row: string, column: string, calculated: VisualizationCalculatedColumnConfig) => {
+    const source = Object.fromEntries(metricFields.map((metric) => [metric, column === "subtotal" ? rowMetricTotal(row, metric) : cellValue(row, column, metric)]));
+    return calculatedEvaluators.get(calculated.id)?.evaluate(source) || { value: null, error: "计算列不存在" };
+  };
+  const calculatedAggregateValue = (column: string | null, calculated: VisualizationCalculatedColumnConfig) => {
+    const source = Object.fromEntries(metricFields.map((metric) => [metric, column === null ? rowLabels.reduce((sum, row) => sum + rowMetricTotal(row, metric), 0) : columnMetricTotal(column, metric)]));
+    return calculatedEvaluators.get(calculated.id)?.evaluate(source) || { value: null, error: "计算列不存在" };
+  };
+  const pivotRankingMaps = useMemo(() => {
+    const maps = new Map<string, Map<string, number>>();
+    metricRankings.forEach((config) => {
+      [...columnLabels, "subtotal"].forEach((column) => maps.set(`${column}\u0000${config.metricField}`, ordinalRanks(rowLabels, (rowLabel) => column === "subtotal" ? columnLabels.reduce((sum, item) => sum + (values.get(`${rowLabel}\u0000${item}\u0000${config.metricField}`) || 0), 0) : values.get(`${rowLabel}\u0000${column}\u0000${config.metricField}`) || 0, config.direction)));
+    });
+    return maps;
+  }, [columnLabels, metricRankings, rowLabels, values]);
+  const rankFor = (row: string, column: string, metric: string) => pivotRankingMaps.get(`${column}\u0000${metric}`)?.get(row);
+  const progressByMetric = useMemo(() => new Map(metricProgress.map((config) => {
+    const pivotValues = config.denominatorMode === "column_max"
+      ? [
+          ...rowLabels.flatMap((row) => columnLabels.map((column) => values.get(`${row}\u0000${column}\u0000${config.metricField}`) || 0)),
+          ...rowLabels.map((row) => columnLabels.reduce((sum, column) => sum + (values.get(`${row}\u0000${column}\u0000${config.metricField}`) || 0), 0)),
+        ]
+      : undefined;
+    return [config.metricField, { config, denominator: resolveProgressDenominator(rows, config, pivotValues) }];
+  })), [columnLabels, metricProgress, rowLabels, rows, values]);
+  const pivotAssociationPresentation = (row: string, column: string, targetMetric: string) => {
+    const style: { backgroundColor?: string; color?: string } = {};
+    let replacementValue: string | undefined;
+    progressByMetric.forEach(({ config, denominator }) => {
+      const metricValue = column === "subtotal" ? rowMetricTotal(row, config.metricField) : cellValue(row, column, config.metricField);
+      const percentage = progressPercentage(metricValue, denominator.value);
+      config.associationRules.forEach((rule) => {
+        if (rule.targetField !== targetMetric || !associationRuleMatches(rule, metricValue, percentage)) return;
+        if (rule.style === "text") style.color = rule.color;
+        else if (rule.style === "background") style.backgroundColor = rule.color;
+        else replacementValue = rule.replacementValue || "";
+      });
+    });
+    return { style, replacementValue };
+  };
+  const pivotRowHeaderPresentation = (row: string) => {
+    const style: { backgroundColor?: string; color?: string } = {};
+    let replacementValue: string | undefined;
+    progressByMetric.forEach(({ config, denominator }) => {
+      const metricValue = rowMetricTotal(row, config.metricField);
+      const percentage = progressPercentage(metricValue, denominator.value);
+      config.associationRules.forEach((rule) => {
+        if (rule.targetField !== rowField || !associationRuleMatches(rule, metricValue, percentage)) return;
+        if (rule.style === "text") style.color = rule.color;
+        else if (rule.style === "background") style.backgroundColor = rule.color;
+        else replacementValue = rule.replacementValue || "";
+      });
+    });
+    return { style, replacementValue };
+  };
   return <div data-pivot-table="true" className={fillHeight ? "flex min-h-0 flex-1 flex-col" : ""}>
     <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
       <div className="min-w-0 flex-1 truncate text-[10px] text-[#8a9690]">维度：{dimensionFields.map((field) => labels[field] || field).join(" → ")} · 指标：{metricFields.map((field) => labels[field] || field).join("、")}</div>
@@ -1023,36 +1411,55 @@ function PaginatedPivotTable({ rows, dimensionFields, metricFields, labels, fiel
     <div
       ref={tableRef}
       className={`${fillHeight ? "min-h-0 flex-1" : "max-h-[360px]"} overflow-auto overscroll-contain rounded-lg border border-[#e5e5ea] bg-white`}
-      style={{ overscrollBehavior: "none", overflowAnchor: "none" }}
+      style={{ overscrollBehavior: "none", overflowAnchor: "none", ...tableThemeVariables(normalizedTableStyle) }}
       data-visual-table-scroll="true"
+      data-visual-table-theme="true"
+      data-table-template-id={normalizedTableStyle.templateId}
+      data-table-banded={normalizedTableStyle.bandedRows ? "true" : "false"}
+      data-table-first-column={normalizedTableStyle.emphasizeFirstColumn ? "true" : "false"}
+      data-table-density={normalizedTableStyle.density}
       data-pivot-row-pagination={rowPagination.paginated ? "true" : "false"}
       data-pivot-column-pagination={columnPagination.paginated ? "true" : "false"}
     >
       <table className="min-w-full border-separate border-spacing-0 text-[11px]">
         <thead className="sticky top-0 z-20 bg-[#fafbfc]" data-visual-table-frozen-header="true">
-          <tr>
-            <th rowSpan={2} className="sticky left-0 z-30 min-w-[120px] border-b border-r border-[#e5e5ea] bg-[#fafbfc] px-3 py-2 text-left font-normal text-[#636366]">{labels[rowField] || rowField}</th>
-            {columnPagination.items.map((column) => <th key={column} colSpan={metricFields.length} className="border-b border-r border-[#e5e5ea] px-3 py-2 text-center font-normal text-[#636366]">{column}</th>)}
-            <th colSpan={metricFields.length} className="border-b border-[#e5e5ea] px-3 py-2 text-center font-normal text-[#636366]">行小计</th>
+          <tr data-table-total-row="true">
+            <th rowSpan={2} className="sticky left-0 z-30 min-w-[120px] border-b border-r border-[#e5e5ea] bg-[#fafbfc] px-3 py-2 text-left font-normal text-[#636366]" data-pivot-corner-header="true">{labels[rowField] || rowField}</th>
+            {columnPagination.items.map((column) => <th key={column} colSpan={metricColumns.length} className="border-b border-r border-[#e5e5ea] px-3 py-2 text-center font-normal text-[#636366]">{column}</th>)}
+            <th colSpan={metricColumns.length} className="border-b border-[#e5e5ea] px-3 py-2 text-center font-normal text-[#636366]">行小计</th>
           </tr>
           <tr>
-            {[...columnPagination.items, "subtotal"].flatMap((column) => metricFields.map((metric) => (
-              <th key={`${column}-${metric}`} className="min-w-[96px] border-b border-r border-[#ececf0] px-3 py-2 text-right font-normal text-[#8a8a8e]">{labels[metric] || metric}</th>
+            {[...columnPagination.items, "subtotal"].flatMap((column) => metricColumns.map(({ metric, kind, calculated }, columnIndex) => (
+              <th key={`${column}-${metric || calculated?.id}-${kind}`} onContextMenu={(event) => onMetricHeaderContextMenu({ field: calculated?.id || metric || "", kind, columnIndex }, event)} onDoubleClick={() => { if (calculated) setEditingCalculatedColumn(calculated.id); }} data-visual-table-metric-header={kind === "metric" ? metric : undefined} data-visual-table-rank-header={kind === "rank" ? metric : undefined} data-visual-table-calculated-header={kind === "calculated" ? calculated?.id : undefined} className={`min-w-[96px] border-b border-r border-[#ececf0] px-3 py-2 text-right font-normal ${kind === "calculated" ? "cursor-text bg-[#f7f9f8] text-[#496257]" : "text-[#8a8a8e]"}`}>{calculated && editingCalculatedColumn === calculated.id ? <input autoFocus defaultValue={calculated.name} onClick={(event) => event.stopPropagation()} onBlur={(event) => { onCalculatedColumnChange(calculated.id, { name: event.target.value }); setEditingCalculatedColumn(null); }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") setEditingCalculatedColumn(null); }} className="h-7 w-24 rounded-md border border-[#9fc2ae] bg-white px-2 text-[10px] text-[#34443c] outline-none" aria-label="修改计算列名称" data-calculated-column-name-input={calculated.id} /> : calculated?.name || `${labels[metric || ""] || metric}${kind === "rank" ? "-排名" : ""}`}</th>
             )))}
           </tr>
         </thead>
         <tbody>
           {rowPagination.items.map((rowLabel) => (
             <tr key={rowLabel}>
-              <th className="sticky left-0 z-10 border-b border-r border-[#ececf0] bg-white px-3 py-2 text-left font-normal text-[#3a3a3c]">{rowLabel}</th>
-              {visibleColumns.map(({ column, metric }) => <td key={`${column}-${metric}`} className="border-b border-r border-[#f0f0f2] px-3 py-2 text-right tabular-nums text-[#3a3a3c]">{formatFieldValue(cellValue(rowLabel, column, metric), fieldMetadata[metric])}</td>)}
-              {metricFields.map((metric) => <td key={`subtotal-${metric}`} className="border-b border-r border-[#ececf0] bg-[#fafbfc] px-3 py-2 text-right tabular-nums text-[#1d1d1f]">{formatFieldValue(rowMetricTotal(rowLabel, metric), fieldMetadata[metric])}</td>)}
+              <th className="sticky left-0 z-10 border-b border-r border-[#ececf0] bg-white px-3 py-2 text-left font-normal text-[#3a3a3c]" style={pivotRowHeaderPresentation(rowLabel).style}>{pivotRowHeaderPresentation(rowLabel).replacementValue ?? rowLabel}</th>
+              {visibleColumns.map(({ column, metric, kind, calculated }) => {
+                const value = metric ? cellValue(rowLabel, column, metric) : 0;
+                const progress = metric ? progressByMetric.get(metric) : undefined;
+                const association = metric ? pivotAssociationPresentation(rowLabel, column, metric) : { style: {}, replacementValue: undefined };
+                const calculatedResult = calculated ? calculatedValue(rowLabel, column, calculated) : undefined;
+                const content = calculated ? (calculated.expression ? calculatedResult?.error ? "-" : calculatedResult?.value === null || calculatedResult?.value === undefined ? "" : new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 6 }).format(calculatedResult.value) : "") : kind === "rank" && metric ? rankFor(rowLabel, column, metric) : progress && metric ? <ProgressMetricValue value={value} metadata={fieldMetadata[metric]} format={formatByMetric.get(metric)} color={progress.config.color} colorEnd={progress.config.colorEnd} colorMode={progress.config.colorMode} denominator={progress.denominator.value} denominatorStatus={progress.denominator.status} textColor={association.style.color} displayOverride={association.replacementValue} /> : association.replacementValue ?? displayTableMetricValue(value, metric ? fieldMetadata[metric] : undefined, metric ? formatByMetric.get(metric) : undefined);
+                return <td key={`${column}-${metric || calculated?.id}-${kind}`} title={calculatedResult?.error || undefined} data-visual-rank-cell={kind === "rank" ? metric : undefined} data-visual-calculated-cell={kind === "calculated" ? calculated?.id : undefined} data-visual-progress-cell={kind === "metric" && progress ? metric : undefined} className={`relative border-b border-r border-[#f0f0f2] px-3 py-2 text-right tabular-nums text-[#3a3a3c] ${kind === "rank" || kind === "calculated" ? "text-[#60756b]" : ""}`} style={association.style}>{content}</td>;
+              })}
+              {metricColumns.map(({ metric, kind, calculated }) => {
+                const value = metric ? rowMetricTotal(rowLabel, metric) : 0;
+                const progress = metric ? progressByMetric.get(metric) : undefined;
+                const association = metric ? pivotAssociationPresentation(rowLabel, "subtotal", metric) : { style: {}, replacementValue: undefined };
+                const calculatedResult = calculated ? calculatedValue(rowLabel, "subtotal", calculated) : undefined;
+                const content = calculated ? (calculated.expression ? calculatedResult?.error ? "-" : calculatedResult?.value === null || calculatedResult?.value === undefined ? "" : new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 6 }).format(calculatedResult.value) : "") : kind === "rank" && metric ? rankFor(rowLabel, "subtotal", metric) : progress && metric ? <ProgressMetricValue value={value} metadata={fieldMetadata[metric]} format={formatByMetric.get(metric)} color={progress.config.color} colorEnd={progress.config.colorEnd} colorMode={progress.config.colorMode} denominator={progress.denominator.value} denominatorStatus={progress.denominator.status} textColor={association.style.color} displayOverride={association.replacementValue} /> : association.replacementValue ?? displayTableMetricValue(value, metric ? fieldMetadata[metric] : undefined, metric ? formatByMetric.get(metric) : undefined);
+                return <td key={`subtotal-${metric || calculated?.id}-${kind}`} title={calculatedResult?.error || undefined} data-visual-rank-cell={kind === "rank" ? metric : undefined} data-visual-calculated-cell={kind === "calculated" ? calculated?.id : undefined} data-visual-progress-cell={kind === "metric" && progress ? metric : undefined} className={`relative border-b border-r border-[#ececf0] bg-[#fafbfc] px-3 py-2 text-right tabular-nums text-[#1d1d1f] ${kind === "rank" || kind === "calculated" ? "text-[#60756b]" : ""}`} style={association.style}>{content}</td>;
+              })}
             </tr>
           ))}
-          <tr>
+          <tr data-table-total-row="true">
             <th className="sticky bottom-0 left-0 z-20 border-r border-[#e5e5ea] bg-[#f2f2f7] px-3 py-2 text-left font-normal text-[#1d1d1f]">总计</th>
-            {visibleColumns.map(({ column, metric }) => <td key={`${column}-${metric}`} className="sticky bottom-0 border-r border-[#e5e5ea] bg-[#f2f2f7] px-3 py-2 text-right tabular-nums text-[#1d1d1f]">{formatFieldValue(columnMetricTotal(column, metric), fieldMetadata[metric])}</td>)}
-            {metricFields.map((metric) => <td key={`total-${metric}`} className="sticky bottom-0 border-r border-[#e5e5ea] bg-[#e9e9ed] px-3 py-2 text-right tabular-nums text-[#1d1d1f]">{formatFieldValue(rowLabels.reduce((sum, row) => sum + rowMetricTotal(row, metric), 0), fieldMetadata[metric])}</td>)}
+            {visibleColumns.map(({ column, metric, kind, calculated }) => { const result = calculated ? calculatedAggregateValue(column, calculated) : undefined; return <td key={`${column}-${metric || calculated?.id}-${kind}`} title={result?.error || undefined} className="sticky bottom-0 border-r border-[#e5e5ea] bg-[#f2f2f7] px-3 py-2 text-right tabular-nums text-[#1d1d1f]">{kind === "rank" ? "-" : calculated ? result?.error ? "-" : result?.value === null || result?.value === undefined ? "" : new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 6 }).format(result.value) : metric ? displayTableMetricValue(columnMetricTotal(column, metric), fieldMetadata[metric], formatByMetric.get(metric)) : ""}</td>; })}
+            {metricColumns.map(({ metric, kind, calculated }) => { const result = calculated ? calculatedAggregateValue(null, calculated) : undefined; return <td key={`total-${metric || calculated?.id}-${kind}`} title={result?.error || undefined} className="sticky bottom-0 border-r border-[#e5e5ea] bg-[#e9e9ed] px-3 py-2 text-right tabular-nums text-[#1d1d1f]">{kind === "rank" ? "-" : calculated ? result?.error ? "-" : result?.value === null || result?.value === undefined ? "" : new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 6 }).format(result.value) : metric ? displayTableMetricValue(rowLabels.reduce((sum, row) => sum + rowMetricTotal(row, metric), 0), fieldMetadata[metric], formatByMetric.get(metric)) : ""}</td>; })}
           </tr>
         </tbody>
       </table>

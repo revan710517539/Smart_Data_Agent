@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Search, X } from "lucide-react";
+import { Search } from "lucide-react";
 import type { RawTableAsset, TopicTableAsset } from "../../services/dataAssetApi";
 import { rawTableToSelection, topicTableToSelection, type AnalysisDataTableSelection } from "./domain";
+import { FormDialog, FormDialogPrimaryButton } from "../ui/FormDialog";
 
 export function DataTablePickerModal({
   rawTables,
@@ -39,15 +40,7 @@ export function DataTablePickerModal({
     setSuggestionsOpen(false);
   };
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/20 px-4">
-      <div className="w-full max-w-[820px] rounded-xl border border-[#e5e5ea] bg-white shadow-2xl shadow-black/20">
-        <div className="flex items-center justify-between border-b border-[#f0f0f2] px-5 py-4">
-          <div>
-            <h3 className="text-[14px] text-[#1d1d1f]">选择数据表</h3>
-            <p className="mt-1 text-[11px] text-[#8a8a8e]">与站内数据同源，选中后会将对应 SQL 和字段信息注入智能分析上下文。</p>
-          </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-[#8a8a8e] hover:bg-[#f2f2f7]"><X className="h-4 w-4" /></button>
-        </div>
+    <FormDialog title="选择数据表" description="与站内数据同源，选中后会将对应 SQL 和字段信息注入智能分析上下文。" onClose={onClose} widthClassName="max-w-[820px]" zIndexClassName="z-[70]" bodyClassName="p-0" footer={<><span className="mr-auto text-[11px] text-[#8a8a8e]">{selectedId ? "已选择 1 张表" : "一次分析仅使用 1 张数据表"}</span><FormDialogPrimaryButton onClick={onClose}>完成</FormDialogPrimaryButton></>}>
         <div className="flex items-center justify-between border-b border-[#f0f0f2] px-5 py-3">
           <div className="inline-flex rounded-lg bg-[#f2f2f7] p-1">
             {[{ key: "raw", label: `原始表 ${rawTables.length}` }, { key: "topic", label: `主题表 ${topicTables.length}` }].map((tab) => (
@@ -79,8 +72,6 @@ export function DataTablePickerModal({
             {!!rows.length && !filteredRows.length && <div className="px-3 py-8 text-center text-[12px] text-[#aeaeb2]">未找到匹配的表名称</div>}
           </div>
         </div>
-        <div className="flex items-center justify-between border-t border-[#f0f0f2] px-5 py-3"><span className="text-[11px] text-[#8a8a8e]">{selectedId ? "已选择 1 张表" : "一次分析仅使用 1 张数据表"}</span><button type="button" onClick={onClose} className="rounded-lg bg-[#1d1d1f] px-4 py-2 text-[12px] text-white hover:bg-[#2c2c2e]">完成</button></div>
-      </div>
-    </div>
+    </FormDialog>
   );
 }

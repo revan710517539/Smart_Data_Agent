@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from backend.platform.api.routes.application import _bind_visual_report_payload, _prepare_visual_report_upsert_payload
 from backend.platform.api.routes.assets import handle_data_assets_get
 from backend.platform.application import InMemoryApplicationStore
+from backend.platform.visualization_config import normalize_chart_style, normalize_table_metric_enhancements
 
 
 class _Catalog:
@@ -87,11 +88,151 @@ class VisualReportsTest(unittest.TestCase):
                     "title": "余额明细",
                     "type": "table",
                     "dataset": {"id": "raw_loans", "kind": "raw", "name": "伪造名称", "rows": [{"secret": "never store"}]},
-                    "config": {"metricFields": ["balance"], "dimensionFields": ["branch"]},
+                    "config": {
+                        "metricFields": ["balance"],
+                        "dimensionFields": ["branch"],
+                        "metricRankings": [{"metricField": "balance", "direction": "desc"}],
+                        "metricFormats": [
+                            {"metricField": "balance", "percent": True, "decimalPlaces": 3},
+                            {"metricField": "missing", "percent": True, "decimalPlaces": 99},
+                        ],
+                        "metricProgress": [{
+                            "metricField": "balance",
+                            "denominatorRules": [{"id": "denominator-1", "field": "branch", "operator": "not_in", "values": ["总行", "忽略"]}],
+                            "color": "#2ca66f",
+                            "colorEnd": "#77bb99",
+                            "colorMode": "gradient",
+                            "associationRules": [{
+                                "id": "association-1",
+                                "source": "metric",
+                                "operator": "gt",
+                                "threshold": 0,
+                                "targetField": "balance",
+                                "style": "value",
+                                "color": "#116644",
+                                "replacementValue": "有效",
+                            }],
+                        }],
+                        "calculatedColumns": [{"id": "calculated-1", "name": "折算余额", "position": 2, "expression": "[balance] / 2"}],
+                        "tableStyle": {
+                            "templateId": "excel-navy",
+                            "headerBackground": "#245680",
+                            "headerTextColor": "#ffffff",
+                            "headerBorderColor": "not-a-color",
+                            "bodyBackground": "#ffffff",
+                            "alternateRowBackground": "#eef5fb",
+                            "bodyTextColor": "#26394a",
+                            "borderColor": "#b8d0e6",
+                            "accentColor": "#e3b341",
+                            "totalBackground": "#245680",
+                            "totalTextColor": "#ffffff",
+                            "fontFamily": "humanist",
+                            "density": "compact",
+                            "bandedRows": True,
+                            "emphasizeFirstColumn": True,
+                        },
+                        "chartStyle": {
+                            "templateId": "chart-cloud-blue",
+                            "backgroundColor": "#f8fafd",
+                            "plotBackgroundColor": "#ffffff",
+                            "textColor": "#273142",
+                            "mutedTextColor": "#737c89",
+                            "gridColor": "#e6eaf0",
+                            "axisColor": "#c9d0da",
+                            "palette": ["#3370ff", "#38a7a0"],
+                            "fontFamily": "humanist",
+                            "chartHeight": "expanded",
+                            "lineWidth": 2.2,
+                            "pointRadius": 2.6,
+                            "barRadius": 5,
+                            "barWidth": "wide",
+                            "areaOpacity": 0.12,
+                        },
+                    },
                 }
             ],
             "destinations": ["mine"],
         }
+
+    def test_column_max_progress_mode_persists_without_row_selector(self) -> None:
+        rankings, progress, calculated = normalize_table_metric_enhancements(
+            {
+                "metricProgress": [
+                    {
+                        "metricField": "balance",
+                        "denominatorMode": "column_max",
+                        "denominatorRules": [],
+                        "color": "#5a9bd5",
+                        "colorEnd": "#d7e8f6",
+                        "colorMode": "gradient",
+                        "associationRules": [],
+                    },
+                    {
+                        "metricField": "missing",
+                        "denominatorMode": "column_max",
+                        "denominatorRules": [],
+                    },
+                ]
+            },
+            ["balance"],
+            ["branch"],
+        )
+
+        self.assertEqual(rankings, [])
+        self.assertEqual(calculated, [])
+        self.assertEqual(progress, [{
+            "metricField": "balance",
+            "denominatorMode": "column_max",
+            "denominatorRules": [],
+            "color": "#5A9BD5",
+            "colorEnd": "#D7E8F6",
+            "colorMode": "gradient",
+            "associationRules": [],
+        }])
+
+    def test_invalid_progress_mode_without_row_selector_fails_closed(self) -> None:
+        _, progress, _ = normalize_table_metric_enhancements(
+            {"metricProgress": [{"metricField": "balance", "denominatorMode": "unknown", "denominatorRules": []}]},
+            ["balance"],
+            ["branch"],
+        )
+        self.assertEqual(progress, [])
+
+    def test_reverse_gradient_progress_mode_is_preserved(self) -> None:
+        _, progress, _ = normalize_table_metric_enhancements(
+            {
+                "metricProgress": [{
+                    "metricField": "balance",
+                    "denominatorMode": "column_max",
+                    "denominatorRules": [],
+                    "color": "#b7ebd7",
+                    "colorEnd": "#00a870",
+                    "colorMode": "reverse_gradient",
+                    "associationRules": [],
+                }]
+            },
+            ["balance"],
+            ["branch"],
+        )
+
+        self.assertEqual(progress[0]["colorMode"], "reverse_gradient")
+
+    def test_chart_style_normalization_is_bounded_and_data_free(self) -> None:
+        style = normalize_chart_style({
+            "templateId": "custom-chart",
+            "palette": ["#123456", "invalid", "#abcdef"],
+            "fontFamily": "unknown",
+            "chartHeight": "expanded",
+            "lineWidth": 99,
+            "areaOpacity": -2,
+            "rows": [{"secret": "never store"}],
+        })
+        self.assertEqual(style["palette"], ["#123456", "#ABCDEF"])
+        self.assertEqual(style["fontFamily"], "system")
+        self.assertEqual(style["chartHeight"], "expanded")
+        self.assertEqual(style["lineWidth"], 4.0)
+        self.assertEqual(style["areaOpacity"], 0.0)
+        self.assertNotIn("rows", style)
 
     def test_route_rebinds_dataset_to_current_tenant_catalog(self) -> None:
         handler = SimpleNamespace(
@@ -118,6 +259,21 @@ class VisualReportsTest(unittest.TestCase):
         self.assertEqual(saved["ownerUserId"], "u_owner")
         self.assertEqual(saved["cards"][0]["type"], "table")
         self.assertNotIn("rows", saved["cards"][0]["dataset"])
+        self.assertEqual(saved["cards"][0]["config"]["metricRankings"][0]["direction"], "desc")
+        self.assertEqual(saved["cards"][0]["config"]["metricFormats"], [{"metricField": "balance", "percent": True, "decimalPlaces": 3}])
+        self.assertEqual(saved["cards"][0]["config"]["metricProgress"][0]["denominatorRules"][0]["values"], ["总行"])
+        self.assertEqual(saved["cards"][0]["config"]["metricProgress"][0]["denominatorRules"][0]["operator"], "in")
+        self.assertEqual(saved["cards"][0]["config"]["metricProgress"][0]["colorEnd"], "#77BB99")
+        self.assertEqual(saved["cards"][0]["config"]["metricProgress"][0]["associationRules"][0]["replacementValue"], "有效")
+        self.assertEqual(saved["cards"][0]["config"]["calculatedColumns"][0]["expression"], "[balance] / 2")
+        self.assertEqual(saved["cards"][0]["config"]["tableStyle"]["templateId"], "excel-navy")
+        self.assertEqual(saved["cards"][0]["config"]["tableStyle"]["headerBackground"], "#245680")
+        self.assertEqual(saved["cards"][0]["config"]["tableStyle"]["headerBorderColor"], "#DCE7DF")
+        self.assertEqual(saved["cards"][0]["config"]["tableStyle"]["fontFamily"], "humanist")
+        self.assertTrue(saved["cards"][0]["config"]["tableStyle"]["emphasizeFirstColumn"])
+        self.assertEqual(saved["cards"][0]["config"]["chartStyle"]["templateId"], "chart-cloud-blue")
+        self.assertEqual(saved["cards"][0]["config"]["chartStyle"]["palette"], ["#3370FF", "#38A7A0"])
+        self.assertEqual(saved["cards"][0]["config"]["chartStyle"]["chartHeight"], "expanded")
         owner_state = store.get_module("tenant_a", "self_analysis", actor_user_id="u_owner")["state"]
         other_state = store.get_module("tenant_a", "self_analysis", actor_user_id="u_other")["state"]
         self.assertEqual([report["id"] for report in owner_state["visualReports"]], ["visual_report_1"])

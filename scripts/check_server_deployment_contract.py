@@ -58,6 +58,7 @@ server_development_script = read("scripts/server-development-container.sh")
 server_development_env = read(".env.server-development.example")
 server_development_unit = read("configs/deployment/smart-data-agent-docker-mss.service")
 release_evidence = read("scripts/collect_release_evidence.py")
+webhook_helper = read("scripts/configure_forgejo_dokploy_webhook.py")
 legacy_personal_crawler_bind = "/opt/" + "palywright/examples/data-crawler/data"
 
 require("SMART_DATA_AGENT_DATA_CRAWLER_ROOT=/app/data" in dockerfile, "dockerfile_data_crawler_root")
@@ -171,6 +172,10 @@ require(
     "ci_no_postgresql_primary",
 )
 require("scripts/release-gate.sh" in ci, "ci_release_gate")
+require(
+    "https://xujingbo-jk-git.qifudigitech.com/api/v1" in webhook_helper,
+    "webhook_helper_qifu_api",
+)
 require('"test:frontend-contracts"' in package_json, "package_frontend_contract_suite")
 require("npm run test:frontend-contracts" in package_json, "package_full_test_includes_frontend_contracts")
 for contract_script in (

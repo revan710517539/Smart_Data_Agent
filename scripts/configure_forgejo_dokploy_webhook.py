@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Create or update one Forgejo push webhook for a Dokploy application.
+"""Create or update one Qifu Git push webhook for a Dokploy application.
 
-Run this on the private Forgejo host. The webhook URL is read from stdin so its
-Dokploy refresh token is never written to disk or command-line history.
+The webhook URL is read from stdin so its Dokploy refresh token is never written
+to disk or command-line history.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--owner", default="revan")
     parser.add_argument("--repository", default="smart-data-agent")
-    parser.add_argument("--api-root", default="http://100.126.193.56:3000/api/v1")
+    parser.add_argument("--api-root", default="https://xujingbo-jk-git.qifudigitech.com/api/v1")
     parser.add_argument("--token-file", default="~/.config/forgejo/codex-bootstrap-token")
     args = parser.parse_args()
 

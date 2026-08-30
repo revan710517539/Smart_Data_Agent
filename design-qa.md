@@ -53,6 +53,100 @@ final result: passed
 
 ---
 
+# Design QA — 可视化报表页头与模板提示收紧
+
+- source visual truth: `/var/folders/5j/1tdj8bb17jbc5z_08kq65_bc0000gn/T/codex-clipboard-ce4eca88-d67f-412a-8651-6f1d56cd107b.png`, `/var/folders/5j/1tdj8bb17jbc5z_08kq65_bc0000gn/T/codex-clipboard-ffaff0be-c0cf-4fc1-9480-ee5f0153841d.png`
+- reproduced pre-change screenshot: `output/playwright/visual-report-header-notice-cleanup-20260830/before.png`
+- iteration-2 screenshots: `output/playwright/visual-report-header-notice-cleanup-20260830/after-header.png`, `output/playwright/visual-report-header-notice-cleanup-20260830/after-template.png`
+- same-input comparison: `output/playwright/visual-report-header-notice-cleanup-20260830/comparison.png`
+- viewport: 1470×750 CSS px; both local captures are 1470×750 and the side-by-side comparison is 2940×750 without density resampling
+- state: 华兴银行 / 可视化报表 / 创建订单漏斗转化_2026-08-27 / 编辑态 / 银行经营排名模板
+
+## Findings
+
+- No actionable P0/P1/P2 difference remains. The standalone text return row is gone; the compact return icon now precedes the report title on the first title baseline.
+- Removing the standalone row, title description, institution metadata and save-success banner moves the complete report page upward while retaining the shared `StandardAnalysisPageHeader` gutter, action alignment and typography.
+- The return control uses the existing Lucide `ArrowLeft` asset at 14px inside a 24px button, with an accessible name, tooltip, hover treatment and keyboard focus ring.
+- Save, destination and template-application success banners no longer reserve vertical space. Genuine save errors, template field-mapping warnings and freeze restrictions remain visible through their existing alert paths.
+- Applying `银行经营排名` still produces three ranking columns and 24 progress cells in the authenticated fixture; the table data, navy header, banded rows and progress bars remain unchanged.
+
+## Interaction evidence
+
+- Clicking 保存 completed without rendering `可视化报表已保存。`; the existing save request and `正在保存…` transient state remain intact.
+- Clicking the title-side `返回报表首页` control returned to the existing landing list with `最近创建` and `新建报表`, then the same report reopened normally. The final source contract fixes this control before `data-visual-report-title` and removes both description strings.
+- Applying the featured custom template produced nine `-排名` text occurrences across headers/accessibility output and 24 progress cells, with no `已应用自定义模板` or generic template-success banner.
+- The in-app Browser reached the local login page but had no authenticated session, so final same-state acceptance used the already authenticated Chrome SDA tab; no credential was copied or changed.
+
+## Comparison history
+
+- iteration 1: captured the existing standalone return row and save-success banner in the authenticated historical report.
+- iteration 2: moved the icon into the title, removed success-only banners, reran save/template/back interactions and compared the same report at the same viewport.
+- iteration 3: applied the user's follow-up by moving the icon from the title's right side to its left and removing the two remaining title-detail rows. The focused source contract, typecheck and build pass; the latest supplied screenshot path was already unavailable, and the Chrome extension disconnected before a new authenticated capture, so the prior screenshots are retained as iteration evidence rather than mislabeled as the final micro-adjustment.
+
+## Verification
+
+- [x] `node scripts/visual-report-workbench-contract.mjs`
+- [x] `node scripts/visualization-interaction-contract.mjs`
+- [x] `npm run typecheck`
+- [x] `npm run build` (3530 modules, 82 precompressed assets)
+- [x] authenticated Chrome save, template and return journey
+- [x] authenticated browser console error count: 0
+- [x] local frontend 5174 HTTP 200 and `GET /api/ready` ready=true with database ready
+
+final result: passed
+
+---
+
+# Design QA — 可视化报表数据重绑与页头操作区
+
+- source visual truth: `/var/folders/5j/1tdj8bb17jbc5z_08kq65_bc0000gn/T/codex-clipboard-fc099235-ca18-4e7f-bee0-8843d1792b66.png`
+- reproduced pre-fix screenshot: `output/playwright/visual-report-schema-header-before.png`
+- implementation screenshot: `output/playwright/visual-report-schema-header-after.png`
+- same-input comparison: `output/playwright/visual-report-schema-header-comparison.png`
+- viewport: 1470×750 CSS px, device scale factor 2
+- pixel dimensions: both browser captures are 1470×750 px from the same Chrome viewport and authenticated report state; the comparison is 2940×750 px with no density resampling
+- state: 华兴银行 / 可视化报表 / 标品双周会周度sql_2026-08-14 / 编辑态 / 保存结果
+
+## Findings
+
+- No actionable P0/P1/P2 difference remains. The three destination actions now occupy the existing standard page-header action group, immediately before 便签、编辑/保存、留言板.
+- Fonts and typography: all six actions retain the existing 12px desktop control typography, icon scale and single-line labels; the title and metadata hierarchy are unchanged.
+- Spacing and layout rhythm: the action group is 518.66×36px at x=928.66 and shares the header's y=42.62 baseline. The header ends at x=1447.33 within a 1470px viewport, and body scroll width equals document client width, so no horizontal overflow is introduced.
+- Colors and visual tokens: completed destination state keeps the existing pale-green semantic treatment; the successful save banner uses the existing green status token instead of the previous red error token.
+- Image quality and asset fidelity: the page uses the existing Lucide icon set and rendered chart; no source imagery or raster asset was replaced.
+- Copy and content: the false `可视化报表引用的数据结构已变化` alert is absent after save, and the visible status is `可视化报表已保存。`.
+
+## Full-view and focused comparison evidence
+
+- The left side of the combined image reproduces the original defect at the same browser viewport: red schema alert and a detached second-row destination toolbar.
+- The right side shows the same report after repair: one upper-right action row, no detached toolbar, no red alert, and the chart remains visually and functionally unchanged.
+- A separate focused crop was not needed because the complete header, status banner and chart are legible together in the 2940×750 comparison.
+
+## Interaction and runtime evidence
+
+- Opened the historical report from the real report list, clicked 保存, waited for the API result, and observed `可视化报表已保存。`.
+- The persisted dataset reference was rebound from the retired 2026-08-14 delivery to the current 2026-05-06 delivery while retaining all 14 physical field codes.
+- DOM readback found zero alerts, a single success status, and no page overflow.
+- Browser console contained no error entries. Existing transient Recharts zero-size warnings were observed during route transitions and are unrelated to this header/schema repair.
+
+## Comparison history
+
+- iteration 1: reproduced the red fingerprint alert and detached destination toolbar in the authenticated historical report.
+- iteration 2: aligned frontend/backend compatibility to physical field label and type family, moved destination actions into `StandardAnalysisPageHeader`, reloaded the same report, saved successfully, and captured the post-fix comparison. No P0/P1/P2 visual issue remained.
+
+## Verification
+
+- [x] `python3 -m unittest backend.platform.tests.test_visual_reports` (17 tests)
+- [x] `node scripts/visual-report-workbench-contract.mjs`
+- [x] `npm run typecheck`
+- [x] `npm run build`
+- [x] authenticated Chrome save/rebind journey and before/after screenshots
+- [x] local `GET /api/ready`: ready=true
+
+final result: passed
+
+---
+
 # Design QA — 银行经营排名模板
 
 - Result: passed

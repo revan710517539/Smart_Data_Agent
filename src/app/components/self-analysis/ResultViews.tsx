@@ -268,7 +268,6 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     appliedSkinIdRef.current = activeSkin.id;
     const template = chartTemplateById(activeSkin.chartTemplateId);
     setChartStyle(template.style);
-    setTableNotice(`已随页面皮肤应用图表模板：${template.name}`);
   }, [activeSkin]);
   useEffect(() => {
     setCustomTemplates(templateLibraryKey ? readCustomTableTemplates(templateLibraryKey) : []);
@@ -670,7 +669,6 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   const applyBuiltInTableTemplate = (template: BuiltInTableTemplate) => {
     setTableStyle(template.style);
     setMetricProgress((current) => current.map((progress) => ({ ...progress, color: template.progressColors[0], colorEnd: template.progressColors[1], colorMode: "gradient" })));
-    setTableNotice(`已应用模板：${template.name}`);
     setActivePanel(null);
     trackVisual("visualization_result", { action: "apply_table_template", template_id: template.id, template_kind: "built_in" });
   };
@@ -684,7 +682,7 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     setMergedDimensionFields(result.mergedDimensionFields || []);
     setFrozenColumnFields(result.frozenColumnFields || []);
     setFrozenRowKeys([]);
-    setTableNotice(result.warnings.length ? `已应用“${template.name}”，跳过 ${result.warnings.length} 项未匹配规则` : `已应用自定义模板：${template.name}`);
+    if (result.warnings.length) setTableNotice(`已应用“${template.name}”，跳过 ${result.warnings.length} 项未匹配规则`);
     setActivePanel(null);
     trackVisual("visualization_result", { action: "apply_table_template", template_id: template.id, template_kind: "custom", skipped_rules: result.warnings.length });
   };
@@ -707,7 +705,6 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   };
   const applyBuiltInChartTemplate = (template: BuiltInChartTemplate) => {
     setChartStyle(template.style);
-    setTableNotice(`已应用图表模板：${template.name}`);
     setActivePanel(null);
     trackVisual("visualization_result", { action: "apply_chart_template", template_id: template.id, chart_type: cardType });
   };

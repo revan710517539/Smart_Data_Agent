@@ -463,7 +463,7 @@ class VisualReportsTest(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, "visual_report_dataset_unavailable"):
             _bind_visual_report_payload(handler, SimpleNamespace(tenant_id="tenant_a"), {"report": report})
 
-    def test_route_rejects_changed_schema_for_stable_source(self) -> None:
+    def test_route_rebinds_changed_fingerprint_when_physical_fields_remain_compatible(self) -> None:
         handler = SimpleNamespace(
             services=SimpleNamespace(
                 data_asset_store=SimpleNamespace(list_published_bundle=lambda tenant_id: {"topic_tables": []}),
@@ -479,6 +479,36 @@ class VisualReportsTest(unittest.TestCase):
                     "kind": "raw",
                     "sourceKey": "source_loans",
                     "schemaFingerprint": "schema_stale",
+                    "fields": [
+                        {"fieldNameEn": "branch", "fieldNameCn": "机构", "type": "string"},
+                        {"fieldNameEn": "balance", "fieldNameCn": "余额", "type": "rate"},
+                    ],
+                },
+            }],
+        }
+        bound = _bind_visual_report_payload(handler, SimpleNamespace(tenant_id="tenant_a"), {"report": report})
+        self.assertEqual(bound["report"]["cards"][0]["dataset"]["schemaFingerprint"], "schema_current")
+
+    def test_route_rejects_changed_schema_when_physical_field_is_incompatible(self) -> None:
+        handler = SimpleNamespace(
+            services=SimpleNamespace(
+                data_asset_store=SimpleNamespace(list_published_bundle=lambda tenant_id: {"topic_tables": []}),
+                data_acquisition_service=SimpleNamespace(csv_source=_RotatedCsvSource()),
+            )
+        )
+        report = {
+            **self.report,
+            "cards": [{
+                **self.report["cards"][0],
+                "dataset": {
+                    "id": "raw_loans_previous_delivery",
+                    "kind": "raw",
+                    "sourceKey": "source_loans",
+                    "schemaFingerprint": "schema_stale",
+                    "fields": [
+                        {"fieldNameEn": "branch", "fieldNameCn": "机构", "type": "string"},
+                        {"fieldNameEn": "balance", "fieldNameCn": "余额", "type": "string"},
+                    ],
                 },
             }],
         }

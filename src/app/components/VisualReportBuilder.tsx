@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, BarChart3, BookmarkPlus, Check, Clock3, Lightbulb, Plus, RotateCcw, Search, Sparkles } from "lucide-react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { usePlatformContext } from "../platform/PlatformContext";
 import { apiErrorMessage } from "../services/apiClient";
 import { fetchDataAssets, fetchPageDataRows, fetchTopicData, saveDataAssetItem, type PageDataAsset, type RawTableAsset, type TopicTableAsset } from "../services/dataAssetApi";
@@ -29,8 +29,13 @@ type VisualChartDraft = {
   config: VisualizationCardConfig;
 };
 
+type VisualReportRouteState = {
+  createVisualReport?: boolean;
+} | null;
+
 export function VisualReportBuilder() {
   const { tenantId, userId, selectedInstitution } = usePlatformContext();
+  const location = useLocation();
   const navigate = useNavigate();
   const [view, setView] = useState<"landing" | "editor">("landing");
   const [reports, setReports] = useState<VisualReport[]>([]);
@@ -45,7 +50,6 @@ export function VisualReportBuilder() {
   const [pageDataTables, setPageDataTables] = useState<PageDataAsset[]>([]);
   const [reportLoading, setReportLoading] = useState(true);
   const [catalogLoading, setCatalogLoading] = useState(false);
-  const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [visualChartDrafts, setVisualChartDrafts] = useState<Record<string, VisualChartDraft>>({});
@@ -53,6 +57,7 @@ export function VisualReportBuilder() {
   const hydratedRef = useRef(false);
   const catalogLoadedRef = useRef(false);
   const savedSignatureRef = useRef("");
+  const consumedCreateIntentRef = useRef<string | null>(null);
   const stickyNote = useStickyNote("self_analysis", `visual_report:${report.id}`);
 
   useEffect(() => {
@@ -102,13 +107,13 @@ export function VisualReportBuilder() {
     if (!hydratedRef.current || view !== "editor") return;
     const signature = reportSignature(report);
     if (signature === savedSignatureRef.current) return;
-    const timer = window.setTimeout(() => { void persistReport(report, false); }, 650);
+    const timer = window.setTimeout(() => { void persistReport(report); }, 650);
     return () => window.clearTimeout(timer);
     // persistReport intentionally follows the current report snapshot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [report, view]);
 
-  const persistReport = async (next: VisualReport, showNotice = true) => {
+  const persistReport = async (next: VisualReport) => {
     setSaving(true);
     setError("");
     try {
@@ -116,7 +121,6 @@ export function VisualReportBuilder() {
       savedSignatureRef.current = reportSignature(saved);
       setReport(saved);
       setReports((current) => upsertReportList(current, saved));
-      if (showNotice) setNotice("可视化报表已保存。");
       return saved;
     } catch (reason) {
       setError(apiErrorMessage(reason, "可视化报表保存失败。"));
@@ -142,7 +146,6 @@ export function VisualReportBuilder() {
     }
     setSaving(true);
     setError("");
-    setNotice("");
     try {
       if (destination !== "topic") await saveAsTopic(report, rawTables, topicTables, tenantId, userId);
       if (destination === "experience") await saveAsExperience(report, selectedInstitution, tenantId, userId);
@@ -151,7 +154,6 @@ export function VisualReportBuilder() {
       savedSignatureRef.current = reportSignature(saved);
       setReport(saved);
       setReports((current) => upsertReportList(current, saved));
-      setNotice(destinationMessage(destination));
       window.dispatchEvent(new CustomEvent("smart-data-agent-visual-report-saved", { detail: saved }));
       if (destination === "mine") navigate("/self-analysis/reports");
     } catch (reason) {
@@ -199,12 +201,22 @@ export function VisualReportBuilder() {
     setEditingTitle(false);
     setModalOpen(false);
     setMode(nextMode);
-    setNotice("");
     setError("");
     setView("editor");
   };
 
-  const createReport = () => openReport(newVisualReport(), "browse");
+  const createReport = () => openReport(newVisualReport(), "edit");
+
+  useEffect(() => {
+    const routeState = location.state as VisualReportRouteState;
+    if (!routeState?.createVisualReport || consumedCreateIntentRef.current === location.key) return;
+    consumedCreateIntentRef.current = location.key;
+    createReport();
+    navigate(location.pathname, { replace: true, state: null });
+    // This effect consumes an explicit, one-shot navigation intent. The
+    // callback deliberately uses the same creation path as the landing button.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.key, location.pathname, location.state, navigate]);
 
   const reportEditController: PageEditController = {
     mode,
@@ -223,6 +235,13 @@ export function VisualReportBuilder() {
     .filter((item) => item.cards.length > 0)
     .sort((left, right) => recommendationScore(right) - recommendationScore(left) || reportTime(right) - reportTime(left))
     .slice(0, 6), [reports]);
+  const destinationActions = report.cards.length ? (
+    <div className="flex flex-wrap items-center justify-end gap-2" data-visual-report-destinations="true">
+      <DestinationButton label="存我的" icon={BookmarkPlus} done={report.destinations.includes("mine")} disabled={saving} onClick={() => void saveDestination("mine")} />
+      <DestinationButton label="存经验" icon={Lightbulb} done={report.destinations.includes("experience")} disabled={saving} onClick={() => void saveDestination("experience")} />
+      <DestinationButton label="存周报" icon={BookmarkPlus} done={report.destinations.includes("weekly")} disabled={saving} onClick={() => void saveDestination("weekly")} />
+    </div>
+  ) : null;
 
   if (view === "landing") {
     return <VisualReportLanding
@@ -240,39 +259,45 @@ export function VisualReportBuilder() {
 
   return (
     <div className={PAGE_DATA_PAGE_GUTTER_CLASS} data-visual-report-builder="true" data-visual-report-mode={mode} data-default-report-page-template={DEFAULT_REPORT_PAGE_TEMPLATE}>
-      <button type="button" onClick={() => setView("landing")} className="mb-2 inline-flex items-center gap-1 text-[10px] text-[#7d8781] hover:text-[#178a53]" data-visual-report-back="true"><ArrowLeft className="h-3 w-3" />返回报表首页</button>
       <StandardAnalysisPageHeader
-        title={editingTitle ? (
-          <input
-            autoFocus
-            value={titleDraft}
-            onChange={(event) => setTitleDraft(event.target.value)}
-            onBlur={commitTitle}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") event.currentTarget.blur();
-              if (event.key === "Escape") { setTitleDraft(report.title); setEditingTitle(false); }
-            }}
-            aria-label="可视化报表名称"
-            className="h-9 w-full max-w-[520px] rounded-lg border border-[#cfe1d5] bg-white px-3 text-[18px] text-[#1d1d1f] outline-none ring-2 ring-[#2ca66f]/10"
-          />
-        ) : (
-          <button type="button" onDoubleClick={() => setEditingTitle(true)} className="max-w-full cursor-text truncate rounded-md px-1 py-0.5 text-left text-[18px] tracking-tight text-[#1d1d1f] hover:bg-[#f5faf7]" title="双击修改报表名称" data-visual-report-title="true">{report.title}</button>
+        title={(
+          <span className="inline-flex max-w-full items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setView("landing")}
+              aria-label="返回报表首页"
+              title="返回报表首页"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[#758079] transition-colors hover:bg-[#eef6f1] hover:text-[#178a53] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2ca66f]/30"
+              data-visual-report-back="true"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+            </button>
+            {editingTitle ? (
+              <input
+                autoFocus
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                onBlur={commitTitle}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                  if (event.key === "Escape") { setTitleDraft(report.title); setEditingTitle(false); }
+                }}
+                aria-label="可视化报表名称"
+                className="h-9 w-full max-w-[520px] rounded-lg border border-[#cfe1d5] bg-white px-3 text-[18px] text-[#1d1d1f] outline-none ring-2 ring-[#2ca66f]/10"
+              />
+            ) : (
+              <button type="button" onDoubleClick={() => setEditingTitle(true)} className="max-w-full cursor-text truncate rounded-md px-1 py-0.5 text-left text-[18px] tracking-tight text-[#1d1d1f] hover:bg-[#f5faf7]" title="双击修改报表名称" data-visual-report-title="true">{report.title}</button>
+            )}
+          </span>
         )}
-        description="从空白画布开始编辑当前机构的可视化报表"
-        metadata={<>双击名称编辑，点击其他位置自动保存 · 当前机构：{selectedInstitution}</>}
         stickyNote={stickyNote}
         editController={reportEditController}
         canEditLayout
+        leadingActions={destinationActions}
         headerDataAttribute="visual-report"
       />
 
-      {notice && <div className="mb-4 rounded-lg border border-[#d7efd9] bg-[#eef8f1] px-3 py-2 text-[11px] text-[#258a3f]" role="status">{notice}</div>}
       {error && <div className="mb-4 rounded-lg border border-[#ffd0d0] bg-[#fff5f5] px-3 py-2 text-[11px] text-[#c84034]" role="alert">{error}</div>}
-      {report.cards.length ? <div className="mb-3 flex flex-wrap items-center justify-end gap-2" data-visual-report-destinations="true">
-        <DestinationButton label="存我的" icon={BookmarkPlus} done={report.destinations.includes("mine")} disabled={saving} onClick={() => void saveDestination("mine")} />
-        <DestinationButton label="存经验" icon={Lightbulb} done={report.destinations.includes("experience")} disabled={saving} onClick={() => void saveDestination("experience")} />
-        <DestinationButton label="存周报" icon={BookmarkPlus} done={report.destinations.includes("weekly")} disabled={saving} onClick={() => void saveDestination("weekly")} />
-      </div> : null}
       <StandardAnalysisPageStickyNote stickyNote={stickyNote} />
       <div data-visual-report-canvas="true" data-report-list-loading={reportLoading ? "true" : "false"}>
         <StandardReportPageCanvas empty={!report.cards.length} editable={mode === "edit"} busy={catalogLoading} onEdit={() => setModalOpen(true)} editLabel="新增图表">
@@ -554,13 +579,6 @@ function datasetCode(dataset: VisualReportDataset) {
 
 function destinationLabel(destination: VisualReportDestination) {
   return ({ mine: "存我的", topic: "已沉淀主题", experience: "存经验", weekly: "存周报" } as const)[destination];
-}
-
-function destinationMessage(destination: VisualReportDestination) {
-  if (destination === "mine") return "已存入“我的报表 > 可视化报表”。";
-  if (destination === "topic") return "已提交为主题表候选；复核后进入主题数据资产。";
-  if (destination === "experience") return "已提交为分析经验候选；复核后进入知识记忆。";
-  return "已存入经营周报的可视化报表区域。";
 }
 
 async function saveAsTopic(report: VisualReport, rawTables: RawTableAsset[], topicTables: TopicTableAsset[], tenantId: string, userId: string) {

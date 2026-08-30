@@ -131,10 +131,24 @@ function visualReportRawSchemaCompatible(reference: VisualReportDatasetReference
   if (!reference.schemaFingerprint || !dataset.schemaFingerprint || reference.schemaFingerprint === dataset.schemaFingerprint) {
     return true;
   }
-  const storedFields = (reference.fields || []).map((field) => field.fieldNameEn).filter(Boolean);
+  const storedFields = (reference.fields || []).filter((field) => Boolean(field.fieldNameEn));
   if (!storedFields.length) return false;
-  const currentFields = new Set((dataset.fields || []).map((field) => field.fieldNameEn).filter(Boolean));
-  return storedFields.every((field) => currentFields.has(field));
+  const currentFields = new Map((dataset.fields || []).filter((field) => Boolean(field.fieldNameEn)).map((field) => [field.fieldNameEn, field]));
+  return storedFields.every((field) => {
+    const current = currentFields.get(field.fieldNameEn);
+    if (!current) return false;
+    const storedLabel = field.fieldNameCn || field.fieldNameEn;
+    const currentLabel = current.fieldNameCn || current.fieldNameEn;
+    return storedLabel === currentLabel && visualReportFieldTypeFamily(field.type) === visualReportFieldTypeFamily(current.type);
+  });
+}
+
+function visualReportFieldTypeFamily(value: string) {
+  const fieldType = String(value || "string").trim().toLocaleLowerCase();
+  if (/int|decimal|number|numeric|float|double|real|rate|percent|currency|money/.test(fieldType)) return "number";
+  if (/date|time|timestamp/.test(fieldType)) return "temporal";
+  if (/bool/.test(fieldType)) return "boolean";
+  return "text";
 }
 
 export function isPageDataDataset(dataset: VisualReportDataset): dataset is PageDataAsset {

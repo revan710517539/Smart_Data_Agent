@@ -2829,7 +2829,7 @@ export function SelfAnalysis() {
               <button type="button" role="tab" aria-selected={reportKindTab === "visual"} onClick={() => selectReportKindTab("visual")} className={`h-8 rounded-md px-4 text-[11px] ${reportKindTab === "visual" ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#7b7b80]"}`}>可视化报表</button>
             </div>
             {reportKindTab !== "featured" && (
-              <button type="button" onClick={() => navigate(reportKindTab === "analysis" ? "/self-analysis/query" : "/self-analysis/visual-reports")} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#0f8f58] px-3 text-[11px] text-white hover:bg-[#0b7d4c]">
+              <button type="button" onClick={() => reportKindTab === "analysis" ? navigate("/self-analysis/query") : navigate("/self-analysis/visual-reports", { state: { createVisualReport: true } })} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#0f8f58] px-3 text-[11px] text-white hover:bg-[#0b7d4c]">
                 <Plus className="h-3.5 w-3.5" />{reportKindTab === "analysis" ? "新建智能分析" : "新建可视化报表"}
               </button>
             )}

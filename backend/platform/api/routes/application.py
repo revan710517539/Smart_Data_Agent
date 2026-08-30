@@ -286,7 +286,12 @@ def _bind_visual_report_payload(handler: Any, context: Any, payload: dict[str, A
         requested_schema = str(requested_dataset.get("schemaFingerprint") or "").strip()
         current_schema = str(source.get("schemaFingerprint") or source.get("schemaVersion") or "").strip()
         if requested_schema and current_schema and requested_schema != current_schema:
-            raise PermissionError("visual_report_dataset_schema_changed")
+            raw_fields_compatible = dataset_kind == "raw" and _visual_report_fields_remain_compatible(
+                requested_dataset.get("fields"),
+                source.get("fields"),
+            )
+            if not raw_fields_compatible:
+                raise PermissionError("visual_report_dataset_schema_changed")
         requested_relationship = str(requested_dataset.get("relationshipGroupId") or "").strip()
         current_relationship = str(source.get("relationshipGroupId") or "").strip()
         if dataset_kind == "page_data" and requested_relationship and requested_relationship != current_relationship:
@@ -348,6 +353,50 @@ def _resolve_visual_report_raw_source(
         )
     ]
     return matches[0] if len(matches) == 1 else None
+
+
+def _visual_report_fields_remain_compatible(saved_fields: Any, current_fields: Any) -> bool:
+    """Allow a refreshed delivery when its stored physical columns still match.
+
+    Raw-table fingerprints also change when field governance adds semantic roles,
+    primary-key flags, or specializes a decimal column as a rate.  Those metadata
+    improvements must not invalidate an existing chart.  A missing/renamed field
+    or a change between numeric, temporal, boolean and text families still fails
+    closed.
+    """
+
+    saved = {
+        str(field.get("fieldNameEn") or "").strip(): field
+        for field in saved_fields if isinstance(field, dict) and str(field.get("fieldNameEn") or "").strip()
+    } if isinstance(saved_fields, list) else {}
+    current = {
+        str(field.get("fieldNameEn") or "").strip(): field
+        for field in current_fields if isinstance(field, dict) and str(field.get("fieldNameEn") or "").strip()
+    } if isinstance(current_fields, list) else {}
+    if not saved:
+        return False
+    return all(
+        code in current
+        and _visual_report_field_label(field) == _visual_report_field_label(current[code])
+        and _visual_report_field_type_family(field.get("type"))
+        == _visual_report_field_type_family(current[code].get("type"))
+        for code, field in saved.items()
+    )
+
+
+def _visual_report_field_label(field: dict[str, Any]) -> str:
+    return str(field.get("fieldNameCn") or field.get("fieldNameEn") or "").strip()
+
+
+def _visual_report_field_type_family(value: Any) -> str:
+    field_type = str(value or "string").strip().casefold()
+    if re.search(r"int|decimal|number|numeric|float|double|real|rate|percent|currency|money", field_type):
+        return "number"
+    if re.search(r"date|time|timestamp", field_type):
+        return "temporal"
+    if re.search(r"bool", field_type):
+        return "boolean"
+    return "text"
 
 
 def _visual_report_logical_title_candidate(value: str) -> bool:

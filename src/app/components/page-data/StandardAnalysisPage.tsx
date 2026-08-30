@@ -43,7 +43,7 @@ export function StandardAnalysisPageHeader({
   headerDataAttribute,
 }: {
   title: ReactNode;
-  description: string;
+  description?: string;
   metadata?: ReactNode;
   stickyNote: StandardAnalysisStickyNoteController;
   editController: PageEditController;
@@ -60,7 +60,7 @@ export function StandardAnalysisPageHeader({
     >
       <div className="min-w-0">
         <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">{title}</h2>
-        <p className="mt-1 text-[13px] text-[#aeaeb2]">{description}</p>
+        {description ? <p className="mt-1 text-[13px] text-[#aeaeb2]">{description}</p> : null}
         {metadata ? <div className="mt-1 text-[10px] text-[#c7c7cc]">{metadata}</div> : null}
       </div>
       <div className="flex w-fit min-h-9 max-w-full shrink-0 flex-wrap items-center justify-end gap-[0.2cm]" data-page-header-actions="true" data-standard-analysis-page-actions="true">

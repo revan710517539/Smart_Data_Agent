@@ -14,6 +14,7 @@ const visuals = read("src/app/components/self-analysis/ResultViews.tsx");
 const permissionDomain = read("src/app/components/system-settings/domain.ts");
 const accessService = read("backend/platform/access/service.py");
 const analyticsRoute = read("backend/platform/api/routes/interaction_events.py");
+const analyticsDomain = read("backend/platform/interaction_events.py");
 
 function expect(condition, message) {
   if (!condition) throw new Error(message);
@@ -28,12 +29,16 @@ expect(dataPreload.includes('path.startsWith("/agent/interaction-analytics")') &
 expect(service.includes('scope: "global"') && analyticsRoute.includes("list_global_range") && analyticsRoute.includes('"scope": "global"'), "超级管理员埋点分析必须覆盖全平台跨机构行为");
 expect(page.includes("全平台跨机构视角") && page.includes("tenantDisplayName"), "全平台埋点页面必须明确展示机构归属");
 expect(page.includes('className="min-h-full p-7"') && page.includes('text-[18px] tracking-tight text-[#1d1d1f]') && page.includes('text-[13px] text-[#aeaeb2]'), "页面边距、标题和副标题必须沿用留言板管理排版");
-expect(page.includes('data-page-header-actions="true"') && page.includes('h-9 rounded-lg border border-[#e5e5ea] bg-white'), "页头操作区必须沿用系统按钮高度和边框风格");
+expect(page.includes('data-page-header-actions="true"') && page.includes('inline-flex h-9') && page.includes('rounded-lg border border-[#e5e5ea] bg-white'), "页头操作区必须沿用系统按钮高度和边框风格");
 expect(page.includes("useState(7)") && service.includes("{ days = 7") && analyticsRoute.includes('int(value or "7")'), "埋点分析前后端默认统计周期必须统一为近 7 天");
 expect(page.includes("analyticsRetryDelaysMs") && page.includes("isRetryableInteractionAnalyticsError") && page.includes("页面将在服务就绪后自动恢复"), "API 启动期必须有界自动恢复并明确展示重试状态");
 expect(service.includes("normalizeInteractionAnalyticsSnapshot") && service.includes("arrayOrEmpty") && service.includes("breakpoint_summary"), "旧版或不完整响应必须在请求边界补齐集合字段，避免页面崩溃");
 expect(page.includes("重新读取") && page.includes('setLoadStatus("failed")'), "不可恢复错误必须保留人工重新读取入口");
+expect(!page.includes('setLoadStatus("loading");\n    setSnapshot(null);') && page.includes("loading && !snapshot"), "筛选和翻页刷新必须保留已有快照，避免页面高度塌缩后跳到页首");
+expect(page.includes("setAppliedActor(selectedActor)") && page.includes("appliedActor === item.actor_user_id") && page.includes("item.actor_user_id === appliedActor"), "用户选中态、链路标题和时间线必须在筛选响应成功后同步切换");
 expect(page.includes("访问人数") && page.includes("高频指标") && page.includes("访问链路追索"), "页面必须覆盖总览、数据使用和用户轨迹");
+expect(page.includes("setSelectedActor(item.actor_user_id)") && service.includes('params.set("actor_user_id", actorUserId)') && analyticsRoute.includes("timeline_actor_user_id=actor_user_id"), "点击来访用户必须把其用户标识传入访问链路筛选");
+expect(analyticsDomain.includes("timeline_source = [event for event in timeline_source") && analyticsDomain.includes('str(event.get("actor_user_id") or "") == actor_filter') && analyticsDomain.includes('"total": len(timeline_source)'), "访问链路必须返回所选用户的完整过滤总数并由分页呈现");
 expect(page.includes('useState<TrendMetricKey>("visits")') && page.includes("data-trend-metric-card") && page.includes("aria-pressed={selected}"), "总览卡片必须默认选择访问次数，并提供可访问的选择状态");
 expect(page.includes('data-weekly-trend-metric={metric}') && page.includes("每周访问人数趋势") && page.includes("每周行为事件趋势") && page.includes("每周访问高峰趋势"), "点击总览卡片必须切换对应的每周趋势口径");
 expect(service.includes("peak_hour: number | null") && service.includes("item?.peak_hour ?? null"), "周峰值小时字段必须兼容旧版响应");

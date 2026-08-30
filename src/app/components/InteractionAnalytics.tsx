@@ -67,6 +67,7 @@ export function InteractionAnalytics() {
   const [days, setDays] = useState(7);
   const [trendMetric, setTrendMetric] = useState<TrendMetricKey>("visits");
   const [selectedActor, setSelectedActor] = useState("");
+  const [appliedActor, setAppliedActor] = useState("");
   const [page, setPage] = useState(1);
   const [refreshToken, setRefreshToken] = useState(0);
   const [snapshot, setSnapshot] = useState<InteractionAnalyticsSnapshot | null>(null);
@@ -83,7 +84,6 @@ export function InteractionAnalytics() {
     let cancelled = false;
     setLoading(true);
     setLoadStatus("loading");
-    setSnapshot(null);
     setNotice("");
     const loadSnapshot = async () => {
       for (let attempt = 0; attempt < analyticsRetryDelaysMs.length; attempt += 1) {
@@ -97,6 +97,7 @@ export function InteractionAnalytics() {
           const response = await fetchInteractionAnalytics({ days, actorUserId: selectedActor, page, pageSize: 50 }, { tenantId, userId });
           if (cancelled) return;
           setSnapshot(response);
+          setAppliedActor(selectedActor);
           setLoadStatus("ready");
           setLoading(false);
           return;
@@ -117,7 +118,7 @@ export function InteractionAnalytics() {
     return () => { cancelled = true; };
   }, [days, isSuperAdmin, page, refreshToken, selectedActor, tenantId, userId]);
 
-  const selectedUser = snapshot?.users.find((item) => item.actor_user_id === selectedActor);
+  const selectedUser = snapshot?.users.find((item) => item.actor_user_id === appliedActor);
   const peakHours = useMemo(() => [...(snapshot?.hourly || [])].sort((left, right) => right.events - left.events).slice(0, 3), [snapshot]);
   const breakpointSummary = snapshot?.breakpoint_summary;
 
@@ -184,9 +185,9 @@ export function InteractionAnalytics() {
 
           <section className="mt-4 grid min-h-[520px] gap-4 lg:grid-cols-[0.8fr_1.2fr]">
             <Panel title="来访用户" subtitle="选择用户后追索其完整操作链路">
-              <button type="button" onClick={() => { setSelectedActor(""); setPage(1); }} className={`mb-2 flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[11px] ${!selectedActor ? "bg-[#eaf7ef] text-[#178a53]" : "bg-[#f7f8fa] text-[#636366]"}`}><span>全部用户</span><span>{snapshot.summary.total_visitors} 人</span></button>
+              <button type="button" onClick={() => { setSelectedActor(""); setPage(1); }} className={`mb-2 flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[11px] ${!appliedActor ? "bg-[#eaf7ef] text-[#178a53]" : "bg-[#f7f8fa] text-[#636366]"}`}><span>全部用户</span><span>{snapshot.summary.total_visitors} 人</span></button>
               <div className="max-h-[430px] space-y-1.5 overflow-y-auto pr-1">
-                {snapshot.users.map((item) => <button key={item.actor_user_id} type="button" onClick={() => { setSelectedActor(item.actor_user_id); setPage(1); }} className={`w-full rounded-xl border p-3 text-left transition-colors ${selectedActor === item.actor_user_id ? "border-[#b7ddc3] bg-[#f1faf4]" : "border-[#ececf0] bg-white hover:bg-[#fafbfc]"}`}>
+                {snapshot.users.map((item) => <button key={item.actor_user_id} type="button" onClick={() => { setSelectedActor(item.actor_user_id); setPage(1); }} className={`w-full rounded-xl border p-3 text-left transition-colors ${appliedActor === item.actor_user_id ? "border-[#b7ddc3] bg-[#f1faf4]" : "border-[#ececf0] bg-white hover:bg-[#fafbfc]"}`}>
                   <div className="flex items-center justify-between gap-3"><span className="truncate text-[12px] font-medium text-[#1d1d1f]">{item.actor_name}</span><span className="shrink-0 text-[11px] tabular-nums text-[#178a53]">{item.visits} 次访问</span></div>
                   <div className="mt-1 truncate text-[10px] text-[#9a9aa0]">{item.actor_account || item.actor_user_id}</div>
                   <div className="mt-1 truncate text-[10px] text-[#6f8778]" title={item.tenant_ids.map(tenantDisplayName).join("、")}>机构：{item.tenant_ids.map(tenantDisplayName).join("、") || "未知机构"}</div>

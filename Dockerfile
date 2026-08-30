@@ -1,3 +1,9 @@
+FROM node:22.14.0-bookworm-slim@sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b AS release-cache
+# Dokploy invokes the Dockerfile directly and cannot provide the named cache
+# context used by scripts/build-image.sh. Keep an empty online-build fallback;
+# the governed release command overrides this stage with its validated cache.
+RUN mkdir -p /npm /wheelhouse
+
 FROM node:22.14.0-bookworm-slim@sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b AS frontend-build
 ARG SMART_DATA_AGENT_RELEASE_OFFLINE=false
 WORKDIR /workspace

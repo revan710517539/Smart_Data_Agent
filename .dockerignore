@@ -1,6 +1,5 @@
 .env
 .env.*
-!.env.example
 .git
 .smart_data_agent.sqlite*
 node_modules

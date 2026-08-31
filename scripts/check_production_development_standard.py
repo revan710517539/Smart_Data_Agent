@@ -26,7 +26,6 @@ def main() -> None:
     ci = _read(".github/workflows/ci.yml")
     compose = _read("docker-compose.server.yml")
     server_development = _read("scripts/server-development-container.sh")
-    server_development_env = _read(".env.server-development.example")
     browser_e2e = _read("scripts/production-auth-browser-e2e.mjs")
     required_standard_markers = (
         "sda-production-development/v1",
@@ -94,10 +93,10 @@ def main() -> None:
         "direct_development_server_contract",
     )
     require(
-        "SMART_DATA_AGENT_ENV=development" in server_development_env
-        and "SMART_DATA_AGENT_AUTH_MODE=development" in server_development_env
-        and "SMART_DATA_AGENT_EMBEDDED_WORKER=true" in server_development_env
-        and "SMART_DATA_AGENT_AUTO_MIGRATE=false" in server_development_env,
+        "SMART_DATA_AGENT_ENV=development" in server_development
+        and "SMART_DATA_AGENT_AUTH_MODE=development" in server_development
+        and "SMART_DATA_AGENT_EMBEDDED_WORKER=true" in server_development
+        and "SMART_DATA_AGENT_AUTO_MIGRATE=false" in server_development,
         "direct_development_runtime_profile",
     )
     release_section = standard.split("## 8. 标准发布门禁", 1)[1].split("## 9.", 1)[0]

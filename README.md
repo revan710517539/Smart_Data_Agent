@@ -79,7 +79,7 @@
   `docs/server_mysql_deployment.md`:
 
   - The current CentOS 7 server uses direct Docker + systemd with
-    `.env.server-development.example`, `scripts/server-development-container.sh`
+    a protected environment file outside Git, `scripts/server-development-container.sh`
     and `configs/deployment/smart-data-agent-docker-mss.service`. The unit name
     deliberately matches the existing server controller so deployment replaces
     it atomically after backup instead of installing a competing supervisor. It keeps
@@ -153,8 +153,9 @@
   Production Compose separates one-time migration and capability-preparation
   jobs from the long-running API and Worker. It
   requires enterprise OIDC, Redis TLS, KMS, object storage, ClamAV and an
-  explicit egress allowlist; copy `.env.production.example` into protected
-  deployment configuration and run the six release/candidate gates documented
+  explicit egress allowlist; create the protected `.env.production` directly in
+  the deployment platform from the required variables in `docker-compose.server.yml`,
+  and run the six release/candidate gates documented
   in `docs/server_mysql_deployment.md`. The complete model-entry, page-routing,
   scene-recognition, Skill/Memory scheduling and result-expression contract is
   documented in `docs/production_model_skill_runtime.md`.

@@ -137,8 +137,9 @@ SMART_DATA_AGENT_MIGRATION_BASE_REF=<发布基线SHA> \
 
 CentOS 7 服务器允许使用直接 Docker + systemd，不要求安装 Compose。该拓扑必须
 显式保持 `SMART_DATA_AGENT_ENV=development`、development auth、local object store、
-embedded worker，并通过 `.env.server-development.example` 与
-`scripts/server-development-container.sh` 管理。简化拓扑不要求独立 Worker、Redis、
+embedded worker，并通过 Git 外的受保护环境文件与
+`scripts/server-development-container.sh` 管理。环境文件的绝对路径由
+`SMART_DATA_AGENT_SERVER_ENV_FILE` 指定。简化拓扑不要求独立 Worker、Redis、
 OIDC、S3、ClamAV 或 KMS，但仍必须保留：MySQL 8.0.18 + TLS、`AUTO_MIGRATE=false`、
 备份/隔离恢复回执、一次性 migration、不可变 Image ID/digest、完整 SHA、同源 Crawler
 挂载、候选业务验证和可执行回滚。Development 模式不得直接公开绑定 `0.0.0.0`；公网

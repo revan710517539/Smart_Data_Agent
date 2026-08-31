@@ -105,7 +105,8 @@ Crawler 对同一 bind Source 必须通过其 `verify_shared_volume_mount.py` �
 ### 严格 Production Compose 档位
 
 当 OIDC、Redis TLS、KMS、外部对象存储、ClamAV 和独立 Worker 均已实际提供时，使用
-`.env.production.example` 与 `docker-compose.server.yml`。Compose 不是当前服务器的
+部署平台内受保护的 `.env.production` 与 `docker-compose.server.yml`。环境文件不进入
+Git；所需变量以 Compose 中的必填 `${VAR:?说明}` 契约为准。Compose 不是当前服务器的
 必装依赖，也不得因为服务器缺少这些可选组件而改写 Development 业务行为。
 
 ## 版本与配置
@@ -118,9 +119,9 @@ Crawler 对同一 bind Source 必须通过其 `verify_shared_volume_mount.py` �
    ./scripts/release-gate.sh <40位SHA>
    ```
 
-2. 将 `.env.production.example` 复制为受保护的 `.env.production`，只在部署平台
-   Secret 区填真实值。不得把数据库、OIDC、模型、对象存储或 KMS 凭据写入 Git、
-   日志和聊天。
+2. 直接在部署平台 Secret 区创建受保护的 `.env.production`，按
+   `docker-compose.server.yml` 的必填变量契约填写真实值。不得把数据库、OIDC、
+   模型、对象存储或 KMS 凭据写入 Git、日志和聊天。
 3. `SMART_DATA_AGENT_IMAGE` 必须是 registry 返回的
    `repository@sha256:<64位摘要>`；SHA tag 只可作为构建期定位，不能作为部署身份。
    Dockerfile 的 OCI revision label、源码闭包摘要和待发布 Commit 必须一致。

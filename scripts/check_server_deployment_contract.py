@@ -37,9 +37,6 @@ def requirement_name(value: str) -> str:
 
 dockerfile = read("Dockerfile")
 dockerignore = read(".dockerignore")
-env_example = read(".env.example")
-production_env_example = read(".env.production.example")
-server_development_env_example = read(".env.server-development.example")
 dev_compose = read("docker-compose.dev.yml")
 server_compose = read("docker-compose.server.yml")
 production_lock = read("requirements.lock")
@@ -55,7 +52,6 @@ business_data_manifest_text = read("src/app/data/business-data-manifest.json")
 mount_contract_shell = read("scripts/data-crawler-mount-contract.sh")
 mount_contract_python = read("scripts/data_crawler_mount_contract.py")
 server_development_script = read("scripts/server-development-container.sh")
-server_development_env = read(".env.server-development.example")
 server_development_unit = read("configs/deployment/smart-data-agent-docker-mss.service")
 release_evidence = read("scripts/collect_release_evidence.py")
 webhook_helper = read("scripts/configure_forgejo_dokploy_webhook.py")
@@ -80,6 +76,8 @@ for pattern in (
 ):
     require(pattern in dockerignore.splitlines(), f"dockerignore:{pattern}")
 require("src/app/data/*/" in dockerignore.splitlines(), "dockerignore:mounted_business_data")
+for relative in (".env.example", ".env.production.example", ".env.server-development.example"):
+    require(not (ROOT / relative).exists(), f"source_environment_template_absent:{relative}")
 
 with (ROOT / "pyproject.toml").open("rb") as handle:
     project = tomllib.load(handle)
@@ -139,31 +137,30 @@ require(
     "server_compose_no_development_login",
 )
 
-require("SMART_DATA_AGENT_DATA_CRAWLER_ROOT=" in env_example, "env_data_crawler_key")
-require("SMART_DATA_AGENT_CSV_SOURCE_ROOT=" not in env_example, "env_no_retired_source_key")
-require("SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD=" in env_example, "env_login_secret_key")
+require("SMART_DATA_AGENT_DATA_CRAWLER_ROOT" in dev_compose, "dev_compose_data_crawler_key")
+require("SMART_DATA_AGENT_CSV_SOURCE_ROOT" not in dev_compose, "dev_compose_no_retired_source_key")
+require("SMART_DATA_AGENT_DEVELOPMENT_LOGIN_PASSWORD" in dev_compose, "dev_compose_login_secret_key")
 for key in (
-    "SMART_DATA_AGENT_IMAGE=",
-    "SMART_DATA_AGENT_PUBLIC_ORIGIN=",
-    "SMART_DATA_AGENT_OIDC_ISSUER=",
-    "SMART_DATA_AGENT_REDIS_URL=rediss://",
-    "SMART_DATA_AGENT_OBJECT_BUCKET=",
-    "SMART_DATA_AGENT_KMS_COMMAND=",
+    "SMART_DATA_AGENT_IMAGE",
+    "SMART_DATA_AGENT_PUBLIC_ORIGIN",
+    "SMART_DATA_AGENT_OIDC_ISSUER",
+    "SMART_DATA_AGENT_REDIS_URL",
+    "SMART_DATA_AGENT_OBJECT_BUCKET",
+    "SMART_DATA_AGENT_KMS_COMMAND",
 ):
-    require(key in production_env_example, f"production_env:{key}")
-require("DATA_CRAWLER_SHARED_VOLUME=" in production_env_example, "production_env:shared_crawler_volume")
-require("DATA_CRAWLER_MOUNT_TYPE=volume" in production_env_example, "production_env:crawler_mount_type")
-require("DATA_CRAWLER_MOUNT_SOURCE=" in production_env_example, "production_env:crawler_mount_source")
-require("SMART_DATA_AGENT_DATA_CRAWLER_HOST_ROOT=" not in production_env_example, "production_env:no_server_host_bind")
+    require(key in server_compose, f"server_compose_protected_environment:{key}")
+require("set rediss URL" in server_compose, "server_compose_redis_tls_contract")
+require("DATA_CRAWLER_MOUNT_SOURCE" in server_compose, "server_compose_crawler_mount_source")
+require("SMART_DATA_AGENT_DATA_CRAWLER_HOST_ROOT" not in server_compose, "server_compose_no_server_host_bind")
 for marker in (
-    "SMART_DATA_AGENT_ENV=development",
-    "SMART_DATA_AGENT_AUTH_MODE=development",
-    "SMART_DATA_AGENT_AUTO_MIGRATE=false",
-    "SMART_DATA_AGENT_EMBEDDED_WORKER=true",
-    "SMART_DATA_AGENT_OBJECT_STORE=local",
-    "SMART_DATA_AGENT_DATA_CRAWLER_ROOT=/app/data",
+    "SMART_DATA_AGENT_ENV:development",
+    "SMART_DATA_AGENT_AUTH_MODE:development",
+    "SMART_DATA_AGENT_AUTO_MIGRATE:false",
+    "SMART_DATA_AGENT_EMBEDDED_WORKER:true",
+    "SMART_DATA_AGENT_OBJECT_STORE:local",
+    "SMART_DATA_AGENT_DATA_CRAWLER_ROOT:/app/data",
 ):
-    require(marker in server_development_env_example, f"server_development_env:{marker}")
+    require(marker in server_development_script, f"server_development_script_profile:{marker}")
 
 require("image: mysql:8.0.18@sha256:" in ci, "ci_mysql_8018_digest")
 require("SMART_DATA_AGENT_TEST_MYSQL_URL" in ci, "ci_mysql_integration_url")
@@ -357,8 +354,8 @@ require("Restart=always" in server_development_unit, "server_development_systemd
 require("--restart no" in server_development_script, "server_development_no_dual_restart_owner")
 require("mysql80.service" not in server_development_unit, "server_development_no_unconfirmed_mysql_unit")
 require("smart-data-agent-docker-mss.service" in deployment_doc, "server_development_reuses_existing_systemd_unit_name")
-require("ssl_mode=required" in server_development_env, "server_development_matches_confirmed_mysql_tls_mode")
-require("SMART_DATA_AGENT_MYSQL_TLS_MODE=required" in server_development_env, "server_development_explicit_mysql_tls_mode")
+require("当前 Development 服务器已确认是 `required`" in deployment_doc, "server_development_matches_confirmed_mysql_tls_mode")
+require("SMART_DATA_AGENT_MYSQL_TLS_MODE" in deployment_doc, "server_development_explicit_mysql_tls_mode")
 require("mysql_ca_mount_required" in server_development_script, "server_development_conditional_mysql_ca_mount")
 require(
     "Runtime/Topic volumes intentionally use Docker's first-mount copy-up" in server_development_script
@@ -366,7 +363,6 @@ require(
     "server_development_state_volume_inherits_app_permissions",
 )
 for path in (
-    ".env.server-development.example",
     "configs/deployment/smart-data-agent-docker-mss.service",
     "scripts/data-crawler-mount-contract.sh",
     "scripts/data_crawler_mount_contract.py",

@@ -535,11 +535,11 @@ def test_development_state_volumes_inherit_the_non_root_image_permissions() -> N
 
 
 def test_development_server_matches_confirmed_tls_and_existing_systemd_controller() -> None:
-    server_env = (ROOT / ".env.server-development.example").read_text(encoding="utf-8")
+    deployment_doc = (ROOT / "docs" / "server_mysql_deployment.md").read_text(encoding="utf-8")
     server_script = (ROOT / "scripts" / "server-development-container.sh").read_text(encoding="utf-8")
     server_unit = ROOT / "configs" / "deployment" / "smart-data-agent-docker-mss.service"
-    assert "SMART_DATA_AGENT_MYSQL_TLS_MODE=required" in server_env
-    assert "ssl_mode=required" in server_env
+    assert "SMART_DATA_AGENT_MYSQL_TLS_MODE" in deployment_doc
+    assert "当前 Development 服务器已确认是 `required`" in deployment_doc
     assert "mysql_ca_mount_required=false" in server_script
     assert 'if test "$mysql_ca_mount_required" = true' in server_script
     assert server_unit.is_file()

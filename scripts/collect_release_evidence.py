@@ -78,7 +78,6 @@ def main() -> None:
         ROOT / "Dockerfile.release-toolchain",
         ROOT / "docker-compose.server.yml",
         ROOT / "DEVELOPMENT.md",
-        ROOT / ".env.server-development.example",
         ROOT / "configs" / "deployment" / "smart-data-agent-docker-mss.service",
         ROOT / "configs" / "release" / "toolchain-lock.json",
         ROOT / "configs" / "deployment" / "mysql-migration-checksums.json",

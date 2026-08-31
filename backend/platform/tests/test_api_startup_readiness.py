@@ -4,11 +4,37 @@ import http.client
 import json
 import threading
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from backend.platform.api.server import AnalysisAPIHandler, AnalysisAPIServer
+from backend.platform.api.server import AnalysisAPIHandler, AnalysisAPIServer, _bootstrap_until_ready
 
 
 class ApiStartupReadinessTest(unittest.TestCase):
+    def test_bootstrap_recovers_when_database_becomes_available_after_initial_retries(self) -> None:
+        server = SimpleNamespace(
+            startup_status="starting",
+            startup_error="",
+            bootstrap_stop_event=threading.Event(),
+        )
+        services = object()
+        attempts = [ConnectionError("mysql unavailable"), ConnectionError("mysql starting"), services]
+        delays: list[float] = []
+
+        def build_services():
+            result = attempts.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        with patch("backend.platform.api.server._attach_platform") as attach:
+            _bootstrap_until_ready(server, build_services, lambda delay: delays.append(delay) or False)
+
+        self.assertEqual(delays, [2, 4])
+        attach.assert_called_once_with(server, services)
+        self.assertEqual(server.startup_status, "ready")
+        self.assertEqual(server.startup_error, "")
+
     def test_live_succeeds_and_app_routes_wait_while_bootstrap_is_running(self) -> None:
         server = AnalysisAPIServer(("127.0.0.1", 0), AnalysisAPIHandler)
         server.startup_status = "starting"

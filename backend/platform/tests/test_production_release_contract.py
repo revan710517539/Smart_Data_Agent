@@ -63,6 +63,25 @@ def test_release_gate_rejects_non_sha_before_docker_access() -> None:
     assert "40-character-git-sha" in completed.stderr
 
 
+def test_release_gate_accepts_exactly_forty_hex_characters_before_head_check() -> None:
+    completed = subprocess.run(
+        ["sh", str(ROOT / "scripts" / "release-gate.sh"), "a" * 40],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 1
+    assert "requested SHA is not HEAD" in completed.stderr
+
+
+def test_typescript_importing_node_contracts_enable_stripping() -> None:
+    package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    assert package["scripts"]["test:client-uuid"] == "node --experimental-strip-types scripts/client-uuid-contract.mjs"
+    assert package["scripts"]["test:weekly-page-data-workbench"] == (
+        "node --experimental-strip-types scripts/weekly-page-data-workbench-contract.mjs"
+    )
+
+
 def test_release_toolchain_contract_pins_bases_and_browser() -> None:
     completed = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "check_release_toolchain.py"), "--contract-only"],
@@ -655,6 +674,12 @@ class ProductionReleaseContractTest(unittest.TestCase):
 
     def test_release_gate_rejects_non_sha_before_docker_access(self) -> None:
         test_release_gate_rejects_non_sha_before_docker_access()
+
+    def test_release_gate_accepts_exactly_forty_hex_characters_before_head_check(self) -> None:
+        test_release_gate_accepts_exactly_forty_hex_characters_before_head_check()
+
+    def test_typescript_importing_node_contracts_enable_stripping(self) -> None:
+        test_typescript_importing_node_contracts_enable_stripping()
 
     def test_release_toolchain_contract_pins_bases_and_browser(self) -> None:
         test_release_toolchain_contract_pins_bases_and_browser()

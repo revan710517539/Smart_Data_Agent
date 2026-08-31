@@ -5,12 +5,11 @@ import json
 import os
 import socket
 import threading
-import time
 import traceback
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
@@ -36,10 +35,13 @@ class AnalysisAPIServer(ThreadingHTTPServer):
     automation_worker: AutomationWorker | None = None
     startup_status: str = "ready"
     startup_error: str = ""
+    bootstrap_stop_event: threading.Event | None = None
 
     def server_close(self) -> None:
         try:
             try:
+                if self.bootstrap_stop_event is not None:
+                    self.bootstrap_stop_event.set()
                 if self.automation_worker is not None:
                     self.automation_worker.close()
                 if self.services is not None:
@@ -625,25 +627,53 @@ def create_server(host: str, port: int, test_sqlite_db: str | Path | None = None
     # ECONNREFUSED while schema checks are still running.
     server = _listening_server(host, port, startup_status="starting")
 
-    def bootstrap() -> None:
-        last_error = ""
-        for attempt in range(1, 4):
-            try:
-                _attach_platform(server, build_production_platform())
-                server.startup_status = "ready"
-                server.startup_error = ""
-                print("Smart Data Agent API ready", flush=True)
-                return
-            except BaseException as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
-                traceback.print_exc()
-                time.sleep(2 * attempt)
-        server.startup_status = "failed"
-        server.startup_error = last_error
-        print(f"Smart Data Agent API startup failed: {last_error}", flush=True)
-
-    threading.Thread(target=bootstrap, name="sda-api-bootstrap", daemon=True).start()
+    threading.Thread(target=_bootstrap_until_ready, args=(server,), name="sda-api-bootstrap", daemon=True).start()
     return server
+
+
+def _bootstrap_until_ready(
+    server: AnalysisAPIServer,
+    build_services: Callable[[], PlatformServices] = build_production_platform,
+    wait_for_retry: Callable[[float], bool] | None = None,
+) -> None:
+    """Keep the bound API recoverable while a local dependency is restarting.
+
+    The API deliberately binds before MySQL bootstrap. Previously it stopped
+    trying after roughly twelve seconds, so a later MySQL recovery still left
+    every API, model, upload and report workflow unavailable until the API was
+    manually restarted. Keep retrying with bounded backoff and retain the last
+    safe startup error for readiness responses.
+    """
+
+    stop_event = server.bootstrap_stop_event or threading.Event()
+    server.bootstrap_stop_event = stop_event
+    waiter = wait_for_retry or stop_event.wait
+    attempt = 0
+    previously_logged_error = ""
+    while not stop_event.is_set():
+        attempt += 1
+        try:
+            _attach_platform(server, build_services())
+            server.startup_status = "ready"
+            server.startup_error = ""
+            print("Smart Data Agent API ready", flush=True)
+            return
+        except BaseException as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            server.startup_status = "failed"
+            server.startup_error = last_error
+            retry_delay = min(30, 2 * attempt)
+            should_log = attempt <= 3 or last_error != previously_logged_error or attempt % 20 == 0
+            if should_log:
+                traceback.print_exc()
+                print(
+                    f"Smart Data Agent API startup attempt {attempt} failed; "
+                    f"retrying in {retry_delay}s: {last_error}",
+                    flush=True,
+                )
+                previously_logged_error = last_error
+            if waiter(retry_delay):
+                return
 
 
 def _listening_server(host: str, port: int, startup_status: str) -> AnalysisAPIServer:
@@ -653,6 +683,7 @@ def _listening_server(host: str, port: int, startup_status: str) -> AnalysisAPIS
     server = AnalysisAPIServer((host, port), BoundAnalysisAPIHandler)
     server.startup_status = startup_status
     server.startup_error = ""
+    server.bootstrap_stop_event = threading.Event()
     server.services = None
     BoundAnalysisAPIHandler.services = None  # type: ignore[assignment]
     return server

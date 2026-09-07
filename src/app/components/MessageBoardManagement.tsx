@@ -15,6 +15,7 @@ import { globalMessageBoardSubmittedEvent } from "./message-board/GlobalMessageB
 import { MessageBoardAttachmentGallery } from "./message-board/MessageBoardAttachmentGallery";
 import { DataPageSelector } from "./ui/DataPageSelector";
 import { AppSelect } from "./ui/AppSelect";
+import { ManagementListHeader, ManagementListPage, ManagementListSection } from "./ui/ManagementListPage";
 
 const messagePageSize = 20;
 const messageStatusOptions: { value: MessageBoardEntry["status"] | ""; label: string }[] = [
@@ -189,14 +190,8 @@ export function MessageBoardManagement() {
   }
 
   return (
-    <div className="p-7" data-message-board-management="true">
-      <div className="mb-7 flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">留言板管理</h2>
-          <p className="mt-1 text-[13px] text-[#aeaeb2]">查看当前机构各账号提交的登录调查、产品意见和需求</p>
-          {notice && <p className={`mt-1 text-[11px] ${noticeTone === "error" ? "text-[#b42318]" : "text-[#8a8a8e]"}`}>{notice}</p>}
-        </div>
-        <div className="flex w-fit min-h-9 shrink-0 items-center gap-[0.2cm]" data-page-header-actions="true">
+    <ManagementListPage data-message-board-management="true">
+      <ManagementListHeader title="留言板管理" description="查看当前机构各账号提交的登录调查、产品意见和需求" notice={notice ? <p className={`mt-1 text-[11px] ${noticeTone === "error" ? "text-[#b42318]" : "text-[#8a8a8e]"}`}>{notice}</p> : null} actions={<div className="flex items-center gap-[0.2cm]" data-page-header-actions="true">
           <button type="button" onClick={() => setRefreshKey((value) => value + 1)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#3a3a3c] hover:bg-[#f2f2f7]">
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
             刷新
@@ -219,10 +214,9 @@ export function MessageBoardManagement() {
               </div>
             )}
           </div>
-        </div>
-      </div>
+      </div>} />
 
-      <section className="overflow-hidden rounded-xl border border-[#f0f0f2] bg-white">
+      <ManagementListSection>
         <div className="flex items-center justify-between gap-4 border-b border-[#f0f0f2] px-5 py-4">
           <div>
             <h3 className="text-[14px] text-[#1d1d1f]">全部留言</h3>
@@ -355,8 +349,8 @@ export function MessageBoardManagement() {
             </article>
           );
         })}
-      </section>
-    </div>
+      </ManagementListSection>
+    </ManagementListPage>
   );
 }
 

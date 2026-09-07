@@ -63,6 +63,9 @@ class PostgreSQLReportStoreProjectionTests(unittest.TestCase):
                     "rules": [{"id": "rule-1", "field": "branch", "operator": "in", "values": ["A"]}],
                 }],
                 "sumFilteredRows": True,
+                "borderless": True,
+                "layoutSpan": 9,
+                "layoutHeight": 512,
                 "comboLineFields": ["amount"],
                 "metricRankings": [{"metricField": "amount", "direction": "asc"}],
                 "metricFormats": [
@@ -113,6 +116,9 @@ class PostgreSQLReportStoreProjectionTests(unittest.TestCase):
 
         self.assertEqual(result["visualizations"][0]["type"], "bar")
         self.assertEqual(result["visualizations"][0]["config"]["metricFields"], ["amount"])
+        self.assertTrue(result["visualizations"][0]["config"]["borderless"])
+        self.assertEqual(result["visualizations"][0]["config"]["layoutSpan"], 9)
+        self.assertEqual(result["visualizations"][0]["config"]["layoutHeight"], 512)
         self.assertEqual(result["visualizations"][0]["config"]["filterGroups"][0]["rules"][0]["values"], ["A"])
         self.assertEqual(result["visualizations"][0]["config"]["metricRankings"], [{"metricField": "amount", "direction": "asc"}])
         self.assertEqual(result["visualizations"][0]["config"]["metricFormats"], [{"metricField": "amount", "percent": False, "decimalPlaces": 2}])

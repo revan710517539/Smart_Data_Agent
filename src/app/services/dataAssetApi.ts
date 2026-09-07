@@ -61,6 +61,7 @@ export type RawTableAsset = DataAssetGovernanceFields & {
   rowCount?: number;
   usageScenario?: string;
   relatedIntent?: string;
+  /** Stable non-secret Data Crawler tenant connection marker. */
   connectionId?: string;
   sourceSnapshotId?: string;
   /** Project-relative CSV path. Present for the read-only CSV source catalog. */
@@ -387,6 +388,31 @@ export type PageDataAsset = DataAssetGovernanceFields & {
   customerKeyField?: string;
 };
 
+export type ConclusionMetricRule = {
+  id: string;
+  metricField: string;
+  performance: string;
+  operator: "gt" | "gte" | "eq" | "lte" | "lt" | "between";
+  threshold: number;
+  thresholdEnd?: number;
+  conclusion: string;
+};
+
+export type ConclusionRuleAsset = DataAssetGovernanceFields & {
+  id: string;
+  name: string;
+  purpose: "conclusion_generation";
+  datasetId: string;
+  datasetRefIds?: string[];
+  datasetName: string;
+  datasetKind: "raw_table" | "topic_table" | "page_data";
+  datasetSchemaFingerprint?: string;
+  skillId: string;
+  skillName?: string;
+  metricRules: ConclusionMetricRule[];
+  updatedAt?: string;
+};
+
 export type DataAssetBundle = {
   tenant_id: string;
   status?: "loading" | "ready";
@@ -425,12 +451,14 @@ export type DataAssetBundle = {
   analysis_shortcuts: AnalysisShortcutAsset[];
   page_data: PageDataAsset[];
   table_relationships: TableRelationshipAsset[];
+  conclusion_rules: ConclusionRuleAsset[];
   relationships: DataAssetRelationship[];
   count: Record<string, number>;
 };
 
-type DataAssetBundleWire = Omit<DataAssetBundle, "table_relationships"> & {
+type DataAssetBundleWire = Omit<DataAssetBundle, "table_relationships" | "conclusion_rules"> & {
   table_relationships?: unknown;
+  conclusion_rules?: unknown;
 };
 
 /** Keep additive frontend fields compatible with an API process that has not
@@ -440,6 +468,7 @@ export function normalizeDataAssetBundle(bundle: DataAssetBundleWire): DataAsset
   return {
     ...bundle,
     table_relationships: Array.isArray(bundle.table_relationships) ? bundle.table_relationships : [],
+    conclusion_rules: Array.isArray(bundle.conclusion_rules) ? bundle.conclusion_rules : [],
   };
 }
 
@@ -466,7 +495,8 @@ export type DataAssetItemType =
   | "external_tool"
   | "analysis_shortcut"
   | "page_data"
-  | "table_relationship";
+  | "table_relationship"
+  | "conclusion_rule";
 
 type DataAssetParams = {
   tenantId: string;
@@ -501,6 +531,11 @@ export async function fetchDataAssets({
   const bundle = await apiRequest<DataAssetBundleWire>(`/api/data-assets${query}`, {
     method: "GET",
     context: { tenantId, userId },
+    // The governed catalog can include raw-table fields, topic metadata and
+    // page-data definitions in one response. A cold MySQL/Data Crawler read can
+    // legitimately exceed the global 12s API deadline, so keep a bounded
+    // endpoint-specific deadline instead of surfacing a false outage.
+    timeoutMs: 30_000,
     readCache: {
       ttlMs: scope === "visualization" ? 60_000 : 20_000,
       tags: ["data-assets", scope ? `data-assets:${scope}` : "data-assets:catalog"],
@@ -570,6 +605,9 @@ export type PageDataWorkspace = {
   page_code: PageDataPageCode;
   assets: PageDataAsset[];
   layout: string[];
+  cards?: unknown[];
+  public_filters?: unknown[];
+  page_style_id?: string;
   notes: unknown[];
   rows: Record<string, PageDataRows>;
   row_errors: Record<string, string>;
@@ -590,6 +628,17 @@ export function writePageDataWorkspaceMemory(tenantId: string, userId: string, p
   pageDataWorkspaceMemory.set(pageDataWorkspaceMemoryKey(tenantId, userId, pageCode), workspace);
 }
 
+export function patchPageDataWorkspaceMemory(
+  tenantId: string,
+  userId: string,
+  pageCode: PageDataPageCode,
+  patch: Partial<Pick<PageDataWorkspace, "layout" | "cards" | "public_filters" | "page_style_id" | "notes">>,
+) {
+  const key = pageDataWorkspaceMemoryKey(tenantId, userId, pageCode);
+  const current = pageDataWorkspaceMemory.get(key);
+  if (current) pageDataWorkspaceMemory.set(key, { ...current, ...patch });
+}
+
 export async function fetchPageDataWorkspace({
   tenantId,
   userId = getDefaultUserId(),
@@ -599,6 +648,9 @@ export async function fetchPageDataWorkspace({
   const workspace = await apiRequest<PageDataWorkspace>(`/api/data-assets/page-data/workspace?${params.toString()}`, {
     method: "GET",
     context: { tenantId, userId },
+    // The governed workspace may need to assemble the tenant CSV catalog on a
+    // cold read. Keep this bounded, but do not abort at the generic 12s limit.
+    timeoutMs: 30_000,
     // Pointer/focus/down preloads and the route mount must share one governed
     // request. A short cache still revalidates changes promptly, while failed
     // reads are never cached by apiRequest.

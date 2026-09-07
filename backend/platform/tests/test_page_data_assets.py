@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from http import HTTPStatus
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from backend.platform.api.routes.assets import (
@@ -21,7 +22,7 @@ from backend.platform.api.routes.assets import (
     read_page_data_workspace_payload,
 )
 from backend.platform.api.routes.application import handle_application_action_post
-from backend.platform.application import InMemoryApplicationStore
+from backend.platform.application import InMemoryApplicationStore, SQLiteApplicationStore
 from backend.platform.application.postgresql_store import _shared_page_layout_module
 from backend.platform.assets import InMemoryDataAssetStore
 from backend.platform.assets.store import _validate_asset_schema
@@ -148,6 +149,7 @@ class _ApplicationHandler:
                 "id": "multi_1",
                 "institutionScope": "multi_institution",
                 "targetPages": ["dashboard"],
+                "sourceFields": [{"fieldNameEn": "institution_name", "fieldNameCn": "机构"}],
             }]}),
             permission_broker=SimpleNamespace(enforcer=_LayoutEnforcer(super_admin)),
         )
@@ -419,12 +421,41 @@ class PageDataAssetTest(unittest.TestCase):
             "set_page_data_layout",
             {
                 "assetIds": [saved["id"]],
+                "cards": [{
+                    "id": "weekly-card-1",
+                    "sourceAssetId": saved["id"],
+                    "title": "每周放款趋势",
+                    "type": "line",
+                    "config": {
+                        "metricFields": ["loan_amount"],
+                        "dimensionFields": ["report_date"],
+                        "layoutSpan": 9,
+                        "layoutHeight": 486,
+                        "chartStyle": {"templateId": "minimal", "backgroundColor": "#ffffff"},
+                    },
+                }],
+                "publicFilters": [{
+                    "id": "weekly-filter-1",
+                    "name": "日期筛选",
+                    "datasetIds": [saved["id"]],
+                    "fields": ["report_date"],
+                    "controlOrder": ["report_date"],
+                    "selections": {"report_date": "2026-08-01"},
+                }],
+                "pageStyleId": "operations-dense",
                 "notes": [{"id": "note_1", "sourceAssetId": saved["id"], "noteTitle": "结论", "noteBody": "放款金额上升", "config": {}}],
             },
             actor_user_id="u_admin",
         )
         self.assertEqual(noted["module"]["state"]["pageDataNotes"][0]["sourceAssetId"], saved["id"])
         self.assertEqual(noted["module"]["state"]["pageDataNotes"][0]["noteTitle"], "结论")
+        self.assertEqual(noted["module"]["state"]["pageDataCards"][0]["id"], "weekly-card-1")
+        self.assertEqual(noted["module"]["state"]["pageDataCards"][0]["type"], "line")
+        self.assertEqual(noted["module"]["state"]["pageDataCards"][0]["config"]["layoutSpan"], 9)
+        self.assertEqual(noted["module"]["state"]["pageDataCards"][0]["config"]["layoutHeight"], 486)
+        self.assertEqual(noted["module"]["state"]["pageDataPublicFilters"][0]["fields"], ["report_date"])
+        self.assertEqual(noted["module"]["state"]["pageDataPublicFilters"][0]["selections"]["report_date"], "2026-08-01")
+        self.assertEqual(noted["module"]["state"]["pageReportStyleId"], "operations-dense")
         sticky = applications.run_action(
             "tenant_a",
             "weekly_report",
@@ -444,6 +475,7 @@ class PageDataAssetTest(unittest.TestCase):
         self.assertEqual(sticky["module"]["state"]["pageStickyNote"]["items"][0]["text"], "周报便签")
         self.assertEqual(sticky["module"]["state"]["pageStickyNote"]["items"][0]["html"], "<strong>周报便签</strong>alert(1)")
         self.assertEqual(sticky["module"]["state"]["pageStickyNote"]["items"][1]["type"], "image")
+
         analysis_note = applications.run_action(
             "tenant_a",
             "self_analysis",
@@ -474,16 +506,66 @@ class PageDataAssetTest(unittest.TestCase):
                 actor_user_id="u_admin",
             )
 
+    def test_page_card_filter_and_anchor_state_survive_store_restart(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            path = f"{tmpdir}/application.sqlite"
+            store = SQLiteApplicationStore(path)
+            store.run_action(
+                "tenant_a",
+                "weekly_report",
+                "set_page_data_layout",
+                {
+                    "assetIds": ["page_data_1"],
+                    "cards": [{
+                        "id": "card_1", "sourceAssetId": "page_data_1", "title": "重启后保留",
+                        "type": "bar", "config": {"layoutSpan": 10, "layoutHeight": 520, "borderless": True},
+                    }],
+                    "publicFilters": [{
+                        "id": "filter_1", "name": "日期", "datasetIds": ["page_data_1"],
+                        "fields": ["report_date"], "controlOrder": ["report_date"],
+                        "controlPositions": {"report_date": 7},
+                        "selections": {"report_date": "2026-09-01"},
+                    }],
+                },
+                actor_user_id="u_admin",
+            )
+            store.run_action(
+                "tenant_a",
+                "weekly_report",
+                "set_page_sticky_note",
+                {"note": {"visible": True, "anchorTargetId": "card_1", "anchorXRatio": 0.35, "items": []}},
+                actor_user_id="u_admin",
+            )
+            store.run_action(
+                "tenant_a",
+                "weekly_report",
+                "set_weekly_data_preferences",
+                {"preferences": [{"id": "page-data:page_data_1", "visible": True}], "orderCustomized": True},
+                actor_user_id="u_admin",
+            )
+
+            reopened = SQLiteApplicationStore(path)
+            state = reopened.get_module("tenant_a", "weekly_report", "u_admin")["state"]
+            self.assertEqual(state["pageDataCards"][0]["config"]["layoutSpan"], 10)
+            self.assertEqual(state["pageDataCards"][0]["config"]["layoutHeight"], 520)
+            self.assertTrue(state["pageDataCards"][0]["config"]["borderless"])
+            self.assertEqual(state["pageDataPublicFilters"][0]["selections"]["report_date"], "2026-09-01")
+            self.assertEqual(state["pageDataPublicFilters"][0]["controlPositions"]["report_date"], 7)
+            self.assertEqual(state["pageStickyNote"]["anchorTargetId"], "card_1")
+            self.assertEqual(state["pageStickyNote"]["anchorXRatio"], 0.35)
+            self.assertEqual(state["weeklyDataPreferences"], {"preferences": [{"id": "page-data:page_data_1", "visible": True}], "orderCustomized": True})
+
     def test_customer_and_competition_pages_persist_governed_visual_layout_and_sticky_note(self) -> None:
         applications = InMemoryApplicationStore()
         customer = applications.run_action(
             "tenant_a",
             "customer_insight",
             "set_page_visual_layout",
-            {"items": [{"id": "distribution", "span": 8, "height": 480}, {"id": "segments", "span": 12, "height": 260}]},
+            {"items": [{"id": "distribution", "span": 8, "height": 480}, {"id": "segments", "span": 12, "height": 260}], "styleId": "segment-lens"},
             actor_user_id="u_admin",
         )
         self.assertEqual([item["id"] for item in customer["module"]["state"]["pageVisualLayout"]], ["distribution", "segments"])
+        self.assertEqual(customer["module"]["state"]["pageVisualStyleId"], "segment-lens")
         competition = applications.run_action(
             "tenant_a",
             "competition_analysis",
@@ -1046,7 +1128,17 @@ class PageDataAssetTest(unittest.TestCase):
             "tenant_a",
             "weekly_report",
             "set_page_data_layout",
-            {"assetIds": [saved["id"]]},
+            {
+                "assetIds": [saved["id"]],
+                "cards": [{
+                    "id": "weekly-card-1",
+                    "sourceAssetId": saved["id"],
+                    "title": "每周放款趋势",
+                    "type": "column",
+                    "config": {"metricFields": ["loan_amount"], "dimensionFields": ["report_date"], "layoutSpan": 8, "layoutHeight": 440},
+                }],
+                "publicFilters": [{"id": "weekly-filter-1", "name": "日期筛选", "datasetIds": [saved["id"]], "fields": ["report_date"], "controlOrder": ["report_date"], "selections": {}}],
+            },
             actor_user_id="u_admin",
         )
         catalog = _Catalog([self.table], {self.table["relativePath"]: [{"日期": "2026-08-01", "放款金额": "125.5"}]})
@@ -1061,6 +1153,9 @@ class PageDataAssetTest(unittest.TestCase):
             page_code="weekly_report",
         )
         self.assertEqual(payload["layout"], [saved["id"]])
+        self.assertEqual(payload["cards"][0]["id"], "weekly-card-1")
+        self.assertEqual(payload["cards"][0]["config"]["layoutSpan"], 8)
+        self.assertEqual(payload["public_filters"][0]["datasetIds"], [saved["id"]])
         self.assertEqual(payload["assets"][0]["id"], saved["id"])
         self.assertEqual(payload["rows"][saved["id"]]["row_count"], 1)
         self.assertEqual(payload["rows"][saved["id"]]["rows"][0]["loan_amount"], "125.5")
@@ -1169,6 +1264,27 @@ class PageDataAssetTest(unittest.TestCase):
         denied.services.data_asset_store = SimpleNamespace(list_published_bundle=lambda _tenant_id: {"page_data": []})
         handle_application_action_post(denied)
         self.assertEqual(denied.response[1], HTTPStatus.FORBIDDEN)
+
+    def test_page_data_card_rejects_an_unpublished_dataset(self) -> None:
+        handler = _ApplicationHandler(super_admin=True)
+        handler.payload["payload"] = {
+            "assetIds": ["multi_1"],
+            "cards": [{"id": "card-1", "sourceAssetId": "other", "title": "越权数据", "type": "line", "config": {}}],
+        }
+        handle_application_action_post(handler)
+        self.assertEqual(handler.response[1], HTTPStatus.FORBIDDEN)
+        self.assertEqual(handler.services.application_store.get_module("tenant:a", "dashboard", "u_editor")["state"]["pageDataCards"], [])
+
+    def test_public_filter_rejects_a_field_outside_the_dataset_intersection(self) -> None:
+        handler = _ApplicationHandler(super_admin=True)
+        handler.payload["payload"] = {
+            "assetIds": ["multi_1"],
+            "cards": [],
+            "publicFilters": [{"id": "filter-1", "datasetIds": ["multi_1"], "fields": ["private_field"], "controlOrder": ["private_field"], "selections": {}}],
+        }
+        handle_application_action_post(handler)
+        self.assertEqual(handler.response[1], HTTPStatus.BAD_REQUEST)
+        self.assertEqual(handler.services.application_store.get_module("tenant:a", "dashboard", "u_editor")["state"]["pageDataPublicFilters"], [])
 
     def test_customer_and_competition_visual_layout_actions_require_super_admin(self) -> None:
         for module_key, item_id in (("customer_insight", "segments"), ("competition_analysis", "competitors")):

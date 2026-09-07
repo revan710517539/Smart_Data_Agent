@@ -107,6 +107,7 @@ const menuItems: MenuItem[] = [
     children: [
       { key: "data-assets.metrics", path: "/data-assets/metrics", label: "指标字典" },
       { key: "data-assets.knowledge", path: "/data-assets/knowledge", label: "知识记忆" },
+      { key: "data-assets.rules", path: "/data-assets/rules", label: "规则管理" },
       { key: "data-assets.data-management", path: "/data-assets/data-management", label: "站内数据" },
       { key: "data-assets.quality", path: "/data-assets/quality", label: "质量监控" },
       { key: "data-assets.tools", path: "/data-assets/tools", label: "工具调用" },

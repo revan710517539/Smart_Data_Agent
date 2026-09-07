@@ -30,6 +30,23 @@ const [layout, routes, builder, library, cards, reportData, visualCard, visualNo
   readFile("src/app/components/page-data/PageDataComposer.tsx", "utf8"),
   readFile("src/app/components/page-data/StandardAnalysisPage.tsx", "utf8"),
 ]);
+const [reportPublicFilters, apiSupport, weeklyAnalysisModules] = await Promise.all([
+  readFile("src/app/components/report-filters/ReportPublicFilters.tsx", "utf8"),
+  readFile("backend/platform/api/support.py", "utf8"),
+  readFile("src/app/components/weekly-report/AnalysisModules.tsx", "utf8"),
+]);
+const [reportPageStyles, reportPageStyleCss, dataAssetApi, postgresqlApplicationStore, assetsRoute] = await Promise.all([
+  readFile("src/app/components/report-style/reportPageStyles.tsx", "utf8"),
+  readFile("src/styles/report-page-styles.css", "utf8"),
+  readFile("src/app/services/dataAssetApi.ts", "utf8"),
+  readFile("backend/platform/application/postgresql_store.py", "utf8"),
+  readFile("backend/platform/api/routes/assets.py", "utf8"),
+]);
+const [visualReportApi, customerInsight, competitionAnalysis] = await Promise.all([
+  readFile("src/app/services/visualReportApi.ts", "utf8"),
+  readFile("src/app/components/CustomerInsight.tsx", "utf8"),
+  readFile("src/app/components/CompetitionAnalysis.tsx", "utf8"),
+]);
 
 assert.ok(layout.indexOf('label: "可视化报表"') < layout.indexOf('label: "智能分析"'), "可视化报表必须位于智能分析上方");
 assert.match(layout, /path: "\/self-analysis\/reports", label: "我的报表"/);
@@ -73,6 +90,53 @@ assert.ok(!builder.includes('label="存主题"'), "可视化报表不得保留�
 assert.match(builder, /if \(destination !== "topic"\) await saveAsTopic\(/, "三个保存入口必须自动沉淀对应 SQL 到主题表");
 
 assert.match(cards, /AnalysisVisualCard/);
+assert.match(cards, /initialConfig=\{card\.config\}[\s\S]{0,120}configAuthority="server"/, "已保存可视化报表必须以服务端配置为权威，不能被会话缓存覆盖");
+assert.match(standardAnalysisPage, /data-visual-card=\{visualGridId\(moduleKey, item\.id\)\}[\s\S]*?rememberVisualStickyNoteAnchor\(visualGridId\(moduleKey, item\.id\)/, "标准报表网格必须把点击的自定义图表登记为便签锚点");
+assert.match(cards, /onLayoutChange=\{\(cardId, size\) => \{[\s\S]{0,300}updateCard\(cardId, \{ config: \{ \.\.\.card\.config, layoutSpan: size\.span, layoutHeight: size\.height \} \}\)/, "可视化报表缩放结果必须回写卡片配置，不能只停留在网格组件内部");
+assert.match(builder, /data-visual-report-dataset-toolbar="true"[\s\S]{0,500}<ReportPublicFilterButton/, "可视化报表编辑态必须在首个数据集旁提供公共筛选入口");
+assert.match(builder, /<ReportPublicFilterButton[\s\S]{0,420}<ReportPageStyleButton/, "可视化报表样式入口必须紧邻公共筛选右侧");
+assert.match(weekly, /<WeeklyAnalysisModuleMenu[\s\S]{0,900}<PageDataPublicFilterButton controller=\{weeklyPageData\}/, "经营周报公共筛选入口必须位于首个可选数据模块右侧");
+assert.match(weekly, /<PageDataPublicFilterButton controller=\{weeklyPageData\} \/><ReportPageStyleButton/, "经营周报样式入口必须紧邻公共筛选右侧");
+assert.match(pageDataComposer, /<PageDataPublicFilterButton controller=\{controller\} \/><ReportPageStyleButton/, "页面数据报表样式入口必须紧邻公共筛选右侧");
+assert.match(pageDataComposer, /const selectedAssets = controller\.visibleAssets\.filter[\s\S]*controller\.visibleAssets\.map/, "页面数据公共筛选只能选择当前报表已经显示并由后端布局授权的数据集");
+assert.match(pageDataComposer, /new Map\(layoutIds\.flatMap/, "同一数据集的多个图表不得在公共筛选数据集列表中重复出现");
+assert.match(pageDataComposer, /const nextPublicFilters = normalizeReportPublicFilterPositions[\s\S]*group\.datasetIds\.filter\(\(datasetId\) => nextIdSet\.has\(datasetId\)\)/, "移除报表数据集时必须同步清理公共筛选映射，避免后端拒绝整页保存");
+assert.equal((reportPageStyles.match(/\{ id: "(?:executive-overview|trend-story|variance-benchmark|risk-watch|operations-dense|segment-lens|funnel-journey|board-brief|evidence-ledger|balanced-canvas)"/g) || []).length, 10, "整页样式下拉必须提供十套受控模板");
+for (const method of ["关键指标优先", "时间趋势展开", "同类比较", "异常优先", "明细驱动", "分群比较", "漏斗拆解", "结论先行", "证据追溯", "总分均衡"]) assert.ok(reportPageStyles.includes(method), `整页模板必须包含分析方法：${method}`);
+assert.match(reportPageStyles, /applyReportPageStyleToCards[\s\S]*layoutSpan:[\s\S]*layoutHeight:[\s\S]*tableStyle:[\s\S]*chartStyle:/, "选择整页模板必须同时改动排列、尺寸、表格与图表样式");
+assert.match(reportPageStyleCss, /--sda-report-canvas[\s\S]*--sda-report-border[\s\S]*--sda-report-font/, "整页模板必须统一画布、线框和字体令牌");
+assert.match(reportPageStyles, /--sda-report-chart-1[\s\S]*--sda-report-chart-grid[\s\S]*--sda-report-chart-line-width/, "整页模板必须把对应图表模板转换为原生图表主题令牌");
+assert.match(standardAnalysisPage, /data-report-native-chart-theme="true"/, "标准分析页的原生图表必须接入整页图表主题");
+assert.match(reportPageStyleCss, /data-report-native-chart-theme[\s\S]*recharts-cartesian-grid[\s\S]*--sda-report-table-header-bg/, "整页样式必须实际覆盖原生图表网格和表格主题");
+assert.match(customerInsight, /--sda-report-chart-1[\s\S]*--sda-report-chart-grid/, "客群分析原生图形必须直接消费所选整页模板的图表令牌");
+assert.match(competitionAnalysis, /reportChartColors[\s\S]*--sda-report-chart-grid/, "竞品分析原生多序列图形必须消费所选整页模板的调色板和网格令牌");
+assert.match(application, /_REPORT_PAGE_STYLE_IDS/, "服务端必须用白名单校验整页样式");
+assert.match(application, /next_state\["pageReportStyleId"\][\s\S]*next_state\["pageVisualStyleId"\]/, "服务端必须保存两类报表页样式");
+assert.match(postgresqlApplicationStore, /shared_state\["pageReportStyleId"\][\s\S]*shared_state\["pageVisualStyleId"\]/, "生产状态投影必须持久化报表整页样式");
+assert.match(assetsRoute, /"page_style_id": str\(state\.get\("pageReportStyleId"\)/, "页面数据工作区必须回读服务端保存的整页样式");
+assert.match(dataAssetApi, /page_style_id\?: string/, "前端页面数据缓存必须携带服务端整页样式");
+assert.match(cards, /<ReportPublicFilterControls[\s\S]{0,300}onChange=\{\(publicFilters\) => onChange\?\.\(\{ \.\.\.report, publicFilters \}\)\}/, "可视化报表的公共筛选选择与拖动顺序必须进入报表持久状态");
+assert.match(cards, /applyReportPublicFilters\([\s\S]{0,220}visualReportDatasetKey\(card\)/, "公共筛选必须按图表绑定的数据集精确过滤行数据");
+assert.match(cards, /return `\$\{card\.dataset\.kind\}:\$\{card\.dataset\.id\}`/, "筛选数据集键必须包含类型，避免不同来源同 ID 串数据");
+assert.match(reportPublicFilters, /data-page-public-filter-common-fields="true"[\s\S]*data-page-public-filter-datasets="true"/, "公共筛选弹窗必须上方展示公共字段、下方展示可用数据集");
+assert.match(reportPublicFilters, /data-page-public-filter-field-menu="true"/, "公共字段必须支持右键打开操作菜单");
+assert.match(reportPublicFilters, /data-page-public-filter-remove-field=\{field\}/, "公共字段右键菜单必须提供删除字段动作");
+assert.match(reportPublicFilters, /data-page-public-filter-save-group="true">保存/, "保存分组后必须留在弹窗内继续配置");
+assert.match(reportPublicFilters, /data-page-public-filter-confirm="true">确认/, "公共筛选弹窗必须提供确认关闭入口");
+assert.match(reportPublicFilters, /draggable=\{editable\}/, "公共筛选控件必须支持在编辑态拖动排序");
+assert.match(reportPublicFilters, /moveReportPublicFilterControl/, "公共筛选控件必须支持跨分组拖动并持久化全局位置");
+assert.match(reportPublicFilters, /const source = draggingRef\.current \|\| dragging[\s\S]*moveReportPublicFilterControl\(groups, source, target\)/, "公共筛选 drop 必须优先读取同步拖拽身份");
+assert.match(reportPublicFilters, /onDragStart=\{\(\) => \{ const source = [^;]+; draggingRef\.current = source; setDragging\(source\); \}\}/, "公共筛选快拖时必须同步登记源控件");
+assert.match(pageDataComposer, /const source = draggingRef\.current \|\| dragging[\s\S]*moveReportPublicFilterControl\(controller\.publicFilters, source, target\)/, "页面数据公共筛选 drop 必须优先读取同步拖拽身份");
+assert.match(weekly, /useWeeklyDataPreferences/, "经营周报必须使用统一的服务端模块偏好控制器");
+assert.match(weeklyAnalysisModules, /set_weekly_data_preferences[\s\S]*keepalive: true/, "周报模块顺序与显示状态必须自动保存到服务端并支持离页续传");
+assert.match(application, /set_weekly_data_preferences[\s\S]*_normalize_weekly_data_preferences/, "服务端必须归一化并持久化周报模块顺序与显示状态");
+assert.match(library, /upsertVisualReport\(\{ tenantId, userId, report, keepalive: destination === "weekly" \}\)/, "周报内可视化报表变更必须使用离页可续传的保存请求");
+assert.match(library, /pendingKeepaliveRef[\s\S]*addEventListener\("pagehide", flush\)[\s\S]*visibilitychange/, "周报内可视化报表必须在离页时立即发送最新快照，不能只等待保存队列");
+assert.match(visualReportApi, /keepalive = false[\s\S]*keepalive,/, "可视化报表保存 API 必须透传 keepalive");
+assert.match(application, /def _normalize_visual_report_public_filters[\s\S]*visual_report_public_filter_field_unavailable/, "服务端必须重新验证公共字段确实属于所选数据集交集");
+assert.match(applicationRoute, /dataset_id_aliases[\s\S]*publicFilters/, "数据文件轮换后公共筛选绑定必须跟随权威数据集身份重绑");
+assert.match(apiSupport, /visual_report_public_filter_field_unavailable/, "公共筛选字段失效必须返回可理解的产品错误");
 assert.match(cards, /revealVisualFollowUp/);
 assert.match(cards, /replaceVisualAnalysisSourceGroup/, "可视化报表必须把当前页全部图表登记为页面 AI 分析数据源");
 assert.match(cards, /revealVisualComment/);
@@ -94,6 +158,8 @@ assert.doesNotMatch(weekly, /WebkitTextFillColor: "transparent"/, "周报文本�
 assert.match(richNote, /data-note-bold-action="true"/, "选中文字工具条必须在评论和 AI 分析之间提供加粗");
 assert.doesNotMatch(richNote, /data-note-bold-menu/, "不得再用右键加粗下拉框");
 assert.match(stickyHook, /function hiddenOnLoad/, "各页面便签必须在进入页面时默认隐藏，点击后才显示");
+assert.match(stickyHook, /pendingSave[\s\S]*saveStickyNote\(\{ tenantId, userId, moduleKey, surface, pending, keepalive: true \}\)/, "便签最后一次编辑必须使用离页续传请求");
+assert.match(stickyHook, /addEventListener\("pagehide", flush\)[\s\S]*visibilitychange/, "便签最后一次编辑必须在离页时立即冲刷");
 assert.match(visualCard, /createPortal\(<div className="fixed z-\[120\] w-32/, "更多菜单必须浮到卡片外，并为保存模板保留足够宽度");
 assert.match(noteModel, /text-\[16px\] leading-\[26px\] tracking-\[-0.31px\]/, "正文必须使用 16px / 26px / -0.31px 字距");
 assert.match(noteModel, /gap-\[10px\]/, "段落间距必须为 10px");
@@ -132,6 +198,9 @@ assert.ok(selfAnalysis.indexOf('label: "存报表"') < selfAnalysis.indexOf('lab
 assert.ok(selfAnalysis.includes("justify-between") && selfAnalysis.includes("whitespace-nowrap rounded px-2 py-1"), "结果工具栏保存入口必须右对齐，并用紧凑滑块避免变形");
 assert.ok(!selfAnalysis.includes('demoFallbackDisabledMessage("分析结果保存")'), "存报表/存周报失败不得再套 demo fallback 文案");
 assert.match(selfAnalysis, /isSelfAnalysisNoticeFailure\(saveMessage\)/, "保存失败提示不得再用成功绿色");
+assert.match(selfAnalysis, /onLayoutChange=\{\(cardId, size\) => \{[\s\S]{0,280}updateVisualCard\(cardId, \{ config: \{ \.\.\.card\.config, layoutSpan: size\.span, layoutHeight: size\.height \} \}\)/, "当前智能分析图表缩放后必须进入待保存卡片状态");
+assert.equal((selfAnalysis.match(/onConfigChange=\{\(config\) => void persistSavedReportVisualizations/g) || []).length, 2, "我的报表中的普通与精选分析结果都必须把样式修改立即保存到服务端");
+assert.equal((selfAnalysis.match(/onLayoutChange=\{\(cardId, size\) => \{[\s\S]{0,260}persistSavedReportVisualizations/g) || []).length, 2, "我的报表中的普通与精选分析结果都必须持久化缩放结果");
 assert.match(application, /set_page_sticky_note/, "应用模块必须提供统一便签保存动作");
 assert.match(visualCard, /\{showFollowUp && <button[\s\S]*data-visual-follow-up="true"/, "追问按钮显示应由标准图表契约控制");
 for (const label of ["评论", "AI 分析", "留言板"]) assert.ok(contextRail.includes(label), `追问右侧栏必须保留${label}`);
@@ -184,7 +253,7 @@ assert.match(cards, /visualReportCardHasData/, "浏览态必须按是否有数�
 assert.match(cards, /visibleCards.filter\(\(card\) => visualReportCardHasData/, "浏览态没有数据的图表必须整卡不渲染");
 assert.doesNotMatch(cards, /数据集不存在、无权限或 Schema 已变化/, "不得把轮转后的交付文件 ID 直接判成数据集不存在");
 assert.match(library, /empty:hidden/, "我的报表展开后若无图表不得留下空白底栏");
-assert.match(selfAnalysis, /analysisRows.length \? \(\s*<ResizableVisualizationGrid>/, "智能分析浏览态没有数据时不得挂载空白图表");
+assert.match(selfAnalysis, /analysisRows.length \? \(\s*<ResizableVisualizationGrid(?:\s[^>]*)?>/, "智能分析浏览态没有数据时不得挂载空白图表");
 assert.match(visualCard, /if \(!rows.length \|\| !metricFields.length\) return null/, "没有数据时图表区域必须整块不渲染，不得保留空态占位");
 assert.match(reportData, /export function resolveVisualReportRawTable/, "原始表回读必须有独立的重绑入口");
 assert.match(reportData, /uniqueRawTablesByLogicalTitle/, "历史报表必须能按去掉交付日期后的题目重绑当前 CSV");
@@ -194,12 +263,13 @@ assert.match(selfAnalysis, /已保存到我的报表「智能分析」/, "智能
 function analysisTableLogicalTitle(value) {
   const stem = String(value || "").trim().replace(/\.csv$/i, "");
   const withoutPrefix = stem.replace(/^\d{8}(?:_\d{6})?_/, "");
-  const withoutSuffix = withoutPrefix.replace(/_\d{4}-\d{2}-\d{2}$/, "");
+  const withoutSuffix = withoutPrefix.replace(/_\d{4}-\d{2}-\d{2}(?:_历史数据)?$/, "");
   const title = withoutSuffix.split("/").pop() || withoutSuffix;
   return title.replace(/[\s_\-./]+/g, "").toLocaleLowerCase();
 }
 assert.equal(analysisTableLogicalTitle("标品双周会周度sql_2026-08-14"), analysisTableLogicalTitle("标品双周会周度sql_2026-05-06"));
 assert.equal(analysisTableLogicalTitle("标品双周会周度sql_2026-08-14"), "标品双周会周度sql");
+assert.equal(analysisTableLogicalTitle("标品双周会周度sql_2026-05-06_历史数据"), "标品双周会周度sql");
 assert.match(domain, /export function analysisTableLogicalTitle\(value: string\)/, "题目归一化实现必须与报表重绑契约一致");
 assert.match(reportsRoute, /topic_data_store\.read_reference/, "我的报表智能分析 Tab 必须从分析执行的受治理快照回读数据");
 

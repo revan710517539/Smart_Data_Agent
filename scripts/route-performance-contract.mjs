@@ -41,6 +41,7 @@ const checks = [
   [layout.includes("sda-navigation-keys-v1") && layout.includes("isSuperAdmin") && layout.includes("optimisticKeys"), "登录后必须用超级管理员全菜单或会话缓存立刻渲染，不得清空菜单再白屏等待导航"],
   [layout.includes('data-navigation-loading="true"'), "无缓存时权限加载必须显示局部加载态而不是空白主栏"],
   [dataAssetApi.includes("timeoutMs: 30_000") && dataAssetApi.includes("/api/data-assets/table-relationships/catalog"), "表关系目录必须使用长于默认读请求的超时"],
+  [/fetchPageDataWorkspace[\s\S]*?\/api\/data-assets\/page-data\/workspace[\s\S]*?timeoutMs: 30_000/.test(dataAssetApi), "页面数据工作区冷读必须使用 30 秒有界超时"],
   [layout.includes("visibleMenuItems.flatMap"), "只能预热当前用户可见的页面"],
   [layout.includes("cancelCodeWarmup = warmVisibleRoutePaths(visiblePaths, location.pathname)") && layout.includes("cancelCodeWarmup();"), "路由变化必须清理并重建剩余预热队列"],
   [(layout.match(/preloadRoutePath\(/g) || []).length >= 4, "一级和二级页面入口都必须保留悬停和聚焦即时预热"],

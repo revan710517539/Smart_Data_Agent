@@ -26,8 +26,9 @@ import {
   useStandardAnalysisPageLayout,
   type StandardAnalysisVisualDefinition,
 } from "./page-data/StandardAnalysisPage";
+import { ReportPageStyleButton } from "./report-style/reportPageStyles";
 
-const pieColors = ["#1d1d1f", "#3a3a3c", "#636366", "#8e8e93", "#aeaeb2", "#c7c7cc"];
+const pieColors = ["var(--sda-report-chart-1, #1d1d1f)", "var(--sda-report-chart-2, #3a3a3c)", "var(--sda-report-chart-3, #636366)", "var(--sda-report-chart-4, #8e8e93)"];
 const CUSTOMER_VISUAL_DEFINITIONS: StandardAnalysisVisualDefinition[] = [
   { id: "segments", label: "客群卡片", defaultSpan: 12, defaultHeight: 220 },
   { id: "distribution", label: "客群规模分布", defaultSpan: 4, defaultHeight: 340 },
@@ -132,7 +133,7 @@ export function CustomerInsight() {
     },
     {
       id: "conversion",
-      content: <div className="flex h-full min-h-0 flex-col rounded-xl border border-[#f0f0f2] bg-white p-5"><h3 className="mb-3 shrink-0 text-[13px] text-[#1d1d1f]">客群转化率</h3><div className="min-h-0 flex-1"><ResponsiveContainer width="100%" height="100%"><BarChart data={model.segments} layout="vertical"><CartesianGrid strokeDasharray="3 3" stroke="#f5f5f5" horizontal={false} /><XAxis type="number" unit="%" tick={{ fontSize: 9, fill: "#c7c7cc" }} stroke="transparent" /><YAxis type="category" dataKey="name" width={78} tick={{ fontSize: 9, fill: "#8a8a8e" }} stroke="transparent" /><Tooltip contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #f0f0f2" }} /><Bar dataKey="conversionPct" fill="#636366" radius={[0, 4, 4, 0]} barSize={16} /></BarChart></ResponsiveContainer></div></div>,
+      content: <div className="flex h-full min-h-0 flex-col rounded-xl border border-[#f0f0f2] bg-white p-5"><h3 className="mb-3 shrink-0 text-[13px] text-[#1d1d1f]">客群转化率</h3><div className="min-h-0 flex-1"><ResponsiveContainer width="100%" height="100%"><BarChart data={model.segments} layout="vertical"><CartesianGrid strokeDasharray="3 3" stroke="var(--sda-report-chart-grid, #f5f5f5)" horizontal={false} /><XAxis type="number" unit="%" tick={{ fontSize: 9, fill: "var(--sda-report-chart-muted, #c7c7cc)" }} stroke="transparent" /><YAxis type="category" dataKey="name" width={78} tick={{ fontSize: 9, fill: "var(--sda-report-chart-muted, #8a8a8e)" }} stroke="transparent" /><Tooltip contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid var(--sda-report-border, #f0f0f2)" }} /><Bar dataKey="conversionPct" fill="var(--sda-report-chart-1, #636366)" radius={[0, 4, 4, 0]} barSize={16} /></BarChart></ResponsiveContainer></div></div>,
     },
     {
       id: "summary",
@@ -140,7 +141,7 @@ export function CustomerInsight() {
     },
     {
       id: "trend",
-      content: <div className="flex h-full min-h-0 flex-col rounded-xl border border-[#f0f0f2] bg-white p-5"><div className="mb-3 flex shrink-0 items-center gap-2"><Users className="w-4 h-4 text-[#aeaeb2]" /><h3 className="text-[13px] text-[#1d1d1f]">选中客群月度趋势</h3></div><div className="min-h-0 flex-1">{activeTrend.length > 0 ? <ResponsiveContainer width="100%" height="100%"><BarChart data={activeTrend}><CartesianGrid strokeDasharray="3 3" stroke="#f5f5f5" vertical={false} /><XAxis dataKey="month" tick={{ fontSize: 9, fill: "#c7c7cc" }} stroke="transparent" /><YAxis tick={{ fontSize: 9, fill: "#c7c7cc" }} stroke="transparent" /><Tooltip contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #f0f0f2" }} /><Bar dataKey="active_customer_count" name="活跃客户" fill="#636366" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer> : <Unavailable text="当前客群没有月度趋势数据。" />}</div></div>,
+      content: <div className="flex h-full min-h-0 flex-col rounded-xl border border-[#f0f0f2] bg-white p-5"><div className="mb-3 flex shrink-0 items-center gap-2"><Users className="w-4 h-4 text-[#aeaeb2]" /><h3 className="text-[13px] text-[#1d1d1f]">选中客群月度趋势</h3></div><div className="min-h-0 flex-1">{activeTrend.length > 0 ? <ResponsiveContainer width="100%" height="100%"><BarChart data={activeTrend}><CartesianGrid strokeDasharray="3 3" stroke="var(--sda-report-chart-grid, #f5f5f5)" vertical={false} /><XAxis dataKey="month" tick={{ fontSize: 9, fill: "var(--sda-report-chart-muted, #c7c7cc)" }} stroke="transparent" /><YAxis tick={{ fontSize: 9, fill: "var(--sda-report-chart-muted, #c7c7cc)" }} stroke="transparent" /><Tooltip contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid var(--sda-report-border, #f0f0f2)" }} /><Bar dataKey="active_customer_count" name="活跃客户" fill="var(--sda-report-chart-1, #636366)" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer> : <Unavailable text="当前客群没有月度趋势数据。" />}</div></div>,
     },
     {
       id: "risk",
@@ -161,6 +162,7 @@ export function CustomerInsight() {
         editController={pageLayout.editController}
         canEditLayout={isSuperAdmin}
         headerDataAttribute="customer-insight"
+        pageStyleControl={isSuperAdmin && pageLayout.mode === "edit" ? <ReportPageStyleButton styleId={pageLayout.pageStyleId} onSelect={pageLayout.applyPageStyle} /> : null}
       />
       <StandardAnalysisPageStickyNote stickyNote={stickyNote} />
 
@@ -169,7 +171,7 @@ export function CustomerInsight() {
           {notice || pageLayout.notice}
         </div>
       )}
-      {loading && !snapshot ? <CustomerState message="正在读取受治理客群数据…" embedded /> : !model.hasData ? <CustomerState message={notice || "当前租户没有已授权的客群主题数据，页面不会展示内置画像或虚构流失客户。"} embedded /> : <StandardAnalysisPageGrid moduleKey="customer_insight" definitions={CUSTOMER_VISUAL_DEFINITIONS} modules={modules} layout={pageLayout.layout} hiddenDefinitions={pageLayout.hiddenDefinitions} editable={isSuperAdmin && pageLayout.mode === "edit"} onHide={pageLayout.hide} onRestore={pageLayout.restore} onMove={pageLayout.move} />}
+      {loading && !snapshot ? <CustomerState message="正在读取受治理客群数据…" embedded /> : !model.hasData ? <CustomerState message={notice || "当前租户没有已授权的客群主题数据，页面不会展示内置画像或虚构流失客户。"} embedded /> : <StandardAnalysisPageGrid moduleKey="customer_insight" definitions={CUSTOMER_VISUAL_DEFINITIONS} modules={modules} layout={pageLayout.layout} hiddenDefinitions={pageLayout.hiddenDefinitions} editable={isSuperAdmin && pageLayout.mode === "edit"} onHide={pageLayout.hide} onRestore={pageLayout.restore} onMove={pageLayout.move} pageStyleId={pageLayout.pageStyleId} onApplyPageStyle={pageLayout.applyPageStyle} />}
     </div>
   );
 }

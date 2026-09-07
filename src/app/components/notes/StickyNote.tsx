@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { StickyNote as StickyNoteIcon } from "lucide-react";
 import { RichNoteEditor, type RichNoteUploadContext } from "./RichNoteEditor";
 import { selectedTextWithin, type StickyNoteRecord } from "./richNote";
@@ -24,6 +24,8 @@ export function StickyNotePanel({
   className?: string;
 }) {
   const [deleteMenu, setDeleteMenu] = useState<{ x: number; y: number } | null>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const [anchorStyle, setAnchorStyle] = useState<CSSProperties | null>(null);
 
   useEffect(() => {
     if (!deleteMenu) return;
@@ -31,6 +33,23 @@ export function StickyNotePanel({
     document.addEventListener("pointerdown", close);
     return () => document.removeEventListener("pointerdown", close);
   }, [deleteMenu]);
+
+  useLayoutEffect(() => {
+    if (!note.visible || !note.anchorTargetId) { setAnchorStyle(null); return; }
+    const update = () => {
+      const target = document.querySelector<HTMLElement>(`[data-visual-card="${CSS.escape(note.anchorTargetId || "")}"]`);
+      if (!target) { setAnchorStyle(null); return; }
+      const rect = target.getBoundingClientRect();
+      const width = Math.min(360, window.innerWidth - 16);
+      const height = panelRef.current?.offsetHeight || 132;
+      const anchorX = rect.left + rect.width * (note.anchorXRatio ?? 0.5);
+      setAnchorStyle({ left: Math.max(8, Math.min(window.innerWidth - width - 8, anchorX - width / 2)), top: Math.max(8, rect.top - height - 8), width });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => { window.removeEventListener("resize", update); window.removeEventListener("scroll", update, true); };
+  }, [note.anchorTargetId, note.anchorXRatio, note.visible]);
 
   if (!note.visible) return null;
 
@@ -47,8 +66,11 @@ export function StickyNotePanel({
 
   return (
     <section
-      className={`relative rounded-xl border border-[#dce7df] bg-[#fbfdfc] p-3 ${className}`}
+      ref={panelRef}
+      className={`${anchorStyle ? "fixed z-[170]" : "relative"} rounded-xl border border-[#dce7df] bg-[#fbfdfc] p-3 shadow-sm ${anchorStyle ? "" : className}`}
+      style={anchorStyle || undefined}
       data-page-sticky-note="true"
+      data-sticky-note-anchor={anchorStyle ? note.anchorTargetId : undefined}
       onDoubleClick={() => { if (!editing) onStartEdit(); }}
       onContextMenu={openDeleteMenu}
     >

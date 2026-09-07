@@ -61,8 +61,12 @@ class PostgreSQLApplicationStore:
             if _shared_page_layout_module(module_key):
                 shared_state = self._load_state(connection, tenant_key, module_key, None)
                 state["pageDataLayout"] = list(shared_state.get("pageDataLayout") or [])
+                state["pageDataCards"] = list(shared_state.get("pageDataCards") or [])
+                state["pageDataPublicFilters"] = list(shared_state.get("pageDataPublicFilters") or [])
+                state["pageReportStyleId"] = str(shared_state.get("pageReportStyleId") or "balanced-canvas")
                 state["pageDataNotes"] = list(shared_state.get("pageDataNotes") or [])
                 state["pageVisualLayout"] = list(shared_state.get("pageVisualLayout") or [])
+                state["pageVisualStyleId"] = str(shared_state.get("pageVisualStyleId") or "balanced-canvas")
                 state["pageStickyNote"] = dict(shared_state.get("pageStickyNote") or {})
                 if module_key == "weekly_report":
                     state["weeklyVisualReports"] = list(shared_state.get("weeklyVisualReports") or [])
@@ -99,8 +103,12 @@ class PostgreSQLApplicationStore:
             if _shared_page_layout_module(module_key):
                 shared_state = self._load_state(connection, tenant_key, module_key, None)
                 state["pageDataLayout"] = list(shared_state.get("pageDataLayout") or [])
+                state["pageDataCards"] = list(shared_state.get("pageDataCards") or [])
+                state["pageDataPublicFilters"] = list(shared_state.get("pageDataPublicFilters") or [])
+                state["pageReportStyleId"] = str(shared_state.get("pageReportStyleId") or "balanced-canvas")
                 state["pageDataNotes"] = list(shared_state.get("pageDataNotes") or [])
                 state["pageVisualLayout"] = list(shared_state.get("pageVisualLayout") or [])
+                state["pageVisualStyleId"] = str(shared_state.get("pageVisualStyleId") or "balanced-canvas")
                 state["pageStickyNote"] = dict(shared_state.get("pageStickyNote") or {})
                 if module_key == "weekly_report":
                     state["weeklyVisualReports"] = list(shared_state.get("weeklyVisualReports") or [])
@@ -134,11 +142,15 @@ class PostgreSQLApplicationStore:
                 shared_state = self._load_state(connection, tenant_key, module_key, None)
                 if action == "set_page_data_layout":
                     shared_state["pageDataLayout"] = list(next_state.get("pageDataLayout") or [])
+                    shared_state["pageDataCards"] = list(next_state.get("pageDataCards") or [])
+                    shared_state["pageDataPublicFilters"] = list(next_state.get("pageDataPublicFilters") or [])
+                    shared_state["pageReportStyleId"] = str(next_state.get("pageReportStyleId") or "balanced-canvas")
                     shared_state["pageDataNotes"] = list(next_state.get("pageDataNotes") or [])
                 if action == "set_page_data_notes":
                     shared_state["pageDataNotes"] = list(next_state.get("pageDataNotes") or [])
                 if action == "set_page_visual_layout":
                     shared_state["pageVisualLayout"] = list(next_state.get("pageVisualLayout") or [])
+                    shared_state["pageVisualStyleId"] = str(next_state.get("pageVisualStyleId") or "balanced-canvas")
                 if action == "set_page_sticky_note":
                     shared_state["pageStickyNote"] = dict(next_state.get("pageStickyNote") or {})
                 self._save_non_core_state(

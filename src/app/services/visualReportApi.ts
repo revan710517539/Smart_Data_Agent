@@ -3,6 +3,7 @@ import { fetchApplicationModule, runApplicationAction } from "./applicationApi";
 import type { VisualizationType } from "../components/self-analysis/domain";
 import type { VisualizationCardConfig } from "../components/visualization/visualizationDataModel";
 import type { StickyNoteRecord } from "../components/notes/richNote";
+import type { ReportPageStyleId } from "../components/report-style/reportPageStyles";
 
 export type VisualReportDestination = "mine" | "topic" | "experience" | "weekly";
 
@@ -25,10 +26,22 @@ export type VisualReportCard = {
   config: VisualizationCardConfig;
 };
 
+export type VisualReportPublicFilterGroup = {
+  id: string;
+  name: string;
+  datasetIds: string[];
+  fields: string[];
+  controlOrder: string[];
+  controlPositions?: Record<string, number>;
+  selections: Record<string, string>;
+};
+
 export type VisualReport = {
   id: string;
   title: string;
   cards: VisualReportCard[];
+  publicFilters?: VisualReportPublicFilterGroup[];
+  pageStyleId?: ReportPageStyleId;
   destinations: VisualReportDestination[];
   stickyNote?: StickyNoteRecord;
   ownerUserId?: string;
@@ -48,13 +61,14 @@ export async function fetchVisualReports({ tenantId, userId }: VisualReportParam
   return Array.isArray(response.state.visualReports) ? response.state.visualReports : [];
 }
 
-export async function upsertVisualReport({ tenantId, userId, report }: VisualReportParams & { report: VisualReport }) {
+export async function upsertVisualReport({ tenantId, userId, report, keepalive = false }: VisualReportParams & { report: VisualReport; keepalive?: boolean }) {
   const response = await runApplicationAction<VisualReportState>({
     tenantId,
     userId,
     moduleKey: "self_analysis",
     action: "upsert_visual_report",
     payload: { report },
+    keepalive,
   });
   return response.result.report as VisualReport;
 }

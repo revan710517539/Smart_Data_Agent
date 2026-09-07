@@ -414,6 +414,7 @@ class CSVFolderSourceTest(unittest.TestCase):
             self.assertEqual(table["sqlId"], "sql_yushu_daily")
             self.assertEqual(table["crawlerRunId"], "run_daily_20260826")
             self.assertEqual(table["relativePath"], approved.name)
+            self.assertEqual(table["connectionId"], "data-crawler:tenant:华兴银行")
 
     def test_production_manifest_maps_canonical_and_legacy_tenant_ids_to_one_directory(self) -> None:
         with TemporaryDirectory() as tmpdir:

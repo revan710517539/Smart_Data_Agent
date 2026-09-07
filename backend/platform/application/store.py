@@ -76,7 +76,7 @@ REGISTERED_ACTIONS: dict[str, set[str]] = {
     "notifications": {"create_rule", "edit_rule", "toggle_rule", "manage_subscription", "mark_read", "acknowledge"},
     "weekly_report": {
         "save_version", "open_history", "open_export_dialog",
-        "start_realtime_voice", "analyze_selected_context", "set_page_data_layout", "set_page_data_notes", "set_page_sticky_note",
+        "start_realtime_voice", "analyze_selected_context", "set_page_data_layout", "set_page_data_notes", "set_page_sticky_note", "set_weekly_data_preferences",
     },
     "self_analysis": {
         "upload_knowledge_file", "remove_knowledge_file", "select_analysis_skill",
@@ -120,6 +120,9 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
         "exports": [],
         "actions": [],
         "pageDataLayout": [],
+        "pageDataCards": [],
+        "pageDataPublicFilters": [],
+        "pageReportStyleId": "balanced-canvas",
         "pageDataNotes": [],
         "pageStickyNote": {"visible": False, "items": [], "updatedAt": ""},
         "selectedProduct": "all",
@@ -140,6 +143,7 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
         "selectedBank": "全部分行",
         "selectedSegment": 0,
         "pageVisualLayout": DEFAULT_PAGE_VISUAL_LAYOUTS["customer_insight"],
+        "pageVisualStyleId": "balanced-canvas",
         "pageStickyNote": {"visible": False, "items": [], "updatedAt": ""},
     },
     "single_customer_insight": {
@@ -150,11 +154,15 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
         "exports": [],
         "productView": "consumer",
         "pageVisualLayout": DEFAULT_PAGE_VISUAL_LAYOUTS["competition_analysis"],
+        "pageVisualStyleId": "balanced-canvas",
         "pageStickyNote": {"visible": False, "items": [], "updatedAt": ""},
     },
     "institution_supervision": {
         "exports": [],
         "pageDataLayout": [],
+        "pageDataCards": [],
+        "pageDataPublicFilters": [],
+        "pageReportStyleId": "balanced-canvas",
         "pageDataNotes": [],
         "pageStickyNote": {"visible": False, "items": [], "updatedAt": ""},
         "selectedBranch": None,
@@ -164,6 +172,9 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
         "customerSegmentList": None,
         "customerSegmentListsByUser": {},
         "pageDataLayout": [],
+        "pageDataCards": [],
+        "pageDataPublicFilters": [],
+        "pageReportStyleId": "balanced-canvas",
         "pageDataNotes": [],
         "pageStickyNote": {"visible": False, "items": [], "updatedAt": ""},
     },
@@ -190,8 +201,12 @@ DEFAULT_MODULE_STATES: dict[str, dict[str, Any]] = {
         "drafts": [],
         "exports": [],
         "pageDataLayout": [],
+        "pageDataCards": [],
+        "pageDataPublicFilters": [],
+        "pageReportStyleId": "balanced-canvas",
         "pageDataNotes": [],
         "weeklyVisualReports": [],
+        "weeklyDataPreferences": None,
         "pageStickyNote": {"visible": False, "items": [], "updatedAt": ""},
         "historyOpenedAt": "",
     },
@@ -602,6 +617,11 @@ def _execute_action(
         next_state["historyOpenedAt"] = now
         return {"message": "历史版本已打开。", "drafts": next_state.get("drafts", [])}, next_state
 
+    if module_key == "weekly_report" and action == "set_weekly_data_preferences":
+        preferences = _normalize_weekly_data_preferences(payload)
+        next_state["weeklyDataPreferences"] = preferences
+        return {"message": "周报数据呈现设置已保存。", "preferences": preferences}, next_state
+
     if action == "set_customer_segment_list" and module_key == "customer_segment_analysis":
         if not actor_user_id:
             raise ValueError("customer_segment_list_owner_required")
@@ -651,8 +671,18 @@ def _execute_action(
         if len(normalized) > 40 or any(not asset_id or len(asset_id) > 160 for asset_id in normalized) or len(normalized) != len(set(normalized)):
             raise ValueError("page_data_layout_invalid")
         next_state["pageDataLayout"] = normalized
+        next_state["pageDataCards"] = _normalize_page_data_cards(payload.get("cards"), set(normalized))
+        next_state["pageDataPublicFilters"] = _normalize_page_data_public_filters(payload.get("publicFilters"), set(normalized))
+        next_state["pageReportStyleId"] = _normalize_report_page_style_id(payload.get("pageStyleId"))
         next_state["pageDataNotes"] = _normalize_page_data_notes(payload.get("notes"), set(normalized))
-        return {"message": "页面数据布局已保存。", "assetIds": normalized, "notes": next_state["pageDataNotes"]}, next_state
+        return {
+            "message": "页面数据布局已保存。",
+            "assetIds": normalized,
+            "cards": next_state["pageDataCards"],
+            "publicFilters": next_state["pageDataPublicFilters"],
+            "pageStyleId": next_state["pageReportStyleId"],
+            "notes": next_state["pageDataNotes"],
+        }, next_state
 
     if action == "set_page_data_notes" and module_key in {"dashboard", "weekly_report", "institution_supervision", "customer_segment_analysis"}:
         layout = {str(asset_id or "").strip() for asset_id in list(next_state.get("pageDataLayout") or []) if str(asset_id or "").strip()}
@@ -668,7 +698,8 @@ def _execute_action(
     if action == "set_page_visual_layout" and module_key in DEFAULT_PAGE_VISUAL_LAYOUTS:
         layout = _normalize_page_visual_layout(module_key, payload.get("items"))
         next_state["pageVisualLayout"] = layout
-        return {"message": "页面布局已保存。", "items": layout}, next_state
+        next_state["pageVisualStyleId"] = _normalize_report_page_style_id(payload.get("styleId"))
+        return {"message": "页面布局已保存。", "items": layout, "styleId": next_state["pageVisualStyleId"]}, next_state
 
     if action == "set_page_sticky_note" and module_key in {"dashboard", "weekly_report", "institution_supervision", "customer_segment_analysis", "customer_insight", "competition_analysis", "self_analysis"}:
         note = _normalize_sticky_note(payload.get("note"))
@@ -1017,6 +1048,16 @@ _VISUAL_REPORT_TYPES = frozenset({
     "scatter", "funnel", "treemap", "radar", "table", "pivot", "text",
 })
 _VISUAL_REPORT_FILTER_OPERATORS = frozenset({"in", "not_in", "contains", "not_contains"})
+_REPORT_PAGE_STYLE_IDS = frozenset({
+    "executive-overview", "trend-story", "variance-benchmark", "risk-watch",
+    "operations-dense", "segment-lens", "funnel-journey", "board-brief",
+    "evidence-ledger", "balanced-canvas",
+})
+
+
+def _normalize_report_page_style_id(value: Any) -> str:
+    style_id = str(value or "").strip()
+    return style_id if style_id in _REPORT_PAGE_STYLE_IDS else "balanced-canvas"
 
 
 def _normalize_visual_report(value: Any, now: str, actor_user_id: str | None) -> dict[str, Any]:
@@ -1033,6 +1074,7 @@ def _normalize_visual_report(value: Any, now: str, actor_user_id: str | None) ->
     card_ids = [card["id"] for card in cards]
     if len(card_ids) != len(set(card_ids)):
         raise ValueError("visual_report_cards_invalid")
+    public_filters = _normalize_visual_report_public_filters(value.get("publicFilters"), cards)
     destinations = []
     for raw_destination in value.get("destinations", []) if isinstance(value.get("destinations"), list) else []:
         destination = str(raw_destination or "").strip()
@@ -1042,6 +1084,8 @@ def _normalize_visual_report(value: Any, now: str, actor_user_id: str | None) ->
         "id": report_id,
         "title": title,
         "cards": cards,
+        "publicFilters": public_filters,
+        "pageStyleId": _normalize_report_page_style_id(value.get("pageStyleId")),
         "destinations": destinations,
         "stickyNote": _normalize_sticky_note(value.get("stickyNote")),
         "ownerUserId": str(actor_user_id or ""),
@@ -1060,7 +1104,7 @@ def _normalize_visual_report_card(value: Any, index: int) -> dict[str, Any]:
         raise ValueError("visual_report_cards_invalid")
     dataset_id = str(dataset.get("id") or "").strip()[:160]
     dataset_kind = str(dataset.get("kind") or "").strip()
-    if not dataset_id or dataset_kind not in {"raw", "topic"}:
+    if not dataset_id or dataset_kind not in {"raw", "topic", "page_data"}:
         raise ValueError("visual_report_dataset_invalid")
     fields = []
     for raw_field in dataset.get("fields", [])[:300] if isinstance(dataset.get("fields"), list) else []:
@@ -1085,6 +1129,7 @@ def _normalize_visual_report_card(value: Any, index: int) -> dict[str, Any]:
         "code": str(dataset.get("code") or dataset_id).strip()[:300],
         "sourceKey": str(dataset.get("sourceKey") or "").strip()[:300],
         "schemaFingerprint": str(dataset.get("schemaFingerprint") or "").strip()[:160],
+        "relationshipGroupId": str(dataset.get("relationshipGroupId") or "").strip()[:160],
         "fields": fields,
     }
     return {
@@ -1094,6 +1139,32 @@ def _normalize_visual_report_card(value: Any, index: int) -> dict[str, Any]:
         "dataset": normalized_dataset,
         "config": _normalize_visual_report_config(value.get("config")),
     }
+
+
+def _normalize_visual_report_public_filters(value: Any, cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    datasets: dict[str, set[str]] = {}
+    for card in cards:
+        dataset = card.get("dataset") if isinstance(card.get("dataset"), dict) else {}
+        dataset_id = str(dataset.get("id") or "").strip()
+        dataset_kind = str(dataset.get("kind") or "").strip()
+        filter_id = f"{dataset_kind}:{dataset_id}" if dataset_id and dataset_kind else ""
+        if not filter_id:
+            continue
+        datasets[filter_id] = {
+            str(field.get("fieldNameEn") or "").strip()
+            for field in dataset.get("fields") or []
+            if isinstance(field, dict) and str(field.get("fieldNameEn") or "").strip()
+        }
+    groups = _normalize_page_data_public_filters(value, set(datasets))
+    normalized: list[dict[str, Any]] = []
+    for group in groups:
+        common_fields: set[str] | None = None
+        for dataset_id in group["datasetIds"]:
+            common_fields = set(datasets[dataset_id]) if common_fields is None else common_fields & datasets[dataset_id]
+        if not group["fields"] or any(field not in (common_fields or set()) for field in group["fields"]):
+            raise ValueError("visual_report_public_filter_field_unavailable")
+        normalized.append(group)
+    return normalized
 
 
 def _normalize_visual_report_config(value: Any) -> dict[str, Any]:
@@ -1160,6 +1231,7 @@ def _normalize_visual_report_config(value: Any) -> dict[str, Any]:
         "layoutHeight": _bounded_optional_int(raw.get("layoutHeight"), 160, 1600),
         "maxLayoutSpan": _bounded_optional_int(raw.get("maxLayoutSpan"), 1, 12),
         "maxLayoutHeight": _bounded_optional_int(raw.get("maxLayoutHeight"), 160, 1600),
+        "borderless": bool(raw.get("borderless")),
     }
     table_style = normalize_table_style(raw.get("tableStyle"))
     if table_style:
@@ -1216,12 +1288,120 @@ def _normalize_page_data_notes(value: Any, available_ids: set[str]) -> list[dict
     return notes
 
 
+def _normalize_page_data_cards(value: Any, available_ids: set[str]) -> list[dict[str, Any]]:
+    cards: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    if value is None:
+        return cards
+    if not isinstance(value, list) or len(value) > 40:
+        raise ValueError("page_data_cards_invalid")
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("page_data_cards_invalid")
+        card_id = str(item.get("id") or "").strip()[:160]
+        source_id = str(item.get("sourceAssetId") or "").strip()[:160]
+        card_type = str(item.get("type") or "table").strip()
+        if (
+            not card_id
+            or card_id in seen
+            or not source_id
+            or source_id not in available_ids
+            or card_type not in _VISUAL_REPORT_TYPES
+        ):
+            raise ValueError("page_data_cards_invalid")
+        seen.add(card_id)
+        cards.append({
+            "id": card_id,
+            "sourceAssetId": source_id,
+            "title": str(item.get("title") or "未命名可视化").strip()[:500] or "未命名可视化",
+            "type": card_type,
+            "config": _normalize_visual_report_config(item.get("config")),
+        })
+    return cards
+
+
+def _normalize_page_data_public_filters(value: Any, available_ids: set[str]) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    if value is None:
+        return groups
+    if not isinstance(value, list) or len(value) > 20:
+        raise ValueError("page_data_public_filters_invalid")
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("page_data_public_filters_invalid")
+        group_id = str(item.get("id") or "").strip()[:160]
+        dataset_ids = _string_list(item.get("datasetIds"), 40, 160)
+        fields = _string_list(item.get("fields"), 40, 300)
+        order = [field for field in _string_list(item.get("controlOrder"), 40, 300) if field in fields]
+        if not group_id or group_id in seen or not dataset_ids or not fields or any(dataset_id not in available_ids for dataset_id in dataset_ids):
+            raise ValueError("page_data_public_filters_invalid")
+        raw_selections = item.get("selections") if isinstance(item.get("selections"), dict) else {}
+        raw_positions = item.get("controlPositions") if isinstance(item.get("controlPositions"), dict) else {}
+        positions = {
+            str(field): max(0, min(800, int(raw_value)))
+            for field, raw_value in list(raw_positions.items())[:40]
+            if str(field) in fields and isinstance(raw_value, (int, float))
+        }
+        selections = {
+            str(field): str(raw_value or "")[:500]
+            for field, raw_value in list(raw_selections.items())[:40]
+            if str(field) in fields
+        }
+        seen.add(group_id)
+        groups.append({
+            "id": group_id,
+            "name": str(item.get("name") or f"公共筛选 {len(groups) + 1}").strip()[:120] or f"公共筛选 {len(groups) + 1}",
+            "datasetIds": dataset_ids,
+            "fields": fields,
+            "controlOrder": [*order, *[field for field in fields if field not in order]],
+            "controlPositions": positions,
+            "selections": selections,
+        })
+    next_position = max(
+        (position for group in groups for position in group["controlPositions"].values()),
+        default=-1,
+    ) + 1
+    for group in groups:
+        for field in group["controlOrder"]:
+            if field not in group["controlPositions"]:
+                group["controlPositions"][field] = next_position
+                next_position += 1
+    return groups
+
+
+def _normalize_weekly_data_preferences(value: Any) -> dict[str, Any]:
+    raw_preferences = value.get("preferences") if isinstance(value, dict) else None
+    if not isinstance(raw_preferences, list) or len(raw_preferences) > 160:
+        raise ValueError("weekly_data_preferences_invalid")
+    preferences: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw_preferences:
+        if not isinstance(item, dict):
+            raise ValueError("weekly_data_preferences_invalid")
+        item_id = str(item.get("id") or "").strip()[:240]
+        if not item_id or item_id in seen:
+            raise ValueError("weekly_data_preferences_invalid")
+        seen.add(item_id)
+        preferences.append({"id": item_id, "visible": bool(item.get("visible"))})
+    return {
+        "preferences": preferences,
+        "orderCustomized": bool(value.get("orderCustomized")) if isinstance(value, dict) else False,
+    }
+
+
 def _normalize_sticky_note(value: Any) -> dict[str, Any]:
     raw = value if isinstance(value, dict) else {}
+    try:
+        anchor_x_ratio = float(raw.get("anchorXRatio") or 0.5)
+    except (TypeError, ValueError):
+        anchor_x_ratio = 0.5
     return {
         "visible": bool(raw.get("visible")),
         "items": _normalize_note_items(raw.get("items")),
         "updatedAt": str(raw.get("updatedAt") or "")[:80],
+        "anchorTargetId": str(raw.get("anchorTargetId") or "")[:160],
+        "anchorXRatio": max(0.0, min(1.0, anchor_x_ratio)),
     }
 
 

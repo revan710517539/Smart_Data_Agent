@@ -950,6 +950,7 @@ def _apply_scene_and_resolve_skills(
     question: str,
     page_context: dict[str, Any],
 ) -> dict[str, Any]:
+    page_context = _attach_conclusion_rule_skill_refs(services, tenant_id, page_context)
     page_context = _resolve_analysis_extensions(services, tenant_id, page_context)
     catalog: list[dict[str, Any]] = []
     store = getattr(services, "data_asset_store", None)
@@ -970,6 +971,56 @@ def _apply_scene_and_resolve_skills(
     except Exception:
         return page_context
     return _resolve_analysis_extensions(services, tenant_id, page_context)
+
+
+def _dataset_reference_ids(table: dict[str, Any]) -> set[str]:
+    return {
+        str(table.get(key) or "").strip()
+        for key in ("id", "code", "datasetId", "sourceKey")
+        if str(table.get(key) or "").strip()
+    }
+
+
+def _matched_conclusion_rules(bundle: dict[str, Any], tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rules = [
+        rule for rule in bundle.get("conclusion_rules", [])
+        if isinstance(rule, dict) and rule.get("purpose") == "conclusion_generation"
+    ]
+    matched: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    # Preserve the user's selected-dataset order. Rules within one dataset keep
+    # their governed catalog order, and a rule referenced by aliases is fused once.
+    for table in tables:
+        selected_ids = _dataset_reference_ids(table)
+        for rule in rules:
+            references = {
+                str(value or "").strip()
+                for value in [rule.get("datasetId"), *(rule.get("datasetRefIds") or [])]
+                if str(value or "").strip()
+            }
+            rule_id = str(rule.get("id") or "").strip()
+            if references & selected_ids and rule_id not in seen:
+                matched.append(rule)
+                seen.add(rule_id)
+    return matched[:24]
+
+
+def _attach_conclusion_rule_skill_refs(services: PlatformServices, tenant_id: str, page_context: dict[str, Any]) -> dict[str, Any]:
+    store = getattr(services, "data_asset_store", None)
+    tables = _list_of_dicts(page_context.get("selected_data_tables"))
+    if store is None or not tables:
+        return page_context
+    try:
+        matched = _matched_conclusion_rules(store.list_published_bundle(tenant_id), tables)
+    except Exception:
+        return page_context
+    requested = _list_of_dicts(page_context.get("analysis_context_skills"))
+    known = {str(item.get("id") or "") for item in requested}
+    for skill_id in dict.fromkeys(str(rule.get("skillId") or "") for rule in matched):
+        if skill_id and skill_id not in known:
+            requested.append({"id": skill_id})
+            known.add(skill_id)
+    return {**page_context, "analysis_context_skills": requested}
 
 
 def _resolve_analysis_extensions(
@@ -1885,6 +1936,7 @@ def _build_asset_context(
         selected_data_tables,
         published_tables,
     )
+    conclusion_rules = _matched_conclusion_rules(bundle, selected_data_tables)
     return {
         "matched_intents": matched_intents[:3],
         "topics": topics[:3],
@@ -1895,6 +1947,17 @@ def _build_asset_context(
         "analysis_memories": selected_memories,
         "experiences": experiences[:3],
         "metric_dictionary_definitions": metric_dictionary_definitions,
+        # Rules are fetched per resolved dataset and fused in dataset order.
+        # They guide wording only; factual values still come from executed
+        # query evidence as enforced by the intelligent-analysis prompt.
+        "conclusion_rules": [
+            {
+                key: rule.get(key)
+                for key in ("id", "name", "purpose", "datasetId", "datasetName", "skillId", "skillName", "metricRules")
+                if rule.get(key) not in (None, "")
+            }
+            for rule in conclusion_rules
+        ],
         "metric_preset": {key: value for key, value in metric_preset.items() if key != "selected_table"},
         "raw_table_count": len(raw_tables),
         "multi_institution_page_data_count": len(multi_page_tables),

@@ -80,6 +80,7 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             "page_data_source_unavailable": "页面数据源已不可用。请检查当前机构的数据目录和页面数据绑定。",
             "visual_report_dataset_unavailable": "可视化报表引用的数据集已不可用，请重新绑定后再保存。",
             "visual_report_dataset_schema_changed": "可视化报表引用的数据结构已变化，请重新绑定后再保存。",
+            "visual_report_public_filter_field_unavailable": "公共筛选字段不再是所选数据集的共有字段，请重新配置后再保存。",
             "visual_report_owner_required": "只有报表创建人或机构管理员可以从经营周报移除该可视化报表。",
             "page_data_source_schema_changed": "页面数据源结构已更新，当前图表字段不再兼容。请重新绑定数据源后保存。",
             "global_super_admin_required": "仅超级管理员可以执行该操作。",
@@ -92,6 +93,8 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             "raw_table_metadata_source_unavailable": "原始表已更新或不属于当前机构，请重新选择后再保存字段配置。",
             "data_crawler_sql_binding_override_forbidden": "当前请求中的 SQL 与数据表血缘不一致，系统已拒绝执行。",
             "data_crawler_sql_binding_institution_mismatch": "关联 SQL 不属于当前机构，系统已拒绝执行。",
+            "conclusion_rule_dataset_unavailable": "所选数据集已不可用或不属于当前机构，请刷新数据目录后重新选择。",
+            "conclusion_rule_skill_unavailable": "所选结论表达 Skill 已不可用或未启用，请重新选择。",
         }
         if error_text in permission_messages:
             handler._send_json(
@@ -300,6 +303,8 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
             "table_relationship_institution_graph_disconnected": "同一机构内的多张表必须先互相连接。",
             "table_relationship_cross_institution_edge_required": "跨机构表关系必须有一条连接不同机构的字段关联。",
             "table_relationship_common_fields_required": "跨机构表关系要求各机构数据表具有相同字段结构，才能用于多机构页面。当前两侧表没有同名字段，请选择结构一致的数据表。",
+            "conclusion_rule_metric_field_unavailable": "规则引用的指标字段已不在所选数据集中，请刷新后重新配置。",
+            "conclusion_rule_threshold_invalid": "规则阈值格式不正确；区间条件必须同时填写起始值和结束值。",
         }
         metric_workbook_messages = {
             "请上传 .xlsx 格式的指标文件。": ("metric_workbook_file_type", "仅支持 .xlsx 格式的指标文件，请重新选择。"),
@@ -348,6 +353,8 @@ def send_route_exception(handler: Any, exc: Exception) -> None:
                 "non_temporal_sql_parameters_not_supported",
                 "sql_parameter_fixed_value_required",
                 "sql_parameter_fixed_value_invalid",
+                "conclusion_rule_metric_field_unavailable",
+                "conclusion_rule_threshold_invalid",
             }
             else "invalid_request"
         )

@@ -4,6 +4,7 @@ import { fetchApplicationModule, runApplicationAction, type ApplicationModuleKey
 import {
   STICKY_NOTE_CHANGED_EVENT,
   emptyStickyNote,
+  currentVisualStickyNoteAnchor,
   localStickyNoteKey,
   normalizeStickyNote,
   type StickyNoteRecord,
@@ -14,12 +15,19 @@ type StickyNoteChangedDetail = {
   note: StickyNoteRecord;
 };
 
+type PendingStickyNote = {
+  note: StickyNoteRecord;
+  version: number;
+};
+
 export function useStickyNote(moduleKey: ApplicationModuleKey, surface: string) {
   const { tenantId, userId } = usePlatformContext();
   const [note, setNote] = useState<StickyNoteRecord>(() => readLocalNote(surface));
   const [editing, setEditing] = useState(false);
   const saveTimer = useRef<number | null>(null);
   const skipHydrate = useRef(false);
+  const pendingSave = useRef<PendingStickyNote | null>(null);
+  const saveVersion = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,28 +65,59 @@ export function useStickyNote(moduleKey: ApplicationModuleKey, surface: string) 
     };
   }, [surface]);
 
+  useEffect(() => {
+    const flush = () => {
+      const pending = pendingSave.current;
+      if (!pending) return;
+      void saveStickyNote({ tenantId, userId, moduleKey, surface, pending, keepalive: true })
+        .then(() => {
+          if (pendingSave.current?.version === pending.version) pendingSave.current = null;
+        })
+        .catch(() => undefined);
+    };
+    const flushWhenHidden = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", flushWhenHidden);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", flushWhenHidden);
+      if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+      flush();
+    };
+  }, [moduleKey, surface, tenantId, userId]);
+
   const persist = (next: StickyNoteRecord, immediate = false) => {
     const payload = { ...next, updatedAt: new Date().toISOString() };
+    const pending = { note: payload, version: saveVersion.current + 1 };
+    saveVersion.current = pending.version;
+    pendingSave.current = pending;
     skipHydrate.current = true;
     setNote(payload);
     writeLocalNote(surface, payload);
     broadcastNote(surface, payload);
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
-    const save = () => {
-      void runApplicationAction({
-        tenantId,
-        userId,
-        moduleKey,
-        action: "set_page_sticky_note",
-        payload: { surface, note: payload },
-      }).catch(() => undefined);
+    const save = (keepalive = false) => {
+      void saveStickyNote({ tenantId, userId, moduleKey, surface, pending, keepalive })
+        .then(() => {
+          if (pendingSave.current?.version === pending.version) pendingSave.current = null;
+        })
+        .catch(() => undefined);
     };
     if (immediate) save();
     else saveTimer.current = window.setTimeout(save, 700);
   };
 
   const show = () => {
-    const next = { ...note, visible: true, items: note.items.length ? note.items : emptyStickyNote().items };
+    const anchor = currentVisualStickyNoteAnchor();
+    const next = {
+      ...note,
+      visible: true,
+      items: note.items.length ? note.items : emptyStickyNote().items,
+      anchorTargetId: anchor?.targetId || note.anchorTargetId,
+      anchorXRatio: anchor?.xRatio ?? note.anchorXRatio,
+    };
     persist(next, true);
     setEditing(true);
   };
@@ -108,6 +147,24 @@ export function useStickyNote(moduleKey: ApplicationModuleKey, surface: string) 
     finishEdit,
     uploadContext: { tenantId, userId, reportId: `sticky-${surface}`, blockId: "sticky-note" },
   };
+}
+
+async function saveStickyNote({ tenantId, userId, moduleKey, surface, pending, keepalive = false }: {
+  tenantId: string;
+  userId: string;
+  moduleKey: ApplicationModuleKey;
+  surface: string;
+  pending: PendingStickyNote;
+  keepalive?: boolean;
+}) {
+  return runApplicationAction({
+    tenantId,
+    userId,
+    moduleKey,
+    action: "set_page_sticky_note",
+    payload: { surface, note: pending.note },
+    keepalive,
+  });
 }
 
 type StickyNoteModuleState = {

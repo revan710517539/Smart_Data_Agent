@@ -5,6 +5,7 @@ export const transientUiSessionStoragePrefixes = [
   "sda:self-analysis:workbench:v1:",
   "sda:visual-card:v1:",
   "sda:visual-card:v2:",
+  "sda:visual-card:v3:",
   "smart-data-agent:pending-analysis:",
   "sda:analysis-workspace:active-thread:v1:",
   analysisConversationSessionStoragePrefix,

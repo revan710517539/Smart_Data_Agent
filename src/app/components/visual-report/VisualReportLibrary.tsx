@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BarChart3, ChevronDown, ChevronRight, Star, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { usePlatformContext } from "../../platform/PlatformContext";
@@ -119,6 +119,9 @@ export function useVisualReportCollection(destination: Extract<VisualReportDesti
   const [reports, setReports] = useState<VisualReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const updateVersionsRef = useRef(new Map<string, number>());
+  const updateQueuesRef = useRef(new Map<string, Promise<void>>());
+  const pendingKeepaliveRef = useRef(new Map<string, { version: number; report: VisualReport }>());
 
   const refresh = async () => {
     setLoading(true);
@@ -157,6 +160,7 @@ export function useVisualReportCollection(destination: Extract<VisualReportDesti
         await deleteVisualReport({ tenantId, userId, reportId: report.id });
       }
       setReports((current) => current.filter((item) => item.id !== report.id));
+      pendingKeepaliveRef.current.delete(report.id);
       setError("");
       return { ok: true as const };
     } catch (reason) {
@@ -166,7 +170,55 @@ export function useVisualReportCollection(destination: Extract<VisualReportDesti
     }
   };
 
-  return { reports, loading, error, refresh, remove };
+  const update = (report: VisualReport) => {
+    const previous = reports.find((item) => item.id === report.id);
+    const version = (updateVersionsRef.current.get(report.id) || 0) + 1;
+    updateVersionsRef.current.set(report.id, version);
+    if (destination === "weekly") pendingKeepaliveRef.current.set(report.id, { version, report });
+    setReports((current) => current.map((item) => item.id === report.id ? report : item));
+    const prior = updateQueuesRef.current.get(report.id) || Promise.resolve();
+    const queued = prior.catch(() => undefined).then(async () => {
+      try {
+        const saved = await upsertVisualReport({ tenantId, userId, report, keepalive: destination === "weekly" });
+        if (updateVersionsRef.current.get(report.id) === version) {
+          setReports((current) => current.map((item) => item.id === saved.id ? saved : item));
+          setError("");
+          pendingKeepaliveRef.current.delete(report.id);
+        }
+        window.dispatchEvent(new CustomEvent("smart-data-agent-visual-report-saved", { detail: saved }));
+      } catch (reason) {
+        if (updateVersionsRef.current.get(report.id) === version && previous) {
+          setReports((current) => current.map((item) => item.id === previous.id ? previous : item));
+        }
+        setError(apiErrorMessage(reason, "可视化报表自动保存失败。"));
+        throw reason;
+      }
+    });
+    updateQueuesRef.current.set(report.id, queued);
+    void queued.finally(() => {
+      if (updateQueuesRef.current.get(report.id) === queued) updateQueuesRef.current.delete(report.id);
+    }).catch(() => undefined);
+    return queued;
+  };
+
+  useEffect(() => {
+    if (destination !== "weekly") return;
+    const flush = () => {
+      for (const { report } of pendingKeepaliveRef.current.values()) {
+        void upsertVisualReport({ tenantId, userId, report, keepalive: true }).catch(() => undefined);
+      }
+    };
+    const flushWhenHidden = () => { if (document.visibilityState === "hidden") flush(); };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", flushWhenHidden);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", flushWhenHidden);
+      flush();
+    };
+  }, [destination, tenantId, userId]);
+
+  return { reports, loading, error, refresh, remove, update };
 }
 
 export function VisualReportDeleteConfirm({

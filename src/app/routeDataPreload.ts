@@ -76,6 +76,9 @@ function routeDataTasks(path: string, { tenantId, userId }: RouteDataContext): A
   if (path.startsWith("/data-assets/knowledge")) {
     return [fetchDataAssets({ tenantId, userId, scope: "knowledge" })];
   }
+  if (path.startsWith("/data-assets/rules")) {
+    return [fetchDataAssets({ tenantId, userId })];
+  }
   if (path.startsWith("/data-assets/quality")) {
     return [];
   }

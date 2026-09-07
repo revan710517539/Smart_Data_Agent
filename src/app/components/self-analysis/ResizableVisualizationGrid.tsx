@@ -2,6 +2,7 @@ import { Children, isValidElement, useEffect, useMemo, useRef, useState, type Po
 import {
   defaultVisualGridSpan,
   packVisualGridItems,
+  visualGridIdFromReactKey,
   visualGridSpanForWidth,
   visualGridWidthForSpan,
 } from "./visualGridLayout";
@@ -14,7 +15,7 @@ const defaultVisualGridHeight = 380;
 const minimumVisualGridHeight = 280;
 const minimumTextVisualGridHeight = 180;
 
-export function ResizableVisualizationGrid({ children, editable = true }: { children: ReactNode; editable?: boolean }) {
+export function ResizableVisualizationGrid({ children, editable = true, onLayoutChange }: { children: ReactNode; editable?: boolean; onLayoutChange?: (id: string, size: { span: number; height: number }) => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
   const [overrides, setOverrides] = useState<Record<string, VisualGridOverride>>({});
@@ -24,7 +25,7 @@ export function ResizableVisualizationGrid({ children, editable = true }: { chil
   const entries = useMemo(() => Children.toArray(children).filter(isValidElement).map((child, index) => {
     const hints = gridHintsFromChild(child.props);
     return {
-      id: child.key === null ? `visual-${index}` : String(child.key).replace(/^\.\$/, ""),
+      id: visualGridIdFromReactKey(child.key, index),
       child,
       hints,
     };
@@ -118,7 +119,9 @@ export function ResizableVisualizationGrid({ children, editable = true }: { chil
       document.body.style.userSelect = previousUserSelect;
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
-      setOverrides((current) => ({ ...current, [id]: { ...current[id], span: visualGridSpanForWidth(effectiveWidth, visualGridGap, nextWidth), height: nextHeight } }));
+      const nextSize = { span: visualGridSpanForWidth(effectiveWidth, visualGridGap, nextWidth), height: Math.round(nextHeight) };
+      setOverrides((current) => ({ ...current, [id]: { ...current[id], ...nextSize } }));
+      onLayoutChange?.(id, nextSize);
       setActiveItemId("");
     };
     handle.addEventListener("pointermove", move);

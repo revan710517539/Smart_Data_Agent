@@ -38,6 +38,7 @@ const pageTitles: Record<string, string> = {
   "/agent/skills": "skill/插件",
   "/data-assets/metrics": "指标字典",
   "/data-assets/knowledge": "知识记忆",
+  "/data-assets/rules": "规则管理",
   "/data-assets/data-management": "站内数据",
   "/data-assets/quality": "质量监控",
   "/data-assets/tools": "工具调用",

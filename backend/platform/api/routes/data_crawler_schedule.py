@@ -586,19 +586,22 @@ def handle_data_crawler_schedule_statuses_get(handler: Any, query: str) -> None:
             return
         if catalog.root.name != endpoint.institution_directory:
             raise PermissionError("data_crawler_csv_institution_mismatch")
-        binding_items = client_for_tenant(context.tenant_id).list_bindings().get("items") or []
+        # Schedule state is owned by SDA's automation store.  Do not make the
+        # raw-table list depend on a second live Data Crawler catalog request:
+        # a transient crawler outage must not turn verified local schedules
+        # into an API error.  The stable catalog key is deterministic from the
+        # institution and SQL ids already persisted in each governed task.
+        tasks = handler.services.automation_store.list_tasks(context.tenant_id)
         source_keys_by_sql_id = {
-            str(item.get("sqlId") or ""): _catalog_source_key(
-                endpoint.institution_id,
-                str(item.get("sqlId") or ""),
-            )
-            for item in binding_items
-            if isinstance(item, dict)
-            and str(item.get("institutionId") or "") == endpoint.institution_id
-            and str(item.get("sqlId") or "")
+            sql_id: _catalog_source_key(endpoint.institution_id, sql_id)
+            for task in tasks
+            if str(task.get("handler_ref") or "") == "data_crawler.dispatch"
+            for config in [task.get("task_config") if isinstance(task.get("task_config"), dict) else {}]
+            for sql_id in [str(config.get("sql_id") or "").strip()]
+            if sql_id and str(config.get("institution_id") or "") == endpoint.institution_id
         }
         items = _schedule_statuses(
-            handler.services.automation_store.list_tasks(context.tenant_id),
+            tasks,
             source_keys_by_sql_id,
             endpoint.institution_id,
         )

@@ -88,6 +88,8 @@ import {
   fetchTopicData,
   type AnalysisExperienceAsset,
   type BehaviorHabitAsset,
+  type ConclusionMetricRule,
+  type ConclusionRuleAsset,
   type DataAssetBundle,
   type IntentAsset,
   type KnowledgeFileAsset,
@@ -114,8 +116,10 @@ import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "./u
 import { Calendar } from "./ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { createClientUuid } from "../utils/clientUuid";
+import { ManagementListPage, ManagementListSection } from "./ui/ManagementListPage";
 
-type DataAssetSection = "metrics" | "knowledge" | "data-management" | "quality";
+type DataAssetSection = "metrics" | "knowledge" | "rules" | "data-management" | "quality";
 type DataManagementTab = "raw" | "single_page" | "multi_page" | "customer_segment_page" | "topic";
 type KnowledgeMemoryTab = "all" | "intent" | "files" | "experience";
 type MetricForm = MetricDictionaryItem;
@@ -160,6 +164,11 @@ const sectionCopy: Record<
     subtitle: "按意图、知识文件、分析经验和用户行为习惯沉淀可复用业务语义",
     searchPlaceholder: "搜索意图、知识文件、分析经验或用户行为习惯",
   },
+  rules: {
+    title: "规则管理",
+    subtitle: "按数据集和指标表现维护结论生成规则，并绑定用于综合表达的分析 Skill",
+    searchPlaceholder: "搜索规则、数据集、指标或 Skill",
+  },
   "data-management": {
     title: "站内数据",
     subtitle: "原始表仅读取当前机构 Data Crawler 文件夹中的 CSV；主题表和分析结果统一复用 Topic_Data 中的最新数据资产",
@@ -201,6 +210,7 @@ const defaultColumnWidths = metricColumns.reduce(
 
 function getSection(pathname: string): DataAssetSection {
   if (pathname.endsWith("/knowledge")) return "knowledge";
+  if (pathname.endsWith("/rules")) return "rules";
   if (pathname.endsWith("/data-management")) return "data-management";
   if (pathname.endsWith("/quality")) return "quality";
   return "metrics";
@@ -598,7 +608,7 @@ export function DataAssets() {
   };
 
   return (
-    <div className="p-7">
+    <ManagementListPage>
       <div className="flex flex-col gap-4 mb-7 xl:flex-row xl:items-center xl:justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -653,6 +663,12 @@ export function DataAssets() {
               意图 / 文件 / 经验 / 行为习惯
             </span>
           )}
+          {section === "rules" && (
+            <span className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#e5e5ea] bg-white px-3 text-[12px] text-[#636366]">
+              <Sparkles className="h-3.5 w-3.5 text-[#8a8a8e]" />
+              数据集 × 指标表现 × Skill
+            </span>
+          )}
         </div>
       </div>
 
@@ -685,6 +701,10 @@ export function DataAssets() {
           userId={userId}
           canManage={isSuperAdmin || isInstitutionAdmin}
         />
+      )}
+
+      {section === "rules" && (
+        <ConclusionRulesManagement searchTerm={searchTerm} tenantId={tenantId} userId={userId} canManage={isSuperAdmin} />
       )}
 
       {section === "data-management" && <DataManagement searchTerm={searchTerm} tenantId={tenantId} userId={userId} isSuperAdmin={isSuperAdmin} />}
@@ -724,7 +744,7 @@ export function DataAssets() {
           onClose={() => setVersionMetric(null)}
         />
       )}
-    </div>
+    </ManagementListPage>
   );
 }
 
@@ -802,7 +822,7 @@ function MetricManagement({
 
   return (
     <div className="space-y-5">
-      <div className="rounded-xl border border-[#f0f0f2] bg-white overflow-hidden">
+      <ManagementListSection>
         <div className="flex flex-col gap-2 border-b border-[#f0f0f2] px-4 py-3 md:flex-row md:items-center md:justify-between">
           <div>
             <div className="text-[13px] text-[#1d1d1f]">指标全集</div>
@@ -901,7 +921,7 @@ function MetricManagement({
             </tbody>
           </table>
         </div>
-      </div>
+      </ManagementListSection>
     </div>
   );
 }
@@ -1239,6 +1259,7 @@ const emptyAssetBundle: DataAssetBundle = {
       analysis_shortcuts: [],
       page_data: [],
       table_relationships: [],
+      conclusion_rules: [],
       relationships: [],
       count: {},
 };
@@ -2337,6 +2358,126 @@ function DataTableDeleteConfirm({
   );
 }
 
+type RuleDataset = {
+  id: string;
+  key: string;
+  name: string;
+  kind: ConclusionRuleAsset["datasetKind"];
+  fields: RawField[];
+};
+
+const emptyConclusionMetricRule = (): ConclusionMetricRule => ({
+  id: createClientUuid(), metricField: "", performance: "达标", operator: "gte", threshold: 0, conclusion: "",
+});
+
+function conclusionRuleDatasetId(item: RawTableAsset | TopicTableAsset | PageDataAsset) {
+  return "sourceKey" in item && item.sourceKey ? item.sourceKey : "datasetId" in item && item.datasetId ? item.datasetId : item.id;
+}
+
+function conclusionRuleDatasets(bundle: DataAssetBundle): RuleDataset[] {
+  const candidates = [
+    ...(bundle.raw_tables || []).map((item) => ({ id: conclusionRuleDatasetId(item), name: item.tableNameCn || item.tableNameEn, kind: "raw_table" as const, fields: item.fields || [] })),
+    ...(bundle.topic_tables || []).map((item) => ({ id: conclusionRuleDatasetId(item), name: item.name, kind: "topic_table" as const, fields: Array.isArray(item.fields) ? item.fields : [] })),
+    ...(bundle.page_data || []).map((item) => ({ id: conclusionRuleDatasetId(item), name: item.name, kind: "page_data" as const, fields: item.sourceFields || [] })),
+  ].map((item) => ({ ...item, key: `${item.kind}:${item.id}` }));
+  return Array.from(new Map(candidates.map((item) => [item.key, item])).values());
+}
+
+function ConclusionRulesManagement({ searchTerm, tenantId, userId, canManage }: { searchTerm: string; tenantId: string; userId: string; canManage: boolean }) {
+  const [bundle, setBundle] = useState<DataAssetBundle | null>(null);
+  const [notice, setNotice] = useState("正在加载规则目录…");
+  const [draft, setDraft] = useState<ConclusionRuleAsset | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<ConclusionRuleAsset | null>(null);
+
+  const reload = async () => {
+    try {
+      const next = await fetchDataAssets({ tenantId, userId, forceRefresh: true });
+      setBundle(next);
+      setNotice("");
+    } catch (error) {
+      setNotice(apiErrorMessage(error, "规则目录加载失败。"));
+    }
+  };
+  useEffect(() => { void reload(); }, [tenantId, userId]);
+
+  const datasets = useMemo(() => bundle ? conclusionRuleDatasets(bundle) : [], [bundle]);
+  const skills = useMemo(() => (bundle?.analysis_skills || []).filter((item) => item.enabled !== false && (!item.lifecycleStatus || item.lifecycleStatus === "active")), [bundle]);
+  const filtered = useMemo(() => {
+    const keyword = searchTerm.trim().toLowerCase();
+    return (bundle?.conclusion_rules || []).filter((item) => !keyword || [item.name, item.datasetName, item.skillName, ...item.metricRules.map((rule) => `${rule.metricField} ${rule.performance} ${rule.conclusion}`)].join(" ").toLowerCase().includes(keyword));
+  }, [bundle, searchTerm]);
+
+  const openCreate = () => setDraft({
+    id: "", name: "", purpose: "conclusion_generation", datasetId: "", datasetName: "", datasetKind: "raw_table",
+    skillId: skills[0]?.id || "", skillName: skills[0]?.name || "", metricRules: [emptyConclusionMetricRule()],
+  });
+  const save = async () => {
+    if (!draft || !draft.name.trim() || !draft.datasetId || !draft.skillId || draft.metricRules.some((rule) => !rule.metricField || !rule.performance.trim() || !rule.conclusion.trim() || !Number.isFinite(rule.threshold) || (rule.operator === "between" && !Number.isFinite(rule.thresholdEnd)))) {
+      setNotice("请完整填写规则名称、数据集、Skill 以及每条指标表现规则。");
+      return;
+    }
+    setBusy(true);
+    try {
+      await saveDataAssetItem({ tenantId, userId, itemType: "conclusion_rule", item: draft });
+      setDraft(null);
+      setNotice("规则已保存并立即进入当前机构的分析运行时。");
+      await reload();
+    } catch (error) {
+      setNotice(apiErrorMessage(error, "规则保存失败。"));
+    } finally { setBusy(false); }
+  };
+  const remove = async () => {
+    if (!pendingDelete) return;
+    setBusy(true);
+    try {
+      await deleteDataAssetItem({ tenantId, userId, itemType: "conclusion_rule", itemId: pendingDelete.id });
+      setPendingDelete(null);
+      setNotice("规则已删除。");
+      await reload();
+    } catch (error) { setNotice(apiErrorMessage(error, "规则删除失败。")); }
+    finally { setBusy(false); }
+  };
+  const selectedDataset = draft ? datasets.find((item) => item.id === draft.datasetId && item.kind === draft.datasetKind) : null;
+  const selectableFields = (selectedDataset?.fields || []).filter((field) => field.semanticRole === "metric" || field.isMetric || ["integer", "decimal", "rate", "number"].includes(field.type));
+
+  return (
+    <ManagementListSection data-conclusion-rules="true">
+      <div className="flex items-center justify-between gap-4 border-b border-[#f0f0f2] px-5 py-4">
+        <div><h3 className="text-[14px] text-[#1d1d1f]">结论生成规则</h3><p className="mt-1 text-[11px] text-[#8a8a8e]">共 {filtered.length} 条；多数据集分析会逐数据集读取规则，合并后交给绑定 Skill 统一表达。</p></div>
+        <div className="flex items-center gap-2">
+          <AppSelect aria-label="规则用途" value="conclusion_generation" onChange={() => undefined} className="h-9 min-w-[128px] rounded-lg border border-[#e5e5ea] bg-[#fafbfc] px-2 text-[12px]"><option value="conclusion_generation">结论生成</option></AppSelect>
+          {canManage && <button type="button" onClick={openCreate} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-3 text-[12px] text-white"><Plus className="h-3.5 w-3.5" />新增规则</button>}
+        </div>
+      </div>
+      {notice && <div className={`border-b border-[#f0f0f2] px-5 py-2.5 text-[11px] ${/失败|请/.test(notice) ? "text-[#d93025]" : "text-[#258a3f]"}`}>{notice}</div>}
+      <div className="grid grid-cols-[minmax(220px,1.2fr)_minmax(180px,1fr)_120px_minmax(220px,1.2fr)_90px] gap-3 border-b border-[#ececf0] bg-[#fafbfc] px-5 py-2.5 text-[11px] text-[#8a8a8e]"><div>规则名称</div><div>数据集</div><div>用途</div><div>绑定 Skill / 指标规则</div><div>操作</div></div>
+      {!filtered.length && !notice ? <div className="px-5 py-12 text-center text-[12px] text-[#aeaeb2]">暂无结论生成规则</div> : filtered.map((rule) => (
+        <article key={rule.id} className="grid grid-cols-[minmax(220px,1.2fr)_minmax(180px,1fr)_120px_minmax(220px,1.2fr)_90px] items-center gap-3 border-b border-[#f0f0f2] px-5 py-3 last:border-b-0 hover:bg-[#fafbfc]">
+          <div><div className="text-[12px] text-[#1d1d1f]">{rule.name}</div><div className="mt-0.5 text-[10px] text-[#aeaeb2]">{rule.id}</div></div>
+          <div className="text-[12px] text-[#3a3a3c]">{rule.datasetName}</div><div><span className="rounded-full bg-[#eef8f2] px-2 py-0.5 text-[10px] text-[#0f8554]">结论生成</span></div>
+          <div><div className="text-[11px] text-[#3a3a3c]">{rule.skillName || rule.skillId}</div><div className="mt-0.5 text-[10px] text-[#aeaeb2]">{rule.metricRules.length} 条指标表现规则</div></div>
+          <div className="flex gap-1"><button aria-label={`编辑${rule.name}`} onClick={() => setDraft({ ...rule, metricRules: rule.metricRules.map((item) => ({ ...item })) })} className="rounded-md p-1.5 text-[#636366] hover:bg-white"><Pencil className="h-3.5 w-3.5" /></button><button aria-label={`删除${rule.name}`} onClick={() => setPendingDelete(rule)} className="rounded-md p-1.5 text-[#8a8a8e] hover:bg-[#fff0f0] hover:text-[#d93025]"><Trash2 className="h-3.5 w-3.5" /></button></div>
+        </article>
+      ))}
+      {draft && <FormDialog title={draft.id ? "编辑结论生成规则" : "新增结论生成规则"} description="选择一个数据集，并配置多条指标表现与结论规则。" ariaLabel="结论生成规则" onClose={() => !busy && setDraft(null)} widthClassName="max-w-[980px]" zIndexClassName="z-[90]" bodyClassName="space-y-5" footer={<><FormDialogCancelButton onClick={() => setDraft(null)} disabled={busy}>取消</FormDialogCancelButton><FormDialogPrimaryButton onClick={() => void save()} disabled={busy}>{busy ? "保存中…" : "保存"}</FormDialogPrimaryButton></>}>
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="space-y-1.5 text-[11px] text-[#636366]">规则名称<input aria-label="规则名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} className="h-9 w-full rounded-lg border border-[#e5e5ea] px-3 text-[12px] outline-none" /></label>
+          <label className="space-y-1.5 text-[11px] text-[#636366]">用途<AppSelect aria-label="规则用途" value={draft.purpose} onChange={() => undefined} className="h-9 w-full rounded-lg border border-[#e5e5ea] px-3 text-[12px]"><option value="conclusion_generation">结论生成</option></AppSelect></label>
+          <label className="space-y-1.5 text-[11px] text-[#636366]">数据集<AppSelect aria-label="规则数据集" value={draft.datasetId ? `${draft.datasetKind}:${draft.datasetId}` : ""} onChange={(event) => { const dataset = datasets.find((item) => item.key === event.target.value); setDraft({ ...draft, datasetId: dataset?.id || "", datasetName: dataset?.name || "", datasetKind: dataset?.kind || "raw_table", metricRules: [emptyConclusionMetricRule()] }); }} className="h-9 w-full rounded-lg border border-[#e5e5ea] px-3 text-[12px]"><option value="">请选择数据集</option>{datasets.map((item) => <option key={item.key} value={item.key}>{item.name}</option>)}</AppSelect></label>
+          <label className="space-y-1.5 text-[11px] text-[#636366]">结论表达 Skill<AppSelect aria-label="结论表达Skill" value={draft.skillId} onChange={(event) => { const skill = skills.find((item) => item.id === event.target.value); setDraft({ ...draft, skillId: event.target.value, skillName: skill?.name || "" }); }} className="h-9 w-full rounded-lg border border-[#e5e5ea] px-3 text-[12px]"><option value="">请选择 Skill</option>{skills.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</AppSelect></label>
+        </div>
+        <div className="overflow-hidden rounded-lg border border-[#ececf0]">
+          <div className="flex items-center justify-between border-b border-[#ececf0] bg-[#fafbfc] px-4 py-3"><div className="text-[12px] text-[#1d1d1f]">指标表现规则</div><button type="button" onClick={() => setDraft({ ...draft, metricRules: [...draft.metricRules, emptyConclusionMetricRule()] })} className="inline-flex items-center gap-1 text-[11px] text-[#258a3f]"><Plus className="h-3.5 w-3.5" />添加一条</button></div>
+          <div className="grid grid-cols-[150px_110px_100px_150px_minmax(220px,1fr)_34px] gap-2 border-b border-[#ececf0] px-3 py-2 text-[10px] text-[#8a8a8e]"><div>指标</div><div>表现</div><div>条件</div><div>阈值</div><div>结论模板</div><div /></div>
+          {draft.metricRules.map((rule, index) => { const change = (patch: Partial<ConclusionMetricRule>) => setDraft({ ...draft, metricRules: draft.metricRules.map((item, at) => at === index ? { ...item, ...patch } : item) }); return <div key={rule.id} className="grid grid-cols-[150px_110px_100px_150px_minmax(220px,1fr)_34px] items-center gap-2 border-b border-[#f0f0f2] px-3 py-2 last:border-b-0"><AppSelect aria-label={`第${index + 1}条指标`} value={rule.metricField} onChange={(event) => change({ metricField: event.target.value })} className="h-8 rounded-md border border-[#e5e5ea] px-2 text-[11px]"><option value="">选择指标</option>{selectableFields.map((field) => <option key={field.fieldNameEn} value={field.fieldNameEn}>{field.fieldNameCn || field.fieldNameEn}</option>)}</AppSelect><input aria-label={`第${index + 1}条表现`} value={rule.performance} onChange={(event) => change({ performance: event.target.value })} className="h-8 rounded-md border border-[#e5e5ea] px-2 text-[11px]" /><AppSelect aria-label={`第${index + 1}条条件`} value={rule.operator} onChange={(event) => change({ operator: event.target.value as ConclusionMetricRule["operator"] })} className="h-8 rounded-md border border-[#e5e5ea] px-2 text-[11px]"><option value="gte">≥</option><option value="gt">&gt;</option><option value="eq">=</option><option value="lte">≤</option><option value="lt">&lt;</option><option value="between">区间</option></AppSelect><div className="flex items-center gap-1"><input aria-label={`第${index + 1}条阈值`} type="number" value={rule.threshold} onChange={(event) => change({ threshold: Number(event.target.value) })} className="h-8 min-w-0 flex-1 rounded-md border border-[#e5e5ea] px-2 text-[11px]" />{rule.operator === "between" && <><span className="text-[10px] text-[#8a8a8e]">至</span><input aria-label={`第${index + 1}条结束阈值`} type="number" value={rule.thresholdEnd ?? ""} onChange={(event) => change({ thresholdEnd: event.target.value === "" ? undefined : Number(event.target.value) })} className="h-8 min-w-0 flex-1 rounded-md border border-[#e5e5ea] px-2 text-[11px]" /></>}</div><input aria-label={`第${index + 1}条结论`} value={rule.conclusion} onChange={(event) => change({ conclusion: event.target.value })} placeholder="例如：该指标表现优于目标" className="h-8 rounded-md border border-[#e5e5ea] px-2 text-[11px]" /><button aria-label={`删除第${index + 1}条规则`} disabled={draft.metricRules.length === 1} onClick={() => setDraft({ ...draft, metricRules: draft.metricRules.filter((_, at) => at !== index) })} className="rounded p-1 text-[#8a8a8e] disabled:opacity-30"><Trash2 className="h-3.5 w-3.5" /></button></div>; })}
+        </div>
+      </FormDialog>}
+      {pendingDelete && <ConfirmDialog open title="删除结论生成规则" description={pendingDelete.name} hint="删除后新的分析任务将不再召回该规则。" busy={busy} onCancel={() => !busy && setPendingDelete(null)} onConfirm={() => void remove()} />}
+    </ManagementListSection>
+  );
+}
+
 type MemoryItemType = "intent" | "knowledge_file" | "analysis_experience" | "user_behavior_habit";
 type ManagedMemoryAsset = IntentAsset | KnowledgeFileAsset | AnalysisExperienceAsset | BehaviorHabitAsset;
 type MemoryEditorMode = "view" | "edit" | "create";
@@ -3259,6 +3400,7 @@ function RawTableCard({
           <div className="flex min-w-0 items-center gap-2 overflow-hidden">
             <Database className="h-4 w-4 shrink-0 text-[#8a8a8e]" />
             <h4 className="min-w-0 max-w-[320px] truncate text-[13px] text-[#1d1d1f]" title={table.tableNameCn}>{table.tableNameCn}</h4>
+            {table.connectionId?.startsWith("data-crawler:") && <span data-data-crawler-connection="direct" className="inline-flex h-5 shrink-0 items-center rounded-full bg-[#e9f5ee] px-2 text-[10px] font-medium text-[#087647]" title={`连接标记：${table.connectionId}；CSV 由清单校验，调度使用当前机构 Data Crawler API。`}>Data Crawler 直连</span>}
             {scheduleStatus?.scheduled && <span className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-[#e5f5ec] px-2 text-[10px] font-medium text-[#087647]" title={`已启用${scheduleStatus.recurrence || "循环"}定时任务${scheduleStatus.next_run_at ? `；下次执行 ${scheduleStatus.next_run_at}` : ""}`}><CalendarClock className="h-3 w-3" />已定时</span>}
             {!dataAvailable && <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-[#fff4df] px-2 text-[10px] font-medium text-[#9a6700]">仅 SQL · 待刷新</span>}
             <span className="shrink-0 font-mono text-[11px] text-[#8a8a8e]">{table.tableNameEn}</span>

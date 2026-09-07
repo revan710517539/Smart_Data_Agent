@@ -59,10 +59,10 @@ class _LogicalTitleCatalog(_Catalog):
             **asset,
             "id": "csv_new_delivery_hash",
             "sourceKey": "source_loans_current",
-            "tableNameCn": "标品双周会周度sql_2026-05-06",
+            "tableNameCn": "标品双周会周度sql_2026-05-06_历史数据",
             "tableNameEn": "csv_newhash12ab",
-            "fileName": "标品双周会周度sql_2026-05-06.csv",
-            "relativePath": "华兴银行/标品双周会周度sql_2026-05-06.csv",
+            "fileName": "标品双周会周度sql_2026-05-06_历史数据.csv",
+            "relativePath": "static://标品双周会周度sql_2026-05-06_历史数据.csv",
         }]
 
 
@@ -152,6 +152,7 @@ class VisualReportsTest(unittest.TestCase):
                 }
             ],
             "destinations": ["mine"],
+            "pageStyleId": "trend-story",
         }
 
     def test_column_max_progress_mode_persists_without_row_selector(self) -> None:
@@ -253,10 +254,29 @@ class VisualReportsTest(unittest.TestCase):
             "tenant_a",
             "self_analysis",
             "upsert_visual_report",
-            {"report": self.report},
+            {"report": {
+                **self.report,
+                "cards": [{
+                    **self.report["cards"][0],
+                    "dataset": {
+                        **self.report["cards"][0]["dataset"],
+                        "fields": _Catalog().table_assets()[0]["fields"],
+                    },
+                }],
+                "publicFilters": [{
+                    "id": "public-filter-1",
+                    "name": "机构筛选",
+                    "datasetIds": ["raw:raw_loans"],
+                    "fields": ["branch"],
+                    "controlOrder": ["branch"],
+                    "controlPositions": {"branch": 0},
+                    "selections": {"branch": "苏州分行"},
+                }],
+            }},
             actor_user_id="u_owner",
         )["result"]["report"]
         self.assertEqual(saved["ownerUserId"], "u_owner")
+        self.assertEqual(saved["pageStyleId"], "trend-story")
         self.assertEqual(saved["cards"][0]["type"], "table")
         self.assertNotIn("rows", saved["cards"][0]["dataset"])
         self.assertEqual(saved["cards"][0]["config"]["metricRankings"][0]["direction"], "desc")
@@ -274,10 +294,28 @@ class VisualReportsTest(unittest.TestCase):
         self.assertEqual(saved["cards"][0]["config"]["chartStyle"]["templateId"], "chart-cloud-blue")
         self.assertEqual(saved["cards"][0]["config"]["chartStyle"]["palette"], ["#3370FF", "#38A7A0"])
         self.assertEqual(saved["cards"][0]["config"]["chartStyle"]["chartHeight"], "expanded")
+        self.assertEqual(saved["publicFilters"], [{
+            "id": "public-filter-1",
+            "name": "机构筛选",
+            "datasetIds": ["raw:raw_loans"],
+            "fields": ["branch"],
+            "controlOrder": ["branch"],
+            "controlPositions": {"branch": 0},
+            "selections": {"branch": "苏州分行"},
+        }])
         owner_state = store.get_module("tenant_a", "self_analysis", actor_user_id="u_owner")["state"]
         other_state = store.get_module("tenant_a", "self_analysis", actor_user_id="u_other")["state"]
         self.assertEqual([report["id"] for report in owner_state["visualReports"]], ["visual_report_1"])
         self.assertEqual(other_state["visualReports"], [])
+
+        fallback = store.run_action(
+            "tenant_a",
+            "self_analysis",
+            "upsert_visual_report",
+            {"report": {**self.report, "id": "visual_report_invalid_style", "pageStyleId": "unknown-heavy-theme"}},
+            actor_user_id="u_owner",
+        )["result"]["report"]
+        self.assertEqual(fallback["pageStyleId"], "balanced-canvas")
         store.run_action(
             "tenant_a",
             "self_analysis",
@@ -392,7 +430,7 @@ class VisualReportsTest(unittest.TestCase):
         dataset = bound["report"]["cards"][0]["dataset"]
         self.assertEqual(dataset["id"], "csv_new_delivery_hash")
         self.assertEqual(dataset["sourceKey"], "source_loans_current")
-        self.assertEqual(dataset["name"], "标品双周会周度sql_2026-05-06")
+        self.assertEqual(dataset["name"], "标品双周会周度sql_2026-05-06_历史数据")
 
     def test_route_rebinds_rotated_delivery_by_stable_source_key(self) -> None:
         handler = SimpleNamespace(
@@ -412,9 +450,47 @@ class VisualReportsTest(unittest.TestCase):
                     "schemaFingerprint": "schema_current",
                 },
             }],
+            "publicFilters": [{
+                "id": "public-filter-1",
+                "name": "机构筛选",
+                "datasetIds": ["raw:raw_loans_previous_delivery"],
+                "fields": ["branch"],
+                "controlOrder": ["branch"],
+                "selections": {},
+            }],
         }
         bound = _bind_visual_report_payload(handler, SimpleNamespace(tenant_id="tenant_a"), {"report": report})
         self.assertEqual(bound["report"]["cards"][0]["dataset"]["id"], "raw_loans_20260816")
+        self.assertEqual(bound["report"]["publicFilters"][0]["datasetIds"], ["raw:raw_loans_20260816"])
+
+    def test_store_rejects_public_filter_field_outside_dataset_intersection(self) -> None:
+        store = InMemoryApplicationStore()
+        invalid_report = {
+            **self.report,
+            "cards": [{
+                **self.report["cards"][0],
+                "dataset": {
+                    **self.report["cards"][0]["dataset"],
+                    "fields": _Catalog().table_assets()[0]["fields"],
+                },
+            }],
+            "publicFilters": [{
+                "id": "public-filter-1",
+                "name": "机构筛选",
+                "datasetIds": ["raw:raw_loans"],
+                "fields": ["missing"],
+                "controlOrder": ["missing"],
+                "selections": {},
+            }],
+        }
+        with self.assertRaisesRegex(ValueError, "visual_report_public_filter_field_unavailable"):
+            store.run_action(
+                "tenant_a",
+                "self_analysis",
+                "upsert_visual_report",
+                {"report": invalid_report},
+                actor_user_id="u_owner",
+            )
 
     def test_route_binds_only_published_multi_page_data_identity(self) -> None:
         page_data = {
@@ -454,6 +530,17 @@ class VisualReportsTest(unittest.TestCase):
         self.assertEqual(dataset["relationshipGroupId"], "relationship_multi_1")
         self.assertEqual(dataset["schemaFingerprint"], "page-schema-1")
         self.assertNotIn("rows", dataset)
+
+        store = InMemoryApplicationStore()
+        saved = store.run_action(
+            "tenant_a",
+            "self_analysis",
+            "upsert_visual_report",
+            bound,
+            actor_user_id="u_owner",
+        )["result"]["report"]
+        self.assertEqual(saved["cards"][0]["dataset"]["kind"], "page_data")
+        self.assertEqual(saved["cards"][0]["dataset"]["relationshipGroupId"], "relationship_multi_1")
 
         single_store = SimpleNamespace(list_published_bundle=lambda _tenant_id: {
             "topic_tables": [],

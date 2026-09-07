@@ -14,6 +14,8 @@ import { PAGE_DATA_PAGE_GUTTER_CLASS, type PageEditController } from "./page-dat
 import { DEFAULT_REPORT_PAGE_TEMPLATE, StandardAnalysisPageHeader, StandardAnalysisPageStickyNote, StandardReportPageCanvas } from "./page-data/StandardAnalysisPage";
 import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "./ui/FormDialog";
 import { isPageDataDataset, rowsFromPageVisualDataset, rowsFromRawVisualDataset, rowsFromTopicVisualDataset, visualReportDatasetReference, type VisualReportDataset } from "./visual-report/reportData";
+import { ReportPublicFilterButton } from "./report-filters/ReportPublicFilters";
+import { applyReportPageStyleToCards, normalizeReportPageStyleId, ReportPageStyleButton, ReportPageStyleSurface } from "./report-style/reportPageStyles";
 
 const emptyConfig: VisualizationCardConfig = {
   metricFields: [],
@@ -299,8 +301,9 @@ export function VisualReportBuilder() {
 
       {error && <div className="mb-4 rounded-lg border border-[#ffd0d0] bg-[#fff5f5] px-3 py-2 text-[11px] text-[#c84034]" role="alert">{error}</div>}
       <StandardAnalysisPageStickyNote stickyNote={stickyNote} />
-      <div data-visual-report-canvas="true" data-report-list-loading={reportLoading ? "true" : "false"}>
+      <ReportPageStyleSurface styleId={report.pageStyleId} data-visual-report-canvas="true" data-report-list-loading={reportLoading ? "true" : "false"}>
         <StandardReportPageCanvas empty={!report.cards.length} editable={mode === "edit"} busy={catalogLoading} onEdit={() => setModalOpen(true)} editLabel="新增图表">
+          {mode === "edit" && report.cards.length ? <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-dashed border-[#cfe0d6] bg-white p-3" data-visual-report-dataset-toolbar="true"><span className="text-[10px] text-[#7c8781]">当前报表数据集 · {visualReportFilterDatasets(report).length}</span><span className="flex items-center gap-2"><ReportPublicFilterButton datasets={visualReportFilterDatasets(report)} groups={report.publicFilters || []} onChange={(publicFilters) => setReport({ ...report, publicFilters })} /><ReportPageStyleButton styleId={report.pageStyleId} onSelect={(pageStyleId) => setReport({ ...report, pageStyleId, cards: applyReportPageStyleToCards(report.cards, pageStyleId) })} /></span></div> : null}
           <VisualReportCards report={report} editable={mode === "edit"} onChange={setReport} railPageKey="visual-reports" />
           {mode === "edit" && report.cards.length ? (
             <button type="button" disabled={catalogLoading} onClick={() => setModalOpen(true)} className="group mt-4 flex min-h-[140px] w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#cfdad3] bg-white text-[12px] text-[#758079] transition-colors hover:border-[#8fc8a4] hover:bg-[#f5faf7] hover:text-[#178a53] disabled:cursor-wait disabled:opacity-60" data-add-visual-report-chart="true">
@@ -309,7 +312,7 @@ export function VisualReportBuilder() {
             </button>
           ) : null}
         </StandardReportPageCanvas>
-      </div>
+      </ReportPageStyleSurface>
       {saving && <div className="mt-2 text-right text-[10px] text-[#9aa19d]">正在保存…</div>}
       {modalOpen && <VisualChartModal rawTables={rawTables} topicTables={topicTables} tenantId={tenantId} userId={userId} reportId={report.id} drafts={visualChartDrafts} draftRevision={visualChartDraftRevision} onDraftChange={updateVisualChartDraft} onRestore={resetVisualChartDrafts} onCancel={() => setModalOpen(false)} onSave={addCard} />}
     </div>
@@ -531,7 +534,17 @@ function DestinationButton({ label, icon: Icon, done, disabled, onClick }: { lab
 
 function newVisualReport(): VisualReport {
   const now = new Date().toISOString();
-  return { id: `visual_report_${Date.now()}`, title: "可视化报表", cards: [], destinations: [], createdAt: now, updatedAt: now };
+  return { id: `visual_report_${Date.now()}`, title: "可视化报表", cards: [], publicFilters: [], pageStyleId: normalizeReportPageStyleId(undefined), destinations: [], createdAt: now, updatedAt: now };
+}
+
+function visualReportFilterDatasets(report: VisualReport) {
+  const datasets = report.cards.map((card) => ({
+    id: `${card.dataset.kind}:${card.dataset.id}`,
+    name: card.dataset.name,
+    subtitle: card.dataset.code,
+    fields: card.dataset.fields,
+  }));
+  return Array.from(new Map(datasets.map((dataset) => [dataset.id, dataset])).values());
 }
 
 function upsertReportList(reports: VisualReport[], report: VisualReport) {
@@ -566,7 +579,7 @@ function formatReportTime(value: string) {
 }
 
 function reportSignature(report: VisualReport) {
-  return JSON.stringify({ id: report.id, title: report.title, cards: report.cards, destinations: report.destinations });
+  return JSON.stringify({ id: report.id, title: report.title, cards: report.cards, publicFilters: report.publicFilters, pageStyleId: report.pageStyleId, destinations: report.destinations });
 }
 
 function datasetName(dataset: VisualReportDataset) {

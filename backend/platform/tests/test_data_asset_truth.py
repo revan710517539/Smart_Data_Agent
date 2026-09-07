@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 from backend.platform.assets import InMemoryDataAssetStore, SQLiteDataAssetStore
 from backend.platform.api.routes.assets import _remove_deleted_skill_references
+from backend.platform.api.routes.analysis import _matched_conclusion_rules
+from backend.platform.intelligent_analysis.engine import IntelligentAnalysisRequest, _final_analysis_prompt
 from backend.platform.database import apply_migrations
 
 
@@ -27,6 +29,65 @@ class DataAssetTruthTest(unittest.TestCase):
         store = InMemoryDataAssetStore(seed_defaults=False)
         bundle = store.list_bundle("tenant_empty")
         self.assertTrue(all(items == [] for items in bundle.values()))
+
+    def test_conclusion_rules_are_versioned_and_matched_only_to_selected_datasets(self) -> None:
+        store = InMemoryDataAssetStore(seed_defaults=False)
+        saved = store.upsert_item(
+            "tenant_a",
+            "conclusion_rule",
+            {
+                "id": "rule_loan",
+                "name": "贷款余额达标结论",
+                "purpose": "conclusion_generation",
+                "datasetId": "loan_daily",
+                "datasetRefIds": ["loan_daily", "raw_delivery_1"],
+                "datasetName": "贷款日报",
+                "datasetKind": "raw_table",
+                "skillId": "scene-self-analysis",
+                "metricRules": [{
+                    "id": "metric_rule_1", "metricField": "loan_balance", "performance": "达标",
+                    "operator": "gte", "threshold": 100, "conclusion": "贷款余额达到目标。",
+                }],
+            },
+            updated_by="u_admin",
+            lifecycle_status="active",
+        )
+        bundle = store.list_published_bundle("tenant_a")
+        self.assertEqual(bundle["conclusion_rules"][0]["assetVersion"], saved["assetVersion"])
+        self.assertEqual(
+            [rule["id"] for rule in _matched_conclusion_rules(bundle, [{"id": "raw_delivery_1"}])],
+            ["rule_loan"],
+        )
+        self.assertEqual(_matched_conclusion_rules(bundle, [{"id": "another_dataset"}]), [])
+
+    def test_conclusion_rules_follow_selected_dataset_order_and_deduplicate_aliases(self) -> None:
+        rules = [
+            {"id": "rule_b", "purpose": "conclusion_generation", "datasetId": "dataset_b", "datasetRefIds": ["alias_b"]},
+            {"id": "rule_a", "purpose": "conclusion_generation", "datasetId": "dataset_a", "datasetRefIds": ["alias_a"]},
+            {"id": "ignored", "purpose": "other", "datasetId": "dataset_b"},
+        ]
+        matched = _matched_conclusion_rules(
+            {"conclusion_rules": rules},
+            [{"id": "dataset_a"}, {"id": "dataset_b"}, {"sourceKey": "alias_b"}],
+        )
+        self.assertEqual([rule["id"] for rule in matched], ["rule_a", "rule_b"])
+
+    def test_final_analysis_prompt_requires_rule_matching_fusion_and_skill_format(self) -> None:
+        prompt = _final_analysis_prompt(
+            IntelligentAnalysisRequest(
+                question="分析贷款余额",
+                tenant_id="tenant_a",
+                user_id="u_admin",
+                asset_context={"conclusion_rules": [{"id": "rule_loan"}]},
+                query_result={"data": [{"loan_balance": 120}]},
+            ),
+            "经营分析 Skill",
+            {},
+        )
+        self.assertIn("逐数据集按输入顺序处理规则列表", prompt)
+        self.assertIn("operator、threshold 与 thresholdEnd", prompt)
+        self.assertIn("Skill 的 output_format", prompt)
+        self.assertIn("规则只能约束表达，不能替代或改写实际证据", prompt)
 
     def test_raw_table_external_reference_is_tenant_scoped_and_defaults_to_absent_private(self) -> None:
         store = InMemoryDataAssetStore(seed_defaults=False)

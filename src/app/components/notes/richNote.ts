@@ -19,7 +19,23 @@ export type StickyNoteRecord = {
   visible: boolean;
   items: RichNoteItem[];
   updatedAt: string;
+  anchorTargetId?: string;
+  anchorXRatio?: number;
 };
+
+type StickyNoteAnchor = { pathname: string; targetId: string; xRatio: number };
+let lastStickyNoteAnchor: StickyNoteAnchor | null = null;
+
+export function rememberVisualStickyNoteAnchor(targetId: string, clientX: number, element: HTMLElement | null) {
+  if (!element) return;
+  const rect = element.getBoundingClientRect();
+  const xRatio = rect.width > 0 ? Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) : 0.5;
+  lastStickyNoteAnchor = { pathname: window.location.pathname, targetId, xRatio };
+}
+
+export function currentVisualStickyNoteAnchor() {
+  return lastStickyNoteAnchor?.pathname === window.location.pathname ? lastStickyNoteAnchor : null;
+}
 
 export type StickyNoteSurface =
   | "dashboard"
@@ -73,6 +89,8 @@ export function normalizeStickyNote(value: unknown): StickyNoteRecord {
     visible: Boolean(record.visible),
     items: items.length ? items : [emptyParagraph("sticky")],
     updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : "",
+    anchorTargetId: typeof record.anchorTargetId === "string" ? record.anchorTargetId.slice(0, 160) : undefined,
+    anchorXRatio: typeof record.anchorXRatio === "number" && Number.isFinite(record.anchorXRatio) ? Math.max(0, Math.min(1, record.anchorXRatio)) : undefined,
   };
 }
 

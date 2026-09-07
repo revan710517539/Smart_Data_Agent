@@ -148,6 +148,7 @@ export const router = createBrowserRouter([
       { path: "data-assets", Component: () => createElement(Navigate, { to: "/data-assets/metrics", replace: true }) },
       { path: "data-assets/metrics", Component: withPageSuspense(DataAssets) },
       { path: "data-assets/knowledge", Component: withPageSuspense(DataAssets) },
+      { path: "data-assets/rules", Component: withPageSuspense(DataAssets) },
       { path: "data-assets/behavior", Component: () => createElement(Navigate, { to: "/data-assets/knowledge", replace: true }) },
       { path: "data-assets/data-management", Component: withPageSuspense(DataAssets) },
       { path: "data-assets/quality", Component: withPageSuspense(DataAssets) },

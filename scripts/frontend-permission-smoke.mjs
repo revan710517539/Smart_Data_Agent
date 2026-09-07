@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -22,6 +22,7 @@ async function main() {
   const apiUrl = `http://127.0.0.1:${apiPort}`;
   const appUrl = `http://127.0.0.1:${vitePort}`;
   const customerListPath = join(workDir, "customer-list.xlsx");
+  const reportPersistenceWorkbookPath = join(workDir, "report-persistence.xlsx");
   const processes = [];
   let browser = null;
   const reportIngressBindings = JSON.stringify({ bindings: [{
@@ -35,6 +36,7 @@ async function main() {
 
   try {
   await createCustomerListWorkbook(customerListPath);
+  if (process.env.SDA_SMOKE_REPORT_PERSISTENCE_ONLY === "true") await createReportPersistenceWorkbook(reportPersistenceWorkbookPath);
   const api = spawn(
     "uv",
     ["run", "--frozen", "python", "-m", "backend.platform.api.server", "--host", "127.0.0.1", "--port", String(apiPort), "--test-sqlite-db", join(workDir, "api.sqlite")],
@@ -126,6 +128,11 @@ async function main() {
   await navigate(cdp, `${appUrl}/`);
   await waitForEval(cdp, `location.pathname === "/self-analysis/query" && document.body.innerText.includes("智能分析")`);
   await waitForEval(cdp, `JSON.parse(localStorage.getItem(${JSON.stringify(authStorageKey)}))?.user?.id === "u_super_admin"`);
+  if (process.env.SDA_SMOKE_REPORT_PERSISTENCE_ONLY === "true") {
+    await verifyReportPersistence(cdp, appUrl, reportPersistenceWorkbookPath);
+    console.log("显式保存报表与经营周报自动保存的公共筛选、整页样式、图表尺寸、无边框和便签锚点经刷新及重新登录恢复验收通过");
+    return;
+  }
   if (process.env.SDA_SMOKE_SHELL_EDGE_ONLY === "true") {
     await verifyShellEdgeSpacing(cdp);
     console.log("全局工作区顶部和右侧 0.4cm 边距、滚动条贴齐且桌面与窄屏无溢出的浏览器验收通过");
@@ -1239,6 +1246,229 @@ async function installSession(cdp, apiUrl, email, institution) {
   if (!userId) throw new Error(`failed to install session for ${email}`);
 }
 
+async function verifyReportPersistence(cdp, appUrl, workbookPath) {
+  const workbookBase64 = (await readFile(workbookPath)).toString("base64");
+  const seeded = await cdp.evaluate(`
+    (async () => {
+      const headers = {
+        "Content-Type": "application/json",
+        "X-User-Id": "u_super_admin",
+        "X-Tenant-Id": encodeURIComponent("tenant:华兴银行")
+      };
+      const request = async (path, body) => {
+        const response = await fetch(path, { method: "POST", credentials: "include", headers, body: JSON.stringify(body) });
+        const text = await response.text();
+        if (!response.ok) throw new Error(path + ":" + response.status + ":" + text);
+        return JSON.parse(text);
+      };
+      const upload = await request("/api/data-assets/raw-file", {
+        file_name: "report-persistence.xlsx",
+        content_base64: ${JSON.stringify(workbookBase64)}
+      });
+      const table = upload.file?.tables?.[0];
+      if (!table?.sourceKey || !table?.schemaFingerprint) throw new Error("static workbook did not publish a governed raw table");
+      const createPageData = async (name, targetPage) => (await request("/api/data-assets/item", {
+        item_type: "page_data",
+        item: {
+          name,
+          sourceKey: table.sourceKey,
+          sourceTableName: table.tableNameCn || table.tableNameEn,
+          schemaFingerprint: table.schemaFingerprint,
+          sourceFields: table.fields,
+          institutionScope: "single_institution",
+          targetPages: [targetPage],
+          metricFields: ["loan_amount"],
+          dimensionFields: ["report_date", "branch"],
+          visualizationType: "line"
+        }
+      })).item;
+      const first = await createPageData("持久化验收数据集 A", "institution_supervision");
+      const second = await createPageData("持久化验收数据集 B", "institution_supervision");
+      const unmapped = await createPageData("未映射验收数据集 C", "institution_supervision");
+      const weeklyFirst = await createPageData("周报自动保存数据集 A", "weekly_report");
+      const weeklySecond = await createPageData("周报自动保存数据集 B", "weekly_report");
+      return { firstId: first.id, secondId: second.id, unmappedId: unmapped.id, weeklyFirstId: weeklyFirst.id, weeklySecondId: weeklySecond.id };
+    })()
+  `, true);
+  if (!seeded?.firstId || !seeded?.secondId) throw new Error(`failed to seed report persistence datasets: ${JSON.stringify(seeded)}`);
+
+  await navigate(cdp, `${appUrl}/supervision`, 30_000);
+  await waitForEval(cdp, `document.querySelectorAll('[data-page-data-card]').length === 3 && document.querySelectorAll('[data-visual-card]').length === 3`, 30_000);
+  await cdp.evaluate(`document.querySelector('[data-page-data-mode-toggle="true"]')?.click()`);
+  await waitForEval(cdp, `document.querySelector('[data-page-data-mode-toggle="true"]')?.textContent.includes("保存") && Boolean(document.querySelector('[data-page-public-filter-button="true"]'))`);
+
+  await cdp.evaluate(`document.querySelector('[data-page-public-filter-button="true"]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-page-public-filter-dialog="true"]'))`);
+  await cdp.evaluate(`(() => {
+    const section = document.querySelector('[data-page-public-filter-datasets="true"]');
+    for (const name of ["持久化验收数据集 A", "持久化验收数据集 B"]) {
+      [...(section?.querySelectorAll('button') || [])].find((button) => button.textContent.includes(name))?.click();
+    }
+  })()`);
+  await waitForEval(cdp, `(() => { const fields = document.querySelector('[data-page-public-filter-common-fields="true"]')?.innerText || ""; return fields.includes("report_date") && fields.includes("branch"); })()`);
+  await cdp.evaluate(`document.querySelector('[data-page-public-filter-save-group="true"]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-page-public-filter-dialog="true"]')) && Boolean(document.querySelector('[data-page-public-filter-saved-groups="true"]'))`, 10_000);
+  await assertEval(cdp, `Boolean(document.querySelector('[data-page-public-filter-dialog="true"]'))`, "saving one public-filter group must keep the dialog open for additional groups");
+  await cdp.evaluate(`document.querySelector('[data-page-public-filter-confirm="true"]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-page-public-filter-controls="true"] [data-page-public-filter-control="report_date"] select'))`);
+  await cdp.evaluate(`(() => {
+    const select = document.querySelector('[data-page-public-filter-control="report_date"] select');
+    select.value = "2026-09-01";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  })()`);
+  await waitForEval(cdp, `(() => {
+    const mapped = [${JSON.stringify(seeded.firstId)}, ${JSON.stringify(seeded.secondId)}].map((id) => document.querySelector('[data-page-data-card="' + CSS.escape(id) + '"]')?.innerText || "");
+    const unmapped = document.querySelector('[data-page-data-card="' + CSS.escape(${JSON.stringify(seeded.unmappedId)}) + '"]')?.innerText || "";
+    return mapped.every((text) => text.includes("2026-09-01") && !text.includes("2026-09-02") && !text.includes("2026-09-03")) && unmapped.includes("2026-09-01") && unmapped.includes("2026-09-02") && unmapped.includes("2026-09-03");
+  })()`);
+  await cdp.page.locator('[data-page-public-filter-control="report_date"]').dragTo(
+    cdp.page.locator('[data-page-public-filter-control="loan_amount"]'),
+    { sourcePosition: { x: 8, y: 8 }, targetPosition: { x: 8, y: 8 } },
+  );
+  await waitForEval(cdp, `(() => { const fields = [...document.querySelectorAll('[data-page-public-filter-control]')].map((node) => node.getAttribute('data-page-public-filter-control')); return fields.at(-1) === "report_date"; })()`);
+
+  await cdp.evaluate(`document.querySelector('[data-report-page-style-button="true"]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-report-page-style-option="risk-watch"]'))`);
+  await cdp.evaluate(`document.querySelector('[data-report-page-style-option="risk-watch"]')?.click()`);
+  await waitForEval(cdp, `document.querySelector('[data-report-page-style-button="true"]')?.textContent.includes("风险监测")`);
+  const beforeResize = await cdp.evaluate(`Number.parseFloat(document.querySelector('[data-resizable-visual-item]')?.style.height || "0")`);
+  await dispatchRealResize(cdp, '[data-resizable-visual-item] [data-visual-resize-handle="south"]', 96);
+  const afterResize = await cdp.evaluate(`Number.parseFloat(document.querySelector('[data-resizable-visual-item]')?.style.height || "0")`);
+  if (!(afterResize >= beforeResize + 80)) throw new Error(`report card resize did not apply: ${beforeResize} -> ${afterResize}`);
+
+  await cdp.evaluate(`(() => {
+    const card = document.querySelector('[data-visual-card]');
+    card?.querySelector('[data-visual-operation-toggle="true"]')?.click();
+    card?.querySelector('[data-visual-panel-trigger="style"]')?.click();
+  })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-visual-card] [data-visual-borderless-option="true"]'))`);
+  await cdp.evaluate(`document.querySelector('[data-visual-card] [data-visual-borderless-option="true"]')?.click()`);
+  await waitForEval(cdp, `document.querySelector('[data-visual-card]')?.dataset.visualBorderless === "true"`);
+
+  await dispatchRealClick(cdp, '[data-visual-card]');
+  await cdp.evaluate(`document.querySelector('[data-sticky-note-toggle="true"]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-sticky-note-anchor]'))`);
+  const anchorTargetId = await cdp.evaluate(`document.querySelector('[data-sticky-note-anchor]')?.getAttribute('data-sticky-note-anchor') || ""`);
+  if (!anchorTargetId) throw new Error("sticky note did not anchor to the selected visualization");
+
+  await cdp.evaluate(`document.querySelector('[data-page-data-mode-toggle="true"]')?.click()`);
+  await waitForEval(cdp, `document.querySelector('[data-page-data-mode-toggle="true"]')?.textContent.includes("编辑")`, 30_000);
+  const saved = await readApplicationModule(cdp, "institution_supervision");
+  assertPersistedReportState(saved, seeded, anchorTargetId, afterResize);
+
+  await navigate(cdp, `${appUrl}/supervision`, 30_000);
+  await assertRenderedReportState(cdp, anchorTargetId, afterResize);
+
+  await cdp.evaluate(`fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined)`, true);
+  await cdp.evaluate(`localStorage.clear(); sessionStorage.clear()`);
+  await navigate(cdp, `${appUrl}/login`, 30_000);
+  await installSession(cdp, appUrl, "xujingbo-jk@qifu.com", "华兴银行");
+  await navigate(cdp, `${appUrl}/supervision`, 30_000);
+  await assertRenderedReportState(cdp, anchorTargetId, afterResize);
+  const relogged = await readApplicationModule(cdp, "institution_supervision");
+  assertPersistedReportState(relogged, seeded, anchorTargetId, afterResize);
+  await verifyWeeklyReportAutosave(cdp, appUrl);
+}
+
+async function verifyWeeklyReportAutosave(cdp, appUrl) {
+  await navigate(cdp, `${appUrl}/weekly-report`, 30_000);
+  await waitForEval(cdp, `document.querySelectorAll('[data-page-data-card]').length === 2 && document.querySelectorAll('[data-visual-card]').length >= 2`, 30_000);
+  await assertEval(cdp, `!document.querySelector('[data-page-data-mode-toggle="true"]')`, "weekly report must not expose an edit/save mode toggle");
+  await cdp.evaluate(`document.querySelector('[data-report-page-style-button="true"]')?.click()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-report-page-style-option="risk-watch"]'))`);
+  await cdp.evaluate(`document.querySelector('[data-report-page-style-option="risk-watch"]')?.click()`);
+  await waitForEval(cdp, `document.querySelector('[data-report-page-style-button="true"]')?.textContent.includes("风险监测")`);
+  const firstItem = await cdp.evaluate(`document.querySelector('[data-resizable-visual-item]')?.getAttribute('data-resizable-visual-item') || ""`);
+  if (!firstItem) throw new Error("weekly report did not render a resizable page-data card");
+  const beforeResize = await cdp.evaluate(`Number.parseFloat(document.querySelector('[data-resizable-visual-item]')?.style.height || "0")`);
+  await dispatchRealResize(cdp, '[data-resizable-visual-item] [data-visual-resize-handle="south"]', 84);
+  const afterResize = await cdp.evaluate(`Number.parseFloat(document.querySelector('[data-resizable-visual-item]')?.style.height || "0")`);
+  if (!(afterResize >= beforeResize + 60)) throw new Error(`weekly report resize did not apply: ${beforeResize} -> ${afterResize}`);
+  await cdp.evaluate(`(() => {
+    const card = document.querySelector('[data-resizable-visual-item] [data-visual-card]');
+    card?.querySelector('[data-visual-operation-toggle="true"]')?.click();
+    card?.querySelector('[data-visual-panel-trigger="style"]')?.click();
+  })()`);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-resizable-visual-item] [data-visual-borderless-option="true"]'))`);
+  await cdp.evaluate(`document.querySelector('[data-resizable-visual-item] [data-visual-borderless-option="true"]')?.click()`);
+  await waitForEval(cdp, `document.querySelector('[data-resizable-visual-item] [data-visual-card]')?.dataset.visualBorderless === "true"`);
+
+  let saved = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    saved = await readApplicationModule(cdp, "weekly_report");
+    const state = saved?.state || {};
+    const card = (state.pageDataCards || []).find((item) => item.id === firstItem);
+    if (state.pageReportStyleId === "risk-watch" && card?.config?.borderless && Math.abs(Number(card.config.layoutHeight) - afterResize) <= 2) break;
+    await delay(200);
+  }
+  assertWeeklyPersistedState(saved, firstItem, afterResize);
+
+  await cdp.evaluate(`fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined)`, true);
+  await cdp.evaluate(`localStorage.clear(); sessionStorage.clear()`);
+  await navigate(cdp, `${appUrl}/login`, 30_000);
+  await installSession(cdp, appUrl, "xujingbo-jk@qifu.com", "华兴银行");
+  await navigate(cdp, `${appUrl}/weekly-report`, 30_000);
+  await waitForEval(cdp, `Boolean(document.querySelector('[data-report-page-style="risk-watch"]')) && Boolean(document.querySelector('[data-resizable-visual-item=${JSON.stringify(firstItem)}]'))`, 30_000);
+  const rendered = await cdp.evaluate(`(() => {
+    const item = document.querySelector('[data-resizable-visual-item=${JSON.stringify(firstItem)}]');
+    return { height: Number.parseFloat(item?.style.height || "0"), borderless: item?.querySelector('[data-visual-card]')?.dataset.visualBorderless || "" };
+  })()`);
+  if (Math.abs(rendered.height - afterResize) > 2 || rendered.borderless !== "true") throw new Error(`weekly autosaved state did not restore after login: ${JSON.stringify({ rendered, afterResize, firstItem })}`);
+  assertWeeklyPersistedState(await readApplicationModule(cdp, "weekly_report"), firstItem, afterResize);
+}
+
+function assertWeeklyPersistedState(module, cardId, resizedHeight) {
+  const state = module?.state || {};
+  const card = (state.pageDataCards || []).find((item) => item.id === cardId);
+  if (state.pageReportStyleId !== "risk-watch" || !card?.config?.borderless || Math.abs(Number(card.config.layoutHeight) - resizedHeight) > 2) {
+    throw new Error(`weekly autosaved state mismatch: ${JSON.stringify({ state, cardId, resizedHeight })}`);
+  }
+}
+
+async function readApplicationModule(cdp, moduleKey) {
+  return cdp.evaluate(`fetch('/api/application/module?module_key=${encodeURIComponent(moduleKey)}', {
+    credentials: 'include',
+    headers: { 'X-User-Id': 'u_super_admin', 'X-Tenant-Id': encodeURIComponent('tenant:华兴银行') }
+  }).then(async (response) => {
+    const text = await response.text();
+    if (!response.ok) throw new Error(response.status + ':' + text);
+    return JSON.parse(text);
+  })`, true);
+}
+
+function assertPersistedReportState(module, seeded, anchorTargetId, resizedHeight) {
+  const state = module?.state || module?.module?.state || {};
+  const cards = state.pageDataCards || [];
+  const filters = state.pageDataPublicFilters || [];
+  const card = cards.find((item) => item.id === anchorTargetId) || cards[0];
+  const group = filters[0];
+  const expectedDatasets = [seeded.firstId, seeded.secondId].sort();
+  const actualDatasets = [...(group?.datasetIds || [])].sort();
+  if (cards.length !== 3 || state.pageReportStyleId !== "risk-watch" || !card?.config?.borderless || Math.abs(Number(card.config.layoutHeight) - resizedHeight) > 2) {
+    throw new Error(`saved report geometry/style mismatch: ${JSON.stringify({ state, anchorTargetId, resizedHeight })}`);
+  }
+  if (JSON.stringify(actualDatasets) !== JSON.stringify(expectedDatasets) || group?.selections?.report_date !== "2026-09-01") {
+    throw new Error(`saved public-filter mapping mismatch: ${JSON.stringify(group)}`);
+  }
+  if (group?.controlOrder?.at(-1) !== "report_date" || group?.controlPositions?.report_date !== 2) throw new Error(`saved public-filter position mismatch: ${JSON.stringify(group)}`);
+  const note = state.stickyNotes?.institution_supervision || state.pageStickyNote;
+  if (note?.anchorTargetId !== anchorTargetId) throw new Error(`saved sticky-note anchor mismatch: ${JSON.stringify(note)}`);
+}
+
+async function assertRenderedReportState(cdp, anchorTargetId, resizedHeight) {
+  await waitForEval(cdp, `document.querySelectorAll('[data-page-data-card]').length === 3 && Boolean(document.querySelector('[data-report-page-style="risk-watch"]'))`, 30_000);
+  const rendered = await cdp.evaluate(`(() => {
+    const item = document.querySelector('[data-resizable-visual-item=${JSON.stringify(anchorTargetId)}]');
+    const card = item?.querySelector('[data-visual-card]');
+    const filter = document.querySelector('[data-page-public-filter-control="report_date"] select');
+    const controlOrder = [...document.querySelectorAll('[data-page-public-filter-control]')].map((node) => node.getAttribute('data-page-public-filter-control'));
+    return { height: Number.parseFloat(item?.style.height || "0"), borderless: card?.dataset.visualBorderless, filter: filter?.value || "", style: document.querySelector('[data-report-page-style]')?.getAttribute('data-report-page-style') || "", controlOrder };
+  })()`);
+  if (Math.abs(rendered.height - resizedHeight) > 2 || rendered.borderless !== "true" || rendered.filter !== "2026-09-01" || rendered.style !== "risk-watch" || rendered.controlOrder.at(-1) !== "report_date") {
+    throw new Error(`rendered report state did not restore: ${JSON.stringify({ rendered, resizedHeight, anchorTargetId })}`);
+  }
+}
+
 async function configureApplicationModel(cdp, apiUrl, applicationModule, name, source = "中转站", models = ["frontend-smoke-model"], id = `model_${applicationModule}`, enabledModels = models) {
   const result = await cdp.evaluate(`
     (async () => {
@@ -1650,6 +1880,27 @@ async function createCustomerListWorkbook(filePath) {
   if (exitCode !== 0) throw new Error(`failed to create customer-list workbook: ${stderr}`);
 }
 
+async function createReportPersistenceWorkbook(filePath) {
+  const script = [
+    "from openpyxl import Workbook",
+    "import sys",
+    "wb = Workbook()",
+    "ws = wb.active",
+    "ws.title = 'ReportData'",
+    "ws.append(('report_date', 'branch', 'loan_amount'))",
+    "ws.append(('2026-09-01', '华东', 100))",
+    "ws.append(('2026-09-02', '华南', 180))",
+    "ws.append(('2026-09-03', '华东', 260))",
+    "wb.save(sys.argv[1])",
+    "wb.close()",
+  ].join("; ");
+  const child = spawn("uv", ["run", "python", "-c", script, filePath], { cwd: root, stdio: ["ignore", "ignore", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+  const exitCode = await new Promise((resolve) => child.once("exit", resolve));
+  if (exitCode !== 0) throw new Error(`failed to create report-persistence workbook: ${stderr}`);
+}
+
 async function dispatchRealClick(cdp, selector) {
   const point = await cdp.evaluate(`(() => {
     const element = document.querySelector(${JSON.stringify(selector)});
@@ -1662,6 +1913,26 @@ async function dispatchRealClick(cdp, selector) {
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
   await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point });
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point });
+}
+
+async function dispatchRealResize(cdp, selector, deltaY) {
+  const handle = cdp.page.locator(selector).first();
+  await handle.scrollIntoViewIfNeeded();
+  const box = await handle.boundingBox();
+  const startHeight = await cdp.evaluate(`Number.parseFloat(document.querySelector(${JSON.stringify(selector)})?.closest('[data-resizable-visual-item]')?.style.height || "0")`);
+  if (!box) throw new Error(`cannot resize missing selector: ${selector}`);
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await cdp.page.mouse.move(x, y);
+  await cdp.page.mouse.down();
+  for (let step = 1; step <= 4; step += 1) {
+    await cdp.page.mouse.move(x, y + deltaY * step / 4, { steps: 3 });
+    await delay(40);
+  }
+  await cdp.page.mouse.up();
+  await delay(200);
+  const height = await cdp.evaluate(`Number.parseFloat(document.querySelector(${JSON.stringify(selector)})?.closest('[data-resizable-visual-item]')?.style.height || "0")`);
+  if (height < startHeight + Math.max(40, deltaY * 0.7)) throw new Error(`resize did not change item height: ${startHeight} -> ${height}`);
 }
 
 async function dispatchRealDrag(cdp, selector, deltaX, deltaY) {

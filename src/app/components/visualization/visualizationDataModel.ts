@@ -139,6 +139,7 @@ export type VisualizationCardConfig = {
   layoutHeight?: number;
   maxLayoutSpan?: number;
   maxLayoutHeight?: number;
+  borderless?: boolean;
 };
 
 export type VisualDataPoint = {

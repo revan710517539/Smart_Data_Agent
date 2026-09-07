@@ -70,10 +70,12 @@ export async function runApplicationAction<TState extends Record<string, unknown
   moduleKey,
   action,
   payload = {},
+  keepalive = false,
 }: ContextParams & {
   moduleKey: ApplicationModuleKey;
   action: string;
   payload?: Record<string, unknown>;
+  keepalive?: boolean;
 }) {
   return apiRequest<ApplicationActionResponse<TState>>("/api/application/action", {
     method: "POST",
@@ -83,5 +85,6 @@ export async function runApplicationAction<TState extends Record<string, unknown
       action,
       payload,
     },
+    keepalive,
   });
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
@@ -24,12 +25,12 @@ RUNTIME_CONFIGURATION_ASSET_TYPES = frozenset({
     "analysis_skill",
     "external_tool",
     "analysis_shortcut",
-    "page_data", "table_relationship",
+    "page_data", "table_relationship", "conclusion_rule",
 })
 TABLE_ASSET_LINEAGE_TYPES = frozenset({"dataset", "topic_table", "raw_table"})
 VISUALIZATION_ASSET_KEYS = (
     "raw_tables", "topic_tables", "intents", "analysis_experiences", "behavior_habits",
-    "knowledge_files", "analysis_skills", "external_tools", "analysis_shortcuts", "page_data", "table_relationships", "relationships",
+    "knowledge_files", "analysis_skills", "external_tools", "analysis_shortcuts", "page_data", "table_relationships", "conclusion_rules", "relationships",
 )
 VISUALIZATION_TOPIC_LIFECYCLE_STATUSES = frozenset({"draft", "review", "active"})
 SINGLE_INSTITUTION_PAGE_DATA_SCOPE = "single_institution"
@@ -1553,7 +1554,7 @@ def handle_data_asset_item_upsert(handler: Any) -> None:
         item = payload.get("item")
         if not isinstance(item, dict):
             raise ValueError("item must be an object.")
-        if item_type == "page_data" and not handler.services.permission_broker.enforcer.has_super_admin_role(
+        if item_type in {"page_data", "conclusion_rule"} and not handler.services.permission_broker.enforcer.has_super_admin_role(
             context.user_id, context.tenant_id
         ):
             raise PermissionError("global_super_admin_required_for_page_data")
@@ -1596,6 +1597,8 @@ def handle_data_asset_item_upsert(handler: Any) -> None:
             item = _bind_page_data_asset(handler, context, item)
         if item_type == "table_relationship":
             item = _bind_table_relationship_asset(handler, context, item)
+        if item_type == "conclusion_rule":
+            item = _bind_conclusion_rule_asset(handler, context, item)
         saved = handler.services.data_asset_store.upsert_item(
             context.tenant_id,
             item_type,
@@ -1725,6 +1728,9 @@ def read_page_data_workspace_payload(
         page_code,
         str((state.get("customerSegmentList") or {}).get("contentHash") or "") if isinstance(state.get("customerSegmentList"), dict) else "",
         tuple(layout),
+        json.dumps(state.get("pageDataCards") or [], ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        json.dumps(state.get("pageDataPublicFilters") or [], ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        str(state.get("pageReportStyleId") or "balanced-canvas"),
         tuple(
             (
                 str(item.get("id") or ""),
@@ -1776,6 +1782,9 @@ def read_page_data_workspace_payload(
         "page_code": page_code,
         "assets": assets,
         "layout": layout,
+        "cards": list(state.get("pageDataCards") or []),
+        "public_filters": list(state.get("pageDataPublicFilters") or []),
+        "page_style_id": str(state.get("pageReportStyleId") or "balanced-canvas"),
         "notes": list(state.get("pageDataNotes") or []),
         "rows": rows,
         "row_errors": row_errors,
@@ -2028,6 +2037,63 @@ def _resolve_page_data_layout(saved_layout: list[str], available_ids: list[str],
     if include_newly_assigned:
         return [*kept, *extras]
     return kept or list(available_ids)
+
+
+def _bind_conclusion_rule_asset(handler: Any, context: Any, item: dict[str, Any]) -> dict[str, Any]:
+    """Bind a conclusion rule to one current governed dataset and Skill.
+
+    The browser submits identifiers only. Names, fields, schema and Skill
+    existence are read back from the tenant catalogs so a stale or forged rule
+    cannot enter model context.
+    """
+
+    bundle = handler.services.data_asset_store.list_published_bundle(context.tenant_id)
+    datasets = [
+        *[dict(table, datasetKind="raw_table") for table in _raw_tables_for_tenant(handler, context.tenant_id, wait_for_catalog=True)],
+        *[dict(table, datasetKind="topic_table") for table in bundle.get("topic_tables", []) if isinstance(table, dict)],
+        *[dict(table, datasetKind="page_data") for table in bundle.get("page_data", []) if isinstance(table, dict)],
+    ]
+    requested_id = str(item.get("datasetId") or "").strip()
+    requested_kind = str(item.get("datasetKind") or "").strip()
+    dataset = next((candidate for candidate in datasets if str(candidate.get("datasetKind") or "") == requested_kind and requested_id in {
+        str(candidate.get("id") or "").strip(),
+        str(candidate.get("sourceKey") or "").strip(),
+        str(candidate.get("datasetId") or "").strip(),
+        str(candidate.get("code") or "").strip(),
+    }), None)
+    if dataset is None:
+        raise PermissionError("conclusion_rule_dataset_unavailable")
+    fields = dataset.get("sourceFields") if isinstance(dataset.get("sourceFields"), list) else dataset.get("fields")
+    field_codes = {
+        str(field.get("fieldNameEn") or field.get("code") or "").strip()
+        for field in (fields or [])
+        if isinstance(field, dict)
+    }
+    metric_rules = [dict(rule) for rule in item.get("metricRules", []) if isinstance(rule, dict)]
+    if not metric_rules or any(str(rule.get("metricField") or "").strip() not in field_codes for rule in metric_rules):
+        raise ValueError("conclusion_rule_metric_field_unavailable")
+    skill_id = str(item.get("skillId") or "").strip()
+    skill = next((candidate for candidate in bundle.get("analysis_skills", []) if isinstance(candidate, dict)
+                  and str(candidate.get("id") or "") == skill_id and candidate.get("enabled") is not False), None)
+    if skill is None:
+        raise PermissionError("conclusion_rule_skill_unavailable")
+    aliases = list(dict.fromkeys(filter(None, (
+        str(dataset.get("id") or "").strip(), str(dataset.get("sourceKey") or "").strip(),
+        str(dataset.get("datasetId") or "").strip(), str(dataset.get("code") or "").strip(),
+    ))))
+    name = str(dataset.get("name") or dataset.get("tableNameCn") or dataset.get("sourceTableName") or dataset.get("tableNameEn") or requested_id)
+    return {
+        **item,
+        "purpose": "conclusion_generation",
+        "datasetId": aliases[0],
+        "datasetRefIds": aliases,
+        "datasetName": name,
+        "datasetKind": str(dataset.get("datasetKind") or "raw_table"),
+        "datasetSchemaFingerprint": str(dataset.get("schemaFingerprint") or ""),
+        "skillId": skill_id,
+        "skillName": str(skill.get("name") or skill_id),
+        "metricRules": metric_rules,
+    }
 
 
 def _bind_page_data_asset(handler: Any, context: Any, item: dict[str, Any]) -> dict[str, Any]:
@@ -2537,10 +2603,10 @@ def handle_data_asset_item_delete(handler: Any, query: str) -> None:
         item_id = first_query_value(params, "item_id")
         if not item_type or not item_id:
             raise ValueError("item_type and item_id are required.")
-        if item_type == "page_data" and not handler.services.permission_broker.enforcer.has_super_admin_role(
+        if item_type in {"page_data", "conclusion_rule"} and not handler.services.permission_broker.enforcer.has_super_admin_role(
             context.user_id, context.tenant_id
         ):
-            raise PermissionError("global_super_admin_required_for_page_data")
+            raise PermissionError(f"global_super_admin_required_for_{item_type}")
         handler._require_asset_permission(context, "create")
         deleted = handler.services.data_asset_store.delete_item(context.tenant_id, item_type, item_id)
         updated_shortcut_count = (

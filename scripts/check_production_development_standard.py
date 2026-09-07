@@ -24,6 +24,7 @@ def main() -> None:
     release_gate = _read("scripts/release-gate.sh") + _read("scripts/release-gate-in-toolchain.sh")
     production_verify = _read("scripts/verify-production-release.sh") + _read("scripts/verify-production-release-in-toolchain.sh")
     ci = _read(".github/workflows/ci.yml")
+    migration_base_resolver = _read("scripts/resolve_mysql_migration_base.py")
     compose = _read("docker-compose.server.yml")
     server_development = _read("scripts/server-development-container.sh")
     browser_e2e = _read("scripts/production-auth-browser-e2e.mjs")
@@ -54,7 +55,19 @@ def main() -> None:
     require("check_mysql_migration_history.py" in release_gate, "release_gate_migration_history")
     require("scripts/release-gate.sh" in ci, "ci_release_gate")
     require("mysql:8.0.18" in ci, "ci_mysql_8018")
-    require("SMART_DATA_AGENT_MIGRATION_BASE_REF" in ci, "ci_migration_base_ref")
+    require(
+        "SMART_DATA_AGENT_MIGRATION_BASE_CANDIDATE" in ci
+        and "scripts/resolve_mysql_migration_base.py" in ci
+        and "steps.migration-base.outputs.base_ref" in ci
+        and "SMART_DATA_AGENT_MIGRATION_BASE_REF" in ci,
+        "ci_resolved_migration_base_ref",
+    )
+    require(
+        '"rev-list", "--max-parents=0"' in migration_base_resolver
+        and "mysql_migration_initial_base_ambiguous" in migration_base_resolver
+        and '"merge-base", "--is-ancestor"' in migration_base_resolver,
+        "ci_migration_base_resolver_fail_closed",
+    )
     require("collect_release_evidence.py" in _read("scripts/build-image.sh"), "release_evidence_pack")
     require("Dockerfile.release-toolchain" in release_gate, "pinned_release_toolchain_entry")
     require(

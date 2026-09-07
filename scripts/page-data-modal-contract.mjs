@@ -35,6 +35,7 @@ assert.match(modalSource, /新增单机构数据/, "必须提供新增单机构�
 assert.match(modalSource, /新增多机构数据/, "必须提供新增多机构数据按钮文案");
 assert.match(modalSource, /新增明细数据/, "分客群页面必须提供新增明细数据按钮文案");
 assert.match(pageSource, /原始表[\s\S]*?单机构页面[\s\S]*?表关系[\s\S]*?多机构页面[\s\S]*?分客群页面[\s\S]*?主题表/, "数据管理标签顺序必须为原始表、单机构页面、表关系、多机构页面、分客群页面、主题表");
+assert.match(pageSource, /connectionId\?\.startsWith\("data-crawler:"\)[\s\S]*?data-data-crawler-connection="direct"[\s\S]*?Data Crawler 直连/, "清单原始表必须显示稳定的 Data Crawler 直连标记");
 assert.match(assetRouteSource, /_page_data_available_for_raw_catalog/, "单机构/多机构页面必须按当前原始表目录过滤");
 assert.match(assetRouteSource, /live_source_refs/, "多机构页面和表关系必须校验全部参与机构的原始表仍存在，不能只看当前机构");
 assert.match(assetRouteSource, /def _resolve_page_data_raw_table/, "页面数据必须能按当前原始表 sourceKey 或唯一题目重绑交付文件");
@@ -60,8 +61,8 @@ assert.match(supervisionSource, /showAssetPicker/, "机构督导编辑态必须�
 assert.match(composerSource, /includeNewlyAssigned:\s*true/, "多机构、单机构和分客群页面必须把新指定数据集追加到已保存布局之后");
 assert.match(composerSource, /<AnalysisVisualCard[\s\S]*?onTypeChange=[\s\S]*?onConfigChange=/, "非超级管理员仍必须保留图表内部样式、指标和维度配置入口");
 assert.match(composerSource, /data-page-data-rows-loading[\s\S]*正在加载页面数据/, "页面数据行未返回前必须显示加载态，不得先渲染空图");
-assert.match(composerSource, /metricFields: asset\.metricFields, dimensionFields: asset\.dimensionFields/, "页面数据图表必须用资产上的指标和维度作为初始配置");
-assert.match(composerSource, /const commitLayout[\s\S]*?setLayoutIds\(nextIds\)[\s\S]*?const saveLayout[\s\S]*?runApplicationAction/, "编辑过程必须本地暂存并在点击保存后统一持久化");
+assert.match(composerSource, /metricFields: asset\.metricFields,[\s\S]{0,80}dimensionFields: asset\.dimensionFields/, "页面数据图表必须用资产上的指标和维度作为初始配置");
+assert.match(composerSource, /const commitLayout[\s\S]*?setCards\(nextCards\)[\s\S]*?const saveLayout[\s\S]*?writeLayout/, "编辑过程必须本地暂存完整卡片并在点击保存后统一持久化");
 assert.match(composerSource, /pageDataBelongsToPage\(asset, pageCode\)/, "经营周报和机构督导只能读取放置到本页的单机构数据");
 assert.match(dashboardSource, /PAGE_DATA_PAGE_GUTTER_CLASS/, "多机构分析必须复用统一页面边距");
 assert.match(supervisionSource, /PAGE_DATA_PAGE_GUTTER_CLASS/, "机构督导必须复用统一页面边距");

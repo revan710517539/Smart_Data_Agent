@@ -126,11 +126,13 @@ export async function saveSavedAnalysisResult({
   tenantId,
   userId = getDefaultUserId(),
   result,
-}: ReportParams & { result: SavedAnalysisResult }): Promise<{ tenant_id: string; result: SavedAnalysisResult }> {
+  keepalive = false,
+}: ReportParams & { result: SavedAnalysisResult; keepalive?: boolean }): Promise<{ tenant_id: string; result: SavedAnalysisResult }> {
   return apiRequest<{ tenant_id: string; result: SavedAnalysisResult }>("/api/reports/analysis-result", {
     method: "POST",
     context: { tenantId, userId },
     body: { result },
+    keepalive,
   });
 }
 

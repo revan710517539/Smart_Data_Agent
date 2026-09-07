@@ -18,7 +18,7 @@ from .mock_analysis_defaults import MOCK_RAW_TABLES, MOCK_TOPIC_TABLES
 
 ASSET_TYPES = {
     "raw_table", "topic_table", "intent", "analysis_experience", "knowledge_file", "user_behavior_habit",
-    "analysis_skill", "external_tool", "analysis_shortcut", "page_data", "table_relationship",
+    "analysis_skill", "external_tool", "analysis_shortcut", "page_data", "table_relationship", "conclusion_rule",
 }
 ASSET_LIFECYCLE_STATUSES = {"draft", "review", "active", "rejected", "archived"}
 ASSET_BUNDLE_KEYS = {
@@ -33,6 +33,7 @@ ASSET_BUNDLE_KEYS = {
     "analysis_shortcut": "analysis_shortcuts",
     "page_data": "page_data",
     "table_relationship": "table_relationships",
+    "conclusion_rule": "conclusion_rules",
 }
 
 SCENE_INTENT_SKILL_ID = "scene-analysis-intent"
@@ -241,6 +242,7 @@ TENANT_MAINTAINED_ASSET_TYPES = frozenset({
     "analysis_experience",
     "knowledge_file",
     "user_behavior_habit",
+    "conclusion_rule",
 })
 SYSTEM_CATALOG_AUTHORS = frozenset({"system", "development_seed"})
 
@@ -1585,6 +1587,33 @@ def _validate_asset_schema(item_type: str, item: dict[str, Any]) -> None:
     if item_type == "analysis_shortcut":
         _require_text(item, "title", "query")
         return
+    if item_type == "conclusion_rule":
+        _require_text(item, "name", "purpose", "datasetId", "datasetName", "datasetKind", "skillId")
+        if str(item.get("purpose") or "") != "conclusion_generation":
+            raise ValueError("conclusion_rule_purpose_invalid")
+        if str(item.get("datasetKind") or "") not in {"raw_table", "topic_table", "page_data"}:
+            raise ValueError("conclusion_rule_dataset_kind_invalid")
+        rules = item.get("metricRules")
+        if not isinstance(rules, list) or not rules or len(rules) > 40:
+            raise ValueError("conclusion_rule_metric_rules_invalid")
+        seen: set[str] = set()
+        for rule in rules:
+            if not isinstance(rule, dict):
+                raise ValueError("conclusion_rule_metric_rule_invalid")
+            _require_text(rule, "id", "metricField", "performance", "operator", "conclusion")
+            rule_id = str(rule.get("id") or "")
+            if rule_id in seen:
+                raise ValueError("conclusion_rule_metric_rule_duplicate")
+            seen.add(rule_id)
+            if str(rule.get("operator") or "") not in {"gt", "gte", "eq", "lte", "lt", "between"}:
+                raise ValueError("conclusion_rule_operator_invalid")
+            try:
+                float(rule.get("threshold"))
+                if str(rule.get("operator") or "") == "between":
+                    float(rule.get("thresholdEnd"))
+            except (TypeError, ValueError):
+                raise ValueError("conclusion_rule_threshold_invalid") from None
+        return
     if item_type == "page_data":
         _require_text(item, "name", "sourceKey", "schemaFingerprint", "sourceTableName", "visualizationType")
         pages = item.get("targetPages")
@@ -1885,6 +1914,8 @@ def _item_title(item_type: str, item: dict[str, Any]) -> str:
         return str(item.get("name") or item.get("sourceTableName") or item["id"])
     if item_type == "table_relationship":
         return str(item.get("name") or item["id"])
+    if item_type == "conclusion_rule":
+        return str(item.get("name") or item.get("datasetName") or item["id"])
     return str(item.get("title") or item["id"])
 
 

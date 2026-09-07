@@ -2,6 +2,7 @@
 @import './tailwind.css';
 @import './theme.css';
 @import './sda-visual-refresh.css';
+@import './report-page-styles.css';
 
 @media print {
   @page {

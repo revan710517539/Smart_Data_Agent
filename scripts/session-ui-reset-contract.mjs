@@ -17,6 +17,7 @@ const expectedSessionPrefixes = [
   "sda:self-analysis:workbench:v1:",
   "sda:visual-card:v1:",
   "sda:visual-card:v2:",
+  "sda:visual-card:v3:",
   "smart-data-agent:pending-analysis:",
   "sda:analysis-workspace:active-thread:v1:",
   "smart_data_agent_self_analysis_session_v1:",
@@ -30,7 +31,7 @@ assert.match(platformSource, /const logout = \(\) => \{[\s\S]*?resetTransientUiS
 assert.ok(resetSource.includes("analysisConversationStoragePrefix") && resetSource.includes("conversationSessionIds") && resetSource.includes("key.endsWith"), "新登录必须让当前对话草稿脱离旧会话");
 
 assert.ok(workbenchSource.includes(expectedSessionPrefixes[0]), "工作台持久化前缀必须纳入重置注册表");
-assert.ok(visualSource.includes(expectedSessionPrefixes[2]), "当前可视化卡片持久化前缀必须纳入重置注册表");
+assert.ok(visualSource.includes(expectedSessionPrefixes[3]), "当前可视化卡片持久化前缀必须纳入重置注册表");
 assert.ok(pendingSource.includes("smart-data-agent:pending-analysis:"), "待恢复分析前缀必须纳入重置注册表");
 assert.ok(domainSource.includes("smart_data_agent_self_analysis_session_v1"), "当前对话会话前缀必须纳入重置注册表");
 const workspaceSource = await read("src/app/components/analysis-workspace/AnalysisWorkspaceRail.tsx");

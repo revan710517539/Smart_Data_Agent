@@ -325,7 +325,7 @@ function analysisTableLogicalKeys(table: AnalysisDataTableSelection) {
 export function analysisTableLogicalTitle(value: string) {
   const stem = String(value || "").trim().replace(/\.csv$/i, "");
   const withoutPrefix = stem.replace(/^\d{8}(?:_\d{6})?_/, "");
-  const withoutSuffix = withoutPrefix.replace(/_\d{4}-\d{2}-\d{2}$/, "");
+  const withoutSuffix = withoutPrefix.replace(/_\d{4}-\d{2}-\d{2}(?:_历史数据)?$/, "");
   const title = withoutSuffix.split("/").pop() || withoutSuffix;
   return title.replace(/[\s_\-./]+/g, "").toLocaleLowerCase();
 }

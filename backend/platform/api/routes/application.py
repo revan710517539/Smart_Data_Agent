@@ -66,9 +66,10 @@ def handle_application_action_post(handler: Any) -> None:
             if not isinstance(requested_ids, list):
                 raise ValueError("page_data_layout_invalid")
             published = handler.services.data_asset_store.list_published_bundle(context.tenant_id)
+            published_page_data = [item for item in published.get("page_data", []) if isinstance(item, dict)]
             allowed_ids = {
                 str(item.get("id") or "")
-                for item in published.get("page_data", [])
+                for item in published_page_data
                 if module_key in item.get("targetPages", [])
                 and (
                     (_page_data_scope(item) == MULTI_INSTITUTION_PAGE_DATA_SCOPE)
@@ -81,6 +82,36 @@ def handle_application_action_post(handler: Any) -> None:
             normalized_ids = [str(asset_id or "").strip() for asset_id in requested_ids]
             if len(normalized_ids) != len(set(normalized_ids)) or any(asset_id not in allowed_ids for asset_id in normalized_ids):
                 raise PermissionError("page_data_layout_asset_unavailable")
+            cards = action_payload.get("cards")
+            if cards is not None and not isinstance(cards, list):
+                raise ValueError("page_data_cards_invalid")
+            for card in cards or []:
+                if not isinstance(card, dict):
+                    raise ValueError("page_data_cards_invalid")
+                source_id = str(card.get("sourceAssetId") or "").strip()
+                if source_id not in allowed_ids or source_id not in normalized_ids:
+                    raise PermissionError("page_data_card_asset_unavailable")
+            public_filters = action_payload.get("publicFilters")
+            if public_filters is not None and not isinstance(public_filters, list):
+                raise ValueError("page_data_public_filters_invalid")
+            allowed_by_id = {str(item.get("id") or ""): item for item in published_page_data if str(item.get("id") or "") in allowed_ids}
+            for group in public_filters or []:
+                if not isinstance(group, dict):
+                    raise ValueError("page_data_public_filters_invalid")
+                dataset_ids = [str(item or "").strip() for item in group.get("datasetIds") or []]
+                fields = [str(item or "").strip() for item in group.get("fields") or []]
+                if not dataset_ids or any(dataset_id not in normalized_ids or dataset_id not in allowed_by_id for dataset_id in dataset_ids):
+                    raise PermissionError("page_data_public_filter_asset_unavailable")
+                common_fields = None
+                for dataset_id in dataset_ids:
+                    field_codes = {
+                        str(field.get("fieldNameEn") or "").strip()
+                        for field in allowed_by_id[dataset_id].get("sourceFields") or []
+                        if isinstance(field, dict) and str(field.get("fieldNameEn") or "").strip()
+                    }
+                    common_fields = field_codes if common_fields is None else common_fields & field_codes
+                if not fields or any(field not in (common_fields or set()) for field in fields):
+                    raise ValueError("page_data_public_filter_field_unavailable")
             action_payload["assetIds"] = normalized_ids
         if action == "set_page_visual_layout" and module_key in {"customer_insight", "competition_analysis"}:
             action_payload = dict(action_payload or {})
@@ -269,6 +300,7 @@ def _bind_visual_report_payload(handler: Any, context: Any, payload: dict[str, A
         }
 
     bound_cards = []
+    dataset_id_aliases: dict[str, str] = {}
     for raw_card in cards:
         if not isinstance(raw_card, dict) or not isinstance(raw_card.get("dataset"), dict):
             raise ValueError("visual_report_dataset_invalid")
@@ -307,10 +339,12 @@ def _bind_visual_report_payload(handler: Any, context: Any, payload: dict[str, A
         else:
             name = str(source.get("name") or source.get("sourceTableName") or "多机构页面数据")
             code = f"page_data_{dataset_id}"
+        bound_dataset_id = str(source.get("id") or dataset_id)
+        dataset_id_aliases[f"{dataset_kind}:{dataset_id}"] = f"{dataset_kind}:{bound_dataset_id}"
         bound_cards.append({
             **raw_card,
             "dataset": {
-                "id": str(source.get("id") or dataset_id),
+                "id": bound_dataset_id,
                 "kind": dataset_kind,
                 "name": name,
                 "code": code,
@@ -320,7 +354,18 @@ def _bind_visual_report_payload(handler: Any, context: Any, payload: dict[str, A
                 "fields": fields,
             },
         })
-    return {**payload, "report": {**report, "cards": bound_cards}}
+    public_filters = []
+    for raw_group in report.get("publicFilters") if isinstance(report.get("publicFilters"), list) else []:
+        if not isinstance(raw_group, dict):
+            public_filters.append(raw_group)
+            continue
+        rebound_ids = []
+        for raw_dataset_id in raw_group.get("datasetIds") if isinstance(raw_group.get("datasetIds"), list) else []:
+            rebound_id = dataset_id_aliases.get(str(raw_dataset_id), str(raw_dataset_id))
+            if rebound_id not in rebound_ids:
+                rebound_ids.append(rebound_id)
+        public_filters.append({**raw_group, "datasetIds": rebound_ids})
+    return {**payload, "report": {**report, "cards": bound_cards, "publicFilters": public_filters}}
 
 
 def _resolve_visual_report_raw_source(
@@ -407,7 +452,7 @@ def _visual_report_logical_title_candidate(value: str) -> bool:
 def _visual_report_logical_title(value: str) -> str:
     stem = re.sub(r"\.csv$", "", str(value or "").strip(), flags=re.I)
     without_prefix = re.sub(r"^\d{8}(?:_\d{6})?_", "", stem)
-    without_suffix = re.sub(r"_\d{4}-\d{2}-\d{2}$", "", without_prefix)
+    without_suffix = re.sub(r"_\d{4}-\d{2}-\d{2}(?:_历史数据)?$", "", without_prefix)
     title = without_suffix.rsplit("/", 1)[-1]
     return re.sub(r"[\s_\-./]+", "", title).casefold()
 

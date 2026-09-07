@@ -1,0 +1,100 @@
+.sda-report-style-surface {
+  background: var(--sda-report-canvas);
+  color: var(--sda-report-title);
+  font-family: var(--sda-report-font);
+  border-radius: var(--sda-report-radius);
+}
+
+.sda-report-style-surface [data-resizable-visual-grid="true"] {
+  gap: var(--sda-report-gap) !important;
+}
+
+.sda-report-style-surface [data-visual-card] {
+  border-color: var(--sda-report-border) !important;
+  border-radius: var(--sda-report-radius) !important;
+  background-color: var(--sda-report-surface);
+  box-shadow: var(--sda-report-shadow);
+}
+
+.sda-report-style-surface [data-visual-borderless="true"] {
+  border-color: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.sda-report-style-surface [data-standard-analysis-module] > div:last-child > div,
+.sda-report-style-surface [data-weekly-report-ai-module="true"],
+.sda-report-style-surface [data-weekly-visual-report] {
+  border-color: var(--sda-report-border) !important;
+  border-radius: var(--sda-report-radius) !important;
+  background-color: var(--sda-report-surface) !important;
+  box-shadow: var(--sda-report-shadow);
+}
+
+.sda-report-style-surface h3,
+.sda-report-style-surface h4,
+.sda-report-style-surface h5,
+.sda-report-style-surface [data-visual-card] > div:first-child {
+  color: var(--sda-report-title);
+}
+
+.sda-report-style-surface [data-page-public-filter-controls="true"] {
+  border-color: var(--sda-report-border);
+  background: color-mix(in srgb, var(--sda-report-canvas) 82%, white);
+  border-radius: var(--sda-report-radius);
+}
+
+.sda-report-style-surface [data-standard-report-page-canvas="true"] {
+  border-color: var(--sda-report-border) !important;
+  background: var(--sda-report-canvas) !important;
+  border-radius: var(--sda-report-radius) !important;
+}
+
+.sda-report-style-surface table {
+  font-family: var(--sda-report-font);
+}
+
+.sda-report-style-surface [data-report-native-chart-theme="true"] .recharts-cartesian-grid line,
+.sda-report-style-surface [data-report-native-chart-theme="true"] .recharts-polar-grid path {
+  stroke: var(--sda-report-chart-grid);
+}
+
+.sda-report-style-surface [data-report-native-chart-theme="true"] :is(.recharts-cartesian-axis-tick-value, .recharts-polar-angle-axis-tick-value, .recharts-polar-radius-axis-tick-value) {
+  fill: var(--sda-report-chart-muted);
+}
+
+.sda-report-style-surface [data-report-native-chart-theme="true"] table :is(th, td) {
+  border-color: var(--sda-report-table-border) !important;
+}
+
+.sda-report-style-surface [data-report-native-chart-theme="true"] table thead,
+.sda-report-style-surface [data-report-native-chart-theme="true"] table thead tr {
+  background: var(--sda-report-table-header-bg) !important;
+  color: var(--sda-report-table-header-text) !important;
+}
+
+.sda-report-style-surface [data-report-native-chart-theme="true"] table thead th {
+  color: var(--sda-report-table-header-text) !important;
+}
+
+.sda-report-style-surface [data-report-native-chart-theme="true"] table tbody tr {
+  background: var(--sda-report-table-body-bg);
+  color: var(--sda-report-table-body-text);
+}
+
+.sda-report-style-surface [data-report-native-chart-theme="true"] table tbody tr:nth-child(even) {
+  background: var(--sda-report-table-alt-bg);
+}
+
+.sda-report-style-surface[data-report-page-style="board-brief"] [data-standard-analysis-module] > div:last-child > div,
+.sda-report-style-surface[data-report-page-style="board-brief"] [data-weekly-report-ai-module="true"],
+.sda-report-style-surface[data-report-page-style="board-brief"] [data-weekly-visual-report] {
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+@media (max-width: 767px) {
+  .sda-report-style-surface [data-resizable-visual-grid="true"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

@@ -1551,6 +1551,7 @@ def _normalize_saved_analysis_visualization_config(value: dict[str, Any]) -> dic
         "filterGroups": filter_groups,
         "sumFilteredRows": bool(value.get("sumFilteredRows")),
         "comboLineFields": string_list(value.get("comboLineFields")),
+        "borderless": bool(value.get("borderless")),
     }
     table_style = normalize_table_style(value.get("tableStyle"))
     if table_style:
@@ -1574,7 +1575,8 @@ def _normalize_saved_analysis_visualization_config(value: dict[str, Any]) -> dic
             number = int(raw)
         except (TypeError, ValueError):
             continue
-        if 1 <= number <= 24:
+        lower, upper = (1, 12) if key in {"layoutSpan", "maxLayoutSpan"} else (160, 1600)
+        if lower <= number <= upper:
             config[key] = number
     return config
 

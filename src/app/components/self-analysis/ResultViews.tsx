@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSP
 import { createPortal } from "react-dom";
 import { AppSelect } from "../ui/AppSelect";
 import { trackInteraction } from "../../services/interactionTelemetry";
-import { ArrowDown, ArrowLeftToLine, ArrowRightToLine, ArrowUp, ArrowUpDown, AudioLines, Calculator, Check, ChevronDown, Copy, Download, Ellipsis, Filter, LayoutTemplate, MessageSquareText, Percent, Pin, Plus, Save, SlidersHorizontal, Trash2, Type, X } from "lucide-react";
+import { ArrowDown, ArrowLeftToLine, ArrowRightToLine, ArrowUp, ArrowUpDown, AudioLines, Calculator, Check, ChevronDown, Copy, Download, Ellipsis, Filter, LayoutTemplate, MessageSquareText, Percent, Pin, Plus, Save, SlidersHorizontal, SquareDashed, Trash2, Type, X } from "lucide-react";
 import {
   Area,
   AreaChart,
@@ -54,7 +54,7 @@ import { insertVisualVoiceText, resolveVisualizationVoiceCommand } from "../visu
 import { formatFieldValue, type FieldDisplayMetadata } from "../../data/fieldSemantics";
 import { usePlatformContext } from "../../platform/PlatformContext";
 import { useSkinTheme } from "../../theme/SkinThemeContext";
-import { normalizeNoteItems, noteItemsFromText, type RichNoteItem } from "../notes/richNote";
+import { normalizeNoteItems, noteItemsFromText, rememberVisualStickyNoteAnchor, type RichNoteItem } from "../notes/richNote";
 import { VisualNoteFields, VisualNoteTitle } from "../visualization/VisualNoteFields";
 import { DataPageSelector, useClientPagination } from "../ui/DataPageSelector";
 import {
@@ -169,6 +169,7 @@ type AnalysisVisualCardProps = {
   showFollowUp?: boolean;
   analysisSource?: AnalysisDataTableSelection[];
   initialConfig?: Partial<VisualizationCardConfig>;
+  configAuthority?: "session" | "server";
   onFollowUp: (detail?: VisualSelectionDetail) => void;
   onComment: (detail?: VisualSelectionDetail) => void;
   onTypeChange: (type: VisualizationType) => void;
@@ -186,7 +187,7 @@ type AnalysisVisualCardProps = {
 export type VisualSelectionDetail = { selectedText?: string; dataTables?: AnalysisDataTableSelection[] };
 export type VisualDuplicateOptions = { asText?: boolean };
 
-export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compact = false, fillHeight = false, showFollowUp = true, analysisSource, initialConfig, onFollowUp, onComment, onTypeChange, onTitleChange, onConfigChange, onDuplicate, onCreateText, onDelete, visualGridSpan, visualGridHeight, visualGridMaxSpan, visualGridMaxHeight }: AnalysisVisualCardProps) {
+export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compact = false, fillHeight = false, showFollowUp = true, analysisSource, initialConfig, configAuthority = "session", onFollowUp, onComment, onTypeChange, onTitleChange, onConfigChange, onDuplicate, onCreateText, onDelete, visualGridSpan, visualGridHeight, visualGridMaxSpan, visualGridMaxHeight }: AnalysisVisualCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const [moreMenuPos, setMoreMenuPos] = useState<{ top: number; left: number } | null>(null);
@@ -259,6 +260,7 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     return savedItems.length ? savedItems : noteItemsFromText(initialConfig?.noteBody || "", "visual_note");
   });
   const [noteTitleHidden, setNoteTitleHidden] = useState(Boolean(initialConfig?.noteTitleHidden));
+  const [borderless, setBorderless] = useState(Boolean(initialConfig?.borderless));
   const [cardType, setCardType] = useState<VisualizationType>(type);
   const isTableCard = cardType === "table" || cardType === "pivot";
   const isTextCard = cardType === "text";
@@ -336,7 +338,8 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     layoutHeight: visualGridHeight,
     maxLayoutSpan: visualGridMaxSpan,
     maxLayoutHeight: visualGridMaxHeight,
-  }), [calculatedColumns, chartStyle, comboLineFields, dimensionFields, filterGroups, filters, frozenColumnFields, frozenRowKeys, mergedDimensionFields, metricFields, metricFormats, metricProgress, metricRankings, noteBody, noteItems, noteTitle, noteTitleHidden, sumFilteredRows, tableStyle, visualGridHeight, visualGridMaxHeight, visualGridMaxSpan, visualGridSpan]);
+    borderless,
+  }), [borderless, calculatedColumns, chartStyle, comboLineFields, dimensionFields, filterGroups, filters, frozenColumnFields, frozenRowKeys, mergedDimensionFields, metricFields, metricFormats, metricProgress, metricRankings, noteBody, noteItems, noteTitle, noteTitleHidden, sumFilteredRows, tableStyle, visualGridHeight, visualGridMaxHeight, visualGridMaxSpan, visualGridSpan]);
 
   useEffect(() => { if (!editingTitle) setDraftTitle(title); }, [editingTitle, title]);
 
@@ -348,11 +351,12 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   };
 
   useEffect(() => {
-    const key = `sda:visual-card:v2:${window.location.pathname}:${stateKey}`;
+    const key = `sda:visual-card:v3:${tenantId}:${userId}:${window.location.pathname}:${stateKey}`;
     if (cardStateHydratedRef.current === key) return;
     try {
       const saved = JSON.parse(sessionStorage.getItem(key) || "null") as (Partial<VisualizationCardConfig> & { showData?: boolean }) | null;
-      const source = saved || initialConfig;
+      const sessionSource = configAuthority === "session" ? saved : null;
+      const source = sessionSource || initialConfig;
       if (source) {
         if (Array.isArray(source.metricFields)) setMetricFields(source.metricFields);
         if (Array.isArray(source.dimensionFields)) setDimensionFields(source.dimensionFields);
@@ -375,15 +379,16 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
         if (savedItems.length) setNoteItems(savedItems);
         else if (typeof source.noteBody === "string") setNoteItems(noteItemsFromText(source.noteBody, "visual_note"));
         if (typeof source.noteTitleHidden === "boolean") setNoteTitleHidden(source.noteTitleHidden);
-        if (saved && typeof (saved as { type?: string }).type === "string" && (saved as { type?: string }).type !== type) {
-          applyType((saved as { type: VisualizationType }).type);
+        if (typeof source.borderless === "boolean") setBorderless(source.borderless);
+        if (sessionSource && typeof (sessionSource as { type?: string }).type === "string" && (sessionSource as { type?: string }).type !== type) {
+          applyType((sessionSource as { type: VisualizationType }).type);
         }
-        if (saved) setShowData(Boolean(saved.showData));
+        if (sessionSource) setShowData(Boolean(sessionSource.showData));
         cardStateSkipSaveRef.current = true;
       }
     } catch { /* invalid per-card session state is ignored */ }
     cardStateHydratedRef.current = key;
-  }, [initialConfig, stateKey]);
+  }, [configAuthority, initialConfig, stateKey, tenantId, userId]);
 
   useEffect(() => {
     const normalized = normalizeVisualizationSelections(cardType, metricFields, dimensionFields, numericFields, dimensionCandidates, fieldLabels, fieldMetadata);
@@ -410,12 +415,12 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   }, [comboLineFields, metricFields]);
 
   useEffect(() => {
-    const key = `sda:visual-card:v2:${window.location.pathname}:${stateKey}`;
+    const key = `sda:visual-card:v3:${tenantId}:${userId}:${window.location.pathname}:${stateKey}`;
     if (cardStateHydratedRef.current !== key) return;
     if (cardStateSkipSaveRef.current) { cardStateSkipSaveRef.current = false; return; }
     try { sessionStorage.setItem(key, JSON.stringify({ ...currentConfig, showData, type: cardType })); } catch { /* session quota must not block charts */ }
     onConfigChangeRef.current?.(currentConfig);
-  }, [cardType, currentConfig, showData, stateKey]);
+  }, [cardType, currentConfig, showData, stateKey, tenantId, userId]);
 
   const streamedVoiceRef = useRef("");
   const cardTypeRef = useRef(cardType);
@@ -715,7 +720,7 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
   const headerMetricFormat = tableHeaderMenu ? metricFormats.find((item) => item.metricField === tableHeaderMenu.field) : undefined;
   const headerProgress = tableHeaderMenu ? metricProgress.find((item) => item.metricField === tableHeaderMenu.field) : undefined;
   const headerCalculatedColumn = tableHeaderMenu?.kind === "calculated" ? calculatedColumns.find((column) => column.id === tableHeaderMenu.field) : undefined;
-  return <div ref={cardRef} data-visual-card={id} data-visual-text-card={isTextCard ? "true" : "false"} data-visual-values={showData ? "shown" : "hidden"} data-visual-grid-span={visualGridSpan} data-visual-grid-height={visualGridHeight} data-visual-grid-max-span={visualGridMaxSpan} data-visual-grid-max-height={visualGridMaxHeight} className={`relative rounded-xl border border-[#dce9e0] bg-[#fbfdfc] p-4 ${activePanel === "style" ? "overflow-hidden" : ""} ${fillHeight ? "flex h-full min-h-0 flex-col" : ""}`} onClick={(event) => { if (!(event.target instanceof Element) || event.target.closest('[data-visual-interactive="true"]') || eventInsideVisualTable(event.target)) return; trackVisual("visualization_click", { chart_type: cardType, metric_fields: metricFields, dimension_fields: dimensionFields }); revealCommentAt(event.clientX, event.clientY); }} onContextMenu={(event) => { if (event.target instanceof Element && event.target.closest("[data-rich-note-editor], [data-visual-note-selection], [data-visual-note-title-row]")) return; event.preventDefault(); if (eventInsideVisualTable(event.target)) return; revealCommentAt(event.clientX, event.clientY); }}>
+  return <div ref={cardRef} data-visual-card={id} data-visual-text-card={isTextCard ? "true" : "false"} data-visual-borderless={borderless ? "true" : "false"} data-visual-values={showData ? "shown" : "hidden"} data-visual-grid-span={visualGridSpan} data-visual-grid-height={visualGridHeight} data-visual-grid-max-span={visualGridMaxSpan} data-visual-grid-max-height={visualGridMaxHeight} className={`relative rounded-xl ${borderless ? "border border-transparent bg-transparent" : "border border-[#dce9e0] bg-[#fbfdfc]"} p-4 ${activePanel === "style" ? "overflow-hidden" : ""} ${fillHeight ? "flex h-full min-h-0 flex-col" : ""}`} onClick={(event) => { if (!(event.target instanceof Element) || event.target.closest('[data-visual-interactive="true"]')) return; rememberVisualStickyNoteAnchor(String(id), event.clientX, cardRef.current); if (eventInsideVisualTable(event.target)) return; trackVisual("visualization_click", { chart_type: cardType, metric_fields: metricFields, dimension_fields: dimensionFields }); revealCommentAt(event.clientX, event.clientY); }} onContextMenu={(event) => { if (event.target instanceof Element && event.target.closest("[data-rich-note-editor], [data-visual-note-selection], [data-visual-note-title-row]")) return; event.preventDefault(); rememberVisualStickyNoteAnchor(String(id), event.clientX, cardRef.current); if (eventInsideVisualTable(event.target)) return; revealCommentAt(event.clientX, event.clientY); }}>
     <div className={isTextCard ? "mb-3 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-1" : "mb-3 flex items-start justify-between gap-2.5"}>
       {!isTextCard && <div className="min-w-0 flex-1 pr-1" data-visual-interactive="true">{editingTitle ? <input autoFocus value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} onBlur={commitTitle} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setDraftTitle(title); setEditingTitle(false); } }} className="h-7 w-full rounded-md border border-[#b7ddc3] bg-white px-2 text-[12px] text-[#1d1d1f] outline-none ring-2 ring-[#2ca66f]/15" aria-label="可视化标题" data-visual-title-input="true" /> : <button type="button" onDoubleClick={(event) => { event.stopPropagation(); if (onTitleChange) setEditingTitle(true); }} className={`max-w-full truncate text-left text-[12px] text-[#1d1d1f] ${onTitleChange ? "cursor-text rounded px-1 py-1 hover:bg-[#f5faf7]" : ""}`} title={onTitleChange ? "双击修改标题" : title} data-visual-title="true">{title}</button>}</div>}
       <div className={isTextCard ? `${operationsOpen ? "col-span-2 row-start-1 flex justify-end" : "hidden"}` : "ml-auto flex shrink-0 flex-nowrap items-center justify-end gap-0 rounded-full bg-[#f0f6f2] p-0.5"} data-visual-toolbar="true" data-visual-interactive="true" data-visual-text-ops-above={isTextCard && operationsOpen ? "true" : undefined}>
@@ -751,7 +756,7 @@ export function AnalysisVisualCard({ id, stateKey = id, title, type, rows, compa
     {filterOpen && <VisualizationFilterPanel rows={rows} dimensions={dimensionCandidates} labels={fieldLabels} value={draftFilterGroups} sumRows={draftSumRows} onChange={(next) => { setDraftFilterGroups(next); applyFilterState(next, draftSumRows); }} onSumRowsChange={(next) => { setDraftSumRows(next); applyFilterState(draftFilterGroups, next); }} onCancel={() => { const snapshot = filterSnapshotRef.current; if (snapshot) { setFilterGroups(snapshot.filterGroups); setFilters(snapshot.filters); setSumFilteredRows(snapshot.sumFilteredRows); } setFilterOpen(false); }} onSave={() => { applyFilterState(draftFilterGroups, draftSumRows); trackVisual("visualization_result", { action: "condition", filter_count: draftFilterGroups.reduce((count, group) => count + group.rules.filter((rule) => rule.field && rule.values.length).length, 0), dimension_fields: Array.from(new Set(draftFilterGroups.flatMap((group) => group.rules.map((rule) => rule.field).filter(Boolean)))) }); setFilterOpen(false); }} />}
     {isTableCard && activePanel === "template" && templateMenuPos && createPortal(<TableTemplateGallery currentTemplateId={tableStyle.templateId} featuredTemplates={featuredTableTemplates} customTemplates={customTemplates} position={templateMenuPos} onApplyBuiltIn={applyBuiltInTableTemplate} onApplyCustom={applySavedTableTemplate} onDeleteCustom={deleteSavedTableTemplate} />, document.body)}
     {!isTableCard && !isTextCard && activePanel === "template" && templateMenuPos && createPortal(<ChartTemplateGallery currentTemplateId={chartStyle.templateId} position={templateMenuPos} onApply={applyBuiltInChartTemplate} />, document.body)}
-    {operationsOpen && activePanel === "style" && <div className={`absolute right-4 z-30 grid max-h-[calc(100%-4rem)] w-[min(17.5rem,calc(100%-2rem))] grid-cols-2 gap-0.5 overflow-y-auto overflow-x-hidden rounded-lg border border-[#dce7df] bg-white p-1 shadow-lg shadow-black/[0.08] ${isTextCard ? "top-11" : "top-12"}`} data-visual-style-menu="true" data-visual-style-layout="two-column" data-visual-interactive="true">{visualizationOptions.map((option) => <button key={option.type} type="button" onClick={() => { applyType(option.type); trackVisual("visualization_result", { action: "style", chart_type: option.type }); setActivePanel(null); }} className={`flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12px] ${option.type === cardType ? "bg-[#eaf7ef] text-[#178a53]" : "text-[#636366] hover:bg-[#f5faf7]"}`}><option.icon className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{option.label}</span></button>)}</div>}
+    {operationsOpen && activePanel === "style" && <div className={`absolute right-4 z-30 grid max-h-[calc(100%-4rem)] w-[min(17.5rem,calc(100%-2rem))] grid-cols-2 gap-0.5 overflow-y-auto overflow-x-hidden rounded-lg border border-[#dce7df] bg-white p-1 shadow-lg shadow-black/[0.08] ${isTextCard ? "top-11" : "top-12"}`} data-visual-style-menu="true" data-visual-style-layout="two-column" data-visual-interactive="true"><button type="button" onClick={() => setBorderless((current) => !current)} className={`col-span-2 flex min-w-0 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-[12px] ${borderless ? "bg-[#eaf7ef] text-[#178a53]" : "text-[#636366] hover:bg-[#f5faf7]"}`} aria-pressed={borderless} data-visual-borderless-option="true"><span className="inline-flex items-center gap-1.5"><SquareDashed className="h-3.5 w-3.5" />无边框</span>{borderless ? <Check className="h-3.5 w-3.5" /> : null}</button>{visualizationOptions.map((option) => <button key={option.type} type="button" onClick={() => { applyType(option.type); trackVisual("visualization_result", { action: "style", chart_type: option.type }); setActivePanel(null); }} className={`flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12px] ${option.type === cardType ? "bg-[#eaf7ef] text-[#178a53]" : "text-[#636366] hover:bg-[#f5faf7]"}`}><option.icon className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{option.label}</span></button>)}</div>}
     {operationsOpen && activePanel === "metric" && <FieldPanel title="指标" fields={metricFields} candidates={numericFields} labels={fieldLabels} reorder={metricReorder} onToggle={(field) => { const next = toggleVisualizationField("metric", cardType, metricFields, field); setMetricFields(next); trackVisual("visualization_result", { action: "metric", metric_fields: next, changed_field: field }); }} />}
     {operationsOpen && activePanel === "dimension" && <FieldPanel title="维度" fields={dimensionFields} candidates={dimensionCandidates} labels={fieldLabels} reorder={dimensionReorder} onToggle={(field) => { const next = toggleVisualizationField("dimension", cardType, dimensionFields, field); setDimensionFields(next); trackVisual("visualization_result", { action: "dimension", dimension_fields: next, changed_field: field }); }} />}
     {voiceNoticeVisible && (voice.listening || voice.error || commandNotice || voice.transcript) && <div className="absolute right-4 top-12 z-40 max-w-[280px] rounded-lg border border-[#dce7df] bg-white px-3 py-2 text-[10px] leading-4 text-[#53615a] shadow-lg" role="status" data-visual-voice-notice="true" data-visual-interactive="true">{voice.listening ? (isTextCard ? "正在将语音转写到文本框…" : "正在听取样式、指标或维度指令…") : voice.error || commandNotice || voice.transcript}</div>}
@@ -1038,6 +1043,10 @@ type ResultTableProps = {
   compact?: boolean;
 };
 
+function sameMeasuredOffsets(current: number[], next: number[]) {
+  return current.length === next.length && current.every((value, index) => value === next[index]);
+}
+
 function ResultTable({ rows, emptyLabel, dimensionFields, metricFields, mergedDimensionFields = [], frozenColumnFields = [], frozenRowKeys = [], metricRankings = [], metricFormats = [], metricProgress = [], calculatedColumns = [], tableStyle, onCalculatedColumnChange, onDimensionFieldsChange, onMetricFieldsChange, onDimensionHeaderContextMenu, onRowContextMenu, fillHeight, compact }: ResultTableProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   useVisualTableScrollLock(scrollerRef);
@@ -1104,13 +1113,13 @@ function ResultTable({ rows, emptyLabel, dimensionFields, metricFields, mergedDi
     const lefts: number[] = [];
     let left = 0;
     frozenColumnFields.forEach((field) => { lefts.push(left); const cell = root.querySelector(`[data-visual-table-field="${cssEscape(field)}"]:not([data-visual-table-rank-header])`); left += cell instanceof HTMLElement ? cell.getBoundingClientRect().width : 0; });
-    setColumnLefts(lefts);
+    setColumnLefts((current) => sameMeasuredOffsets(current, lefts) ? current : lefts);
     const header = root.querySelector("thead tr");
     const headerHeight = header instanceof HTMLElement ? header.getBoundingClientRect().height : 0;
     const tops: number[] = [];
     let top = headerHeight;
     pinnedRowKeys.forEach((key) => { tops.push(top); const row = root.querySelector(`[data-visual-table-row="${cssEscape(key)}"]`); top += row instanceof HTMLElement ? row.getBoundingClientRect().height : 0; });
-    setRowTops(tops);
+    setRowTops((current) => sameMeasuredOffsets(current, tops) ? current : tops);
   }, [calculatedColumns, displayedRows.length, fields.join("\u0000"), frozenColumnFields.join("\u0000"), pinnedRowKeys.join("\u0000")]);
   return <div ref={scrollerRef} className={`min-h-0 overflow-auto overscroll-contain rounded-lg border border-[#edf1ee] bg-white ${fillHeight ? "min-h-0 flex-1" : compact ? "max-h-[220px]" : "max-h-[300px]"}`} style={{ overscrollBehavior: "none", ...tableThemeVariables(normalizedTableStyle) }} data-visual-table-scroll="true" data-table-long-press-reorder="true" data-visual-table-theme="true" data-table-template-id={normalizedTableStyle.templateId} data-table-banded={normalizedTableStyle.bandedRows ? "true" : "false"} data-table-first-column={normalizedTableStyle.emphasizeFirstColumn ? "true" : "false"} data-table-density={normalizedTableStyle.density}>
     <table className="w-full border-separate border-spacing-0 text-[12px]">

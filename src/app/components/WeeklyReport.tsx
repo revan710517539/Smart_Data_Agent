@@ -60,7 +60,7 @@ import {
 import { isDemoFallbackEnabled } from "../services/apiContext";
 import { fetchReportImageObjectUrl, uploadReportImage } from "../services/reportAttachmentApi";
 import { boundedInteractionText, trackInteraction } from "../services/interactionTelemetry";
-import { buildWeeklyAnalysisModules, CoreMetricChart, SavedAnalysisEmbed, WeeklyAnalysisModuleMenu, loadWeeklyAnalysisModulePreferences, weeklyAnalysisModuleStorageKey, type WeeklyAnalysisModule, type WeeklyAnalysisModuleSettings, type WeeklyDataModule } from "./weekly-report/AnalysisModules";
+import { buildWeeklyAnalysisModules, CoreMetricChart, SavedAnalysisEmbed, WeeklyAnalysisModuleMenu, useWeeklyDataPreferences, type WeeklyAnalysisModule, type WeeklyDataModule } from "./weekly-report/AnalysisModules";
 import {
   type AnalysisStatus,
   type ReportStatus,
@@ -141,7 +141,8 @@ import { AnalysisProgressPanel } from "./self-analysis/AnalysisProgressPanel";
 import { applyWeeklyCoreMetricSnapshot, buildWeeklyCoreMetricRows } from "./weekly-report/CoreMetrics";
 import { downloadWeeklyExport, downloadWeeklyExportPdf, prepareWeeklyExportDocument, weeklyExportFilename, weeklyExportHtml, type WeeklyExportFormat } from "./weekly-report/exportReport";
 import { scheduleWeeklyReportBodyScroll } from "./weekly-report/scrollToReportBody";
-import { PageDataModeToggle, PageDataVisualizationModules, usePageDataComposer } from "./page-data/PageDataComposer";
+import { PageDataPublicFilterButton, PageDataPublicFilterControls, PageDataVisualizationModules, usePageDataComposer } from "./page-data/PageDataComposer";
+import { applyReportPageStyleToCards, ReportPageStyleButton, ReportPageStyleSurface, type ReportPageStyleId } from "./report-style/reportPageStyles";
 import { StickyNoteButton, StickyNotePanel } from "./notes/StickyNote";
 import { NoteParagraphField } from "./notes/RichNoteEditor";
 import { NOTE_TEXT_CLASS, NOTE_TEXT_STYLE, placeCaretAtStart, selectionOffsetsWithin } from "./notes/richNote";
@@ -162,9 +163,18 @@ export function WeeklyReport() {
   const analysisRunRef = useRef<Record<string, string>>({});
   const autoAnalysisStartedRef = useRef<Set<string>>(new Set());
   const { selectedInstitution, tenantId, userId, userName, isSuperAdmin, isInstitutionAdmin } = usePlatformContext();
-  const weeklyPageData = usePageDataComposer({ pageCode: "weekly_report", moduleKey: "weekly_report", railPageKey: "weekly-report" });
+  const weeklyPageData = usePageDataComposer({ pageCode: "weekly_report", moduleKey: "weekly_report", railPageKey: "weekly-report", autoSave: true });
   const stickyNote = useStickyNote("weekly_report", "weekly_report");
   const weeklyVisualReports = useVisualReportCollection("weekly");
+  const [weeklyStyleRevision, setWeeklyStyleRevision] = useState(0);
+
+  const applyWeeklyPageStyle = (pageStyleId: ReportPageStyleId) => {
+    setWeeklyStyleRevision((value) => value + 1);
+    weeklyPageData.applyPageStyle(pageStyleId);
+    weeklyVisualReports.reports.forEach((report) => {
+      void weeklyVisualReports.update({ ...report, pageStyleId, cards: applyReportPageStyleToCards(report.cards, pageStyleId) });
+    });
+  };
   const [reports, setReports] = useState(() => createWeeklyReports(selectedInstitution, userName, userId));
   const [, setSavedAt] = useState(
     isDemoFallbackEnabled() ? "当前为显式演示模板" : "尚未绑定真实分析证据，当前草稿不可发布",
@@ -181,9 +191,7 @@ export function WeeklyReport() {
   const [isLoadingReportEvidence, setIsLoadingReportEvidence] = useState(false);
   const [savedAnalysisResults, setSavedAnalysisResults] = useState<SavedAnalysisResult[]>([]);
   const [selectedAnalysisId, setSelectedAnalysisId] = useState("");
-  const [analysisModuleSettings, setAnalysisModuleSettings] = useState<WeeklyAnalysisModuleSettings>(() =>
-    loadWeeklyAnalysisModulePreferences(tenantId, userId),
-  );
+  const { settings: analysisModuleSettings, setSettings: setAnalysisModuleSettings, error: weeklyPreferencesError } = useWeeklyDataPreferences();
   const [weeklyBehaviorMemoryIds, setWeeklyBehaviorMemoryIds] = useState<string[] | null>(null);
   const [weeklyCoreContext, setWeeklyCoreContext] = useState<{ table: TopicTableAsset | null; skill: AnalysisSkillAsset | null }>({ table: null, skill: null });
   const [weeklyCoreDataReady, setWeeklyCoreDataReady] = useState(false);
@@ -321,18 +329,10 @@ export function WeeklyReport() {
   }, [selectedInstitution, tenantId, userId, userName]);
 
   useEffect(() => {
-    setAnalysisModuleSettings(loadWeeklyAnalysisModulePreferences(tenantId, userId));
     setWeeklyBehaviorMemoryIds(null);
     setWeeklyCoreContext({ table: null, skill: null });
     setWeeklyCoreDataReady(false);
   }, [tenantId, userId]);
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      weeklyAnalysisModuleStorageKey(tenantId, userId),
-      JSON.stringify({ version: 4, orderCustomized: analysisModuleSettings.orderCustomized, preferences: weeklyDataItems.map(({ id, visible }) => ({ id, visible })) }),
-    );
-  }, [analysisModuleSettings.orderCustomized, tenantId, userId, weeklyDataItems]);
 
   useEffect(() => {
     if (alignedScrollReportIdRef.current !== activeReport.id) alignedScrollReportIdRef.current = "";
@@ -1503,8 +1503,7 @@ export function WeeklyReport() {
           </div>
         </div>
         <div className="flex w-fit min-h-9 max-w-full shrink-0 flex-wrap items-center justify-end gap-[0.2cm]" data-page-header-actions="true" data-standard-analysis-page-actions="true">
-          <StickyNoteButton onClick={stickyNote.show} className="weekly-report-sticky-note-toggle" />
-          {isSuperAdmin && <PageDataModeToggle controller={weeklyPageData} onSave={saveReportVersion} className="weekly-report-page-data-mode-toggle" />}
+         <StickyNoteButton onClick={stickyNote.show} className="weekly-report-sticky-note-toggle" />
           <div className="relative" data-weekly-history-menu="true">
             <button
               onClick={() => void openReportHistory()}
@@ -1559,6 +1558,7 @@ export function WeeklyReport() {
           </button>
         </div>
       </div>
+        <PageDataPublicFilterControls controller={weeklyPageData} />
         <AnalysisUnderlineProvider
           targets={analysisSelectionTargets.filter((target) => !target.itemId)}
           activeTargetId={rightRailTab === "analysis" ? selectedCommentTarget?.id : undefined}
@@ -1567,7 +1567,7 @@ export function WeeklyReport() {
         {pendingTextSelection && (
           <FloatingSelectionActions selection={pendingTextSelection} onOpenComment={openCommentDraft} onOpenAnalysis={openContextAnalysis} />
         )}
-        <section className="weekly-report-print-root bg-white rounded-xl border border-[#f0f0f2] overflow-hidden">
+        <ReportPageStyleSurface styleId={weeklyPageData.pageStyleId} className="weekly-report-print-root overflow-hidden border border-[#f0f0f2] bg-white" data-weekly-report-style-surface="true">
           <div className="flex flex-col gap-3 px-4 py-3 md:px-6 lg:flex-row lg:items-center lg:justify-between">
               <h3 className="whitespace-nowrap text-[20px] leading-8 text-[#1d1d1f] tracking-tight">{activeReport.institutionName}经营周报</h3>
               <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)_minmax(220px,1.45fr)] lg:mr-[19px] lg:min-w-[640px] lg:max-w-[760px]" data-weekly-report-meta-grid="true">
@@ -1605,11 +1605,12 @@ export function WeeklyReport() {
                     items={weeklyDataItems}
                     editable={weeklyPageData.mode === "edit"}
                     loading={weeklyPageData.loading || weeklyVisualReports.loading}
-                    notice={weeklyPageData.notice || weeklyVisualReports.error}
+                    notice={weeklyPageData.notice || weeklyVisualReports.error || weeklyPreferencesError}
                     onToggle={toggleWeeklyDataItem}
                     onMove={moveWeeklyDataItem}
                     onDelete={(item) => void deleteWeeklyDataItem(item)}
                   />
+                  {isSuperAdmin ? <><PageDataPublicFilterButton controller={weeklyPageData} /><ReportPageStyleButton styleId={weeklyPageData.pageStyleId} onSelect={applyWeeklyPageStyle} /></> : null}
                 </div>
               </div>
               <StickyNotePanel className="mb-4" note={stickyNote.note} editing={stickyNote.editing} onChange={stickyNote.updateItems} onFinishEdit={stickyNote.finishEdit} onStartEdit={() => stickyNote.setEditing(true)} onHide={stickyNote.hide} uploadContext={stickyNote.uploadContext} />
@@ -1622,12 +1623,12 @@ export function WeeklyReport() {
                     const report = weeklyVisualReports.reports.find((candidate) => candidate.id === item.sourceId);
                     content = report ? <section className="rounded-xl border border-[#eef1ef] bg-white p-4" data-weekly-visual-report={report.id}>
                       <div className="mb-3"><h5 className="text-[12px] text-[#1d1d1f]">{report.title}</h5><p className="mt-1 text-[10px] text-[#9ba19e]">来自可视化报表 · {report.cards.length} 个图表</p></div>
-                      <VisualReportCards report={report} railPageKey="weekly-report" layoutEditable={weeklyPageData.mode === "edit"} />
+                      <VisualReportCards report={report} railPageKey="weekly-report" editable={weeklyPageData.mode === "edit"} layoutEditable={weeklyPageData.mode === "edit"} onChange={(next) => { void weeklyVisualReports.update(next); }} />
                     </section> : null;
                   } else if (item.kind === "saved-analysis") {
                     const module = analysisModules.find((candidate) => candidate.id === item.id);
                     const result = module?.savedAnalysisId ? savedAnalysisResults.find((candidate) => candidate.id === module.savedAnalysisId) : undefined;
-                    content = result ? <SavedAnalysisEmbed result={result} /> : null;
+                    content = result ? <SavedAnalysisEmbed result={result} pageStyleId={weeklyPageData.pageStyleId} pageStyleRevision={weeklyStyleRevision} /> : null;
                   } else {
                     content = mainSections.flatMap((section) => section.blocks).map((block) =>
                       block.type === "table" ? (
@@ -1743,7 +1744,7 @@ export function WeeklyReport() {
               ))}
             </div>
           </div>
-        </section>
+        </ReportPageStyleSurface>
         </AnalysisUnderlineProvider>
         </div>
 

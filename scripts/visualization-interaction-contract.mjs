@@ -35,7 +35,7 @@ const visualGridLayoutCompiled = ts.transpileModule(visualGridLayoutSource, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
 }).outputText;
 const visualGridLayoutModuleUrl = `data:text/javascript;base64,${Buffer.from(visualGridLayoutCompiled).toString("base64")}`;
-const { defaultVisualGridSpan, packVisualGridItems } = await import(visualGridLayoutModuleUrl);
+const { defaultVisualGridSpan, packVisualGridItems, visualGridIdFromReactKey } = await import(visualGridLayoutModuleUrl);
 const tableSortCompiled = ts.transpileModule(tableSortSource, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
 }).outputText;
@@ -111,6 +111,8 @@ assert.equal(normalizedChartStyle.fontFamily, "system", "非法图表字体枚�
 assert.equal(normalizedChartStyle.chartHeight, "expanded", "图表模板必须支持紧凑、标准和扩展高度");
 assert.equal(normalizedChartStyle.lineWidth, 4, "图表线宽必须在共享配置中有界保存");
 assert.equal(normalizedChartStyle.areaOpacity, 0, "图表面积透明度必须在共享配置中有界保存");
+assert.ok(visualCardSource.includes("sameMeasuredOffsets(current, lefts) ? current : lefts") && visualCardSource.includes("sameMeasuredOffsets(current, tops) ? current : tops"), "表格布局测量必须跳过等值状态写入，避免缺省数组依赖触发无限更新");
+assert.ok(!visualCardSource.includes("setColumnLefts(lefts);") && !visualCardSource.includes("setRowTops(tops);"), "表格布局测量不得无条件写入新的偏移数组");
 assert.deepEqual(normalizeMetricFormats([{ metricField: "amount", percent: true, decimalPlaces: 12 }, { metricField: "missing", percent: true }], ["amount"]), [{ metricField: "amount", percent: true, decimalPlaces: 8 }], "指标百分比和小数位必须限于当前指标且位数限定为 0 到 8");
 
 const followUpIndex = visualCardSource.indexOf(">追问</button>");
@@ -177,6 +179,9 @@ assert.match(visualCardSource, /overscroll-contain/, "表格内部滚动不得�
 assert.match(visualCardSource, /data-visual-table-region=\{isTableCard \? "true" : undefined\}/, "表格卡片必须标记图表区以便区分表内表外滚轮");
 assert.match(visualCardSource, /useVisualTableRegionWheelLock\(chartAreaRef, isTableCard\)/, "表格卡片必须在表内接管滚轮");
 assert.match(visualGridSource, /setPointerCapture\(event.pointerId\)/, "可视化缩放必须捕获指针，避免拖到右下角丢失");
+assert.equal(visualGridIdFromReactKey(".$page-data=2asset=20", 0), "page-data:asset:0", "React 转义后的页面数据卡片 key 必须还原为服务端卡片 ID");
+assert.equal(visualGridIdFromReactKey(".0:$visual=0literal=2id", 1), "visual=literal:id", "嵌套列表 key 必须只解码 React 转义且保留用户原始等号");
+assert.equal(visualGridIdFromReactKey(".3", 3), "visual-3", "无显式 key 的可视化必须使用稳定的索引后备 ID");
 assert.match(visualGridSource, /Math.min\(hintMaxWidth, edgeMaxWidth, effectiveWidth\)/, "可视化拖拽宽度不得超过底层页面/网格容器");
 assert.match(visualGridSource, /overflow-x-hidden/, "可视化网格不得把卡片画到页面宽度之外");
 assert.ok(visualCardSource.includes('onClick={(event) =>') && visualCardSource.includes('onContextMenu={(event) =>') && visualCardSource.includes('data-visual-comment-action="true"') && visualCardSource.includes('<MessageSquareText'), "单击或右键可视化必须显示统一评论气泡");

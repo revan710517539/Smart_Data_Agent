@@ -630,7 +630,8 @@ def _final_analysis_prompt(request: IntelligentAnalysisRequest, skill_name: str,
 4. visualization_suggestions 只能使用 line、column、table，并从总到分组织：总体趋势 → 机构/产品/客群/渠道结构 → 必要明细；绑定实际返回的指标和维度。
 5. 对返回指标覆盖总体值、头尾差异和明显异常；证据不足时明确“当前数据无法判断原因”，不得补写未经验证的风险或建议。
 6. analysis_summary 使用短句和数字，{output_mode}；metric_findings 只保留不重复的关键发现。
-7. 不要输出 Markdown、解释性前后缀或代码围栏。"""
+7. 若输入上下文包含 conclusion_generation_rules，必须逐数据集按输入顺序处理规则列表，只用实际执行证据计算并判断每条 metricRules 的 operator、threshold 与 thresholdEnd；仅采用条件确实命中的 conclusion 表达规则，将多个数据集的命中规则去重融合，再遵循相应已调度 Skill 的 output_format 和表达方法。规则只能约束表达，不能替代或改写实际证据。
+8. 不要输出 Markdown、解释性前后缀或代码围栏。"""
 
 
 def _safe_invocation(completion: dict[str, Any], prompt_template_id: str) -> dict[str, Any]:
@@ -1418,6 +1419,19 @@ def _model_input_context_for_prompt(request: IntelligentAnalysisRequest) -> dict
                 else []
             )[:20]
             if isinstance(metric, dict)
+        ],
+        "conclusion_generation_rules": [
+            {
+                key: rule.get(key)
+                for key in ("id", "name", "datasetId", "datasetName", "skillId", "metricRules")
+                if rule.get(key) not in (None, "")
+            }
+            for rule in (
+                request.asset_context.get("conclusion_rules", [])
+                if isinstance(request.asset_context, dict)
+                else []
+            )[:24]
+            if isinstance(rule, dict)
         ],
         "reviewed_workflow_memories": [
             {

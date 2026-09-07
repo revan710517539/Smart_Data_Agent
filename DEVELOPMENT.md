@@ -84,6 +84,10 @@ SMART_DATA_AGENT_MIGRATION_BASE_REF=<发布基线SHA> \
 ./scripts/check-mysql-closure.sh
 ```
 
+GitHub Actions 必须先把事件基线解析为规范提交 SHA，再传给迁移检查器。普通 push / PR
+沿用事件提供且属于当前 HEAD 祖先的基线；首次创建分支时 GitHub 的全零 `before` 值只可
+解析为当前历史唯一的根提交。空值、非法引用、非祖先或多根历史必须失败关闭。
+
 禁止在应用启动时临时改写 SQL、从旧镜像长期提取 overlay、删除 migration ledger、
 使用 root 应用账号或在未审批情况下修改数据库权限。
 

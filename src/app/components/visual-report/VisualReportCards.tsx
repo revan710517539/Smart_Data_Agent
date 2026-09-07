@@ -13,6 +13,7 @@ import { revealVisualComment, revealVisualFollowUp } from "../self-analysis/visu
 import type { AnalysisDataTableSelection, AnalysisRow } from "../self-analysis/domain";
 import { resolveVisualReportRawTable, rowsFromPageVisualDataset, rowsFromRawVisualDataset, rowsFromTopicVisualDataset, visualReportDatasetMatches } from "./reportData";
 import { askConfirm } from "../ui/ConfirmDialog";
+import { applyReportPublicFilters, ReportPublicFilterControls, type ReportFilterDataset } from "../report-filters/ReportPublicFilters";
 
 export function VisualReportCards({
   report,
@@ -36,7 +37,7 @@ export function VisualReportCards({
   const cardsKey = useMemo(() => report.cards.map((card) => `${card.id}:${card.dataset.kind}:${card.dataset.id}:${card.dataset.sourceKey || ""}:${card.dataset.schemaFingerprint || ""}`).join("|"), [report.cards]);
   useEffect(() => {
     let cancelled = false;
-    const knownIds = new Set(report.cards.map((card) => card.dataset.id));
+    const knownIds = new Set(report.cards.map(visualReportDatasetKey));
     setLoading(true);
     setRowsByDataset((current) => Object.fromEntries(Object.entries(current).filter(([id]) => knownIds.has(id))));
     setErrorsByDataset((current) => Object.fromEntries(Object.entries(current).filter(([id]) => knownIds.has(id) || id === "catalog")));
@@ -56,18 +57,18 @@ export function VisualReportCards({
       if (card.dataset.kind === "page_data") {
         try {
           const snapshot = await fetchPageDataRows({ tenantId, userId, pageDataId: card.dataset.id, pageCode });
-          applyRows(card.dataset.id, rowsFromPageVisualDataset({ sourceFields: card.dataset.fields } as import("../../services/dataAssetApi").PageDataAsset, snapshot));
+          applyRows(visualReportDatasetKey(card), rowsFromPageVisualDataset({ sourceFields: card.dataset.fields } as import("../../services/dataAssetApi").PageDataAsset, snapshot));
         } catch (error) {
-          applyRows(card.dataset.id, [], apiErrorMessage(error, "多机构页面数据读取失败。"));
+          applyRows(visualReportDatasetKey(card), [], apiErrorMessage(error, "多机构页面数据读取失败。"));
         }
         return;
       }
       if (card.dataset.kind === "topic") {
         try {
           const snapshot = await fetchTopicData({ tenantId, userId, referenceType: "topic", referenceId: card.dataset.id });
-          applyRows(card.dataset.id, rowsFromTopicVisualDataset({ fields: card.dataset.fields } as import("../../services/dataAssetApi").TopicTableAsset, snapshot));
+          applyRows(visualReportDatasetKey(card), rowsFromTopicVisualDataset({ fields: card.dataset.fields } as import("../../services/dataAssetApi").TopicTableAsset, snapshot));
         } catch (error) {
-          applyRows(card.dataset.id, [], apiErrorMessage(error, "主题数据集读取失败。"));
+          applyRows(visualReportDatasetKey(card), [], apiErrorMessage(error, "主题数据集读取失败。"));
         }
       }
     }));
@@ -89,18 +90,18 @@ export function VisualReportCards({
         if (card.dataset.kind === "raw") {
           const resolved = resolveVisualReportRawTable(card.dataset, rawTables);
           if (!resolved.dataset) {
-            applyRows(card.dataset.id, [], resolved.error || "当前机构目录中找不到该原始表。");
+            applyRows(visualReportDatasetKey(card), [], resolved.error || "当前机构目录中找不到该原始表。");
             return;
           }
           const rows = rowsFromRawVisualDataset(resolved.dataset);
-          applyRows(card.dataset.id, rows, rows.length ? "" : "当前数据集没有可用预览行。");
+          applyRows(visualReportDatasetKey(card), rows, rows.length ? "" : "当前数据集没有可用预览行。");
           return;
         }
         if (card.dataset.kind === "page_data" && !pageDataTables.some((item) => visualReportDatasetMatches(card.dataset, item))) {
-          applyRows(card.dataset.id, [], "多机构页面数据不存在、无权限、关系版本或 Schema 已变化。");
+          applyRows(visualReportDatasetKey(card), [], "多机构页面数据不存在、无权限、关系版本或 Schema 已变化。");
         }
         if (card.dataset.kind === "topic" && !topicTables.some((item) => visualReportDatasetMatches(card.dataset, item))) {
-          applyRows(card.dataset.id, [], "主题数据集未发布、无权限或已失效。");
+          applyRows(visualReportDatasetKey(card), [], "主题数据集未发布、无权限或已失效。");
         }
       });
       setErrorsByDataset((current) => {
@@ -126,18 +127,37 @@ export function VisualReportCards({
     return [...report.cards, ...extraCards.filter((card) => !known.has(card.id))];
   }, [extraCards, report.cards]);
 
+  const filterDatasets = useMemo<ReportFilterDataset[]>(() => Array.from(new Map(visibleCards.map((card) => {
+    const datasetId = visualReportDatasetKey(card);
+    return [datasetId, {
+      id: datasetId,
+      name: card.dataset.name,
+      subtitle: card.dataset.code,
+      fields: card.dataset.fields,
+      rows: (rowsByDataset[datasetId] || []).map((row) => row.raw),
+    } satisfies ReportFilterDataset];
+  })).values()), [rowsByDataset, visibleCards]);
+  const filteredRowsByCardId = useMemo(() => Object.fromEntries(visibleCards.map((card) => [
+    card.id,
+    applyReportPublicFilters(
+      rowsByDataset[visualReportDatasetKey(card)] || [],
+      visualReportDatasetKey(card),
+      report.publicFilters || [],
+    ),
+  ])), [report.publicFilters, rowsByDataset, visibleCards]);
+
   useEffect(() => {
     const group = `visual-report:${report.id}`;
-    replaceVisualAnalysisSourceGroup(railPageKey, group, visibleCards.filter((card) => visualReportCardHasData(card, rowsByDataset[card.dataset.id] || [])).map((card) => ({
+    replaceVisualAnalysisSourceGroup(railPageKey, group, visibleCards.filter((card) => visualReportCardHasData(card, filteredRowsByCardId[card.id] || [])).map((card) => ({
       id: `${report.id}:${card.id}`,
       label: card.title,
       tables: [datasetSelection(card) as unknown as Record<string, unknown>],
       question: card.title,
       summary: report.title,
-      rows: boundedVisualRows(rowsByDataset[card.dataset.id]),
+      rows: boundedVisualRows(filteredRowsByCardId[card.id]),
     })));
     return () => { replaceVisualAnalysisSourceGroup(railPageKey, group, []); };
-  }, [railPageKey, report.id, report.title, rowsByDataset, visibleCards]);
+  }, [filteredRowsByCardId, railPageKey, report.id, report.title, visibleCards]);
 
   const updateCard = (cardId: string, patch: Partial<VisualReportCard>) => {
     if (extraCards.some((card) => card.id === cardId)) {
@@ -192,7 +212,7 @@ export function VisualReportCards({
   if (!report.cards.length) return null;
   const renderedCards = editable
     ? visibleCards
-    : visibleCards.filter((card) => visualReportCardHasData(card, rowsByDataset[card.dataset.id] || []));
+    : visibleCards.filter((card) => visualReportCardHasData(card, filteredRowsByCardId[card.id] || []));
   const waitingForFirstRows = loading && !renderedCards.length;
   if (waitingForFirstRows) {
     return (
@@ -205,12 +225,26 @@ export function VisualReportCards({
   return (
     <div data-visual-report-cards="true">
       {editable && errorsByDataset.catalog && <ReportDataError message={errorsByDataset.catalog} />}
-      <ResizableVisualizationGrid editable={layoutEditable}>
+      <ReportPublicFilterControls
+        datasets={filterDatasets}
+        groups={report.publicFilters || []}
+        editable={editable}
+        onChange={(publicFilters) => onChange?.({ ...report, publicFilters })}
+      />
+      <ResizableVisualizationGrid
+        editable={layoutEditable}
+        onLayoutChange={(cardId, size) => {
+          const card = visibleCards.find((item) => item.id === cardId);
+          if (!card) return;
+          updateCard(cardId, { config: { ...card.config, layoutSpan: size.span, layoutHeight: size.height } });
+        }}
+      >
         {renderedCards.map((card) => {
-          const rows = rowsByDataset[card.dataset.id] || [];
+          const datasetKey = visualReportDatasetKey(card);
+          const rows = filteredRowsByCardId[card.id] || [];
           const selectedTable = datasetSelection(card);
           return <div key={card.id} className="flex h-full min-h-0 flex-col" data-visual-grid-span={card.config?.layoutSpan} data-visual-grid-height={card.config?.layoutHeight} data-visual-grid-max-span={card.config?.maxLayoutSpan} data-visual-grid-max-height={card.config?.maxLayoutHeight}>
-            {editable && errorsByDataset[card.dataset.id] && <ReportDataError message={errorsByDataset[card.dataset.id]} compact />}
+            {editable && errorsByDataset[datasetKey] && <ReportDataError message={errorsByDataset[datasetKey]} compact />}
             <div className="min-h-0 flex-1">
               {visualReportCardHasData(card, rows) ? <AnalysisVisualCard
                 id={card.id}
@@ -219,6 +253,7 @@ export function VisualReportCards({
                 type={card.type}
                 rows={rows}
                 initialConfig={card.config}
+                configAuthority="server"
                 fillHeight
                 analysisSource={[selectedTable]}
                 onFollowUp={(detail) => revealVisualFollowUp({ key: "primary", title: card.title, type: card.type, rows, reportId: report.id, question: report.title, summary: "可视化报表配置", plan: "基于已授权数据集的可视化报表", selectedDataTables: detail?.dataTables?.length ? detail.dataTables : [selectedTable], railPageKey })}
@@ -251,6 +286,10 @@ export function VisualReportCards({
       </ResizableVisualizationGrid>
     </div>
   );
+}
+
+function visualReportDatasetKey(card: VisualReportCard) {
+  return `${card.dataset.kind}:${card.dataset.id}`;
 }
 
 function visualReportCardHasData(card: VisualReportCard, rows: AnalysisRow[]) {

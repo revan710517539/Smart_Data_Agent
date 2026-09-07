@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation } from "react-router";
 import { AppSelect } from "./ui/AppSelect";
+import { ManagementListPage, ManagementListSection } from "./ui/ManagementListPage";
 import { FormDialog, FormDialogCancelButton, FormDialogPrimaryButton } from "./ui/FormDialog";
 import {
   BrainCircuit,
@@ -381,7 +382,7 @@ export function DataAgentWorkspace() {
   };
 
   return (
-    <div className="p-7">
+    <ManagementListPage>
       <div className="mb-7 flex items-start justify-between gap-4">
         <div>
           <h2 className="text-[18px] tracking-tight text-[#1d1d1f]">{header.title}</h2>
@@ -541,7 +542,7 @@ export function DataAgentWorkspace() {
           analysisModels={analysisModels}
         />
       )}
-    </div>
+    </ManagementListPage>
   );
 }
 
@@ -572,7 +573,7 @@ function TaskSection({
 }: TaskSectionProps) {
   const pagination = useClientPagination(tasks);
   return (
-    <section className="rounded-xl border border-[#f0f0f2] bg-white p-5" data-task-section={title}>
+    <ManagementListSection className="p-5" data-task-section={title}>
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
           <h3 className="text-[14px] text-[#1d1d1f]">{title}</h3>
@@ -612,7 +613,7 @@ function TaskSection({
           ))}
         </div>
       )}
-    </section>
+    </ManagementListSection>
   );
 }
 

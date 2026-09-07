@@ -12,6 +12,13 @@ export type VisualGridPosition = VisualGridSize & {
   width: number;
 };
 
+export function visualGridIdFromReactKey(key: unknown, index: number) {
+  const value = String(key ?? "");
+  const userKeyMarker = value.lastIndexOf("$");
+  if (userKeyMarker < 0) return `visual-${index}`;
+  return value.slice(userKeyMarker + 1).replace(/=(0|2)/g, (_match, code: string) => code === "0" ? "=" : ":");
+}
+
 export function defaultVisualGridSpan(itemCount: number) {
   return itemCount === 1 ? visualGridColumnCount : visualGridColumnCount / 2;
 }

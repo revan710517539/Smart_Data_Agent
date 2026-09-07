@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import tempfile
 import unittest
@@ -25,6 +26,7 @@ from backend.platform.api.routes.data_crawler_schedule import (
     _task_code,
     _task_definition,
     handle_data_crawler_schedule_refresh,
+    handle_data_crawler_schedule_statuses_get,
     handle_data_crawler_schedule_test,
 )
 from backend.platform.integrations.data_crawler import endpoint_for_tenant
@@ -620,6 +622,48 @@ class DataCrawlerScheduleContractTest(unittest.TestCase):
                 }
             },
         )
+
+    def test_schedule_status_endpoint_does_not_depend_on_live_crawler_catalog(self) -> None:
+        task = {
+            "handler_ref": "data_crawler.dispatch",
+            "status": "active",
+            "trigger_type": "schedule",
+            "schedule_expression": "0 9 * * *",
+            "next_run_at": "2026-08-26T09:00:00+08:00",
+            "task_config": {
+                "sql_id": "sql_scheduled",
+                "institution_id": "huaxing",
+                "recurrence": "daily",
+            },
+        }
+        sent: dict[str, object] = {}
+        handler = SimpleNamespace(
+            services=SimpleNamespace(
+                data_acquisition_service=SimpleNamespace(
+                    csv_source=SimpleNamespace(
+                        for_tenant=lambda _tenant_id: SimpleNamespace(root=Path("/tmp/华兴银行"))
+                    )
+                ),
+                automation_store=SimpleNamespace(list_tasks=lambda _tenant_id: [task]),
+            ),
+            _request_context=lambda params: SimpleNamespace(tenant_id="tenant:华兴银行"),
+            _require_asset_permission=lambda _context, _action: None,
+            _send_json=lambda payload: sent.update(payload),
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {"SMART_DATA_AGENT_DATA_CRAWLER_ENDPOINTS": json.dumps(self.endpoints, ensure_ascii=False)},
+            clear=True,
+        ), mock.patch(
+            "backend.platform.api.routes.data_crawler_schedule.client_for_tenant",
+            side_effect=AssertionError("status endpoint must not call Data Crawler"),
+        ):
+            handle_data_crawler_schedule_statuses_get(handler, "")
+
+        expected_key = "crawler_sql_" + hashlib.sha256(b"huaxing:sql_scheduled").hexdigest()[:32]
+        self.assertEqual(sent["count"], 1)
+        self.assertEqual(sent["items"][expected_key]["recurrence"], "daily")
 
 
     def test_refresh_binding_matches_table_title_when_receipt_is_missing(self) -> None:

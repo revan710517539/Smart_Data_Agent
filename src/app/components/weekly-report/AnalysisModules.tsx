@@ -4,12 +4,16 @@ import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, 
 import { type SavedAnalysisResult, type TableBlock } from "./domain";
 import { usePlatformContext } from "../../platform/PlatformContext";
 import { fetchAnalysisTask } from "../../services/analysisApi";
+import { saveSavedAnalysisResult, type SavedAnalysisResult as PersistedSavedAnalysisResult } from "../../services/reportApi";
+import { apiErrorMessage } from "../../services/apiClient";
+import { fetchApplicationModule, runApplicationAction } from "../../services/applicationApi";
 import { AnalysisVisualCard } from "../self-analysis/ResultViews";
 import { ResizableVisualizationGrid } from "../self-analysis/ResizableVisualizationGrid";
 import { defaultVisualizationCards } from "../self-analysis/visualCards";
 import { mapBackendRows, type AnalysisDataTableSelection, type AnalysisRow, type VisualizationType } from "../self-analysis/domain";
 import { revealVisualComment, revealVisualFollowUp } from "../self-analysis/visualFollowUp";
 import type { VisualizationCardConfig } from "../visualization/visualizationDataModel";
+import { applyReportPageStyleToCards, type ReportPageStyleId } from "../report-style/reportPageStyles";
 
 export type WeeklyAnalysisModulePreference = { id: string; visible: boolean };
 export type WeeklyAnalysisModuleSettings = {
@@ -92,9 +96,22 @@ function analysisTimestamp(value: string) {
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
-export function SavedAnalysisEmbed({ result }: { result: SavedAnalysisResult }) {
+export function SavedAnalysisEmbed({ result, pageStyleId, pageStyleRevision = 0 }: { result: SavedAnalysisResult; pageStyleId?: ReportPageStyleId; pageStyleRevision?: number }) {
   const { tenantId, userId } = usePlatformContext();
   const [rows, setRows] = useState<AnalysisRow[]>(() => analysisRowsFromWeeklyPreview(result.rows));
+  const [cards, setCards] = useState(() => savedAnalysisCards(result));
+  const [saveError, setSaveError] = useState("");
+  const cardsRef = useRef(cards);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingKeepaliveRef = useRef<{ version: number; result: PersistedSavedAnalysisResult } | null>(null);
+  const saveVersionRef = useRef(0);
+  useEffect(() => {
+    const next = savedAnalysisCards(result);
+    cardsRef.current = next;
+    pendingKeepaliveRef.current = null;
+    setCards(next);
+    setSaveError("");
+  }, [result.id, result.visualizations]);
   useEffect(() => {
     let cancelled = false;
     const tables = (result.selectedDataTables || []).filter((table): table is AnalysisDataTableSelection => (
@@ -110,13 +127,60 @@ export function SavedAnalysisEmbed({ result }: { result: SavedAnalysisResult }) 
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, [result.analysisTaskId, result.id, result.query, result.selectedDataTables, tenantId, userId]);
-  const cards = result.visualizations?.length
-    ? result.visualizations.map((card) => ({ id: card.id, key: card.key, title: card.title, type: card.type as VisualizationType, config: card.config as VisualizationCardConfig | undefined }))
-    : defaultVisualizationCards({ primary: result.visualTypes.primary as VisualizationType, secondary: result.visualTypes.secondary as VisualizationType });
+  const updateCards = (next: typeof cards) => {
+    cardsRef.current = next;
+    setCards(next);
+    const nextResult = {
+      ...result,
+      visualTypes: {
+        primary: next.find((card) => card.key === "primary")?.type || result.visualTypes.primary,
+        secondary: next.find((card) => card.key === "secondary")?.type || result.visualTypes.secondary,
+      },
+      visualizations: next.map((card) => ({ id: card.id, key: card.key, title: card.title, type: card.type, config: card.config })),
+    } as unknown as PersistedSavedAnalysisResult;
+    const version = ++saveVersionRef.current;
+    pendingKeepaliveRef.current = { version, result: nextResult };
+    saveQueueRef.current = saveQueueRef.current.catch(() => undefined).then(async () => {
+      await saveSavedAnalysisResult({ tenantId, userId, result: nextResult, keepalive: true });
+      if (pendingKeepaliveRef.current?.version === version) pendingKeepaliveRef.current = null;
+      setSaveError("");
+      window.dispatchEvent(new CustomEvent("smart-data-agent-analysis-saved", { detail: nextResult }));
+    }).catch((error) => {
+      setSaveError(apiErrorMessage(error, "周报图表自动保存失败。"));
+    });
+  };
+  useEffect(() => {
+    const flush = () => {
+      const pending = pendingKeepaliveRef.current;
+      if (pending) void saveSavedAnalysisResult({ tenantId, userId, result: pending.result, keepalive: true }).catch(() => undefined);
+    };
+    const flushWhenHidden = () => { if (document.visibilityState === "hidden") flush(); };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", flushWhenHidden);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", flushWhenHidden);
+      flush();
+    };
+  }, [tenantId, userId]);
+  const updateCard = (cardId: string, patch: Partial<(typeof cards)[number]>) => {
+    updateCards(cardsRef.current.map((card) => card.id === cardId ? { ...card, ...patch } : card));
+  };
+  useEffect(() => {
+    if (!pageStyleId || pageStyleRevision < 1) return;
+    updateCards(applyReportPageStyleToCards(cardsRef.current, pageStyleId));
+    // A page template is an explicit edit action. Persist the resulting card
+    // layout and visual styles immediately through the existing save queue.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageStyleId, pageStyleRevision]);
   return <div className="mb-4 rounded-lg border border-[#f0f0f2] bg-[#fafbfc] p-4" data-weekly-report-ai-module="true">
     <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between"><div><div className="text-[13px] text-[#1d1d1f]">{result.title}</div><div className="mt-0.5 text-[11px] text-[#aeaeb2]">来自自助分析 · {result.savedAt}</div></div><span className="w-fit rounded-md border border-[#e5e5ea] bg-white px-2 py-1 text-[11px] text-[#8a8a8e]">已引用分析结果</span></div>
-    {rows.length ? (
-    <ResizableVisualizationGrid>
+    {rows.length ? (<>
+    {saveError ? <div className="mb-2 rounded-md border border-[#ffd0d0] bg-[#fff5f5] px-3 py-2 text-[10px] text-[#d93025]" role="alert">{saveError}</div> : null}
+    <ResizableVisualizationGrid onLayoutChange={(cardId, size) => {
+      const card = cardsRef.current.find((item) => item.id === cardId);
+      if (card) updateCard(cardId, { config: { ...card.config, layoutSpan: size.span, layoutHeight: size.height } });
+    }}>
       {cards.map((card) => (
         <AnalysisVisualCard
           key={card.id}
@@ -127,15 +191,24 @@ export function SavedAnalysisEmbed({ result }: { result: SavedAnalysisResult }) 
           type={card.type}
           rows={rows}
           initialConfig={card.config}
+          configAuthority="server"
           onFollowUp={(detail) => revealVisualFollowUp({ key: card.key || "primary", title: card.title, type: card.type, rows, taskId: result.analysisTaskId, reportId: result.id, question: result.query, summary: result.summary, plan: result.plan, railPageKey: "weekly-report", selectedText: detail?.selectedText })}
           onComment={(detail) => revealVisualComment({ key: card.key || "primary", title: card.title, type: card.type, rows, taskId: result.analysisTaskId, reportId: result.id, question: result.query, summary: result.summary, plan: result.plan, railPageKey: "weekly-report", selectedText: detail?.selectedText })}
-          onTypeChange={() => undefined}
+          onTypeChange={(type) => updateCard(card.id, { type })}
+          onTitleChange={(title) => updateCard(card.id, { title })}
+          onConfigChange={(config) => updateCard(card.id, { config })}
         />
       ))}
     </ResizableVisualizationGrid>
-    ) : null}
+    </>) : null}
     <div className="mt-3 rounded-lg border border-[#f0f0f2] bg-white p-3"><div className="mb-1 text-[12px] text-[#1d1d1f]">AI分析结论</div><p className="text-[12px] leading-[1.7] text-[#636366]">{result.summary}</p></div>
   </div>;
+}
+
+function savedAnalysisCards(result: SavedAnalysisResult) {
+  return result.visualizations?.length
+    ? result.visualizations.map((card) => ({ id: card.id, key: card.key, title: card.title, type: card.type as VisualizationType, config: card.config as VisualizationCardConfig | undefined }))
+    : defaultVisualizationCards({ primary: result.visualTypes.primary as VisualizationType, secondary: result.visualTypes.secondary as VisualizationType });
 }
 
 function analysisRowsFromWeeklyPreview(rows: SavedAnalysisResult["rows"]): AnalysisRow[] {
@@ -172,6 +245,59 @@ export function loadWeeklyAnalysisModulePreferences(tenantId: string, userId: st
   } catch {
     return { preferences: [], orderCustomized: false };
   }
+}
+
+export function useWeeklyDataPreferences() {
+  const { tenantId, userId } = usePlatformContext();
+  const [settings, setSettings] = useState<WeeklyAnalysisModuleSettings>(() => loadWeeklyAnalysisModulePreferences(tenantId, userId));
+  const [hydrated, setHydrated] = useState(false);
+  const [error, setError] = useState("");
+  const settingsRef = useRef(settings);
+
+  useEffect(() => {
+    let cancelled = false;
+    const local = loadWeeklyAnalysisModulePreferences(tenantId, userId);
+    settingsRef.current = local;
+    setSettings(local);
+    setHydrated(false);
+    setError("");
+    void fetchApplicationModule<{ weeklyDataPreferences?: WeeklyAnalysisModuleSettings | null }>({ tenantId, userId, moduleKey: "weekly_report" })
+      .then((response) => {
+        if (cancelled) return;
+        const saved = response.state.weeklyDataPreferences;
+        if (!saved || !Array.isArray(saved.preferences)) return;
+        const normalized = {
+          preferences: saved.preferences.filter((item) => item && typeof item.id === "string").map((item) => ({ id: item.id, visible: Boolean(item.visible) })),
+          orderCustomized: saved.orderCustomized === true,
+        };
+        settingsRef.current = normalized;
+        setSettings(normalized);
+      })
+      .catch((reason) => { if (!cancelled) setError(apiErrorMessage(reason, "周报数据呈现设置读取失败。")); })
+      .finally(() => { if (!cancelled) setHydrated(true); });
+    return () => { cancelled = true; };
+  }, [tenantId, userId]);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+    window.localStorage.setItem(weeklyAnalysisModuleStorageKey(tenantId, userId), JSON.stringify({ version: 5, ...settings }));
+    if (!hydrated) return;
+    const timer = window.setTimeout(() => {
+      void runApplicationAction({ tenantId, userId, moduleKey: "weekly_report", action: "set_weekly_data_preferences", payload: settings, keepalive: true })
+        .then(() => setError(""))
+        .catch((reason) => setError(apiErrorMessage(reason, "周报数据呈现设置自动保存失败。")));
+    }, 240);
+    return () => window.clearTimeout(timer);
+  }, [hydrated, settings, tenantId, userId]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const flush = () => { void runApplicationAction({ tenantId, userId, moduleKey: "weekly_report", action: "set_weekly_data_preferences", payload: settingsRef.current, keepalive: true }).catch(() => undefined); };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, [hydrated, tenantId, userId]);
+
+  return { settings, setSettings, error };
 }
 
 export function WeeklyAnalysisModuleMenu({
@@ -250,11 +376,11 @@ function numberValue(value: string | number | undefined) {
 
 export function CoreMetricChart({ block }: { block: TableBlock }) {
   const data = block.rows.map((row, index) => ({ period: String(row.日期 || row.周次 || `第${index + 1}期`), 在贷余额: numberValue(row.在贷余额), 放款金额: numberValue(row.放款金额), 新增余额: numberValue(row.新增余额) })).reverse();
-  return <div className="rounded-xl border border-[#f0f0f2] bg-white p-4">
+  return <div className="rounded-xl border border-[#f0f0f2] bg-white p-4" data-report-native-chart-theme="true">
     <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
       <div><div className="text-[12px] text-[#1d1d1f]">核心指标周度趋势</div><div className="mt-0.5 text-[10px] text-[#aeaeb2]">按日期从早到晚 · 单位：亿元</div></div>
-      <div className="flex flex-wrap items-center gap-3 text-[10px] text-[#8a8a8e]"><span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-[2px] bg-[#8e8e93]" />放款金额</span><span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-[2px] bg-[#d1d1d6]" />新增余额</span><span className="inline-flex items-center gap-1.5"><i className="h-px w-3 bg-[#1d1d1f]" />在贷余额</span></div>
+      <div className="flex flex-wrap items-center gap-3 text-[10px] text-[#8a8a8e]"><span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-[2px]" style={{ background: "var(--sda-report-chart-1)" }} />放款金额</span><span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-[2px]" style={{ background: "var(--sda-report-chart-2)" }} />新增余额</span><span className="inline-flex items-center gap-1.5"><i className="h-px w-3" style={{ background: "var(--sda-report-chart-3)" }} />在贷余额</span></div>
     </div>
-    <div className="h-[240px] min-w-0" role="img" aria-label="在贷余额、放款金额和新增余额周度趋势图，横轴按日期从早到晚排列，单位为亿元"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={data} barGap={6} margin={{ top: 8, right: 8, bottom: 0, left: -18 }}><CartesianGrid stroke="#f5f5f5" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="period" tick={{ fill: "#c7c7cc", fontSize: 10 }} tickLine={false} axisLine={false} /><YAxis yAxisId="amount" tick={{ fill: "#c7c7cc", fontSize: 10 }} tickLine={false} axisLine={false} width={38} /><YAxis yAxisId="balance" orientation="right" tick={{ fill: "#c7c7cc", fontSize: 10 }} tickLine={false} axisLine={false} width={38} /><Tooltip cursor={{ fill: "#f8f8fa" }} contentStyle={{ borderRadius: 8, border: "1px solid #f0f0f2", boxShadow: "0 8px 20px rgba(0,0,0,0.06)", fontSize: 11 }} labelStyle={{ color: "#636366", marginBottom: 4 }} itemStyle={{ color: "#3a3a3c" }} formatter={(value, name) => [`${Number(value).toFixed(2)}亿`, String(name)]} /><Bar yAxisId="amount" dataKey="放款金额" fill="#8e8e93" radius={[3, 3, 0, 0]} maxBarSize={24} /><Bar yAxisId="amount" dataKey="新增余额" fill="#d1d1d6" radius={[3, 3, 0, 0]} maxBarSize={24} /><Line yAxisId="balance" type="monotone" dataKey="在贷余额" stroke="#1d1d1f" strokeWidth={1.6} dot={{ r: 2.5, fill: "#1d1d1f", strokeWidth: 0 }} activeDot={{ r: 3.5 }} /></ComposedChart></ResponsiveContainer></div>
+    <div className="h-[240px] min-w-0" role="img" aria-label="在贷余额、放款金额和新增余额周度趋势图，横轴按日期从早到晚排列，单位为亿元"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={data} barGap={6} margin={{ top: 8, right: 8, bottom: 0, left: -18 }}><CartesianGrid stroke="var(--sda-report-chart-grid)" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="period" tick={{ fill: "var(--sda-report-chart-muted)", fontSize: 10 }} tickLine={false} axisLine={false} /><YAxis yAxisId="amount" tick={{ fill: "var(--sda-report-chart-muted)", fontSize: 10 }} tickLine={false} axisLine={false} width={38} /><YAxis yAxisId="balance" orientation="right" tick={{ fill: "var(--sda-report-chart-muted)", fontSize: 10 }} tickLine={false} axisLine={false} width={38} /><Tooltip cursor={{ fill: "color-mix(in srgb, var(--sda-report-canvas) 82%, white)" }} contentStyle={{ borderRadius: 8, border: "1px solid var(--sda-report-border)", boxShadow: "0 8px 20px rgba(0,0,0,0.06)", fontSize: 11 }} labelStyle={{ color: "var(--sda-report-chart-text)", marginBottom: 4 }} itemStyle={{ color: "var(--sda-report-chart-text)" }} formatter={(value, name) => [`${Number(value).toFixed(2)}亿`, String(name)]} /><Bar yAxisId="amount" dataKey="放款金额" fill="var(--sda-report-chart-1)" radius={[3, 3, 0, 0]} maxBarSize={24} /><Bar yAxisId="amount" dataKey="新增余额" fill="var(--sda-report-chart-2)" radius={[3, 3, 0, 0]} maxBarSize={24} /><Line yAxisId="balance" type="monotone" dataKey="在贷余额" stroke="var(--sda-report-chart-3)" strokeWidth="var(--sda-report-chart-line-width)" dot={{ r: 2.5, fill: "var(--sda-report-chart-3)", strokeWidth: 0 }} activeDot={{ r: 3.5 }} /></ComposedChart></ResponsiveContainer></div>
   </div>;
 }

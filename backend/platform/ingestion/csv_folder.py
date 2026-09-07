@@ -535,6 +535,7 @@ class CSVFolderSource:
             ).encode("utf-8")
         ).hexdigest()[:32]
         display_name = _display_table_name(relative_path)
+        contract_tenant_id = str(self._contract.get("tenant_id") or "").strip()
         return {
             "id": f"csv_{identity}",
             "assetId": asset_id,
@@ -559,6 +560,13 @@ class CSVFolderSource:
             "rowCount": metadata["row_count"],
             "previewRows": preview_rows,
             "contentHash": metadata["content_hash"],
+            # Stable, non-secret marker for consumers that need to reconnect
+            # this manifest-backed asset to its tenant-scoped Data Crawler.
+            **(
+                {"connectionId": f"data-crawler:{contract_tenant_id}"}
+                if contract_tenant_id
+                else {}
+            ),
             # Data Crawler owns this immutable file-to-SQL lineage. SDA uses it
             # to configure and execute the same institution-scoped script; the
             # user must never choose a second SQL for an already selected table.

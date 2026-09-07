@@ -6,7 +6,9 @@ import { readVisualGridItemSize } from "../self-analysis/visualGridLayout";
 import { ResizableVisualizationGrid } from "../self-analysis/ResizableVisualizationGrid";
 import { StickyNoteButton, StickyNotePanel } from "../notes/StickyNote";
 import type { useStickyNote } from "../notes/useStickyNote";
+import { rememberVisualStickyNoteAnchor } from "../notes/richNote";
 import { PageDataModeToggle, type ComposerMode, type PageEditController } from "./PageDataComposer";
+import { applyReportPageStyleToLayout, normalizeReportPageStyleId, ReportPageStyleSurface, type ReportPageStyleId } from "../report-style/reportPageStyles";
 
 export type StandardAnalysisStickyNoteController = ReturnType<typeof useStickyNote>;
 
@@ -40,6 +42,7 @@ export function StandardAnalysisPageHeader({
   editController,
   canEditLayout,
   leadingActions,
+  pageStyleControl,
   headerDataAttribute,
 }: {
   title: ReactNode;
@@ -49,6 +52,7 @@ export function StandardAnalysisPageHeader({
   editController: PageEditController;
   canEditLayout: boolean;
   leadingActions?: ReactNode;
+  pageStyleControl?: ReactNode;
   headerDataAttribute?: string;
 }) {
   return (
@@ -65,6 +69,7 @@ export function StandardAnalysisPageHeader({
       </div>
       <div className="flex w-fit min-h-9 max-w-full shrink-0 flex-wrap items-center justify-end gap-[0.2cm]" data-page-header-actions="true" data-standard-analysis-page-actions="true">
         {leadingActions}
+        {pageStyleControl}
         <StickyNoteButton onClick={stickyNote.show} />
         {canEditLayout ? <PageDataModeToggle controller={editController} /> : null}
       </div>
@@ -145,6 +150,8 @@ export function useStandardAnalysisPageLayout({
   const defaults = useMemo(() => defaultLayout(definitions), [definitions]);
   const [layout, setLayout] = useState<StandardAnalysisVisualLayoutItem[]>(defaults);
   const [savedLayout, setSavedLayout] = useState<StandardAnalysisVisualLayoutItem[]>(defaults);
+  const [pageStyleId, setPageStyleId] = useState<ReportPageStyleId>(normalizeReportPageStyleId(undefined));
+  const [savedPageStyleId, setSavedPageStyleId] = useState<ReportPageStyleId>(normalizeReportPageStyleId(undefined));
   const [mode, setMode] = useState<ComposerMode>("browse");
   const [savingLayout, setSavingLayout] = useState(false);
   const [notice, setNotice] = useState("");
@@ -152,12 +159,15 @@ export function useStandardAnalysisPageLayout({
   useEffect(() => {
     let cancelled = false;
     setMode("browse");
-    fetchApplicationModule<{ pageVisualLayout?: unknown }>({ tenantId, userId, moduleKey })
+    fetchApplicationModule<{ pageVisualLayout?: unknown; pageVisualStyleId?: unknown }>({ tenantId, userId, moduleKey })
       .then((response) => {
         if (cancelled) return;
         const next = normalizeLayout(response.state.pageVisualLayout, definitions);
         setLayout(next);
         setSavedLayout(next);
+        const nextStyleId = normalizeReportPageStyleId(response.state.pageVisualStyleId);
+        setPageStyleId(nextStyleId);
+        setSavedPageStyleId(nextStyleId);
         setNotice("");
       })
       .catch((error) => {
@@ -182,12 +192,14 @@ export function useStandardAnalysisPageLayout({
       };
     });
     try {
-      await runApplicationAction({ tenantId, userId, moduleKey, action: "set_page_visual_layout", payload: { items: measured } });
+      await runApplicationAction({ tenantId, userId, moduleKey, action: "set_page_visual_layout", payload: { items: measured, styleId: pageStyleId } });
       setLayout(measured);
       setSavedLayout(measured);
+      setSavedPageStyleId(pageStyleId);
       return true;
     } catch (error) {
       setLayout(savedLayout);
+      setPageStyleId(savedPageStyleId);
       setNotice(apiErrorMessage(error, "页面布局保存失败，已恢复上次保存的布局。"));
       return false;
     } finally {
@@ -200,9 +212,14 @@ export function useStandardAnalysisPageLayout({
 
   return {
     layout,
+    pageStyleId,
     mode,
     notice,
     editController,
+    applyPageStyle: (nextStyleId: ReportPageStyleId) => {
+      setPageStyleId(nextStyleId);
+      setLayout((current) => applyReportPageStyleToLayout(current, nextStyleId));
+    },
     hiddenDefinitions: definitions.filter((definition) => !visibleIds.has(definition.id)),
     hide: (id: string) => {
       if (mode !== "edit") return;
@@ -238,6 +255,8 @@ export function StandardAnalysisPageGrid({
   onHide,
   onRestore,
   onMove,
+  pageStyleId,
+  onApplyPageStyle,
 }: {
   moduleKey: "customer_insight" | "competition_analysis";
   definitions: StandardAnalysisVisualDefinition[];
@@ -248,6 +267,8 @@ export function StandardAnalysisPageGrid({
   onHide: (id: string) => void;
   onRestore: (id: string) => void;
   onMove: (sourceId: string, targetId: string) => void;
+  pageStyleId: ReportPageStyleId;
+  onApplyPageStyle: (styleId: ReportPageStyleId) => void;
 }) {
   const [draggingId, setDraggingId] = useState("");
   const moduleById = new Map(modules.map((module) => [module.id, module]));
@@ -258,7 +279,7 @@ export function StandardAnalysisPageGrid({
   });
 
   return (
-    <section data-standard-analysis-page-grid={moduleKey}>
+    <ReportPageStyleSurface styleId={pageStyleId} data-standard-analysis-page-grid={moduleKey}>
       {editable ? (
         <div className="mb-3 rounded-xl border border-dashed border-[#cfe0d6] bg-white p-3" data-standard-analysis-module-picker="true">
           <div className="mb-2 text-[10px] text-[#7c8781]">页面模块</div>
@@ -281,11 +302,14 @@ export function StandardAnalysisPageGrid({
                 key={visualGridId(moduleKey, item.id)}
                 className="flex h-full min-h-0 flex-col"
                 draggable={editable}
+                data-visual-card={visualGridId(moduleKey, item.id)}
                 onDragStart={(event) => { if (!editable) return; setDraggingId(item.id); event.dataTransfer.effectAllowed = "move"; }}
                 onDragEnd={() => setDraggingId("")}
                 onDragOver={(event) => { if (editable) event.preventDefault(); }}
                 onDrop={() => { if (editable) onMove(draggingId, item.id); setDraggingId(""); }}
+                onClick={(event) => rememberVisualStickyNoteAnchor(visualGridId(moduleKey, item.id), event.clientX, event.currentTarget)}
                 data-standard-analysis-module={item.id}
+                data-report-native-chart-theme="true"
                 data-visual-grid-span={item.span}
                 data-visual-grid-height={item.height}
               >
@@ -303,7 +327,7 @@ export function StandardAnalysisPageGrid({
       ) : (
         <div className="rounded-xl border border-dashed border-[#dfe7e2] bg-white px-6 py-14 text-center text-[12px] text-[#9aa39e]">当前页面模块均已隐藏，请在编辑状态下重新显示。</div>
       )}
-    </section>
+    </ReportPageStyleSurface>
   );
 }
 

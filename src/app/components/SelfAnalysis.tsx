@@ -2781,7 +2781,7 @@ export function SelfAnalysis() {
                       uploadContext={analysisSticky.uploadContext}
                     />
                   {analysisRows.length ? (
-                  <ResizableVisualizationGrid>
+                  <ResizableVisualizationGrid onLayoutChange={(cardId, size) => { const card = visualCards.find((item) => item.id === cardId); if (card) updateVisualCard(cardId, { config: { ...card.config, layoutSpan: size.span, layoutHeight: size.height } }); }}>
                     {visualCards.map((card) => <AnalysisVisualCard
                       key={card.id} id={card.id} stateKey={`current:${analysisTaskId || query}:${card.id}`} fillHeight visualGridSpan={card.config?.layoutSpan} visualGridHeight={card.config?.layoutHeight} visualGridMaxSpan={card.config?.maxLayoutSpan} visualGridMaxHeight={card.config?.maxLayoutHeight}
                       title={card.title}
@@ -2877,19 +2877,19 @@ export function SelfAnalysis() {
                       ) : (
                         <>
                           {analysisRows.length ? (
-                  <ResizableVisualizationGrid>
+                  <ResizableVisualizationGrid onLayoutChange={(cardId, size) => { const cards = reportVisualizationsFor(entry.result); void persistSavedReportVisualizations(entry.result, cards.map((card) => card.id === cardId ? { ...card, config: { ...card.config, layoutSpan: size.span, layoutHeight: size.height } } : card)); }}>
                             {reportVisualizationsFor(entry.result).map((card, cardIndex, cards) => <AnalysisVisualCard
                               key={card.id} id={card.id} stateKey={`featured:${entry.result.id}:${card.id}`} fillHeight
                               title={card.title}
                               type={card.type}
                               rows={analysisRows}
-                              initialConfig={card.config}
+                              initialConfig={card.config} configAuthority="server"
                               analysisSource={resolveVisualAnalysisTables(entry.result.selectedDataTables, selectedDataTables)}
                               onFollowUp={(detail) => revealVisualFollowUp({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: entry.result.analysisTaskId, reportId: entry.result.id, question: entry.result.query, summary: analysisSummary || entry.result.summary, plan: entry.result.plan, selectedDataTables: resolveVisualAnalysisTables(detail?.dataTables, entry.result.selectedDataTables, selectedDataTables) })}
                               onComment={(detail) => revealVisualComment({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: entry.result.analysisTaskId, reportId: entry.result.id, question: entry.result.query, summary: analysisSummary || entry.result.summary, plan: entry.result.plan, selectedDataTables: resolveVisualAnalysisTables(detail?.dataTables, entry.result.selectedDataTables, selectedDataTables) })}
                               onTypeChange={(nextType) => void persistSavedReportVisualizations(entry.result, cards.map((item) => item.id === card.id ? { ...item, type: nextType } : item))}
                               onTitleChange={(nextTitle) => void persistSavedReportVisualizations(entry.result, cards.map((item) => item.id === card.id ? { ...item, title: nextTitle } : item))}
-                              onConfigChange={(config) => setSavedAnalysisResults((current) => current.map((item) => item.id === entry.result.id ? { ...item, visualizations: cards.map((visual) => visual.id === card.id ? { ...visual, config } : visual) } : item))}
+                              onConfigChange={(config) => void persistSavedReportVisualizations(entry.result, cards.map((visual) => visual.id === card.id ? { ...visual, config } : visual))}
                               onDuplicate={(config, options) => { const duplicate = { ...card, id: `visual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, key: undefined, type: options?.asText ? "text" as const : card.type, title: options?.asText ? `${card.title} · 结论` : `${card.title} · 副本`, config: options?.asText ? { ...config, noteTitle: "", noteBody: "", noteItems: [], noteTitleHidden: false, ...visualDuplicateLayout(card.id) } : config }; void persistSavedReportVisualizations(entry.result, [...cards.slice(0, cardIndex + 1), duplicate, ...cards.slice(cardIndex + 1)]); }}
                               onDelete={() => { void askConfirm({ title: "删除图表", description: `确定删除图表「${card.title}」？`, hint: "此操作不可撤销。" }).then((ok) => { if (ok) void persistSavedReportVisualizations(entry.result, cards.filter((item) => item.id !== card.id)); }); }}
                             />)}
@@ -3005,19 +3005,19 @@ export function SelfAnalysis() {
                       <div className="rounded-lg bg-[#fafbfc] px-3 py-8 text-center text-[12px] text-[#8a8a8e]">正在从 Topic_Data 读取该报告的最新数据…</div>
                     ) : <>
                     {analysisRows.length ? (
-                  <ResizableVisualizationGrid>
+                  <ResizableVisualizationGrid onLayoutChange={(cardId, size) => { const cards = reportVisualizationsFor(result); void persistSavedReportVisualizations(result, cards.map((card) => card.id === cardId ? { ...card, config: { ...card.config, layoutSpan: size.span, layoutHeight: size.height } } : card)); }}>
                       {reportVisualizationsFor(result).map((card, cardIndex, cards) => <AnalysisVisualCard
                         key={card.id} id={card.id} stateKey={`report:${result.id}:${card.id}`} fillHeight
                         title={card.title}
                         type={card.type}
                         rows={analysisRows}
-                        initialConfig={card.config}
+                        initialConfig={card.config} configAuthority="server"
                         analysisSource={resolveVisualAnalysisTables(result.selectedDataTables, selectedDataTables)}
                         onFollowUp={(detail) => revealVisualFollowUp({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: result.analysisTaskId, reportId: result.id, question: result.query, summary: analysisSummary || result.summary, plan: result.plan, selectedDataTables: resolveVisualAnalysisTables(detail?.dataTables, result.selectedDataTables, selectedDataTables) })}
                         onComment={(detail) => revealVisualComment({ key: card.key || "primary", title: card.title, type: card.type, rows: analysisRows, taskId: result.analysisTaskId, reportId: result.id, question: result.query, summary: analysisSummary || result.summary, plan: result.plan, selectedDataTables: resolveVisualAnalysisTables(detail?.dataTables, result.selectedDataTables, selectedDataTables) })}
                         onTypeChange={(nextType) => void persistSavedReportVisualizations(result, cards.map((item) => item.id === card.id ? { ...item, type: nextType } : item))}
                         onTitleChange={(nextTitle) => void persistSavedReportVisualizations(result, cards.map((item) => item.id === card.id ? { ...item, title: nextTitle } : item))}
-                        onConfigChange={(config) => setSavedAnalysisResults((current) => current.map((item) => item.id === result.id ? { ...item, visualizations: cards.map((visual) => visual.id === card.id ? { ...visual, config } : visual) } : item))}
+                        onConfigChange={(config) => void persistSavedReportVisualizations(result, cards.map((visual) => visual.id === card.id ? { ...visual, config } : visual))}
                         onDuplicate={(config, options) => { const duplicate = { ...card, id: `visual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, key: undefined, type: options?.asText ? "text" as const : card.type, title: options?.asText ? `${card.title} · 结论` : `${card.title} · 副本`, config: options?.asText ? { ...config, noteTitle: "", noteBody: "", noteItems: [], noteTitleHidden: false, ...visualDuplicateLayout(card.id) } : config }; void persistSavedReportVisualizations(result, [...cards.slice(0, cardIndex + 1), duplicate, ...cards.slice(cardIndex + 1)]); }}
                         onDelete={() => { void askConfirm({ title: "删除图表", description: `确定删除图表「${card.title}」？`, hint: "此操作不可撤销。" }).then((ok) => { if (ok) void persistSavedReportVisualizations(result, cards.filter((item) => item.id !== card.id)); }); }}
                       />)}

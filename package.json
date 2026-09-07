@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test:backend": "uv run --frozen python -m unittest discover -s backend -t .",
     "test:frontend-permissions": "node scripts/frontend-permission-smoke.mjs",
+    "test:report-persistence-browser": "SDA_SMOKE_REPORT_PERSISTENCE_ONLY=true node scripts/frontend-permission-smoke.mjs",
     "test:browser-executable": "node scripts/browser-executable-contract.mjs",
     "test:context-rail": "node scripts/context-rail-contract.mjs",
     "test:client-uuid": "node --experimental-strip-types scripts/client-uuid-contract.mjs",

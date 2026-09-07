@@ -155,7 +155,7 @@ function CustomerSegmentUploadModal({ tenantId, userId, onClose, onConfirmed }: 
     busy={checking || confirming}
     onClose={onClose}
     bodyClassName="space-y-4"
-    overlayDataAttributes={{ "data-customer-segment-upload-overlay": "true" }}
+    dataAttributes={{ "data-customer-segment-upload-overlay": "true" }}
     footer={<><FormDialogCancelButton disabled={checking || confirming} onClick={onClose} /><FormDialogPrimaryButton disabled={!preview || checking || confirming} onClick={() => void confirm()} data-customer-segment-confirm="true">{confirming ? "保存中…" : "确认"}</FormDialogPrimaryButton></>}
   >
         <input ref={inputRef} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={(event) => void selectFile(event.target.files?.[0] || null)} />
